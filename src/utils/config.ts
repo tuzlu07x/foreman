@@ -1,34 +1,34 @@
-import { existsSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface ForemanPaths {
   /** Root config dir, e.g. ~/.foreman/ (overridable via FOREMAN_HOME). */
-  root: string
+  root: string;
   /** SQLite database file. */
-  dbPath: string
+  dbPath: string;
   /** YAML policy file the user can edit. */
-  policyPath: string
+  policyPath: string;
   /** Ed25519 master identity (0600). */
-  identityPath: string
+  identityPath: string;
   /** Migration .sql directory shipped with the package. */
-  migrationsPath: string
+  migrationsPath: string;
 }
 
 export function getForemanHome(): string {
-  return process.env.FOREMAN_HOME ?? resolve(homedir(), '.foreman')
+  return process.env.FOREMAN_HOME ?? resolve(homedir(), ".foreman");
 }
 
 export function getForemanPaths(): ForemanPaths {
-  const root = getForemanHome()
+  const root = getForemanHome();
   return {
     root,
-    dbPath: resolve(root, 'foreman.db'),
-    policyPath: resolve(root, 'policy.yaml'),
-    identityPath: resolve(root, 'identity.key'),
+    dbPath: resolve(root, "foreman.db"),
+    policyPath: resolve(root, "policy.yaml"),
+    identityPath: resolve(root, "identity.key"),
     migrationsPath: resolveMigrationsDir(),
-  }
+  };
 }
 
 /**
@@ -39,17 +39,17 @@ export function getForemanPaths(): ForemanPaths {
  *   - as a last resort, `<cwd>/src/db/migrations` for invocation from the repo root
  */
 function resolveMigrationsDir(): string {
-  const here = dirname(fileURLToPath(import.meta.url))
+  const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    resolve(here, '../db/migrations'),
-    resolve(here, '../../src/db/migrations'),
-    resolve(process.cwd(), 'src/db/migrations'),
-    resolve(process.cwd(), 'dist/db/migrations'),
-  ]
+    resolve(here, "../db/migrations"),
+    resolve(here, "../../src/db/migrations"),
+    resolve(process.cwd(), "src/db/migrations"),
+    resolve(process.cwd(), "dist/db/migrations"),
+  ];
   for (const c of candidates) {
-    if (existsSync(c)) return c
+    if (existsSync(resolve(c, "meta", "_journal.json"))) return c;
   }
   throw new Error(
-    `Could not locate migrations directory. Tried: ${candidates.join(', ')}`,
-  )
+    `Could not locate a populated migrations directory (no meta/_journal.json). Tried: ${candidates.join(", ")}`,
+  );
 }
