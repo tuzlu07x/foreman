@@ -1,5 +1,5 @@
 import { Box, useApp, useInput, useStdin } from "ink";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApprovalRequest } from "../core/approval.js";
 import type { BootInfo } from "./boot-info.js";
 import {
@@ -10,6 +10,7 @@ import {
 import { ActivityFeed } from "./components/activity-feed.js";
 import { AgentList } from "./components/agent-list.js";
 import { BootBanner } from "./components/boot-banner.js";
+import { InspectView } from "./components/inspect-view.js";
 import { StatsPanel } from "./components/stats-panel.js";
 import { StatusBar } from "./components/status-bar.js";
 import {
@@ -18,6 +19,8 @@ import {
   type DashboardServices,
 } from "./dashboard-context.js";
 import { useLayout } from "./hooks.js";
+
+const APPROVAL_TIMEOUT_MS = 60_000;
 
 export interface AppProps {
   bootInfo: BootInfo;
@@ -39,26 +42,57 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const [quitConfirm, setQuitConfirm] = useState(false);
   const [pendingApproval, setPendingApproval] =
     useState<ApprovalRequest | null>(null);
+  const [approvalDeadline, setApprovalDeadline] = useState<number | null>(null);
+  const [inspectOpen, setInspectOpen] = useState(false);
+  const [inspectOffset, setInspectOffset] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+  const pendingRef = useRef(pendingApproval);
+  pendingRef.current = pendingApproval;
 
   useEffect(() => {
     return bus.on("approval:requested", (req) => {
       setPendingApproval(req);
+      setApprovalDeadline(Date.now() + APPROVAL_TIMEOUT_MS);
+      setInspectOpen(false);
+      setInspectOffset(0);
     });
   }, [bus]);
 
-  const resolveApproval = (
-    resolution: ApprovalResolution,
-    resolvedBy: ResolvedBy,
-  ): void => {
+  useEffect(() => {
     if (!pendingApproval) return;
-    bus.emit("approval:resolved", {
-      requestId: pendingApproval.requestId,
-      decision: resolution.decision,
-      remember: resolution.remember,
-      resolvedBy,
-    });
-    setPendingApproval(null);
-  };
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [pendingApproval]);
+
+  const resolveApproval = useCallback(
+    (resolution: ApprovalResolution, resolvedBy: ResolvedBy): void => {
+      const current = pendingRef.current;
+      if (!current) return;
+      bus.emit("approval:resolved", {
+        requestId: current.requestId,
+        decision: resolution.decision,
+        remember: resolution.remember,
+        resolvedBy,
+      });
+      setPendingApproval(null);
+      setApprovalDeadline(null);
+      setInspectOpen(false);
+      setInspectOffset(0);
+    },
+    [bus],
+  );
+
+  useEffect(() => {
+    if (!pendingApproval || approvalDeadline === null) return;
+    if (now >= approvalDeadline) {
+      resolveApproval({ decision: "denied" }, "timeout");
+    }
+  }, [now, pendingApproval, approvalDeadline, resolveApproval]);
+
+  const remainingSeconds =
+    approvalDeadline === null
+      ? 0
+      : Math.max(0, Math.ceil((approvalDeadline - now) / 1000));
 
   return (
     <Box flexDirection="column">
@@ -67,12 +101,28 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           quitConfirm={quitConfirm}
           setQuitConfirm={setQuitConfirm}
           pendingApproval={pendingApproval}
+          inspectOpen={inspectOpen}
+          setInspectOpen={setInspectOpen}
+          inspectOffset={inspectOffset}
+          setInspectOffset={setInspectOffset}
           onResolveApproval={resolveApproval}
         />
       )}
       <BootBanner info={bootInfo} />
       {pendingApproval ? (
-        <ApprovalModal request={pendingApproval} onResolve={resolveApproval} />
+        inspectOpen ? (
+          <InspectView
+            request={pendingApproval}
+            offset={inspectOffset}
+            setOffset={setInspectOffset}
+            remainingSeconds={remainingSeconds}
+          />
+        ) : (
+          <ApprovalModal
+            request={pendingApproval}
+            remainingSeconds={remainingSeconds}
+          />
+        )
       ) : (
         <Box flexGrow={1}>{renderPanels(layout)}</Box>
       )}
@@ -85,6 +135,10 @@ interface KeyboardHandlerProps {
   quitConfirm: boolean;
   setQuitConfirm: (v: boolean) => void;
   pendingApproval: ApprovalRequest | null;
+  inspectOpen: boolean;
+  setInspectOpen: (v: boolean) => void;
+  inspectOffset: number;
+  setInspectOffset: (next: number) => void;
   onResolveApproval: (r: ApprovalResolution, by: ResolvedBy) => void;
 }
 
@@ -92,10 +146,40 @@ function KeyboardHandler({
   quitConfirm,
   setQuitConfirm,
   pendingApproval,
+  inspectOpen,
+  setInspectOpen,
+  inspectOffset,
+  setInspectOffset,
   onResolveApproval,
 }: KeyboardHandlerProps): null {
   const { exit } = useApp();
   useInput((input, key) => {
+    if (pendingApproval && inspectOpen) {
+      if (key.escape) {
+        setInspectOpen(false);
+        return;
+      }
+      if (key.upArrow) {
+        setInspectOffset(Math.max(0, inspectOffset - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setInspectOffset(inspectOffset + 1);
+        return;
+      }
+      if (key.pageUp) {
+        setInspectOffset(Math.max(0, inspectOffset - 10));
+        return;
+      }
+      if (key.pageDown) {
+        setInspectOffset(inspectOffset + 10);
+        return;
+      }
+      if (input === "a") onResolveApproval({ decision: "allowed" }, "user");
+      else if (input === "d")
+        onResolveApproval({ decision: "denied" }, "user");
+      return;
+    }
     if (pendingApproval) {
       if (input === "a") onResolveApproval({ decision: "allowed" }, "user");
       else if (input === "A")
@@ -105,6 +189,7 @@ function KeyboardHandler({
         onResolveApproval({ decision: "denied", remember: "deny" }, "user");
       else if (input === "r")
         onResolveApproval({ decision: "allowed", remember: "allow" }, "user");
+      else if (input === "i") setInspectOpen(true);
       return;
     }
     if (quitConfirm) {
