@@ -25,10 +25,12 @@ import {
   queryLogs,
   type LogFilters,
 } from "./pages/logs-query.js";
+import { PolicyPage } from "./pages/policy-page.js";
+import { launchEditor } from "./launch-editor.js";
 
 const APPROVAL_TIMEOUT_MS = 60_000;
 
-export type Page = "dashboard" | "logs";
+export type Page = "dashboard" | "logs" | "policy";
 
 export interface AppProps {
   bootInfo: BootInfo;
@@ -46,10 +48,14 @@ export function App({ bootInfo, services }: AppProps): JSX.Element {
 function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const layout = useLayout();
   const { isRawModeSupported } = useStdin();
-  const { bus, mediator, sqlite } = useDashboardServices();
+  const { bus, mediator, sqlite, policy, policyPath } = useDashboardServices();
 
   const [page, setPage] = useState<Page>("dashboard");
   const [quitConfirm, setQuitConfirm] = useState(false);
+
+  const [policySelectedIdx, setPolicySelectedIdx] = useState(0);
+  const [policyExpanded, setPolicyExpanded] = useState(false);
+  const [policyNotice, setPolicyNotice] = useState<string | null>(null);
 
   const [pendingApproval, setPendingApproval] =
     useState<ApprovalRequest | null>(null);
@@ -151,6 +157,44 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     setLogExportNotice(`exported ${count} rows → ${path}`);
   }, [sqlite, logSearch, logFilters]);
 
+  const onPolicyToggle = useCallback((): void => {
+    if (!policy) {
+      setPolicyNotice("policy engine unavailable");
+      return;
+    }
+    const rules = policy.list();
+    const target = rules[policySelectedIdx];
+    if (!target) return;
+    try {
+      policy.setEnabled(target.id, target.enabled === 0);
+      setPolicyNotice(
+        `rule #${target.id} ${target.enabled === 0 ? "enabled" : "disabled"}`,
+      );
+    } catch (err) {
+      setPolicyNotice(
+        `toggle failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, [policy, policySelectedIdx]);
+
+  const onPolicyEdit = useCallback(async (): Promise<void> => {
+    if (!policy || !policyPath) {
+      setPolicyNotice("policy yaml path unavailable");
+      return;
+    }
+    try {
+      await launchEditor(policyPath);
+      const result = policy.loadFromYaml(policyPath);
+      setPolicyNotice(
+        `reloaded ${result.rulesAdded} rule${result.rulesAdded === 1 ? "" : "s"} from yaml`,
+      );
+    } catch (err) {
+      setPolicyNotice(
+        `editor / reload failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, [policy, policyPath]);
+
   return (
     <Box flexDirection="column">
       {isRawModeSupported && (
@@ -177,6 +221,12 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           setLogExpanded={setLogExpanded}
           onLogReplay={onLogReplay}
           onLogExport={onLogExport}
+          policySelectedIdx={policySelectedIdx}
+          setPolicySelectedIdx={setPolicySelectedIdx}
+          policyExpanded={policyExpanded}
+          setPolicyExpanded={setPolicyExpanded}
+          onPolicyToggle={onPolicyToggle}
+          onPolicyEdit={onPolicyEdit}
         />
       )}
       <BootBanner info={bootInfo} />
@@ -203,6 +253,12 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           expanded={logExpanded}
           exportNotice={logExportNotice}
           replayNotice={logReplayNotice}
+        />
+      ) : page === "policy" ? (
+        <PolicyPage
+          selectedIdx={policySelectedIdx}
+          expanded={policyExpanded}
+          notice={policyNotice}
         />
       ) : (
         <Box flexGrow={1}>{renderPanels(layout)}</Box>
@@ -235,6 +291,12 @@ interface KeyboardHandlerProps {
   setLogExpanded: (v: boolean) => void;
   onLogReplay: () => Promise<void>;
   onLogExport: () => void;
+  policySelectedIdx: number;
+  setPolicySelectedIdx: (next: number) => void;
+  policyExpanded: boolean;
+  setPolicyExpanded: (v: boolean) => void;
+  onPolicyToggle: () => void;
+  onPolicyEdit: () => Promise<void>;
 }
 
 function KeyboardHandler(props: KeyboardHandlerProps): null {
@@ -262,6 +324,12 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     setLogExpanded,
     onLogReplay,
     onLogExport,
+    policySelectedIdx,
+    setPolicySelectedIdx,
+    policyExpanded,
+    setPolicyExpanded,
+    onPolicyToggle,
+    onPolicyEdit,
   } = props;
 
   useInput((input, key) => {
@@ -287,8 +355,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         return;
       }
       if (input === "a") onResolveApproval({ decision: "allowed" }, "user");
-      else if (input === "d")
-        onResolveApproval({ decision: "denied" }, "user");
+      else if (input === "d") onResolveApproval({ decision: "denied" }, "user");
       return;
     }
     if (pendingApproval) {
@@ -352,6 +419,24 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "q") exit();
       return;
     }
+    if (page === "policy") {
+      if (key.escape) {
+        setPage("dashboard");
+        setPolicyExpanded(false);
+        return;
+      }
+      if (key.upArrow) {
+        setPolicySelectedIdx(Math.max(0, policySelectedIdx - 1));
+        setPolicyExpanded(false);
+      } else if (key.downArrow) {
+        setPolicySelectedIdx(policySelectedIdx + 1);
+        setPolicyExpanded(false);
+      } else if (key.return) setPolicyExpanded(!policyExpanded);
+      else if (input === "d") onPolicyToggle();
+      else if (input === "e") void onPolicyEdit();
+      else if (input === "q") exit();
+      return;
+    }
     if (quitConfirm) {
       if (input === "y" || input === "Y") exit();
       else if (input === "n" || input === "N" || key.escape)
@@ -361,6 +446,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     if (input === "q") exit();
     else if (key.ctrl && input === "c") setQuitConfirm(true);
     else if (input === "l") setPage("logs");
+    else if (input === "p") setPage("policy");
   });
   return null;
 }

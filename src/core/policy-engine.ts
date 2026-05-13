@@ -80,6 +80,13 @@ const PolicyDocSchema = z
 
 const EFFECT_ORDER: Record<Effect, number> = { deny: 0, allow: 1, ask: 2 };
 
+export class PolicyRuleNotFoundError extends Error {
+  constructor(public readonly ruleId: number) {
+    super(`Policy rule not found: ${ruleId}`);
+    this.name = "PolicyRuleNotFoundError";
+  }
+}
+
 export class PolicyEngine {
   constructor(
     private readonly db: ForemanDb,
@@ -203,6 +210,28 @@ export class PolicyEngine {
 
   list(): (typeof policies.$inferSelect)[] {
     return this.db.select().from(policies).all();
+  }
+
+  setEnabled(ruleId: number, enabled: boolean): void {
+    const row = this.db
+      .select()
+      .from(policies)
+      .where(eq(policies.id, ruleId))
+      .get();
+    if (!row) throw new PolicyRuleNotFoundError(ruleId);
+    this.db
+      .update(policies)
+      .set({ enabled: enabled ? 1 : 0 })
+      .where(eq(policies.id, ruleId))
+      .run();
+    this.bus.emit("policy:changed", {
+      ruleId,
+      sourceAgent: row.sourceAgent,
+      target: row.target,
+      effect: row.effect,
+      createdBy: row.createdBy,
+      changedAt: Date.now(),
+    });
   }
 
   private requestTarget(req: EvaluateRequest): string | null {

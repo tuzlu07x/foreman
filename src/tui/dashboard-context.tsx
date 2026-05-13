@@ -3,6 +3,7 @@ import { createContext, useContext, type ReactNode } from "react";
 import type { ForemanDb } from "../db/client.js";
 import type { EventBus, ForemanEventMap } from "../core/event-bus.js";
 import type { MediatorService } from "../core/mediator.js";
+import type { PolicyEngine } from "../core/policy-engine.js";
 import type { RegistryService } from "../core/registry.js";
 
 export interface DashboardServices {
@@ -11,6 +12,8 @@ export interface DashboardServices {
   bus: EventBus<ForemanEventMap>;
   registry: RegistryService;
   mediator?: MediatorService;
+  policy?: PolicyEngine;
+  policyPath?: string;
 }
 
 const DashboardContext = createContext<DashboardServices | null>(null);
