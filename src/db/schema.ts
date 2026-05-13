@@ -1,112 +1,124 @@
-import { sql } from 'drizzle-orm'
+import { sql } from "drizzle-orm";
 import {
   blob,
   index,
   integer,
   sqliteTable,
   text,
-} from 'drizzle-orm/sqlite-core'
+} from "drizzle-orm/sqlite-core";
 
-export const agents = sqliteTable('agents', {
-  id: text('id').primaryKey(),
-  displayName: text('display_name').notNull(),
-  publicKey: blob('public_key', { mode: 'buffer' }).notNull(),
-  transport: text('transport', { enum: ['stdio', 'ws'] }).notNull(),
-  endpoint: text('endpoint'),
-  registeredAt: integer('registered_at').notNull(),
-  lastSeenAt: integer('last_seen_at'),
-  status: text('status', { enum: ['active', 'inactive', 'blocked'] })
+export const agents = sqliteTable("agents", {
+  id: text("id").primaryKey(),
+  displayName: text("display_name").notNull(),
+  publicKey: blob("public_key", { mode: "buffer" }).notNull(),
+  transport: text("transport", { enum: ["stdio", "ws"] }).notNull(),
+  endpoint: text("endpoint"),
+  registeredAt: integer("registered_at").notNull(),
+  lastSeenAt: integer("last_seen_at"),
+  status: text("status", { enum: ["active", "inactive", "blocked"] })
     .notNull()
-    .default('active'),
-  metadata: text('metadata'),
-})
+    .default("active"),
+  metadata: text("metadata"),
+});
 
 export const policies = sqliteTable(
-  'policies',
+  "policies",
   {
-    id: integer('id').primaryKey({ autoIncrement: true }),
-    sourceAgent: text('source_agent').notNull(),
-    target: text('target').notNull(),
-    effect: text('effect', { enum: ['allow', 'deny', 'ask'] }).notNull(),
-    conditions: text('conditions'),
-    createdAt: integer('created_at').notNull(),
-    createdBy: text('created_by', {
-      enum: ['user', 'remember-action', 'yaml'],
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    sourceAgent: text("source_agent").notNull(),
+    target: text("target").notNull(),
+    effect: text("effect", { enum: ["allow", "deny", "ask"] }).notNull(),
+    conditions: text("conditions"),
+    createdAt: integer("created_at").notNull(),
+    createdBy: text("created_by", {
+      enum: ["user", "remember-action", "yaml"],
     }).notNull(),
-    enabled: integer('enabled').notNull().default(1),
+    enabled: integer("enabled").notNull().default(1),
   },
   (t) => ({
-    lookupIdx: index('policies_lookup_idx').on(
+    lookupIdx: index("policies_lookup_idx").on(
       t.sourceAgent,
       t.target,
       t.enabled,
     ),
   }),
-)
+);
 
 export const requests = sqliteTable(
-  'requests',
+  "requests",
   {
-    id: text('id').primaryKey(),
-    sourceAgent: text('source_agent').notNull(),
-    targetAgent: text('target_agent'),
-    targetTool: text('target_tool'),
-    args: text('args').notNull(),
-    riskScore: integer('risk_score').notNull(),
-    riskReasons: text('risk_reasons'),
-    decision: text('decision', {
-      enum: ['allowed', 'denied', 'pending'],
+    id: text("id").primaryKey(),
+    sourceAgent: text("source_agent").notNull(),
+    targetAgent: text("target_agent"),
+    targetTool: text("target_tool"),
+    args: text("args").notNull(),
+    riskScore: integer("risk_score").notNull(),
+    riskReasons: text("risk_reasons"),
+    decision: text("decision", {
+      enum: ["allowed", "denied", "pending"],
     }).notNull(),
-    decidedBy: text('decided_by'),
-    result: text('result'),
-    durationMs: integer('duration_ms'),
-    createdAt: integer('created_at').notNull(),
-    decidedAt: integer('decided_at'),
+    decidedBy: text("decided_by"),
+    result: text("result"),
+    durationMs: integer("duration_ms"),
+    createdAt: integer("created_at").notNull(),
+    decidedAt: integer("decided_at"),
   },
   (t) => ({
-    sourceCreatedIdx: index('requests_source_created_idx').on(
+    sourceCreatedIdx: index("requests_source_created_idx").on(
       t.sourceAgent,
       t.createdAt,
     ),
-    decisionCreatedIdx: index('requests_decision_created_idx').on(
+    decisionCreatedIdx: index("requests_decision_created_idx").on(
       t.decision,
       t.createdAt,
     ),
   }),
-)
+);
 
-export const sessions = sqliteTable('sessions', {
-  id: text('id').primaryKey(),
-  participants: text('participants').notNull(),
-  startedAt: integer('started_at').notNull(),
-  endedAt: integer('ended_at'),
-  messageCount: integer('message_count').notNull().default(0),
-  tokenCount: integer('token_count').notNull().default(0),
-  status: text('status', { enum: ['active', 'completed', 'halted'] })
+export const sessions = sqliteTable("sessions", {
+  id: text("id").primaryKey(),
+  participants: text("participants").notNull(),
+  startedAt: integer("started_at").notNull(),
+  endedAt: integer("ended_at"),
+  messageCount: integer("message_count").notNull().default(0),
+  tokenCount: integer("token_count").notNull().default(0),
+  status: text("status", { enum: ["active", "completed", "halted"] })
     .notNull()
-    .default('active'),
-})
+    .default("active"),
+});
 
-export const auditEvents = sqliteTable('audit_events', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  eventType: text('event_type').notNull(),
-  payload: text('payload').notNull(),
-  createdAt: integer('created_at').notNull(),
-})
+export const auditEvents = sqliteTable("audit_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  eventType: text("event_type").notNull(),
+  payload: text("payload").notNull(),
+  createdAt: integer("created_at").notNull(),
+});
 
-export type Agent = typeof agents.$inferSelect
-export type NewAgent = typeof agents.$inferInsert
-export type Policy = typeof policies.$inferSelect
-export type NewPolicy = typeof policies.$inferInsert
-export type Request = typeof requests.$inferSelect
-export type NewRequest = typeof requests.$inferInsert
-export type Session = typeof sessions.$inferSelect
-export type NewSession = typeof sessions.$inferInsert
-export type AuditEvent = typeof auditEvents.$inferSelect
-export type NewAuditEvent = typeof auditEvents.$inferInsert
+export const secrets = sqliteTable("secrets", {
+  name: text("name").primaryKey(),
+  valueEncrypted: blob("value_encrypted", { mode: "buffer" }).notNull(),
+  iv: blob("iv", { mode: "buffer" }).notNull(),
+  authTag: blob("auth_tag", { mode: "buffer" }).notNull(),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+  lastAccessedAt: integer("last_accessed_at"),
+});
+
+export type Agent = typeof agents.$inferSelect;
+export type NewAgent = typeof agents.$inferInsert;
+export type Policy = typeof policies.$inferSelect;
+export type NewPolicy = typeof policies.$inferInsert;
+export type Request = typeof requests.$inferSelect;
+export type NewRequest = typeof requests.$inferInsert;
+export type Session = typeof sessions.$inferSelect;
+export type NewSession = typeof sessions.$inferInsert;
+export type AuditEvent = typeof auditEvents.$inferSelect;
+export type NewAuditEvent = typeof auditEvents.$inferInsert;
+export type Secret = typeof secrets.$inferSelect;
+export type NewSecret = typeof secrets.$inferInsert;
 
 // FTS5 virtual table and triggers live in a hand-written migration
 // (drizzle-kit cannot emit virtual tables). See:
 // src/db/migrations/0001_fts5_requests.sql
 
-void sql
+void sql;

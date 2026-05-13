@@ -3,12 +3,16 @@ import {
   handleMessage,
   type McpStdioServices,
 } from "../../src/cli/mcp-stdio.js";
-import type { MediatorOutput } from "../../src/core/mediator.js";
+import type {
+  MediatorOutput,
+  SecretGetOutput,
+} from "../../src/core/mediator.js";
 import type { JSONRPCMessage } from "../../src/mcp/types.js";
 
 function makeServices(
   decision: "allowed" | "denied",
   decidedBy = "policy:7",
+  secretOutput?: SecretGetOutput,
 ): McpStdioServices {
   const result: MediatorOutput = {
     requestId: "r1",
@@ -21,6 +25,7 @@ function makeServices(
   return {
     mediator: {
       handleRequest: vi.fn(async () => result),
+      handleSecretGet: vi.fn(async () => secretOutput),
     },
   } as unknown as McpStdioServices;
 }
@@ -38,13 +43,17 @@ describe("mcp-stdio handleMessage", () => {
     expect(out.result.serverInfo.name).toBe("foreman");
   });
 
-  it("returns an empty tools list for tools/list (no in-process tools yet)", async () => {
+  it("advertises the built-in secrets/get tool on tools/list", async () => {
     const out = (await handleMessage(makeServices("allowed"), "claude-code", {
       jsonrpc: "2.0",
       id: 2,
       method: "tools/list",
-    } as JSONRPCMessage)) as unknown as { result: { tools: unknown[] } };
-    expect(out.result.tools).toEqual([]);
+    } as JSONRPCMessage)) as unknown as {
+      result: { tools: { name: string; inputSchema?: unknown }[] };
+    };
+    expect(out.result.tools.map((t) => t.name)).toContain("secrets/get");
+    const tool = out.result.tools.find((t) => t.name === "secrets/get");
+    expect(tool?.inputSchema).toBeDefined();
   });
 
   it("routes tools/call through mediator and returns success on allow", async () => {
@@ -90,5 +99,60 @@ describe("mcp-stdio handleMessage", () => {
       method: "notifications/cancelled",
     } as JSONRPCMessage);
     expect(out).toBeNull();
+  });
+
+  it("routes tools/call name=secrets/get through mediator.handleSecretGet", async () => {
+    const services = makeServices("allowed", "policy:7", {
+      requestId: "s1",
+      decision: "allowed",
+      decidedBy: "policy:3",
+      value: "sk-abc",
+    });
+    const out = (await handleMessage(services, "hermes", {
+      jsonrpc: "2.0",
+      id: 6,
+      method: "tools/call",
+      params: { name: "secrets/get", arguments: { name: "anthropic-key" } },
+    } as JSONRPCMessage)) as unknown as {
+      result: { content: { type: string; text: string }[] };
+    };
+    expect(services.mediator.handleSecretGet).toHaveBeenCalledWith({
+      sourceAgent: "hermes",
+      secretName: "anthropic-key",
+    });
+    expect(services.mediator.handleRequest).not.toHaveBeenCalled();
+    expect(out.result.content[0]?.text).toBe("sk-abc");
+  });
+
+  it("returns -32603 deny for secrets/get when policy denies", async () => {
+    const services = makeServices("allowed", "policy:7", {
+      requestId: "s2",
+      decision: "denied",
+      decidedBy: "policy:cannot_access_secrets",
+    });
+    const out = (await handleMessage(services, "rogue", {
+      jsonrpc: "2.0",
+      id: 7,
+      method: "tools/call",
+      params: { name: "secrets/get", arguments: { name: "openai-key" } },
+    } as JSONRPCMessage)) as unknown as {
+      error: { code: number; message: string };
+    };
+    expect(out.error.code).toBe(-32603);
+    expect(out.error.message).toContain("policy:cannot_access_secrets");
+  });
+
+  it("returns -32602 invalid-params when secrets/get is called without args.name", async () => {
+    const services = makeServices("allowed");
+    const out = (await handleMessage(services, "hermes", {
+      jsonrpc: "2.0",
+      id: 8,
+      method: "tools/call",
+      params: { name: "secrets/get", arguments: {} },
+    } as JSONRPCMessage)) as unknown as {
+      error: { code: number; message: string };
+    };
+    expect(out.error.code).toBe(-32602);
+    expect(services.mediator.handleSecretGet).not.toHaveBeenCalled();
   });
 });
