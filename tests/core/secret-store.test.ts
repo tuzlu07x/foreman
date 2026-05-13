@@ -20,7 +20,9 @@ describe("SecretStore", () => {
     store = new SecretStore(db, generateMasterKey());
   });
 
-  afterEach(() => sqlite.close());
+  afterEach(() => {
+    sqlite.close();
+  });
 
   it("adds, gets, and lists a secret", () => {
     store.add("anthropic-key", "sk-abc-123");

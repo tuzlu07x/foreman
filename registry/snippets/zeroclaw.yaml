@@ -1,0 +1,8 @@
+# ZeroClaw's MCP server table is keyed by agent id. The wizard merges this
+# entry idempotently — re-running it on an existing config is a no-op.
+mcp:
+  enabled: true
+  servers:
+    foreman:
+      command: foreman
+      args: ["mcp-stdio", "--source", "zeroclaw"]

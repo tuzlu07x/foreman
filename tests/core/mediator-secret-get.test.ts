@@ -45,7 +45,9 @@ describe("MediatorService.handleSecretGet", () => {
     store = new SecretStore(db, generateMasterKey());
   });
 
-  afterEach(() => sqlite.close());
+  afterEach(() => {
+    sqlite.close();
+  });
 
   it("throws SecretStoreNotConfiguredError when deps.secretStore is missing", async () => {
     const policy = new PolicyEngine(db, bus);

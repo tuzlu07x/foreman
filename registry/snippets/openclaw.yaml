@@ -1,0 +1,12 @@
+# OpenClaw uses TOML natively; this YAML mirror is the canonical form
+# `foreman agent add` rewrites into the agent's actual config syntax.
+mcp:
+  enabled: true
+  servers:
+    foreman:
+      command: foreman
+      args: ["mcp-stdio", "--source", "openclaw"]
+secrets:
+  source: foreman
+  required:
+    - anthropic-key
