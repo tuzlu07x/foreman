@@ -1,0 +1,24 @@
+name: registry-validate
+
+on:
+  pull_request:
+    paths:
+      - "registry/**"
+      - "src/core/registry-catalog.ts"
+      - "src/cli/registry-cli.ts"
+      - ".github/workflows/registry-validate.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - name: Validate bundled registry
+        run: node dist/cli/index.js registry validate

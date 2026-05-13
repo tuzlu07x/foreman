@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "agents": [
+    {
+      "id": "hermes",
+      "name": "Hermes",
+      "tagline": "Personal AI assistant on Telegram and Discord",
+      "homepage": "https://github.com/NousResearch/hermes-agent",
+      "install": { "npm": "hermes-agent", "brew": null },
+      "config_paths": [
+        "~/.hermes/config.yaml",
+        "~/.config/hermes/config.yaml"
+      ],
+      "config_snippet": "registry/snippets/hermes.yaml",
+      "required_secrets": ["anthropic-key"],
+      "optional_secrets": ["telegram-bot-token", "discord-bot-token"],
+      "mcp_compatible": true,
+      "supported_versions": ">=2.0.0",
+      "min_foreman_version": "0.1.2"
+    },
+    {
+      "id": "openclaw",
+      "name": "OpenClaw",
+      "tagline": "Multi-channel assistant with a lobster-themed TUI",
+      "homepage": "https://github.com/openclaw/openclaw",
+      "install": { "npm": "openclaw", "brew": "openclaw/tap/openclaw" },
+      "config_paths": [
+        "~/.openclaw/config.toml",
+        "~/.config/openclaw/config.toml"
+      ],
+      "config_snippet": "registry/snippets/openclaw.yaml",
+      "required_secrets": ["anthropic-key"],
+      "optional_secrets": ["openai-key", "slack-bot-token"],
+      "mcp_compatible": true,
+      "supported_versions": ">=1.4.0",
+      "min_foreman_version": "0.1.2"
+    },
+    {
+      "id": "claude-code",
+      "name": "Claude Code",
+      "tagline": "Anthropic's official terminal coding agent",
+      "homepage": "https://github.com/anthropics/claude-code",
+      "install": { "npm": "@anthropic-ai/claude-code", "brew": null },
+      "config_paths": [
+        "~/.claude/settings.json",
+        "~/.config/claude-code/settings.json"
+      ],
+      "config_snippet": "registry/snippets/claude-code.yaml",
+      "required_secrets": ["anthropic-key"],
+      "optional_secrets": [],
+      "mcp_compatible": true,
+      "supported_versions": ">=0.5.0",
+      "min_foreman_version": "0.1.2"
+    },
+    {
+      "id": "zeroclaw",
+      "name": "ZeroClaw",
+      "tagline": "Minimalist self-hosted assistant for low-resource boxes",
+      "homepage": "https://github.com/openclaw/zeroclaw",
+      "install": { "npm": "zeroclaw", "brew": null },
+      "config_paths": ["~/.zeroclaw/config.toml"],
+      "config_snippet": "registry/snippets/zeroclaw.yaml",
+      "required_secrets": [],
+      "optional_secrets": ["anthropic-key", "openai-key"],
+      "mcp_compatible": true,
+      "supported_versions": ">=0.3.0",
+      "min_foreman_version": "0.1.2"
+    },
+    {
+      "id": "generic-mcp",
+      "name": "Generic MCP server",
+      "tagline": "Custom MCP-compatible agent — bring your own binary",
+      "homepage": "https://modelcontextprotocol.io/",
+      "install": { "npm": null, "brew": null },
+      "config_paths": [],
+      "config_snippet": null,
+      "required_secrets": [],
+      "optional_secrets": [],
+      "mcp_compatible": true,
+      "supported_versions": "*",
+      "min_foreman_version": "0.1.2"
+    }
+  ]
+}
