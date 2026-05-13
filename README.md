@@ -30,6 +30,13 @@ curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | 
 
 Pass `--uninstall` to remove the global package (`~/.foreman/` is left in place). Set `FOREMAN_VERSION` to pin a release, `FOREMAN_INSTALL_PREFIX` for a non-default npm prefix, or `FOREMAN_SKIP_NVM=1` to refuse the bootstrap path.
 
+Homebrew (macOS / Linuxbrew):
+
+```bash
+brew tap tuzlu07x/foreman
+brew install foreman
+```
+
 If you already manage Node yourself:
 
 ```bash
