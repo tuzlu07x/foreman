@@ -10,6 +10,7 @@ import {
 import type { PolicyEngine } from './policy-engine.js'
 import { RISK_THRESHOLD, type RiskScorer } from './risk-scorer.js'
 import type { RegistryService } from './registry.js'
+import type { SessionManager } from './session.js'
 
 export interface MediatorInput {
   requestId?: string
@@ -19,6 +20,8 @@ export interface MediatorInput {
   targetTool?: string
   signedPayload?: Buffer | string
   signature?: Buffer
+  sessionId?: string
+  tokenCount?: number
 }
 
 export interface MediatorOutput {
@@ -37,6 +40,7 @@ export interface MediatorDeps {
   risk: RiskScorer
   approval: ApprovalService
   gateway?: MCPGateway
+  sessionManager?: SessionManager
   bus?: EventBus<ForemanEventMap>
   timeoutMs?: number
 }
@@ -62,6 +66,18 @@ export class MediatorService {
         input,
         decision: 'denied',
         decidedBy: 'auth-failure',
+        riskScore: 0,
+        riskReasons: [],
+        createdAt,
+      })
+    }
+
+    if (input.sessionId && this.deps.sessionManager?.isHalted(input.sessionId)) {
+      return this.finalize({
+        requestId,
+        input,
+        decision: 'denied',
+        decidedBy: 'session:halted',
         riskScore: 0,
         riskReasons: [],
         createdAt,
@@ -136,6 +152,17 @@ export class MediatorService {
       decidedBy = policyResult.matchedRuleId
         ? `policy:${policyResult.matchedRuleId}`
         : 'auto'
+    }
+
+    if (decision === 'allowed' && input.sessionId && this.deps.sessionManager) {
+      const turn = this.deps.sessionManager.recordTurn(
+        input.sessionId,
+        input.tokenCount ?? 0,
+      )
+      if (!turn.allowed) {
+        decision = 'denied'
+        decidedBy = `session:${turn.reason ?? 'halted'}`
+      }
     }
 
     let result: unknown | undefined
