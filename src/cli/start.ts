@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { render, type Instance } from "ink";
 import React from "react";
 import {
+  BusApprovalService,
   ReadlineApprovalService,
   type ApprovalService,
 } from "../core/approval.js";
@@ -55,7 +56,10 @@ export function startForeman(
   const db = getDb();
   const registry = new RegistryService(db, bus);
   const audit = new AuditLogger(db, bus);
-  const approval = new ReadlineApprovalService({ bus });
+  const withTui = options.withTui ?? true;
+  const approval: ApprovalService = withTui
+    ? new BusApprovalService({ bus })
+    : new ReadlineApprovalService({ bus });
   const policy = new PolicyEngine(db, bus);
   if (existsSync(paths.policyPath)) policy.loadFromYaml(paths.policyPath);
 
@@ -67,7 +71,6 @@ export function startForeman(
     version: APP_VERSION,
   };
 
-  const withTui = options.withTui ?? true;
   let instance: Instance | null = null;
   let exitResolve: (() => void) | null = null;
   let keepAlive: NodeJS.Timeout | null = null;
