@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { agentsCommand } from "./agents-cli.js";
+import { doctorCommand } from "./doctor.js";
 import { initCommand } from "./init.js";
 import { logCommand } from "./log.js";
 import { mcpStdioCommand } from "./mcp-stdio.js";
@@ -24,5 +25,6 @@ program.addCommand(policyCommand);
 program.addCommand(agentsCommand);
 program.addCommand(secretsCommand);
 program.addCommand(registryCommand);
+program.addCommand(doctorCommand);
 
 program.parse();
