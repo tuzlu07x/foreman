@@ -15,6 +15,13 @@
       "when": 1778675900000,
       "tag": "0001_fts5_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1778676000000,
+      "tag": "0002_secrets",
+      "breakpoints": true
     }
   ]
 }

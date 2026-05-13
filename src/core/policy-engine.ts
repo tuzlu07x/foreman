@@ -62,6 +62,8 @@ const AgentEntrySchema = z
   .object({
     can_call: z.record(z.string(), z.array(z.string())).optional(),
     cannot_call: z.record(z.string(), z.array(z.string())).optional(),
+    can_access_secrets: z.array(z.string()).optional(),
+    cannot_access_secrets: z.array(z.string()).optional(),
     rate_limits: z
       .object({
         messages_per_minute: z.number().int().positive().optional(),
@@ -121,6 +123,16 @@ export class PolicyEngine {
           );
         }
       }
+      for (const secretName of entry.can_access_secrets ?? []) {
+        rows.push(
+          this.makeRow(agentId, secretTarget(secretName), "allow", null, now),
+        );
+      }
+      for (const secretName of entry.cannot_access_secrets ?? []) {
+        rows.push(
+          this.makeRow(agentId, secretTarget(secretName), "deny", null, now),
+        );
+      }
       if (entry.rate_limits) {
         const cond: RuleConditions = {
           rateLimits: {
@@ -146,6 +158,50 @@ export class PolicyEngine {
     if (rows.length === 0) return { rulesAdded: 0 };
     this.db.insert(policies).values(rows).run();
     return { rulesAdded: rows.length };
+  }
+
+  // Secret access is deny-by-default. Only an explicit allow rule grants access;
+  // anything else (no rule, conflicting rule, missing entry) denies.
+  evaluateSecretAccess(
+    sourceAgent: string,
+    secretName: string,
+  ): Evaluation & { decidedBy: string } {
+    const target = secretTarget(secretName);
+    const candidates = this.db
+      .select()
+      .from(policies)
+      .where(
+        and(
+          inArray(policies.sourceAgent, [sourceAgent, "*"]),
+          eq(policies.target, target),
+          eq(policies.enabled, 1),
+        ),
+      )
+      .all();
+
+    candidates.sort((a, b) => {
+      const aExact = a.sourceAgent === sourceAgent ? 0 : 1;
+      const bExact = b.sourceAgent === sourceAgent ? 0 : 1;
+      if (aExact !== bExact) return aExact - bExact;
+      return EFFECT_ORDER[a.effect] - EFFECT_ORDER[b.effect];
+    });
+
+    const winner = candidates[0];
+    if (winner && winner.effect === "allow") {
+      return {
+        decision: "allow",
+        matchedRuleId: winner.id,
+        decidedBy: `policy:${winner.id}`,
+      };
+    }
+    if (winner && winner.effect === "deny") {
+      return {
+        decision: "deny",
+        matchedRuleId: winner.id,
+        decidedBy: `policy:cannot_access_secrets`,
+      };
+    }
+    return { decision: "deny", decidedBy: "policy:deny-by-default" };
   }
 
   evaluate(req: EvaluateRequest): Evaluation {
@@ -323,4 +379,8 @@ export class PolicyEngine {
       enabled: 1,
     };
   }
+}
+
+export function secretTarget(secretName: string): string {
+  return `secret:${secretName}`;
 }

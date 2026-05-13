@@ -4,6 +4,7 @@ import { initCommand } from "./init.js";
 import { logCommand } from "./log.js";
 import { mcpStdioCommand } from "./mcp-stdio.js";
 import { policyCommand } from "./policy-cli.js";
+import { secretsCommand } from "./secrets-cli.js";
 import { startCommand } from "./start.js";
 
 const program = new Command();
@@ -20,5 +21,6 @@ program.addCommand(mcpStdioCommand);
 program.addCommand(logCommand);
 program.addCommand(policyCommand);
 program.addCommand(agentsCommand);
+program.addCommand(secretsCommand);
 
 program.parse();
