@@ -1,24 +1,12 @@
+<img src="assets/mascot/foreman-beaver-256.png" alt="Foreman the Beaver" width="220" align="right" />
+
 # Foreman
-
-```
-           ___[F]___
-          /         \
-         |__/ o   o \__|
-            |  \_/  |
-           /|_______|\
-          / |=======| \
-         /__|=======|__\
-            |_______|
-
-    Foreman — your agent guardian
-```
 
 **Your local AI agents talk to each other. You should know what they're saying.**
 
 A terminal-first guardian that mediates every call between the AI agents on your machine, scores each request for risk, and asks you before anything dangerous happens.
 
-<!-- asciinema cast placeholder — drop in once recorded -->
-<!-- mascot SVG / PNG hero — swap in once the designer bundle lands under assets/mascot/ -->
+<!-- asciinema cast placeholder — drop in once recorded via `examples/phishing-scenario/` -->
 <!-- [![asciicast](https://asciinema.org/a/PLACEHOLDER.svg)](https://asciinema.org/a/PLACEHOLDER) -->
 
 ---
