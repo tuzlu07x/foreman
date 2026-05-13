@@ -70,6 +70,17 @@ export interface ForemanEventMap {
     remember?: 'allow' | 'deny'
     resolvedBy: 'user' | 'timeout'
   }
+  'agent:message': {
+    agentId: string
+    message: unknown
+    receivedAt: number
+  }
+  'agent:disconnected': {
+    agentId: string
+    code: number | null
+    signal: NodeJS.Signals | null
+    disconnectedAt: number
+  }
 }
 
 export type ForemanEvent = keyof ForemanEventMap
