@@ -1,64 +1,69 @@
-import { Box, Text } from "ink";
-import BigText from "ink-big-text";
-import Gradient from "ink-gradient";
-import { useEffect, useState } from "react";
+import { Box, Text, useStdout } from "ink";
+import { useCallback, useEffect, useState } from "react";
 import { buildBootLines, type BootInfo } from "../boot-info.js";
-import { isAsciiMode, theme } from "../theme.js";
+import { theme } from "../theme.js";
+import { BootMascot } from "./boot-mascot.js";
+import { Wordmark } from "./wordmark.js";
 
-interface MascotLine {
-  text: string;
-  color?: string;
-}
+const CHECK_STAGGER_MS = 80;
 
-const MASCOT: MascotLine[] = [
-  { text: "   ___[F]___", color: theme.accent.primary },
-  { text: "  /         \\" },
-  { text: " |__/ o   o \\__|" },
-  { text: "    |  \\_/  |" },
-  { text: "   /|_______|\\" },
-  { text: "  / |==VEST=| \\", color: theme.accent.primary },
-  { text: " /__|=======|__\\", color: theme.accent.primary },
-  { text: "    |_______|" },
-];
-
-const STAGGER_MS = 80;
+type BootPhase = "morph" | "wordmark" | "checks" | "idle";
 
 export interface BootBannerProps {
   info: BootInfo;
+  animationsEnabled?: boolean;
 }
 
-export function BootBanner({ info }: BootBannerProps): JSX.Element {
+export function BootBanner({
+  info,
+  animationsEnabled = true,
+}: BootBannerProps): JSX.Element {
   const lines = buildBootLines(info);
-  const [visible, setVisible] = useState(0);
+  const { stdout } = useStdout();
+  const termCols = stdout?.columns ?? 80;
+
+  const [phase, setPhase] = useState<BootPhase>(
+    animationsEnabled ? "morph" : "idle",
+  );
+  const [visibleChecks, setVisibleChecks] = useState<number>(
+    animationsEnabled ? 0 : lines.length,
+  );
+
+  const handleMorphComplete = useCallback(() => {
+    setPhase((p) => (p === "morph" ? "wordmark" : p));
+  }, []);
+
+  const handleWordmarkComplete = useCallback(() => {
+    setPhase((p) => (p === "wordmark" ? "checks" : p));
+  }, []);
 
   useEffect(() => {
-    if (visible >= lines.length) return;
-    const t = setTimeout(() => setVisible((v) => v + 1), STAGGER_MS);
+    if (phase !== "checks") return;
+    if (visibleChecks >= lines.length) {
+      setPhase("idle");
+      return;
+    }
+    const t = setTimeout(
+      () => setVisibleChecks((v) => v + 1),
+      CHECK_STAGGER_MS,
+    );
     return () => clearTimeout(t);
-  }, [visible, lines.length]);
-
-  const ascii = isAsciiMode();
+  }, [phase, visibleChecks, lines.length]);
 
   return (
     <Box flexDirection="column">
       <Box flexDirection="row" gap={2}>
-        <Box flexDirection="column">
-          {MASCOT.map((line, i) => (
-            <Text key={i} color={line.color}>
-              {line.text}
-            </Text>
-          ))}
-        </Box>
+        <BootMascot
+          termCols={termCols}
+          enabled={animationsEnabled}
+          onMorphComplete={handleMorphComplete}
+        />
         <Box flexDirection="column" justifyContent="center">
-          {ascii ? (
-            <Text bold color={theme.accent.primary}>
-              FOREMAN
-            </Text>
-          ) : (
-            <Gradient colors={[theme.accent.primary, theme.accent.primaryAlt]}>
-              <BigText text="FOREMAN" font="block" />
-            </Gradient>
-          )}
+          <Wordmark
+            text="FOREMAN"
+            enabled={animationsEnabled && phase !== "morph"}
+            onComplete={handleWordmarkComplete}
+          />
           <Text color={theme.fg.muted}>
             your agent guardian · v{info.version}
           </Text>
@@ -66,7 +71,7 @@ export function BootBanner({ info }: BootBannerProps): JSX.Element {
       </Box>
 
       <Box flexDirection="column" marginTop={1}>
-        {lines.slice(0, visible).map((line, i) => (
+        {lines.slice(0, visibleChecks).map((line, i) => (
           <Text key={i}>
             <Text color={theme.accent.primary}>{theme.symbols.bullet}</Text>{" "}
             {line.label}
