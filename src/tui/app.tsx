@@ -1,6 +1,10 @@
 import { Box, useApp, useInput, useStdin } from "ink";
 import { useState } from "react";
 import type { BootInfo } from "./boot-info.js";
+import {
+  DashboardProvider,
+  type DashboardServices,
+} from "./dashboard-context.js";
 import { ActivityFeed } from "./components/activity-feed.js";
 import { AgentList } from "./components/agent-list.js";
 import { BootBanner } from "./components/boot-banner.js";
@@ -10,9 +14,18 @@ import { useLayout } from "./hooks.js";
 
 export interface AppProps {
   bootInfo: BootInfo;
+  services: DashboardServices;
 }
 
-export function App({ bootInfo }: AppProps): JSX.Element {
+export function App({ bootInfo, services }: AppProps): JSX.Element {
+  return (
+    <DashboardProvider {...services}>
+      <Shell bootInfo={bootInfo} />
+    </DashboardProvider>
+  );
+}
+
+function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const layout = useLayout();
   const { isRawModeSupported } = useStdin();
   const [quitConfirm, setQuitConfirm] = useState(false);

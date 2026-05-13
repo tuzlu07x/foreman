@@ -73,9 +73,13 @@ export function startForeman(
   let keepAlive: NodeJS.Timeout | null = null;
 
   if (withTui) {
-    instance = render(React.createElement(App, { bootInfo }), {
-      exitOnCtrlC: false,
-    });
+    instance = render(
+      React.createElement(App, {
+        bootInfo,
+        services: { db, bus, registry },
+      }),
+      { exitOnCtrlC: false },
+    );
   } else {
     keepAlive = setInterval(() => {}, 1 << 30);
   }
@@ -105,15 +109,14 @@ export function startForeman(
     closeDb();
   };
 
-  if (!withTui) {
-    process.once("SIGINT", () => {
-      if (exitResolve) {
-        const r = exitResolve;
-        exitResolve = null;
-        r();
-      }
-    });
-  }
+  process.once("SIGINT", () => {
+    if (instance) instance.unmount();
+    if (exitResolve) {
+      const r = exitResolve;
+      exitResolve = null;
+      r();
+    }
+  });
 
   return {
     registry,
