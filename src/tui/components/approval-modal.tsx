@@ -1,5 +1,4 @@
 import { Box, Text } from "ink";
-import { useEffect, useState } from "react";
 import type { ApprovalRequest } from "../../core/approval.js";
 import { explain } from "../reason-explanations.js";
 import { theme } from "../theme.js";
@@ -13,30 +12,13 @@ export interface ApprovalResolution {
 
 export interface ApprovalModalProps {
   request: ApprovalRequest;
-  timeoutMs?: number;
-  onResolve: (resolution: ApprovalResolution, resolvedBy: ResolvedBy) => void;
+  remainingSeconds: number;
 }
-
-const DEFAULT_TIMEOUT_MS = 60_000;
 
 export function ApprovalModal({
   request,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-  onResolve,
+  remainingSeconds,
 }: ApprovalModalProps): JSX.Element {
-  const [remaining, setRemaining] = useState(timeoutMs);
-
-  useEffect(() => {
-    if (remaining <= 0) {
-      onResolve({ decision: "denied" }, "timeout");
-      return;
-    }
-    const t = setTimeout(
-      () => setRemaining((r) => Math.max(0, r - 1000)),
-      1000,
-    );
-    return () => clearTimeout(t);
-  }, [remaining, onResolve]);
 
   return (
     <Box
@@ -103,7 +85,7 @@ export function ApprovalModal({
       <HotkeyRow />
 
       <Box marginTop={1} justifyContent="flex-end">
-        <TimerLabel remainingMs={remaining} />
+        <TimerLabel remainingSeconds={remainingSeconds} />
       </Box>
     </Box>
   );
@@ -168,17 +150,20 @@ function HotkeyRow(): JSX.Element {
   );
 }
 
-function TimerLabel({ remainingMs }: { remainingMs: number }): JSX.Element {
-  const seconds = Math.ceil(remainingMs / 1000);
+function TimerLabel({
+  remainingSeconds,
+}: {
+  remainingSeconds: number;
+}): JSX.Element {
   const color =
-    seconds <= 10
+    remainingSeconds <= 10
       ? theme.accent.danger
-      : seconds <= 30
+      : remainingSeconds <= 30
         ? theme.accent.warning
         : theme.fg.muted;
   return (
     <Text color={color}>
-      {theme.symbols.timer} {seconds}s left
+      {theme.symbols.timer} {remainingSeconds}s left
     </Text>
   );
 }
