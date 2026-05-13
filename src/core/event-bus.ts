@@ -26,6 +26,7 @@ export interface ForemanEventMap {
     riskReasons: string[]
     result?: unknown
     durationMs: number
+    createdAt: number
     decidedAt: number
   }
   'agent:registered': {
