@@ -1,0 +1,8 @@
+Placeholder so the directory is tracked. The real artefacts:
+
+  demo.cast — asciinema recording, produced by examples/phishing-scenario/run-demo.sh
+  demo.gif  — agg-rendered mirror
+  demo.svg  — svg-term-cli mirror
+
+…are recorded per-release and added separately. See
+examples/phishing-scenario/README.md for the recipe.
