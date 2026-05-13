@@ -256,7 +256,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           onSessionHalt={onSessionHalt}
         />
       )}
-      <BootBanner info={bootInfo} />
+      <BootBanner info={bootInfo} animationsEnabled={isRawModeSupported} />
       {pendingApproval ? (
         inspectOpen ? (
           <InspectView
