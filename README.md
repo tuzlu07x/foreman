@@ -57,7 +57,11 @@ Wire an agent (Claude Code example):
 }
 ```
 
-The full Claude Code recipe lives in [`examples/claude-code/`](examples/claude-code/). A minimal MCP agent that exercises the gateway is in [`examples/mock-agent/`](examples/mock-agent/).
+Per-agent recipes:
+
+- [`examples/claude-code/`](examples/claude-code/) — Anthropic's terminal coding agent
+- [`examples/hermes-integration/`](examples/hermes-integration/) — Nous Research's personal assistant (Telegram + Discord) with a phishing-safe policy
+- [`examples/mock-agent/`](examples/mock-agent/) — minimal MCP client that exercises the gateway end-to-end
 
 ## 5-minute demo
 
