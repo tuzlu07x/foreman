@@ -1,0 +1,121 @@
+name: homebrew-bump
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to bump to (e.g. 0.1.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    name: Bump Homebrew formula
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve target version
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            v="${{ inputs.version }}"
+          else
+            v="${GITHUB_REF_NAME#v}"
+          fi
+          if [ -z "${v}" ]; then
+            echo "::error::could not resolve target version"
+            exit 1
+          fi
+          echo "value=${v}" >> "${GITHUB_OUTPUT}"
+
+      - name: Wait for npm to publish
+        run: |
+          v="${{ steps.version.outputs.value }}"
+          for i in 1 2 3 4 5 6; do
+            if curl -fsSL "https://registry.npmjs.org/foreman-agent/${v}" >/dev/null 2>&1; then
+              echo "npm has foreman-agent@${v}"
+              exit 0
+            fi
+            echo "attempt $i — npm not ready yet, sleeping 30s"
+            sleep 30
+          done
+          echo "::error::npm registry did not publish foreman-agent@${v} within 3 minutes"
+          exit 1
+
+      - name: Compute tarball sha256
+        id: sha
+        run: |
+          v="${{ steps.version.outputs.value }}"
+          url="https://registry.npmjs.org/foreman-agent/-/foreman-agent-${v}.tgz"
+          tmp="$(mktemp)"
+          curl -fsSL "${url}" -o "${tmp}"
+          digest="$(sha256sum "${tmp}" | cut -d' ' -f1)"
+          rm -f "${tmp}"
+          echo "value=${digest}" >> "${GITHUB_OUTPUT}"
+          echo "url=${url}" >> "${GITHUB_OUTPUT}"
+
+      - name: Render formula
+        run: |
+          mkdir -p _render/Formula
+          sed \
+            -e "s|https://registry.npmjs.org/foreman-agent/-/foreman-agent-[0-9.]*\\.tgz|${{ steps.sha.outputs.url }}|" \
+            -e "s|^  sha256 \"[0-9a-f]\\{64\\}\"|  sha256 \"${{ steps.sha.outputs.value }}\"|" \
+            homebrew/foreman.rb > _render/Formula/foreman.rb
+          echo "--- rendered formula ---"
+          cat _render/Formula/foreman.rb
+
+      - name: Checkout tap repository
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        uses: actions/checkout@v4
+        with:
+          repository: tuzlu07x/homebrew-foreman
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Push formula update + open PR
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          v="${{ steps.version.outputs.value }}"
+          cd tap
+          git config user.name "foreman-release-bot"
+          git config user.email "foreman-release-bot@users.noreply.github.com"
+          mkdir -p Formula
+          cp ../_render/Formula/foreman.rb Formula/foreman.rb
+          branch="bump/foreman-${v}"
+          git checkout -B "${branch}"
+          git add Formula/foreman.rb
+          if git diff --cached --quiet; then
+            echo "formula already up to date for ${v}"
+            exit 0
+          fi
+          git commit -m "foreman ${v}"
+          git push --force-with-lease origin "${branch}"
+          gh pr create \
+            --repo tuzlu07x/homebrew-foreman \
+            --title "foreman ${v}" \
+            --body "Auto-bump from release of foreman-agent ${v} (sha256 \`${{ steps.sha.outputs.value }}\`)." \
+            --head "${branch}" \
+            --base main || true
+
+      - name: Skipped — tap token missing
+        if: ${{ env.HOMEBREW_TAP_TOKEN == '' }}
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          echo "::warning::HOMEBREW_TAP_TOKEN secret is not configured — rendered formula is in the job artifacts but no PR was opened."
+
+      - name: Upload rendered formula as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: foreman-formula
+          path: _render/Formula/foreman.rb

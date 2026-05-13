@@ -61,6 +61,16 @@ foreman start              # TUI boots, identity loaded, MCP gateway up
 
 If `foreman start` fails on a non-TTY environment, that's expected — the smoke test is for an interactive shell.
 
+## Homebrew tap (one-time)
+
+After the first `npm publish`, set up the tap repo so users can `brew install foreman`. Detailed steps live in [`homebrew/README.md`](./homebrew/README.md); the short version:
+
+1. Create the public repo **`tuzlu07x/homebrew-foreman`** on GitHub (MIT).
+2. Copy `homebrew/foreman.rb` from this repo into the tap's `Formula/foreman.rb`, bump the `url` + `sha256` for the published version (`curl -fsSL <tarball> | shasum -a 256`).
+3. Mint a fine-grained PAT (`contents: write`, `pull-requests: write`) on the tap repo and save it as the **`HOMEBREW_TAP_TOKEN`** secret on `tuzlu07x/foreman`.
+
+From the next GitHub release onwards, `.github/workflows/homebrew-bump.yml` auto-bumps the tap. You only need to repeat step 3 if the PAT rotates.
+
 ## Soft launch posts
 
 Each post below is a draft. Read it in your own voice, trim, then publish. Keep them short — the asciinema does the heavy lifting.
@@ -70,6 +80,7 @@ Each post below is a draft. Read it in your own voice, trim, then publish. Keep 
 **Title:** `Show HN: Foreman – a terminal-first guardian for your local AI agents`
 
 **Body:**
+
 ```
 Hi HN — I built Foreman because my laptop suddenly had three AI agents
 (Claude Code, a Hermes-style assistant, a custom MCP server) and none of
@@ -104,6 +115,7 @@ https://github.com/tuzlu07x/foreman
 **Title:** `[Project] Foreman: terminal guardian that audits + gates calls between your local AI agents`
 
 **Body:**
+
 ```
 If you're running Hermes/Claude Code/local LLM agents side-by-side, you
 probably noticed they're islands — no shared context, no log of what
