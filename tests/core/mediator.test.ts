@@ -9,6 +9,7 @@ import { MediatorService } from '../../src/core/mediator.js'
 import { PolicyEngine } from '../../src/core/policy-engine.js'
 import { RegistryService } from '../../src/core/registry.js'
 import { RiskScorer } from '../../src/core/risk-scorer.js'
+import { SessionManager } from '../../src/core/session.js'
 import { createInMemoryDb, type ForemanDb } from '../../src/db/client.js'
 import { requests } from '../../src/db/schema.js'
 import { sign } from '../../src/identity/signing.js'
@@ -216,6 +217,90 @@ agents:
       message: callMessage(1, 'read_file', { path: 'x.ts' }),
     })
     expect(result.requestId).toBe('my-custom-id')
+  })
+})
+
+describe('MediatorService — session halt', () => {
+  let db: ForemanDb
+  let sqlite: Database.Database
+  let bus: EventBus<ForemanEventMap>
+  let mediator: MediatorService
+  let sessionManager: SessionManager
+
+  beforeEach(() => {
+    const handle = createInMemoryDb()
+    db = handle.db
+    sqlite = handle.sqlite
+    bus = new EventBus<ForemanEventMap>()
+    const registry = new RegistryService(db, bus)
+    const policy = new PolicyEngine(db, bus)
+    policy.loadYamlText(`
+agents:
+  agent-a:
+    can_call:
+      agent-b: [echo]
+`)
+    const risk = new RiskScorer(db, [])
+    const approval: ApprovalService = {
+      request: vi.fn(
+        async (): Promise<ApprovalDecision> => ({ decision: 'denied' }),
+      ),
+    }
+    sessionManager = new SessionManager(db, { bus })
+    mediator = new MediatorService({
+      registry,
+      policy,
+      risk,
+      approval,
+      sessionManager,
+      bus,
+    })
+  })
+
+  afterEach(() => {
+    sqlite.close()
+  })
+
+  it('halts on the 6th turn — first 5 allowed, 6th denied with session:turn_limit', async () => {
+    const haltHandler = vi.fn()
+    bus.on('session:halted', haltHandler)
+    const sessionId = sessionManager.startSession(['agent-a', 'agent-b'])
+
+    for (let i = 1; i <= 5; i++) {
+      const result = await mediator.handleRequest({
+        sourceAgent: 'agent-a',
+        targetAgent: 'agent-b',
+        targetTool: 'echo',
+        message: callMessage(i, 'echo', { text: `turn ${i}` }),
+        sessionId,
+      })
+      expect(result.decision).toBe('allowed')
+    }
+    const sixth = await mediator.handleRequest({
+      sourceAgent: 'agent-a',
+      targetAgent: 'agent-b',
+      targetTool: 'echo',
+      message: callMessage(6, 'echo', { text: 'turn 6' }),
+      sessionId,
+    })
+    expect(sixth.decision).toBe('denied')
+    expect(sixth.decidedBy).toBe('session:turn_limit')
+    expect(haltHandler).toHaveBeenCalledOnce()
+    expect(sessionManager.isHalted(sessionId)).toBe(true)
+  })
+
+  it('blocks new calls on a session already halted', async () => {
+    const sessionId = sessionManager.startSession(['agent-a', 'agent-b'])
+    sessionManager.halt(sessionId)
+    const result = await mediator.handleRequest({
+      sourceAgent: 'agent-a',
+      targetAgent: 'agent-b',
+      targetTool: 'echo',
+      message: callMessage(1, 'echo', { text: 'x' }),
+      sessionId,
+    })
+    expect(result.decision).toBe('denied')
+    expect(result.decidedBy).toBe('session:halted')
   })
 })
 
