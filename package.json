@@ -19,8 +19,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:generate": "drizzle-kit generate:sqlite",
+    "db:check": "drizzle-kit check:sqlite"
   },
   "engines": {
     "node": ">=20"
