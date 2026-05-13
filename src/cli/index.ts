@@ -12,7 +12,7 @@ program
   .description(
     "Your local AI agents talk to each other. You should know what they're saying.",
   )
-  .version("0.1.0-pre");
+  .version("0.1.0");
 
 program.addCommand(initCommand);
 program.addCommand(startCommand);
