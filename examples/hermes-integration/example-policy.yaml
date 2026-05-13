@@ -1,0 +1,63 @@
+# Foreman policy tuned for Hermes (Nous Research) routed through 'foreman mcp-stdio'.
+# Drop into ~/.foreman/policy.yaml; see examples/hermes-integration/README.md.
+#
+# This policy is the v0.1.1 smart defaults narrowed to Hermes specifically, plus
+# a rate limit on the Hermes side of the bus.
+
+rules:
+  # Hermes reading secret-shaped files always asks the user — the path most
+  # phishing prompts pivot through ("share your config", "send me your key").
+  - source: hermes
+    target: "tool:read_file"
+    effect: ask
+    conditions:
+      pathMatch:
+        - "(^|/)\\.env(\\..*)?$"
+        - "\\.key$"
+        - "(^|/)id_rsa(\\.pub)?$"
+        - "(^|/)id_ed25519(\\.pub)?$"
+        - "(^|/)\\.npmrc$"
+        - "/\\.ssh/"
+        - "/\\.aws/credentials$"
+
+  # Same guard rail on writes to those paths.
+  - source: hermes
+    target: "tool:write_file"
+    effect: ask
+    conditions:
+      pathMatch:
+        - "(^|/)\\.env(\\..*)?$"
+        - "/\\.ssh/"
+        - "/\\.aws/credentials$"
+
+  # Block pipe-to-shell and the destructive commands phishing chains use to
+  # turn a "read a doc" win into exfiltration.
+  - source: hermes
+    target: "tool:shell_exec"
+    effect: ask
+    conditions:
+      commandMatch:
+        - "rm -rf"
+        - "chmod 777"
+        - "| sh"
+        - "| bash"
+        - "curl"
+        - "wget"
+
+  # Permissive defaults for the harmless reads Hermes makes constantly.
+  # The conditional asks above sort ahead, so secret-shaped reads still trigger.
+  - source: hermes
+    target: "tool:list_files"
+    effect: allow
+  - source: hermes
+    target: "tool:stat"
+    effect: allow
+  - source: hermes
+    target: "tool:read_file"
+    effect: allow
+
+agents:
+  hermes:
+    rate_limits:
+      messages_per_minute: 60
+      tokens_per_hour: 200000
