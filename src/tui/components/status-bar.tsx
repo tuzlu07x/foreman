@@ -8,7 +8,7 @@ export interface StatusBarProps {
 
 export function StatusBar({
   quitConfirm,
-  version = "0.1.0-pre",
+  version = "0.1.0",
 }: StatusBarProps): JSX.Element {
   if (quitConfirm) {
     return (

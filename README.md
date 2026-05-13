@@ -1,4 +1,4 @@
-<img src="assets/mascot/foreman-beaver-256.png" alt="Foreman the Beaver" width="220" align="right" />
+<img src="https://raw.githubusercontent.com/tuzlu07x/foreman/main/assets/mascot/foreman-beaver-256.png" alt="Foreman the Beaver" width="220" align="right" />
 
 # Foreman
 
@@ -44,8 +44,8 @@ Wire an agent (Claude Code example):
 // ~/.config/claude-code/mcp.json
 {
   "mcpServers": {
-    "foreman": { "command": "foreman", "args": ["mcp-stdio"] }
-  }
+    "foreman": { "command": "foreman", "args": ["mcp-stdio"] },
+  },
 }
 ```
 
@@ -64,14 +64,14 @@ See [`examples/phishing-scenario/STORYBOARD.md`](examples/phishing-scenario/STOR
 
 ## How is this different from…?
 
-| | Foreman | LangSmith / Helicone | Vanilla MCP |
-|---|---|---|---|
-| Runs on your machine | ✓ local-first | cloud SaaS | ✓ local |
-| Mediates agent-to-agent | ✓ | tracing only | direct calls, no mediator |
-| Asks before risky calls | ✓ in terminal | post-hoc dashboard | no approval layer |
-| Audit log under your control | ✓ SQLite + FTS5 | their cloud | no audit |
-| Identity per agent | ✓ Ed25519 | n/a | n/a |
-| Open source | MIT | proprietary | spec |
+|                              | Foreman         | LangSmith / Helicone | Vanilla MCP               |
+| ---------------------------- | --------------- | -------------------- | ------------------------- |
+| Runs on your machine         | ✓ local-first   | cloud SaaS           | ✓ local                   |
+| Mediates agent-to-agent      | ✓               | tracing only         | direct calls, no mediator |
+| Asks before risky calls      | ✓ in terminal   | post-hoc dashboard   | no approval layer         |
+| Audit log under your control | ✓ SQLite + FTS5 | their cloud          | no audit                  |
+| Identity per agent           | ✓ Ed25519       | n/a                  | n/a                       |
+| Open source                  | MIT             | proprietary          | spec                      |
 
 The closest mental model: a personal-scale gateway with an audit log, for the multi-agent setups people now run at home.
 

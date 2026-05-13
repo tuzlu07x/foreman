@@ -21,7 +21,7 @@ import type { BootInfo } from "../tui/boot-info.js";
 import { getForemanPaths } from "../utils/config.js";
 import { red } from "./colors.js";
 
-const APP_VERSION = "0.1.0-pre";
+const APP_VERSION = "0.1.0";
 
 export class NotInitialisedError extends Error {
   constructor(public readonly rootPath: string) {
