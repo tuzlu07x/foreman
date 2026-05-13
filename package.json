@@ -1,0 +1,67 @@
+{
+  "name": "foreman-agent",
+  "version": "0.1.0-pre",
+  "description": "Your local AI agents talk to each other. You should know what they're saying.",
+  "type": "module",
+  "bin": {
+    "foreman": "./dist/cli/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "FOREMAN.md",
+    "FOREMAN-TUI.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch --onSuccess \"node dist/cli/index.js\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "mcp",
+    "ai-agents",
+    "local-first",
+    "terminal",
+    "security",
+    "audit",
+    "typescript"
+  ],
+  "author": "Fatih Tuzlu",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tuzlu07x/foreman.git"
+  },
+  "homepage": "https://github.com/tuzlu07x/foreman#readme",
+  "bugs": {
+    "url": "https://github.com/tuzlu07x/foreman/issues"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "better-sqlite3": "^11.0.0",
+    "commander": "^12.0.0",
+    "drizzle-orm": "^0.30.0",
+    "ink": "^5.0.0",
+    "react": "^18.0.0",
+    "ulid": "^2.3.0",
+    "yaml": "^2.4.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.0.0",
+    "drizzle-kit": "^0.20.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  }
+}
