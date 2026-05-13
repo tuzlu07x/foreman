@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 import { Command } from 'commander'
+import { ReadlineApprovalService, type ApprovalService } from '../core/approval.js'
 import { AuditLogger } from '../core/audit.js'
 import { bus } from '../core/event-bus.js'
 import { RegistryService } from '../core/registry.js'
@@ -18,6 +19,7 @@ export class NotInitialisedError extends Error {
 export interface StartedForeman {
   registry: RegistryService
   audit: AuditLogger
+  approval: ApprovalService
   publicKey: Buffer
   /** Resolves when the user presses q (or SIGINT). */
   waitForExit: () => Promise<void>
@@ -34,6 +36,7 @@ export function startForeman(): StartedForeman {
   const db = getDb()
   const registry = new RegistryService(db, bus)
   const audit = new AuditLogger(db, bus)
+  const approval = new ReadlineApprovalService({ bus })
 
   let exitResolve: (() => void) | null = null
   // Keeps the event loop alive while we wait for q / SIGINT — AuditLogger's
@@ -60,7 +63,7 @@ export function startForeman(): StartedForeman {
     closeDb()
   }
 
-  return { registry, audit, publicKey, waitForExit, shutdown }
+  return { registry, audit, approval, publicKey, waitForExit, shutdown }
 }
 
 export const startCommand = new Command('start')
