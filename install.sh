@@ -153,9 +153,9 @@ verify_install() {
 
 next_steps() {
   printf "\n%sNext:%s\n" "${c_bold}" "${c_reset}"
-  printf "  1. ${c_orange}foreman init${c_reset}        one-time setup of ~/.foreman/\n"
-  printf "  2. ${c_orange}foreman agent add${c_reset}   wire up Hermes / Claude Code / a custom MCP agent\n"
-  printf "  3. ${c_orange}foreman start${c_reset}       boot the TUI\n"
+  printf "  1. %sforeman init%s        one-time setup of ~/.foreman/\n" "${c_orange}" "${c_reset}"
+  printf "  2. %sforeman agent add%s   wire up Hermes / Claude Code / a custom MCP agent\n" "${c_orange}" "${c_reset}"
+  printf "  3. %sforeman start%s       boot the TUI\n" "${c_orange}" "${c_reset}"
   printf "\n%sREADME: https://github.com/%s%s\n" "${c_dim}" "${REPO}" "${c_reset}"
 }
 
