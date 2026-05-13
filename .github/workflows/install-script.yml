@@ -1,0 +1,48 @@
+name: install-script
+
+on:
+  pull_request:
+    paths:
+      - "install.sh"
+      - ".github/workflows/install-script.yml"
+  push:
+    branches: [main]
+    paths:
+      - "install.sh"
+      - ".github/workflows/install-script.yml"
+
+jobs:
+  shellcheck:
+    name: shellcheck install.sh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+      - name: shellcheck --shell=bash install.sh
+        run: shellcheck --shell=bash install.sh
+
+  smoke:
+    name: smoke (help / unknown flag)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: --help exits 0 and prints usage
+        run: |
+          out=$(bash install.sh --help)
+          echo "$out" | grep -q "Foreman installer"
+          echo "$out" | grep -q "FOREMAN_INSTALL_PREFIX"
+      - name: unknown flag exits non-zero
+        run: |
+          set +e
+          bash install.sh --not-a-flag >/dev/null 2>&1
+          rc=$?
+          set -e
+          test "$rc" -ne 0
+      - name: FOREMAN_SKIP_NVM exits 1 when Node is missing
+        run: |
+          set +e
+          FOREMAN_SKIP_NVM=1 PATH="/bin:/usr/bin" bash install.sh >/dev/null 2>&1
+          rc=$?
+          set -e
+          test "$rc" -eq 1
