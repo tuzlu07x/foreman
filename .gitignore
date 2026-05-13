@@ -15,3 +15,6 @@ coverage/
 foreman.db
 foreman.db-journal
 .claude/
+assets/demo.cast
+assets/demo.gif
+assets/demo.svg
