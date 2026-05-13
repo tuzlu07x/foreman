@@ -1,87 +1,108 @@
-import { ulid } from 'ulid'
-import type { MCPGateway } from '../mcp/gateway.js'
-import type { JSONRPCMessage, JSONRPCRequest } from '../mcp/types.js'
-import type { ApprovalService } from './approval.js'
+import { ulid } from "ulid";
+import type { MCPGateway } from "../mcp/gateway.js";
+import type { JSONRPCMessage, JSONRPCRequest } from "../mcp/types.js";
+import type { ApprovalService } from "./approval.js";
 import {
   bus as defaultBus,
   type EventBus,
   type ForemanEventMap,
-} from './event-bus.js'
-import type { PolicyEngine } from './policy-engine.js'
-import { RISK_THRESHOLD, type RiskScorer } from './risk-scorer.js'
-import type { RegistryService } from './registry.js'
-import type { SessionManager } from './session.js'
+} from "./event-bus.js";
+import type { PolicyEngine } from "./policy-engine.js";
+import { RISK_THRESHOLD, type RiskScorer } from "./risk-scorer.js";
+import type { RegistryService } from "./registry.js";
+import { eq } from "drizzle-orm";
+import type { ForemanDb } from "../db/client.js";
+import { requests } from "../db/schema.js";
+import type { SessionManager } from "./session.js";
 
 export interface MediatorInput {
-  requestId?: string
-  sourceAgent: string
-  message: JSONRPCMessage
-  targetAgent?: string
-  targetTool?: string
-  signedPayload?: Buffer | string
-  signature?: Buffer
-  sessionId?: string
-  tokenCount?: number
+  requestId?: string;
+  sourceAgent: string;
+  message: JSONRPCMessage;
+  targetAgent?: string;
+  targetTool?: string;
+  signedPayload?: Buffer | string;
+  signature?: Buffer;
+  sessionId?: string;
+  tokenCount?: number;
 }
 
 export interface MediatorOutput {
-  requestId: string
-  decision: 'allowed' | 'denied'
-  decidedBy: string
-  riskScore: number
-  riskReasons: string[]
-  result?: unknown
-  durationMs: number
+  requestId: string;
+  decision: "allowed" | "denied";
+  decidedBy: string;
+  riskScore: number;
+  riskReasons: string[];
+  result?: unknown;
+  durationMs: number;
 }
 
 export interface MediatorDeps {
-  registry: RegistryService
-  policy: PolicyEngine
-  risk: RiskScorer
-  approval: ApprovalService
-  gateway?: MCPGateway
-  sessionManager?: SessionManager
-  bus?: EventBus<ForemanEventMap>
-  timeoutMs?: number
+  registry: RegistryService;
+  policy: PolicyEngine;
+  risk: RiskScorer;
+  approval: ApprovalService;
+  gateway?: MCPGateway;
+  sessionManager?: SessionManager;
+  db?: ForemanDb;
+  bus?: EventBus<ForemanEventMap>;
+  timeoutMs?: number;
 }
 
-const DEFAULT_TIMEOUT_MS = 30_000
+export class ReplayNotSupportedError extends Error {
+  constructor() {
+    super("MediatorService.replay() requires deps.db");
+    this.name = "ReplayNotSupportedError";
+  }
+}
+
+export class RequestNotFoundError extends Error {
+  constructor(public readonly requestId: string) {
+    super(`No request: ${requestId}`);
+    this.name = "RequestNotFoundError";
+  }
+}
+
+const DEFAULT_TIMEOUT_MS = 30_000;
 
 export class MediatorService {
-  private readonly bus: EventBus<ForemanEventMap>
-  private readonly timeoutMs: number
+  private readonly bus: EventBus<ForemanEventMap>;
+  private readonly timeoutMs: number;
 
   constructor(private readonly deps: MediatorDeps) {
-    this.bus = deps.bus ?? defaultBus
-    this.timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    this.bus = deps.bus ?? defaultBus;
+    this.timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
   async handleRequest(input: MediatorInput): Promise<MediatorOutput> {
-    const requestId = input.requestId ?? ulid()
-    const createdAt = Date.now()
+    const requestId = input.requestId ?? ulid();
+    const createdAt = Date.now();
 
     if (!this.authenticate(input)) {
       return this.finalize({
         requestId,
         input,
-        decision: 'denied',
-        decidedBy: 'auth-failure',
+        decision: "denied",
+        decidedBy: "auth-failure",
         riskScore: 0,
         riskReasons: [],
         createdAt,
-      })
+      });
     }
 
-    if (input.sessionId && this.deps.sessionManager?.isHalted(input.sessionId)) {
+    if (
+      input.sessionId &&
+      this.deps.sessionManager?.isHalted(input.sessionId)
+    ) {
       return this.finalize({
         requestId,
         input,
-        decision: 'denied',
-        decidedBy: 'session:halted',
+        decision: "denied",
+        decidedBy: "session:halted",
         riskScore: 0,
         riskReasons: [],
         createdAt,
-      })
+      });
     }
 
     const policyResult = this.deps.policy.evaluate({
@@ -89,18 +110,18 @@ export class MediatorService {
       targetAgent: input.targetAgent,
       targetTool: input.targetTool,
       args: this.argsFromMessage(input.message),
-    })
+    });
 
-    if (policyResult.decision === 'deny') {
+    if (policyResult.decision === "deny") {
       return this.finalize({
         requestId,
         input,
-        decision: 'denied',
-        decidedBy: `policy:${policyResult.matchedRuleId ?? 'unknown'}`,
+        decision: "denied",
+        decidedBy: `policy:${policyResult.matchedRuleId ?? "unknown"}`,
         riskScore: 0,
         riskReasons: [],
         createdAt,
-      })
+      });
     }
 
     const risk = this.deps.risk.score({
@@ -108,16 +129,16 @@ export class MediatorService {
       targetAgent: input.targetAgent,
       targetTool: input.targetTool,
       args: this.argsFromMessage(input.message),
-    })
+    });
 
-    let decision: 'allowed' | 'denied'
-    let decidedBy: string
+    let decision: "allowed" | "denied";
+    let decidedBy: string;
 
     const needsApproval =
-      policyResult.decision === 'ask' || risk.score >= RISK_THRESHOLD
+      policyResult.decision === "ask" || risk.score >= RISK_THRESHOLD;
 
     if (needsApproval) {
-      this.bus.emit('approval:requested', {
+      this.bus.emit("approval:requested", {
         requestId,
         sourceAgent: input.sourceAgent,
         targetAgent: input.targetAgent,
@@ -125,7 +146,7 @@ export class MediatorService {
         args: this.argsFromMessage(input.message),
         riskScore: risk.score,
         riskReasons: risk.reasons,
-      })
+      });
       const approval = await this.deps.approval.request({
         requestId,
         sourceAgent: input.sourceAgent,
@@ -134,45 +155,45 @@ export class MediatorService {
         args: this.argsFromMessage(input.message),
         riskScore: risk.score,
         riskReasons: risk.reasons,
-      })
-      decision = approval.decision
-      decidedBy = 'user'
+      });
+      decision = approval.decision;
+      decidedBy = "user";
       if (approval.remember && input.targetTool) {
         const target = input.targetAgent
           ? `${input.targetAgent}:${input.targetTool}`
-          : `tool:${input.targetTool}`
+          : `tool:${input.targetTool}`;
         this.deps.policy.remember({
           sourceAgent: input.sourceAgent,
           target,
           effect: approval.remember,
-        })
+        });
       }
     } else {
-      decision = 'allowed'
+      decision = "allowed";
       decidedBy = policyResult.matchedRuleId
         ? `policy:${policyResult.matchedRuleId}`
-        : 'auto'
+        : "auto";
     }
 
-    if (decision === 'allowed' && input.sessionId && this.deps.sessionManager) {
+    if (decision === "allowed" && input.sessionId && this.deps.sessionManager) {
       const turn = this.deps.sessionManager.recordTurn(
         input.sessionId,
         input.tokenCount ?? 0,
-      )
+      );
       if (!turn.allowed) {
-        decision = 'denied'
-        decidedBy = `session:${turn.reason ?? 'halted'}`
+        decision = "denied";
+        decidedBy = `session:${turn.reason ?? "halted"}`;
       }
     }
 
-    let result: unknown | undefined
-    if (decision === 'allowed' && input.targetAgent && this.deps.gateway) {
+    let result: unknown | undefined;
+    if (decision === "allowed" && input.targetAgent && this.deps.gateway) {
       try {
-        result = await this.forwardToTarget(input.targetAgent, input.message)
+        result = await this.forwardToTarget(input.targetAgent, input.message);
       } catch (err) {
-        decision = 'denied'
-        decidedBy = 'route-error'
-        result = { error: err instanceof Error ? err.message : String(err) }
+        decision = "denied";
+        decidedBy = "route-error";
+        result = { error: err instanceof Error ? err.message : String(err) };
       }
     }
 
@@ -185,82 +206,108 @@ export class MediatorService {
       riskReasons: risk.reasons,
       createdAt,
       result,
-    })
+    });
+  }
+
+  async replay(requestId: string): Promise<MediatorOutput> {
+    if (!this.deps.db) throw new ReplayNotSupportedError();
+    const row = this.deps.db
+      .select()
+      .from(requests)
+      .where(eq(requests.id, requestId))
+      .get();
+    if (!row) throw new RequestNotFoundError(requestId);
+    const args = safeJsonParse(row.args);
+    return this.handleRequest({
+      sourceAgent: row.sourceAgent,
+      targetAgent: row.targetAgent ?? undefined,
+      targetTool: row.targetTool ?? undefined,
+      message: {
+        jsonrpc: "2.0",
+        id: 0,
+        method: row.targetTool ? "tools/call" : "unknown",
+        params: row.targetTool
+          ? { name: row.targetTool, arguments: args }
+          : args,
+      } as JSONRPCMessage,
+    });
   }
 
   private authenticate(input: MediatorInput): boolean {
-    if (!input.signature || input.signedPayload === undefined) return true
+    if (!input.signature || input.signedPayload === undefined) return true;
     return this.deps.registry.authenticate(
       input.sourceAgent,
       input.signedPayload,
       input.signature,
-    )
+    );
   }
 
   private argsFromMessage(message: JSONRPCMessage): unknown {
-    if (!('params' in message)) return undefined
-    const params = message.params as { arguments?: unknown } | undefined
-    return params?.arguments ?? params
+    if (!("params" in message)) return undefined;
+    const params = message.params as { arguments?: unknown } | undefined;
+    return params?.arguments ?? params;
   }
 
   private forwardToTarget(
     targetAgent: string,
     message: JSONRPCMessage,
   ): Promise<unknown> {
-    const gateway = this.deps.gateway
+    const gateway = this.deps.gateway;
     if (!gateway) {
-      return Promise.reject(new Error('No gateway configured'))
+      return Promise.reject(new Error("No gateway configured"));
     }
-    if (!('id' in message) || !('method' in message)) {
-      return Promise.reject(new Error('Only requests can be forwarded'))
+    if (!("id" in message) || !("method" in message)) {
+      return Promise.reject(new Error("Only requests can be forwarded"));
     }
-    const expectedId = (message as JSONRPCRequest).id
+    const expectedId = (message as JSONRPCRequest).id;
     return new Promise((resolve, reject) => {
-      let off: (() => void) | null = null
+      let off: (() => void) | null = null;
       const timer = setTimeout(() => {
-        off?.()
-        reject(new Error(`Timeout waiting for response from ${targetAgent}`))
-      }, this.timeoutMs)
-      off = this.bus.on('agent:message', (e) => {
-        if (e.agentId !== targetAgent) return
-        const msg = e.message as JSONRPCMessage
-        if (!('id' in msg) || msg.id !== expectedId) return
-        clearTimeout(timer)
-        off?.()
-        if ('result' in msg) resolve(msg.result)
-        else if ('error' in msg) {
+        off?.();
+        reject(new Error(`Timeout waiting for response from ${targetAgent}`));
+      }, this.timeoutMs);
+      off = this.bus.on("agent:message", (e) => {
+        if (e.agentId !== targetAgent) return;
+        const msg = e.message as JSONRPCMessage;
+        if (!("id" in msg) || msg.id !== expectedId) return;
+        clearTimeout(timer);
+        off?.();
+        if ("result" in msg) resolve(msg.result);
+        else if ("error" in msg) {
           reject(
             new Error(
-              typeof msg.error === 'object' && msg.error !== null && 'message' in msg.error
+              typeof msg.error === "object" &&
+                msg.error !== null &&
+                "message" in msg.error
                 ? String((msg.error as { message: unknown }).message)
                 : JSON.stringify(msg.error),
             ),
-          )
-        } else resolve(undefined)
-      })
+          );
+        } else resolve(undefined);
+      });
       try {
-        gateway.send(targetAgent, message)
+        gateway.send(targetAgent, message);
       } catch (err) {
-        clearTimeout(timer)
-        off?.()
-        reject(err)
+        clearTimeout(timer);
+        off?.();
+        reject(err);
       }
-    })
+    });
   }
 
   private finalize(args: {
-    requestId: string
-    input: MediatorInput
-    decision: 'allowed' | 'denied'
-    decidedBy: string
-    riskScore: number
-    riskReasons: string[]
-    createdAt: number
-    result?: unknown
+    requestId: string;
+    input: MediatorInput;
+    decision: "allowed" | "denied";
+    decidedBy: string;
+    riskScore: number;
+    riskReasons: string[];
+    createdAt: number;
+    result?: unknown;
   }): MediatorOutput {
-    const decidedAt = Date.now()
-    const durationMs = decidedAt - args.createdAt
-    this.bus.emit('request:decided', {
+    const decidedAt = Date.now();
+    const durationMs = decidedAt - args.createdAt;
+    this.bus.emit("request:decided", {
       requestId: args.requestId,
       sourceAgent: args.input.sourceAgent,
       targetAgent: args.input.targetAgent,
@@ -274,7 +321,7 @@ export class MediatorService {
       durationMs,
       createdAt: args.createdAt,
       decidedAt,
-    })
+    });
     return {
       requestId: args.requestId,
       decision: args.decision,
@@ -283,6 +330,14 @@ export class MediatorService {
       riskReasons: args.riskReasons,
       result: args.result,
       durationMs,
-    }
+    };
+  }
+}
+
+function safeJsonParse(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
   }
 }
