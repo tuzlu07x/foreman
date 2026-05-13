@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+coverage/
+.vitest-cache/
+.idea/
+.vscode/
+*.tsbuildinfo
+.foreman/
+foreman.db
+foreman.db-journal
+.claude/
