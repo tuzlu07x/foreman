@@ -14,6 +14,7 @@ import { eq } from "drizzle-orm";
 import type { ForemanDb } from "../db/client.js";
 import { requests } from "../db/schema.js";
 import type { SessionManager } from "./session.js";
+import { SecretNotFoundError, type SecretStore } from "./secret-store.js";
 
 export interface MediatorInput {
   requestId?: string;
@@ -47,6 +48,28 @@ export interface MediatorDeps {
   db?: ForemanDb;
   bus?: EventBus<ForemanEventMap>;
   timeoutMs?: number;
+  secretStore?: SecretStore;
+}
+
+export interface SecretGetInput {
+  sourceAgent: string;
+  secretName: string;
+  requestId?: string;
+}
+
+export interface SecretGetOutput {
+  requestId: string;
+  decision: "allowed" | "denied";
+  decidedBy: string;
+  value?: string;
+  error?: string;
+}
+
+export class SecretStoreNotConfiguredError extends Error {
+  constructor() {
+    super("MediatorService.handleSecretGet() requires deps.secretStore");
+    this.name = "SecretStoreNotConfiguredError";
+  }
 }
 
 export class ReplayNotSupportedError extends Error {
@@ -209,6 +232,70 @@ export class MediatorService {
     });
   }
 
+  // Secret access bypasses risk scoring and the approval modal — policy is the
+  // only gate. Audit row is still written via request:decided so log search
+  // covers it.
+  async handleSecretGet(input: SecretGetInput): Promise<SecretGetOutput> {
+    if (!this.deps.secretStore) throw new SecretStoreNotConfiguredError();
+    const requestId = input.requestId ?? ulid();
+    const createdAt = Date.now();
+    const args = { name: input.secretName };
+
+    const evaluation = this.deps.policy.evaluateSecretAccess(
+      input.sourceAgent,
+      input.secretName,
+    );
+
+    if (evaluation.decision !== "allow") {
+      this.emitSecretDecision({
+        requestId,
+        sourceAgent: input.sourceAgent,
+        args,
+        decision: "denied",
+        decidedBy: evaluation.decidedBy,
+        createdAt,
+      });
+      return {
+        requestId,
+        decision: "denied",
+        decidedBy: evaluation.decidedBy,
+      };
+    }
+
+    let value: string | undefined;
+    let decision: "allowed" | "denied" = "allowed";
+    let decidedBy = evaluation.decidedBy;
+    let errorMessage: string | undefined;
+    try {
+      value = this.deps.secretStore.get(input.secretName);
+    } catch (err) {
+      decision = "denied";
+      decidedBy =
+        err instanceof SecretNotFoundError
+          ? "secret-store:not-found"
+          : "secret-store:error";
+      errorMessage = err instanceof Error ? err.message : String(err);
+    }
+
+    this.emitSecretDecision({
+      requestId,
+      sourceAgent: input.sourceAgent,
+      args,
+      decision,
+      decidedBy,
+      createdAt,
+      result: decision === "allowed" ? { ok: true } : { error: errorMessage },
+    });
+
+    return {
+      requestId,
+      decision,
+      decidedBy,
+      value,
+      error: errorMessage,
+    };
+  }
+
   async replay(requestId: string): Promise<MediatorOutput> {
     if (!this.deps.db) throw new ReplayNotSupportedError();
     const row = this.deps.db
@@ -292,6 +379,33 @@ export class MediatorService {
         off?.();
         reject(err);
       }
+    });
+  }
+
+  private emitSecretDecision(args: {
+    requestId: string;
+    sourceAgent: string;
+    args: unknown;
+    decision: "allowed" | "denied";
+    decidedBy: string;
+    createdAt: number;
+    result?: unknown;
+  }): void {
+    const decidedAt = Date.now();
+    this.bus.emit("request:decided", {
+      requestId: args.requestId,
+      sourceAgent: args.sourceAgent,
+      targetAgent: "foreman",
+      targetTool: "secrets/get",
+      args: args.args,
+      decision: args.decision,
+      decidedBy: args.decidedBy,
+      riskScore: 0,
+      riskReasons: [],
+      result: args.result,
+      durationMs: decidedAt - args.createdAt,
+      createdAt: args.createdAt,
+      decidedAt,
     });
   }
 

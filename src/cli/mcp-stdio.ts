@@ -7,8 +7,10 @@ import { MediatorService } from "../core/mediator.js";
 import { PolicyEngine } from "../core/policy-engine.js";
 import { RegistryService } from "../core/registry.js";
 import { RiskScorer } from "../core/risk-scorer.js";
+import { SecretStore } from "../core/secret-store.js";
 import { SessionManager } from "../core/session.js";
 import { closeDb, getDb } from "../db/client.js";
+import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { createDecoder, encodeMessage } from "../mcp/framing.js";
 import type { JSONRPCMessage } from "../mcp/types.js";
 import { getForemanPaths } from "../utils/config.js";
@@ -49,6 +51,7 @@ interface Services {
   mediator: MediatorService;
   sessionManager: SessionManager;
   audit: AuditLogger;
+  secretStore: SecretStore;
 }
 
 function bootServices(): Services {
@@ -61,6 +64,7 @@ function bootServices(): Services {
   if (existsSync(paths.policyPath)) policy.loadFromYaml(paths.policyPath);
   const risk = new RiskScorer(db);
   const sessionManager = new SessionManager(db, { bus });
+  const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
   const mediator = new MediatorService({
     registry,
     policy,
@@ -69,8 +73,18 @@ function bootServices(): Services {
     sessionManager,
     db,
     bus,
+    secretStore,
   });
-  return { registry, policy, risk, approval, mediator, sessionManager, audit };
+  return {
+    registry,
+    policy,
+    risk,
+    approval,
+    mediator,
+    sessionManager,
+    audit,
+    secretStore,
+  };
 }
 
 function autoRegisterSource(
@@ -128,11 +142,55 @@ export async function handleMessage(
     });
   }
   if (method === "tools/list") {
-    return reply(id, { tools: [] });
+    return reply(id, {
+      tools: [
+        {
+          name: "secrets/get",
+          description:
+            "Fetch a stored secret by name. Policy-gated; deny-by-default unless the agent has can_access_secrets for that name.",
+          inputSchema: {
+            type: "object",
+            required: ["name"],
+            properties: {
+              name: {
+                type: "string",
+                description: "The secret's name in the Foreman secret store.",
+              },
+            },
+          },
+        },
+      ],
+    });
   }
   if (method === "tools/call") {
-    const params = (msg as { params?: { name?: string } }).params;
+    const params = (
+      msg as {
+        params?: { name?: string; arguments?: Record<string, unknown> };
+      }
+    ).params;
     const toolName = params?.name;
+
+    if (toolName === "secrets/get") {
+      const secretName = params?.arguments?.name;
+      if (typeof secretName !== "string" || secretName.length === 0) {
+        return replyError(
+          id,
+          -32602,
+          "secrets/get requires args.name (string)",
+        );
+      }
+      const result = await services.mediator.handleSecretGet({
+        sourceAgent,
+        secretName,
+      });
+      if (result.decision === "allowed" && result.value !== undefined) {
+        return reply(id, {
+          content: [{ type: "text", text: result.value }],
+        });
+      }
+      return replyError(id, -32603, `Denied by ${result.decidedBy}`);
+    }
+
     const result = await services.mediator.handleRequest({
       sourceAgent,
       targetTool: toolName,
