@@ -26,11 +26,12 @@ import {
   type LogFilters,
 } from "./pages/logs-query.js";
 import { PolicyPage } from "./pages/policy-page.js";
+import { SessionsPage } from "./pages/sessions-page.js";
 import { launchEditor } from "./launch-editor.js";
 
 const APPROVAL_TIMEOUT_MS = 60_000;
 
-export type Page = "dashboard" | "logs" | "policy";
+export type Page = "dashboard" | "logs" | "policy" | "sessions";
 
 export interface AppProps {
   bootInfo: BootInfo;
@@ -48,7 +49,8 @@ export function App({ bootInfo, services }: AppProps): JSX.Element {
 function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const layout = useLayout();
   const { isRawModeSupported } = useStdin();
-  const { bus, mediator, sqlite, policy, policyPath } = useDashboardServices();
+  const { bus, mediator, sqlite, policy, policyPath, sessionManager } =
+    useDashboardServices();
 
   const [page, setPage] = useState<Page>("dashboard");
   const [quitConfirm, setQuitConfirm] = useState(false);
@@ -56,6 +58,10 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const [policySelectedIdx, setPolicySelectedIdx] = useState(0);
   const [policyExpanded, setPolicyExpanded] = useState(false);
   const [policyNotice, setPolicyNotice] = useState<string | null>(null);
+
+  const [sessionSelectedIdx, setSessionSelectedIdx] = useState(0);
+  const [sessionExpanded, setSessionExpanded] = useState(false);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
 
   const [pendingApproval, setPendingApproval] =
     useState<ApprovalRequest | null>(null);
@@ -195,6 +201,22 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     }
   }, [policy, policyPath]);
 
+  const onSessionHalt = useCallback((): void => {
+    if (!sessionManager) {
+      setSessionNotice("session manager unavailable");
+      return;
+    }
+    const all = sessionManager.list();
+    const target = all[sessionSelectedIdx];
+    if (!target) return;
+    if (target.status !== "active") {
+      setSessionNotice(`session ${target.id} already ${target.status}`);
+      return;
+    }
+    sessionManager.halt(target.id, "manual");
+    setSessionNotice(`session ${target.id} halted`);
+  }, [sessionManager, sessionSelectedIdx]);
+
   return (
     <Box flexDirection="column">
       {isRawModeSupported && (
@@ -227,6 +249,11 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           setPolicyExpanded={setPolicyExpanded}
           onPolicyToggle={onPolicyToggle}
           onPolicyEdit={onPolicyEdit}
+          sessionSelectedIdx={sessionSelectedIdx}
+          setSessionSelectedIdx={setSessionSelectedIdx}
+          sessionExpanded={sessionExpanded}
+          setSessionExpanded={setSessionExpanded}
+          onSessionHalt={onSessionHalt}
         />
       )}
       <BootBanner info={bootInfo} />
@@ -259,6 +286,12 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           selectedIdx={policySelectedIdx}
           expanded={policyExpanded}
           notice={policyNotice}
+        />
+      ) : page === "sessions" ? (
+        <SessionsPage
+          selectedIdx={sessionSelectedIdx}
+          expanded={sessionExpanded}
+          notice={sessionNotice}
         />
       ) : (
         <Box flexGrow={1}>{renderPanels(layout)}</Box>
@@ -297,6 +330,11 @@ interface KeyboardHandlerProps {
   setPolicyExpanded: (v: boolean) => void;
   onPolicyToggle: () => void;
   onPolicyEdit: () => Promise<void>;
+  sessionSelectedIdx: number;
+  setSessionSelectedIdx: (next: number) => void;
+  sessionExpanded: boolean;
+  setSessionExpanded: (v: boolean) => void;
+  onSessionHalt: () => void;
 }
 
 function KeyboardHandler(props: KeyboardHandlerProps): null {
@@ -330,6 +368,11 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     setPolicyExpanded,
     onPolicyToggle,
     onPolicyEdit,
+    sessionSelectedIdx,
+    setSessionSelectedIdx,
+    sessionExpanded,
+    setSessionExpanded,
+    onSessionHalt,
   } = props;
 
   useInput((input, key) => {
@@ -437,6 +480,23 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "q") exit();
       return;
     }
+    if (page === "sessions") {
+      if (key.escape) {
+        setPage("dashboard");
+        setSessionExpanded(false);
+        return;
+      }
+      if (key.upArrow) {
+        setSessionSelectedIdx(Math.max(0, sessionSelectedIdx - 1));
+        setSessionExpanded(false);
+      } else if (key.downArrow) {
+        setSessionSelectedIdx(sessionSelectedIdx + 1);
+        setSessionExpanded(false);
+      } else if (key.return) setSessionExpanded(!sessionExpanded);
+      else if (input === "k") onSessionHalt();
+      else if (input === "q") exit();
+      return;
+    }
     if (quitConfirm) {
       if (input === "y" || input === "Y") exit();
       else if (input === "n" || input === "N" || key.escape)
@@ -447,6 +507,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     else if (key.ctrl && input === "c") setQuitConfirm(true);
     else if (input === "l") setPage("logs");
     else if (input === "p") setPage("policy");
+    else if (input === "s") setPage("sessions");
   });
   return null;
 }

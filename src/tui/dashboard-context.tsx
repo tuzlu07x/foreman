@@ -5,6 +5,7 @@ import type { EventBus, ForemanEventMap } from "../core/event-bus.js";
 import type { MediatorService } from "../core/mediator.js";
 import type { PolicyEngine } from "../core/policy-engine.js";
 import type { RegistryService } from "../core/registry.js";
+import type { SessionManager } from "../core/session.js";
 
 export interface DashboardServices {
   db: ForemanDb;
@@ -14,6 +15,7 @@ export interface DashboardServices {
   mediator?: MediatorService;
   policy?: PolicyEngine;
   policyPath?: string;
+  sessionManager?: SessionManager;
 }
 
 const DashboardContext = createContext<DashboardServices | null>(null);
