@@ -14,5 +14,5 @@ export default defineConfig({
   treeshake: true,
   minify: false,
   onSuccess:
-    "chmod +x dist/cli/index.js && mkdir -p dist/db/migrations/meta && cp src/db/migrations/*.sql dist/db/migrations/ && cp src/db/migrations/meta/*.json dist/db/migrations/meta/",
+    "chmod +x dist/cli/index.js && mkdir -p dist/db/migrations/meta && cp src/db/migrations/*.sql dist/db/migrations/ && cp src/db/migrations/meta/*.json dist/db/migrations/meta/ && mkdir -p dist/assets/mascot && cp assets/mascot/terminal-*.png dist/assets/mascot/",
 });
