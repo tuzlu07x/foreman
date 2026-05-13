@@ -12,6 +12,8 @@ export interface ForemanPaths {
   policyPath: string;
   /** Ed25519 master identity (0600). */
   identityPath: string;
+  /** 32-byte AES-256 master key for the secret store (0600). */
+  secretsKeyPath: string;
   /** Migration .sql directory shipped with the package. */
   migrationsPath: string;
 }
@@ -27,6 +29,7 @@ export function getForemanPaths(): ForemanPaths {
     dbPath: resolve(root, "foreman.db"),
     policyPath: resolve(root, "policy.yaml"),
     identityPath: resolve(root, "identity.key"),
+    secretsKeyPath: resolve(root, "secrets.key"),
     migrationsPath: resolveMigrationsDir(),
   };
 }
