@@ -96,7 +96,15 @@ export function startForeman(
     instance = render(
       React.createElement(App, {
         bootInfo,
-        services: { db, sqlite, bus, registry, mediator },
+        services: {
+          db,
+          sqlite,
+          bus,
+          registry,
+          mediator,
+          policy,
+          policyPath: paths.policyPath,
+        },
       }),
       { exitOnCtrlC: false },
     );
