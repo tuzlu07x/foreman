@@ -25,6 +25,11 @@ export interface Evaluation {
 }
 
 export interface RuleConditions {
+  /** Rule applies only when `args.path` matches one of these regex patterns. */
+  pathMatch?: string[];
+  /** Rule applies only when `args.command` (or first array element) contains one of these substrings. */
+  commandMatch?: string[];
+  /** Rule does NOT apply when `args.path` matches this regex. */
   pathNotMatch?: string;
   rateLimits?: {
     messagesPerMinute?: number;
@@ -41,6 +46,8 @@ export interface RememberInput {
 
 const RuleConditionsSchema: z.ZodType<RuleConditions> = z
   .object({
+    pathMatch: z.array(z.string()).optional(),
+    commandMatch: z.array(z.string()).optional(),
     pathNotMatch: z.string().optional(),
     rateLimits: z
       .object({
@@ -227,6 +234,11 @@ export class PolicyEngine {
       const aExact = a.sourceAgent === req.sourceAgent ? 0 : 1;
       const bExact = b.sourceAgent === req.sourceAgent ? 0 : 1;
       if (aExact !== bExact) return aExact - bExact;
+      // Conditional rules win over conditionless ones — a path-pattern `ask`
+      // must be evaluated before a blanket `allow` on the same target.
+      const aSpec = a.conditions ? 0 : 1;
+      const bSpec = b.conditions ? 0 : 1;
+      if (aSpec !== bSpec) return aSpec - bSpec;
       return EFFECT_ORDER[a.effect] - EFFECT_ORDER[b.effect];
     });
 
@@ -309,7 +321,34 @@ export class PolicyEngine {
       const path = this.extractPath(req.args);
       if (path && new RegExp(cond.pathNotMatch).test(path)) return false;
     }
+    if (cond.pathMatch && cond.pathMatch.length > 0) {
+      const path = this.extractPath(req.args);
+      if (!path) return false;
+      const hit = cond.pathMatch.some((p) => safeRegexTest(p, path));
+      if (!hit) return false;
+    }
+    if (cond.commandMatch && cond.commandMatch.length > 0) {
+      const command = this.extractCommand(req.args);
+      if (!command) return false;
+      const hit = cond.commandMatch.some((sub) => command.includes(sub));
+      if (!hit) return false;
+    }
     return true;
+  }
+
+  private extractCommand(args: unknown): string | null {
+    if (typeof args !== "object" || args === null) return null;
+    const obj = args as { command?: unknown; args?: unknown };
+    if (typeof obj.command === "string") {
+      if (Array.isArray(obj.args)) {
+        return [obj.command, ...obj.args.map(String)].join(" ");
+      }
+      return obj.command;
+    }
+    if (Array.isArray(obj.command)) {
+      return obj.command.map(String).join(" ");
+    }
+    return null;
   }
 
   private checkRateLimits(req: EvaluateRequest): Evaluation | null {
@@ -383,4 +422,12 @@ export class PolicyEngine {
 
 export function secretTarget(secretName: string): string {
   return `secret:${secretName}`;
+}
+
+function safeRegexTest(pattern: string, input: string): boolean {
+  try {
+    return new RegExp(pattern).test(input);
+  } catch {
+    return false;
+  }
 }
