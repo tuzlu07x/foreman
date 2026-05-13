@@ -11,5 +11,6 @@ export default defineConfig({
   splitting: false,
   sourcemap: true,
   shims: false,
-  onSuccess: 'chmod +x dist/cli/index.js',
+  onSuccess:
+    'chmod +x dist/cli/index.js && rm -rf dist/db/migrations && mkdir -p dist/db && cp -R src/db/migrations dist/db/migrations',
 })
