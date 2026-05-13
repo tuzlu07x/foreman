@@ -4,6 +4,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,11 +38,37 @@ describe("foreman init", () => {
     expect(result.policyWasNew).toBe(true);
   });
 
-  it("writes a non-empty policy template", () => {
+  it("writes the smart-default policy template", () => {
     runInit();
     const policyText = readFileSync(join(tmpHome, "policy.yaml"), "utf-8");
-    expect(policyText).toContain("# Foreman policy file");
+    expect(policyText).toContain("Foreman default policy");
+    expect(policyText).toContain("rules:");
+    expect(policyText).toContain("tool:read_file");
     expect(policyText.length).toBeGreaterThan(50);
+    // Acceptance: under 80 lines so it reads as a single screen.
+    expect(policyText.split("\n").length).toBeLessThanOrEqual(80);
+  });
+
+  it("--reset-policy overwrites an existing policy.yaml", () => {
+    runInit();
+    const policyPath = join(tmpHome, "policy.yaml");
+    const userEdited = "# my custom rules\nrules: []\n";
+    writeFileSync(policyPath, userEdited);
+    const result = runInit({ resetPolicy: true });
+    expect(result.policyWasReset).toBe(true);
+    expect(readFileSync(policyPath, "utf-8")).toContain(
+      "Foreman default policy",
+    );
+  });
+
+  it("without --reset-policy keeps a user-edited policy.yaml on re-init", () => {
+    runInit();
+    const policyPath = join(tmpHome, "policy.yaml");
+    const userEdited = "# my custom rules\nrules: []\n";
+    writeFileSync(policyPath, userEdited);
+    const result = runInit();
+    expect(result.policyWasReset).toBe(false);
+    expect(readFileSync(policyPath, "utf-8")).toBe(userEdited);
   });
 
   it.runIf(process.platform !== "win32")(

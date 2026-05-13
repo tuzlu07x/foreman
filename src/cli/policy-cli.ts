@@ -1,15 +1,17 @@
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
 import { Command } from "commander";
 import { bus } from "../core/event-bus.js";
 import { PolicyEngine } from "../core/policy-engine.js";
 import { closeDb, getDb } from "../db/client.js";
 import { getForemanPaths } from "../utils/config.js";
-import { red } from "./colors.js";
+import { dim, green, red } from "./colors.js";
+import { DEFAULT_POLICY_YAML } from "./policy-template.js";
 import { launchEditor } from "../tui/launch-editor.js";
 import { renderPolicyJson, renderPolicyLine } from "./render.js";
 
 export const policyCommand = new Command("policy").description(
-  "Policy commands (show / edit)",
+  "Policy commands (show / edit / reset)",
 );
 
 policyCommand
@@ -42,6 +44,36 @@ policyCommand
   });
 
 policyCommand
+  .command("reset")
+  .description(
+    "Overwrite ~/.foreman/policy.yaml with the smart-default template",
+  )
+  .option("--yes", "skip the confirmation prompt")
+  .action(async (options: { yes?: boolean }) => {
+    const paths = getForemanPaths();
+    if (!existsSync(paths.root)) {
+      console.error(
+        red("error: ") +
+          `Foreman is not initialised. Run 'foreman init' first.`,
+      );
+      process.exit(1);
+    }
+    if (!options.yes) {
+      const ok = await promptYesNo(
+        `Overwrite ${paths.policyPath} with the default template? [y/N]`,
+      );
+      if (!ok) {
+        console.log("(cancelled)");
+        return;
+      }
+    }
+    writeFileSync(paths.policyPath, DEFAULT_POLICY_YAML);
+    console.log(
+      `${green("✓")} ${paths.policyPath} ${dim("reset to template")}`,
+    );
+  });
+
+policyCommand
   .command("edit")
   .description("Open policy.yaml in $EDITOR and reload after save")
   .action(async () => {
@@ -62,3 +94,17 @@ policyCommand
     );
     closeDb();
   });
+
+async function promptYesNo(prompt: string): Promise<boolean> {
+  if (!process.stdin.isTTY) return false;
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stderr,
+  });
+  return new Promise((res) => {
+    rl.question(`${prompt} `, (answer) => {
+      rl.close();
+      res(/^y(es)?$/i.test(answer.trim()));
+    });
+  });
+}
