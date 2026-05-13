@@ -1,0 +1,6 @@
+# Claude Code reads MCP server config from ~/.claude/settings.json.
+# `foreman agent add` translates this YAML into that JSON shape.
+mcpServers:
+  foreman:
+    command: foreman
+    args: ["mcp-stdio", "--source", "claude-code"]

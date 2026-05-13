@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/tuzlu07x/foreman/blob/main/registry/schema.json",
+  "title": "Foreman Curated Agent Registry",
+  "description": "Source of truth for agents that the `foreman agent add` wizard can install, configure, and register. Human-readable reference; runtime validation lives in src/core/registry-catalog.ts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "agents"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Bump when the schema changes incompatibly."
+    },
+    "agents": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/agent" }
+    }
+  },
+  "definitions": {
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "tagline",
+        "homepage",
+        "install",
+        "config_paths",
+        "required_secrets",
+        "optional_secrets",
+        "mcp_compatible",
+        "supported_versions",
+        "min_foreman_version"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "Lowercase kebab-case slug used in CLI commands."
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "tagline": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "homepage": { "type": "string", "format": "uri" },
+        "install": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "npm": { "type": ["string", "null"] },
+            "brew": { "type": ["string", "null"] }
+          }
+        },
+        "config_paths": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "config_snippet": {
+          "type": ["string", "null"],
+          "description": "Path inside this repo to the snippet that the wizard injects."
+        },
+        "required_secrets": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "optional_secrets": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "mcp_compatible": { "type": "boolean" },
+        "supported_versions": {
+          "type": "string",
+          "description": "Semver range (e.g. '>=2.0.0', '*')."
+        },
+        "min_foreman_version": {
+          "type": "string",
+          "description": "Lowest Foreman version that supports this entry."
+        }
+      }
+    }
+  }
+}
