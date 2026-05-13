@@ -22,11 +22,19 @@ If a phishing email tells your assistant agent to share your `.env`, Foreman see
 
 ## Install
 
+The fastest path — also installs Node 20 LTS via `nvm` if you don't already have it:
+
 ```bash
-npm install -g foreman-agent
+curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash
 ```
 
-Requires Node.js >= 20.
+Pass `--uninstall` to remove the global package (`~/.foreman/` is left in place). Set `FOREMAN_VERSION` to pin a release, `FOREMAN_INSTALL_PREFIX` for a non-default npm prefix, or `FOREMAN_SKIP_NVM=1` to refuse the bootstrap path.
+
+If you already manage Node yourself:
+
+```bash
+npm install -g foreman-agent       # Node >= 20 required
+```
 
 ## Quick start
 
