@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { agentsCommand } from "./agents-cli.js";
 import { initCommand } from "./init.js";
 import { logCommand } from "./log.js";
+import { mcpStdioCommand } from "./mcp-stdio.js";
 import { policyCommand } from "./policy-cli.js";
 import { startCommand } from "./start.js";
 
@@ -15,6 +16,7 @@ program
 
 program.addCommand(initCommand);
 program.addCommand(startCommand);
+program.addCommand(mcpStdioCommand);
 program.addCommand(logCommand);
 program.addCommand(policyCommand);
 program.addCommand(agentsCommand);

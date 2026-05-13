@@ -1,0 +1,31 @@
+# Sample Foreman policy — copy to ~/.foreman/policy.yaml and adjust.
+#
+# Form A: per-agent allow / deny tool lists.
+agents:
+  claude-code:
+    can_call:
+      foreman: [read_file, list_files, write_file]
+    cannot_call:
+      foreman: [run_shell, run_command, shell_exec]
+    rate_limits:
+      messages_per_minute: 60
+
+  hermes:
+    cannot_call:
+      claude-code: [read_file, write_file]
+    rate_limits:
+      messages_per_minute: 30
+
+# Form B: explicit rules (catch-all / wildcard).
+rules:
+  # Nobody runs shells, ever.
+  - source: "*"
+    target: "tool:shell_exec"
+    effect: deny
+
+  # Reading any file is OK except credentials.
+  - source: "*"
+    target: "tool:read_file"
+    effect: allow
+    conditions:
+      pathNotMatch: "\\.env$|\\.key$|id_rsa|\\.aws/credentials|\\.ssh/"
