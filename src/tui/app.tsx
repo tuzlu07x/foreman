@@ -1,5 +1,6 @@
 import { Box, useApp, useInput, useStdin } from "ink";
 import { useState } from "react";
+import type { BootInfo } from "./boot-info.js";
 import { ActivityFeed } from "./components/activity-feed.js";
 import { AgentList } from "./components/agent-list.js";
 import { BootBanner } from "./components/boot-banner.js";
@@ -7,7 +8,11 @@ import { StatsPanel } from "./components/stats-panel.js";
 import { StatusBar } from "./components/status-bar.js";
 import { useLayout } from "./hooks.js";
 
-export function App(): JSX.Element {
+export interface AppProps {
+  bootInfo: BootInfo;
+}
+
+export function App({ bootInfo }: AppProps): JSX.Element {
   const layout = useLayout();
   const { isRawModeSupported } = useStdin();
   const [quitConfirm, setQuitConfirm] = useState(false);
@@ -20,7 +25,7 @@ export function App(): JSX.Element {
           setQuitConfirm={setQuitConfirm}
         />
       )}
-      <BootBanner />
+      <BootBanner info={bootInfo} />
       <Box flexGrow={1}>{renderPanels(layout)}</Box>
       <StatusBar quitConfirm={quitConfirm} />
     </Box>
