@@ -1,42 +1,110 @@
 # Foreman
 
 ```
-       ___[F]___
-      /         \
-     |__/ o   o \__|
-        |  \_/  |
-       /|_______|\
-      / |==VEST=| \
-     /__|=======|__\
-        |_______|
+           ___[F]___
+          /         \
+         |__/ o   o \__|
+            |  \_/  |
+           /|_______|\
+          / |=======| \
+         /__|=======|__\
+            |_______|
 
     Foreman — your agent guardian
 ```
 
 **Your local AI agents talk to each other. You should know what they're saying.**
 
-A terminal-first guardian that sits between your AI agents and makes sure none of them does anything you didn't approve.
+A terminal-first guardian that mediates every call between the AI agents on your machine, scores each request for risk, and asks you before anything dangerous happens.
+
+<!-- asciinema cast placeholder — drop in once recorded -->
+<!-- mascot SVG / PNG hero — swap in once the designer bundle lands under assets/mascot/ -->
+<!-- [![asciicast](https://asciinema.org/a/PLACEHOLDER.svg)](https://asciinema.org/a/PLACEHOLDER) -->
 
 ---
 
 ## What is this?
 
-Foreman is a local, terminal-first **gateway** that mediates every call between the AI agents running on your machine (Hermes, Claude Code, custom MCP servers, your own scripts). It:
+- **Mediate** — every MCP call between your agents and their tools flows through Foreman.
+- **Score** — heuristic rules flag secret-file access, outbound network, shell exec, and cross-agent calls.
+- **Ask** — when a request crosses the threshold, you decide in the terminal: `[a]llow / [d]eny / [r]emember`.
+- **Log** — every request hits a local SQLite store with full-text search (FTS5) for audit.
 
-- **Registers** each agent with an Ed25519 identity.
-- **Mediates** every call agent → agent and agent → tool through itself.
-- **Scores** each request for risk (heuristic-first: secret-file patterns, outbound network, shell exec, cross-agent calls, …).
-- **Asks you** in the terminal whenever a request crosses the risk threshold: `[a]llow / [d]eny / [r]emember`.
-- **Logs everything** to SQLite (with FTS5 full-text audit search).
+If a phishing email tells your assistant agent to share your `.env`, Foreman sees it, scores it 80/100, and asks before anything leaves your machine.
 
-If a phishing email tells your assistant agent to share your `.env`, Foreman sees it, scores it 80/100, and asks you before anything leaves your machine.
+## Install
 
-## Status
+```bash
+npm install -g foreman-agent
+```
 
-Pre-MVP — repo just opened. Target: **v0.1.0**.
+Requires Node.js >= 20.
 
-See [`FOREMAN.md`](./FOREMAN.md) for the full design doc and [`FOREMAN-TUI.md`](./FOREMAN-TUI.md) for the TUI / brand spec.
+## Quick start
+
+```bash
+foreman init                 # create ~/.foreman/ (db, keypair, policy.yaml)
+foreman start                # launch the TUI gateway
+
+# Point an agent at Foreman's stdio MCP transport
+foreman mcp-stdio
+```
+
+Wire an agent (Claude Code example):
+
+```jsonc
+// ~/.config/claude-code/mcp.json
+{
+  "mcpServers": {
+    "foreman": { "command": "foreman", "args": ["mcp-stdio"] }
+  }
+}
+```
+
+The full Claude Code recipe lives in [`examples/claude-code/`](examples/claude-code/). A minimal MCP agent that exercises the gateway is in [`examples/mock-agent/`](examples/mock-agent/).
+
+## 5-minute demo
+
+A scripted phishing scenario walks through the boot banner → idle dashboard → ⚠ approval modal → inspect → remember → audit log. Run it locally:
+
+```bash
+cd examples/phishing-scenario
+./run-demo.sh
+```
+
+See [`examples/phishing-scenario/STORYBOARD.md`](examples/phishing-scenario/STORYBOARD.md) for the scene-by-scene script.
+
+## How is this different from…?
+
+| | Foreman | LangSmith / Helicone | Vanilla MCP |
+|---|---|---|---|
+| Runs on your machine | ✓ local-first | cloud SaaS | ✓ local |
+| Mediates agent-to-agent | ✓ | tracing only | direct calls, no mediator |
+| Asks before risky calls | ✓ in terminal | post-hoc dashboard | no approval layer |
+| Audit log under your control | ✓ SQLite + FTS5 | their cloud | no audit |
+| Identity per agent | ✓ Ed25519 | n/a | n/a |
+| Open source | MIT | proprietary | spec |
+
+The closest mental model: a personal-scale gateway with an audit log, for the multi-agent setups people now run at home.
+
+## Roadmap
+
+- **v0.1 — Today.** Single-machine gateway, heuristic risk scoring, Ink TUI, SQLite audit, MCP stdio.
+- **v0.2 — Cross-machine mesh.** `foreman link`, optional Tailscale, master/child keys, primary-device approval.
+- **v0.3 — Smart risk.** Optional Llama Prompt Guard 2, intent classification, token budget enforcement.
+- **v0.4 — Ecosystem.** Plugin API, Cedar policy support, official Hermes / OpenClaw adapters.
+
+## Documentation
+
+- [`FOREMAN.md`](./FOREMAN.md) — full design doc (architecture, services, schema).
+- [`FOREMAN-TUI.md`](./FOREMAN-TUI.md) — TUI / brand spec (palette, mascot, layout, screens).
+
+## Contributing
+
+PRs and issues welcome. Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md) and the [Code of Conduct](./CODE_OF_CONDUCT.md).
+
+Repo: [github.com/tuzlu07x/foreman](https://github.com/tuzlu07x/foreman) · Issues: [`/issues`](https://github.com/tuzlu07x/foreman/issues)
 
 ## License
 
-MIT (coming soon).
+[MIT](./LICENSE) © 2026 Fatih Tuzlu
