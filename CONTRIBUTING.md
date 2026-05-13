@@ -51,6 +51,23 @@ For feature ideas, lead with the user story ("as a user running X, I want Y beca
 - Default to no comments — names and types should carry the meaning. A single short line above a function is fine when the _why_ is non-obvious.
 - No new dependencies without a one-line justification in the PR body.
 
+## Adding an agent to the registry
+
+The curated agent registry at [`registry/agents.json`](./registry/agents.json) is the source of truth for what `foreman agent add` can install, configure, and wire up. We accept community contributions there.
+
+To add an agent:
+
+1. Open a PR that touches `registry/agents.json`. Append an entry that matches the existing shape — `id`, `name`, `tagline`, `homepage`, `install` (`npm` and/or `brew`, either may be `null`), `config_paths`, `required_secrets`, `optional_secrets`, `mcp_compatible`, `supported_versions`, `min_foreman_version`. The schema lives at [`registry/schema.json`](./registry/schema.json).
+2. Attach a snippet file at `registry/snippets/<id>.yaml` that the wizard injects into the agent's own config to wire it through Foreman. Use one of the existing snippets as a template.
+3. CI runs `foreman registry validate` on every PR that touches `registry/`. Run it locally first:
+
+```bash
+npm run build
+node dist/cli/index.js registry validate
+```
+
+4. Foreman never ships another team's binary — the `install.npm` field points at *their* package. We orchestrate, we don't repackage.
+
 ## Community
 
 - GitHub Discussions and Issues are the main channels for now.

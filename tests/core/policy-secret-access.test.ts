@@ -16,7 +16,9 @@ describe("PolicyEngine.evaluateSecretAccess", () => {
     engine = new PolicyEngine(db, new EventBus<ForemanEventMap>());
   });
 
-  afterEach(() => sqlite.close());
+  afterEach(() => {
+    sqlite.close();
+  });
 
   it("denies by default when no rule is configured for the agent", () => {
     const result = engine.evaluateSecretAccess("hermes", "anthropic-key");
@@ -68,8 +70,8 @@ agents:
     can_access_secrets:
       - anthropic-key
 `);
-    expect(engine.evaluateSecretAccess("claude-code", "anthropic-key").decision).toBe(
-      "deny",
-    );
+    expect(
+      engine.evaluateSecretAccess("claude-code", "anthropic-key").decision,
+    ).toBe("deny");
   });
 });
