@@ -1,6 +1,6 @@
 {
   "name": "foreman-agent",
-  "version": "0.1.0-pre",
+  "version": "0.1.0",
   "description": "Your local AI agents talk to each other. You should know what they're saying.",
   "type": "module",
   "bin": {
@@ -32,7 +32,9 @@
     "terminal",
     "security",
     "audit",
-    "typescript"
+    "typescript",
+    "ink",
+    "sqlite"
   ],
   "author": "Fatih Tuzlu",
   "license": "MIT",

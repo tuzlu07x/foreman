@@ -48,7 +48,7 @@ For feature ideas, lead with the user story ("as a user running X, I want Y beca
 ## Code style
 
 - TypeScript strict mode, ESM. No `any` outside test files.
-- Default to no comments — names and types should carry the meaning. A single short line above a function is fine when the *why* is non-obvious.
+- Default to no comments — names and types should carry the meaning. A single short line above a function is fine when the _why_ is non-obvious.
 - No new dependencies without a one-line justification in the PR body.
 
 ## Community

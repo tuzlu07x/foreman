@@ -16,7 +16,7 @@ import { red } from "./colors.js";
 
 const PROTOCOL_VERSION = "2024-11-05";
 const SERVER_NAME = "foreman";
-const SERVER_VERSION = "0.1.0-pre";
+const SERVER_VERSION = "0.1.0";
 
 export const mcpStdioCommand = new Command("mcp-stdio")
   .description(
