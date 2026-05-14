@@ -4,6 +4,7 @@ import { doctorCommand } from "./doctor.js";
 import { initCommand } from "./init.js";
 import { logCommand } from "./log.js";
 import { mcpStdioCommand } from "./mcp-stdio.js";
+import { migrateConfigCommand } from "./migrate-config.js";
 import { policyCommand } from "./policy-cli.js";
 import { registryCommand } from "./registry-cli.js";
 import { secretsCommand } from "./secrets-cli.js";
@@ -26,5 +27,6 @@ program.addCommand(agentsCommand);
 program.addCommand(secretsCommand);
 program.addCommand(registryCommand);
 program.addCommand(doctorCommand);
+program.addCommand(migrateConfigCommand);
 
 program.parse();

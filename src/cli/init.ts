@@ -3,7 +3,8 @@ import { Command } from "commander";
 import { closeDb, getDb } from "../db/client.js";
 import { loadOrCreateMasterKey } from "../identity/keypair.js";
 import { getForemanPaths, type ForemanPaths } from "../utils/config.js";
-import { bold, dim, green, orange } from "./colors.js";
+import { legacyHasInterestingFiles } from "../utils/migrate-config.js";
+import { bold, dim, green, orange, red } from "./colors.js";
 import { DEFAULT_POLICY_YAML } from "./policy-template.js";
 
 export interface InitOptions {
@@ -21,7 +22,8 @@ export interface InitResult {
 /** Pure logic — no console output, no process.exit. CLI action wraps this. */
 export function runInit(options: InitOptions = {}): InitResult {
   const paths = getForemanPaths();
-  mkdirSync(paths.root, { recursive: true });
+  mkdirSync(paths.configDir, { recursive: true });
+  mkdirSync(paths.stateDir, { recursive: true });
   const identityWasNew = !existsSync(paths.identityPath);
   const { publicKey } = loadOrCreateMasterKey();
   const policyExisted = existsSync(paths.policyPath);
@@ -42,6 +44,12 @@ export const initCommand = new Command("init")
     "overwrite policy.yaml with the smart-default template",
   )
   .action((options: InitOptions) => {
+    if (legacyHasInterestingFiles()) {
+      console.error(
+        red("warn: ") +
+          "found a legacy ~/.foreman/ install with config or state files. Run 'foreman migrate-config' before you keep going — this init will write to the new platform-native dirs and ignore the legacy ones.",
+      );
+    }
     const { paths, publicKey, identityWasNew, policyWasNew, policyWasReset } =
       runInit(options);
     const fp = publicKey.subarray(0, 4).toString("hex");
