@@ -1,0 +1,89 @@
+name: test-linux
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "scripts/**"
+      - "registry/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - "tsup.config.ts"
+      - "drizzle.config.ts"
+      - ".github/workflows/test-linux.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "scripts/**"
+      - "registry/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - "tsup.config.ts"
+      - "drizzle.config.ts"
+      - ".github/workflows/test-linux.yml"
+  workflow_dispatch:
+
+jobs:
+  ubuntu:
+    name: ubuntu-${{ matrix.ubuntu }} · node-${{ matrix.node }}
+    runs-on: ubuntu-${{ matrix.ubuntu }}
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ["22.04", "24.04"]
+        node: ["20"]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install OS deps (optional renderers)
+        run: sudo apt-get install -y python3 chafa
+
+      - name: npm ci
+        run: npm ci
+
+      - name: npm run lint
+        run: npm run lint
+
+      - name: npm test
+        run: npm test
+
+      - name: npm run build
+        run: npm run build
+
+      - name: Install foreman globally from the checkout
+        run: npm install -g .
+
+      - name: foreman init / doctor (read-only) against tmp FOREMAN_HOME
+        run: |
+          set -eu
+          FH="$(mktemp -d)"
+          export FOREMAN_HOME="$FH"
+          foreman init
+          # doctor exits 1 on warnings (e.g. 'no agents registered' on a
+          # fresh init); accept that, fail only on 2+ (real check failure).
+          set +e
+          foreman doctor
+          rc=$?
+          set -e
+          [ "$rc" -le 1 ] || exit "$rc"
+
+      - name: CLI smoke — agent / policy / registry
+        run: |
+          set -eu
+          FH="$(mktemp -d)"
+          export FOREMAN_HOME="$FH"
+          foreman init >/dev/null
+          foreman agent --help | grep -q "Agent commands"
+          foreman policy show
+          foreman registry list >/dev/null
