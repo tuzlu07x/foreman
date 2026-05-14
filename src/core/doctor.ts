@@ -7,6 +7,7 @@ import { derivePublicKey } from "../identity/keypair.js";
 import { sign, verify } from "../identity/signing.js";
 import { MCPGateway } from "../mcp/gateway.js";
 import { getForemanPaths } from "../utils/config.js";
+import { legacyHasInterestingFiles } from "../utils/migrate-config.js";
 import { EventBus, type ForemanEventMap } from "./event-bus.js";
 import { RegistryService } from "./registry.js";
 
@@ -30,6 +31,32 @@ export interface DoctorOptions {
 }
 
 const MIN_NODE_MAJOR = 20;
+
+export function checkPaths(): CheckResult {
+  const paths = getForemanPaths();
+  return {
+    name: "paths",
+    status: "ok",
+    message: `config=${paths.configDir} · state=${paths.stateDir} · cache=${paths.cacheDir}`,
+  };
+}
+
+export function checkLegacyHome(): CheckResult {
+  if (!legacyHasInterestingFiles()) {
+    return {
+      name: "legacy_home",
+      status: "ok",
+      message: "no legacy ~/.foreman/ files detected",
+    };
+  }
+  return {
+    name: "legacy_home",
+    status: "warn",
+    message: "legacy ~/.foreman/ still contains config or state files",
+    remediation:
+      "Run 'foreman migrate-config' to move them into the platform-native dirs.",
+  };
+}
 
 export function checkNodeVersion(): CheckResult {
   const major = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
@@ -331,6 +358,7 @@ export function checkChafa(env: NodeJS.ProcessEnv = process.env): CheckResult {
 
 const CHECKS: (() => CheckResult)[] = [
   checkNodeVersion,
+  checkPaths,
   checkForemanHome,
   checkExpectedFiles,
   checkIdentityKey,
@@ -339,6 +367,7 @@ const CHECKS: (() => CheckResult)[] = [
   checkPolicyYaml,
   checkAgentsRegistered,
   checkMcpGateway,
+  checkLegacyHome,
   () => checkChafa(),
 ];
 

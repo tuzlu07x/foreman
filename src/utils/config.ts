@@ -3,35 +3,120 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+export type Platform = "linux" | "darwin" | "win32";
+
 export interface ForemanPaths {
-  /** Root config dir, e.g. ~/.foreman/ (overridable via FOREMAN_HOME). */
+  /**
+   * Backward-compat alias. Equals `configDir` so existing callers that read
+   * `paths.root` keep working. New code should pick the specific directory.
+   */
   root: string;
-  /** SQLite database file. */
-  dbPath: string;
-  /** YAML policy file the user can edit. */
+  /** Config dir (policy, identity, secret key). */
+  configDir: string;
+  /** State dir (foreman.db). */
+  stateDir: string;
+  /** Cache dir (registry cache, future use). */
+  cacheDir: string;
+  /** Legacy `~/.foreman/` dir — only set when present on disk. */
+  legacyHome: string | null;
+
+  // Specific file paths (derived from the dirs above).
   policyPath: string;
-  /** Ed25519 master identity (0600). */
   identityPath: string;
-  /** 32-byte AES-256 master key for the secret store (0600). */
   secretsKeyPath: string;
+  dbPath: string;
+
   /** Migration .sql directory shipped with the package. */
   migrationsPath: string;
 }
 
-export function getForemanHome(): string {
-  return process.env.FOREMAN_HOME ?? resolve(homedir(), ".foreman");
+export interface ResolveDirsOptions {
+  /** When set, every dir collapses to this single path (test + legacy mode). */
+  foremanHome?: string | null;
+  platform?: Platform;
+  homeDir?: string;
+  env?: NodeJS.ProcessEnv;
+}
+
+export function legacyHome(homeDir: string = homedir()): string {
+  return resolve(homeDir, ".foreman");
+}
+
+// Pure path resolver. Doesn't touch disk. Use this from tests with a mocked
+// platform + env to assert per-OS behaviour.
+export function resolveDirs(
+  options: ResolveDirsOptions = {},
+): Pick<ForemanPaths, "configDir" | "stateDir" | "cacheDir"> {
+  const home = options.homeDir ?? homedir();
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? (process.platform as Platform);
+
+  if (options.foremanHome) {
+    return {
+      configDir: options.foremanHome,
+      stateDir: options.foremanHome,
+      cacheDir: resolve(options.foremanHome, "cache"),
+    };
+  }
+
+  if (platform === "darwin") {
+    return {
+      configDir: resolve(home, "Library", "Application Support", "foreman"),
+      stateDir: resolve(home, "Library", "Application Support", "foreman"),
+      cacheDir: resolve(home, "Library", "Caches", "foreman"),
+    };
+  }
+
+  if (platform === "win32") {
+    const appData = env.APPDATA ?? resolve(home, "AppData", "Roaming");
+    const localAppData = env.LOCALAPPDATA ?? resolve(home, "AppData", "Local");
+    return {
+      configDir: resolve(appData, "foreman"),
+      stateDir: resolve(appData, "foreman"),
+      cacheDir: resolve(localAppData, "foreman", "Cache"),
+    };
+  }
+
+  // Linux + everything else: XDG.
+  const xdgConfig = env.XDG_CONFIG_HOME ?? resolve(home, ".config");
+  const xdgState = env.XDG_STATE_HOME ?? resolve(home, ".local", "state");
+  const xdgCache = env.XDG_CACHE_HOME ?? resolve(home, ".cache");
+  return {
+    configDir: resolve(xdgConfig, "foreman"),
+    stateDir: resolve(xdgState, "foreman"),
+    cacheDir: resolve(xdgCache, "foreman"),
+  };
 }
 
 export function getForemanPaths(): ForemanPaths {
-  const root = getForemanHome();
+  const env = process.env;
+  const foremanHomeEnv = env.FOREMAN_HOME ?? null;
+  const dirs = resolveDirs({ foremanHome: foremanHomeEnv });
+
+  const home = homedir();
+  const legacy = legacyHome(home);
+  const legacyDetected = foremanHomeEnv === null && existsSync(legacy);
+
   return {
-    root,
-    dbPath: resolve(root, "foreman.db"),
-    policyPath: resolve(root, "policy.yaml"),
-    identityPath: resolve(root, "identity.key"),
-    secretsKeyPath: resolve(root, "secrets.key"),
+    root: dirs.configDir,
+    configDir: dirs.configDir,
+    stateDir: dirs.stateDir,
+    cacheDir: dirs.cacheDir,
+    legacyHome: legacyDetected ? legacy : null,
+    policyPath: resolve(dirs.configDir, "policy.yaml"),
+    identityPath: resolve(dirs.configDir, "identity.key"),
+    secretsKeyPath: resolve(dirs.configDir, "secrets.key"),
+    dbPath: resolve(dirs.stateDir, "foreman.db"),
     migrationsPath: resolveMigrationsDir(),
   };
+}
+
+/**
+ * @deprecated Use `getForemanPaths().configDir` (or `.stateDir`, `.cacheDir`).
+ * Kept for callers that still want the legacy single-dir abstraction.
+ */
+export function getForemanHome(): string {
+  return getForemanPaths().configDir;
 }
 
 /**
