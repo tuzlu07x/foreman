@@ -108,20 +108,6 @@ describe("detectInstall", () => {
     expect(result.found).toBe(true);
   });
 
-  it("honours the install.binary override when set (e.g. claude-code ships a 'claude' binary)", () => {
-    const binDir = join(tmpDir, "bin");
-    mkdirSync(binDir, { recursive: true });
-    const binPath = join(binDir, "claude");
-    writeFileSync(binPath, "#!/bin/sh\n");
-    chmodSync(binPath, 0o755);
-    const result = detectInstall(
-      { npm: "@anthropic-ai/claude-code", brew: null, binary: "claude" },
-      { PATH: binDir },
-    );
-    expect(result.found).toBe(true);
-    expect(result.path).toBe(binPath);
-  });
-
   it("returns found:false when no binary exists on PATH", () => {
     const result = detectInstall(
       { npm: "nonexistent-pkg-xyz", brew: null },

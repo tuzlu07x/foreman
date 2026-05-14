@@ -8,14 +8,12 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import {
   checkSecrets,
-  expandHome,
   pickConfigPath,
   registerAgent,
 } from "../core/agent-add-flow.js";
 import {
   applyInjection,
   planInjection,
-  removeForemanServer,
   UnsupportedConfigFormatError,
 } from "../core/agent-config-injector.js";
 import {
@@ -330,12 +328,6 @@ export async function runInstallStep(
     services.registry.remove(id);
     log(`  ✓ unregistered "${id}"`);
     if (entry) {
-      for (const raw of entry.config_paths) {
-        const expanded = expandHome(raw);
-        if (removeForemanServer(expanded)) {
-          log(`  ✓ stripped foreman entry from ${expanded}`);
-        }
-      }
       const cmd = preferredUninstallCommand(entry.install);
       if (cmd) {
         log(`  uninstalling (${cmd})…`);
