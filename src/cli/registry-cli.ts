@@ -87,6 +87,11 @@ registryCommand
     console.log(
       `${dim("install (brew):  ")} ${entry.install.brew ?? dim("—")}`,
     );
+    if (entry.install.script) {
+      console.log(
+        `${dim("install (script):")} curl -fsSL ${entry.install.script} | bash`,
+      );
+    }
     console.log(
       `${dim("config paths:    ")} ${formatList(entry.config_paths)}`,
     );
