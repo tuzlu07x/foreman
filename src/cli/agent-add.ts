@@ -12,6 +12,7 @@ import {
   planInjection,
   UnsupportedConfigFormatError,
 } from "../core/agent-config-injector.js";
+import { applyForemanSoul } from "../core/foreman-soul.js";
 import {
   detectInstall,
   preferredInstallCommand,
@@ -28,6 +29,7 @@ import type { RegistryService } from "../core/registry.js";
 import { SecretStore } from "../core/secret-store.js";
 import type { ForemanDb } from "../db/client.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
+import { getForemanPaths } from "../utils/config.js";
 import { readSecretValueFromStdin } from "./secrets-cli.js";
 import { bold, dim, green, orange, red } from "./colors.js";
 
@@ -154,6 +156,21 @@ export async function runAgentAddScripted(
       registry: deps.registry,
     });
     handlePrivateKey(result.privateKey, options.keyOut, log);
+    if (entry.identity_path) {
+      try {
+        const soulResult = applyForemanSoul(entry, getForemanPaths().soulPath);
+        if (soulResult?.changed) {
+          log(green("✓") + ` wrote Foreman identity to ${soulResult.path}`);
+        } else if (soulResult) {
+          log(dim(`identity: already current at ${soulResult.path}`));
+        }
+      } catch (err) {
+        log(
+          orange("warn: ") +
+            `identity write skipped: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     log(
       green("✓") +
         ` ${entry.name} is registered as "${agentId}" and ready. Run 'foreman start' to see it in action.`,
