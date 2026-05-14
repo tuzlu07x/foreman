@@ -10,6 +10,7 @@ import {
 import { ActivityFeed } from "./components/activity-feed.js";
 import { AgentList } from "./components/agent-list.js";
 import { BootBanner } from "./components/boot-banner.js";
+import { HelpOverlay } from "./components/help-overlay.js";
 import { InspectView } from "./components/inspect-view.js";
 import { StatsPanel } from "./components/stats-panel.js";
 import { StatusBar } from "./components/status-bar.js";
@@ -54,6 +55,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
 
   const [page, setPage] = useState<Page>("dashboard");
   const [quitConfirm, setQuitConfirm] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [updateNotice, setUpdateNotice] = useState<{
     current: string;
     latest: string;
@@ -257,6 +259,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           setPage={setPage}
           quitConfirm={quitConfirm}
           setQuitConfirm={setQuitConfirm}
+          helpOpen={helpOpen}
+          setHelpOpen={setHelpOpen}
           pendingApproval={pendingApproval}
           inspectOpen={inspectOpen}
           setInspectOpen={setInspectOpen}
@@ -295,7 +299,9 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
         agentUpdates={agentUpdates}
         agentOvershoots={agentOvershoots}
       />
-      {pendingApproval ? (
+      {helpOpen ? (
+        <HelpOverlay />
+      ) : pendingApproval ? (
         inspectOpen ? (
           <InspectView
             request={pendingApproval}
@@ -344,6 +350,8 @@ interface KeyboardHandlerProps {
   setPage: (p: Page) => void;
   quitConfirm: boolean;
   setQuitConfirm: (v: boolean) => void;
+  helpOpen: boolean;
+  setHelpOpen: (v: boolean) => void;
   pendingApproval: ApprovalRequest | null;
   inspectOpen: boolean;
   setInspectOpen: (v: boolean) => void;
@@ -382,6 +390,8 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     setPage,
     quitConfirm,
     setQuitConfirm,
+    helpOpen,
+    setHelpOpen,
     pendingApproval,
     inspectOpen,
     setInspectOpen,
@@ -414,6 +424,11 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
   } = props;
 
   useInput((input, key) => {
+    // Help overlay takes priority — when open, only `?`/Esc close it.
+    if (helpOpen) {
+      if (key.escape || input === "?") setHelpOpen(false);
+      return;
+    }
     if (pendingApproval && inspectOpen) {
       if (key.escape) {
         setInspectOpen(false);
@@ -541,7 +556,8 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         setQuitConfirm(false);
       return;
     }
-    if (input === "q") exit();
+    if (input === "?") setHelpOpen(true);
+    else if (input === "q") exit();
     else if (key.ctrl && input === "c") setQuitConfirm(true);
     else if (input === "l") setPage("logs");
     else if (input === "p") setPage("policy");
