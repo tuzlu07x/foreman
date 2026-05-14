@@ -17,15 +17,13 @@ foreman secrets add anthropic-key  # stored once, every agent reads it back
 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-After OpenClaw is on PATH, Foreman's agent wizard ([#60](https://github.com/tuzlu07x/foreman/issues/60)) registers it and wires its config:
+Or have Foreman install OpenClaw for you when you select it (registry uses `npm install -g openclaw` as the primary path; the curl script is a fallback for systems without Node):
 
 ```bash
-foreman agent add openclaw --type openclaw
+foreman agent add openclaw --type openclaw --auto-install
 ```
 
-That command finds the installed `openclaw` binary, injects the MCP snippet into `~/.openclaw/config.json`, and registers OpenClaw with Foreman. Skip step 2 if that worked.
-
-> **Why not `--auto-install`?** OpenClaw installs via `curl … | bash`, which Foreman refuses to auto-run unattended — the registry surfaces the command and the user pastes it.
+That command runs the install, injects the MCP snippet into `~/.openclaw/config.json`, and registers OpenClaw with Foreman. The interactive `foreman setup` wizard does the same thing when you check the OpenClaw box. Unchecking later runs `npm uninstall -g openclaw` plus removes the registration.
 
 ## 2. (Manual) point OpenClaw at Foreman
 

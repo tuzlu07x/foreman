@@ -16,7 +16,11 @@ import {
   checkAgentUpdates,
   type AgentUpdateStatus,
 } from "../core/agent-update-check.js";
-import { runInstall } from "../core/agent-install.js";
+import {
+  preferredUninstallCommand,
+  runInstall,
+  runUninstall,
+} from "../core/agent-install.js";
 import { closeDb, getDb } from "../db/client.js";
 import { getForemanPaths } from "../utils/config.js";
 import {
@@ -125,26 +129,69 @@ agentsCommand
 
 agentsCommand
   .command("remove <name>")
-  .description("Remove an agent (hard delete; re-add issues a fresh keypair)")
+  .description(
+    "Remove an agent (hard delete + uninstall its binary; re-add issues a fresh keypair)",
+  )
   .option("--yes", "skip confirmation prompt")
-  .action(async (name: string, options: { yes?: boolean }) => {
-    const registry = getRegistry();
-    try {
-      if (
-        !options.yes &&
-        !(await confirmYes(`Remove agent "${name}"? [y/N]`))
-      ) {
-        console.log("(cancelled)");
-        return;
+  .option(
+    "--keep-binary",
+    "remove only the Foreman registration; leave the agent binary installed",
+  )
+  .action(
+    async (
+      name: string,
+      options: { yes?: boolean; keepBinary?: boolean },
+    ) => {
+      const registry = getRegistry();
+      try {
+        const agent = registry.get(name);
+        if (!agent) throw new AgentNotFoundError(name);
+        if (
+          !options.yes &&
+          !(await confirmYes(`Remove agent "${name}"? [y/N]`))
+        ) {
+          console.log("(cancelled)");
+          return;
+        }
+        const { doc } = loadActiveRegistry();
+        const registryId =
+          typeof agent.metadata?.registryId === "string"
+            ? agent.metadata.registryId
+            : null;
+        const entry = registryId ? safeFindAgent(doc, registryId) : null;
+        registry.remove(name);
+        console.log(`${green("✓")} agent ${name} removed`);
+        if (!options.keepBinary && entry) {
+          const uninstallCmd = preferredUninstallCommand(entry.install);
+          if (uninstallCmd) {
+            console.log(orange(`uninstalling ${entry.name} (${uninstallCmd})…`));
+            const result = await runUninstall({
+              install: entry.install,
+              onLine: (line) => console.log(`  ${dim(line)}`),
+            });
+            if (result.ok) {
+              console.log(`${green("✓")} ${entry.name} uninstalled`);
+            } else {
+              console.error(
+                red("warn: ") +
+                  `uninstall failed (exit ${result.exitCode}). Run manually: ${result.manualCommand}`,
+              );
+            }
+          } else if (entry.install.script) {
+            console.log(
+              orange("note: ") +
+                `${entry.name} was installed via a script — Foreman can't auto-uninstall. ` +
+                `Remove the ${entry.install.binary ?? entry.id} binary manually (try the installer's --uninstall flag).`,
+            );
+          }
+        }
+      } catch (err) {
+        handleAgentError(err);
+      } finally {
+        closeDb();
       }
-      registry.remove(name);
-      console.log(`agent ${name} removed`);
-    } catch (err) {
-      handleAgentError(err);
-    } finally {
-      closeDb();
-    }
-  });
+    },
+  );
 
 agentsCommand
   .command("regenerate-key <name>")
