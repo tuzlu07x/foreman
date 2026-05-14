@@ -1,0 +1,53 @@
+rules:
+  - source: openclaw
+    target: "tool:shell_exec"
+    effect: ask
+    conditions:
+      commandMatch:
+        - "rm -rf"
+        - "chmod 777"
+        - "| sh"
+        - "| bash"
+        - "curl"
+        - "wget"
+
+  - source: openclaw
+    target: "tool:read_file"
+    effect: ask
+    conditions:
+      pathMatch:
+        - "(^|/)\\.env(\\..*)?$"
+        - "\\.key$"
+        - "(^|/)id_rsa(\\.pub)?$"
+        - "(^|/)id_ed25519(\\.pub)?$"
+        - "(^|/)\\.npmrc$"
+        - "/\\.ssh/"
+        - "/\\.aws/credentials$"
+        - "/\\.openclaw/skills/.*/manifest\\.toml$"
+
+  - source: openclaw
+    target: "tool:write_file"
+    effect: ask
+    conditions:
+      pathMatch:
+        - "(^|/)\\.env(\\..*)?$"
+        - "/\\.ssh/"
+        - "/\\.aws/credentials$"
+        - "/\\.openclaw/config\\.toml$"
+        - "/\\.openclaw/skills/.*/manifest\\.toml$"
+
+  - source: openclaw
+    target: "tool:list_files"
+    effect: allow
+  - source: openclaw
+    target: "tool:stat"
+    effect: allow
+  - source: openclaw
+    target: "tool:read_file"
+    effect: allow
+
+agents:
+  openclaw:
+    rate_limits:
+      messages_per_minute: 60
+      tokens_per_hour: 200000
