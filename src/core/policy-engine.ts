@@ -107,12 +107,12 @@ export class PolicyEngine {
   }
 
   // Replaces every previously-yaml-loaded rule with the doc's contents.
+  // The swap runs inside a single transaction so concurrent evaluators
+  // never observe the empty-policy window mid-reload.
   loadYamlText(text: string): { rulesAdded: number } {
     const parsed = parseYaml(text);
     const doc = parsed === null ? {} : PolicyDocSchema.parse(parsed);
     const now = Date.now();
-
-    this.db.delete(policies).where(eq(policies.createdBy, "user")).run();
 
     const rows: (typeof policies.$inferInsert)[] = [];
     for (const [agentId, entry] of Object.entries(doc.agents ?? {})) {
@@ -162,8 +162,12 @@ export class PolicyEngine {
       );
     }
 
-    if (rows.length === 0) return { rulesAdded: 0 };
-    this.db.insert(policies).values(rows).run();
+    this.db.transaction((tx) => {
+      tx.delete(policies).where(eq(policies.createdBy, "user")).run();
+      if (rows.length > 0) {
+        tx.insert(policies).values(rows).run();
+      }
+    });
     return { rulesAdded: rows.length };
   }
 
