@@ -6,6 +6,7 @@ import {
   applyInjection,
   detectConfigFormat,
   planInjection,
+  removeForemanServer,
   UnsupportedConfigFormatError,
 } from "../../src/core/agent-config-injector.js";
 
@@ -194,5 +195,94 @@ describe("planInjection — TOML (Codex)", () => {
       mcp_servers: { foreman: { command: "foreman", args: [] } },
     });
     expect(plan.alreadyHasForeman).toBe(true);
+  });
+});
+
+describe("removeForemanServer", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "foreman-inj-rm-"));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("strips foreman from mcpServers in a YAML file and preserves siblings", () => {
+    const path = join(tmpDir, "config.yaml");
+    writeFileSync(
+      path,
+      "mcpServers:\n  foreman:\n    command: foreman\n  other:\n    command: bar\n",
+    );
+    expect(removeForemanServer(path)).toBe(true);
+    const after = readFileSync(path, "utf-8");
+    expect(after).not.toContain("foreman");
+    expect(after).toContain("other");
+  });
+
+  it("drops the mcpServers parent when foreman was the only entry (JSON)", () => {
+    const path = join(tmpDir, "settings.json");
+    writeFileSync(
+      path,
+      JSON.stringify(
+        {
+          theme: "dark",
+          mcpServers: { foreman: { command: "foreman" } },
+        },
+        null,
+        2,
+      ),
+    );
+    expect(removeForemanServer(path)).toBe(true);
+    const after = JSON.parse(readFileSync(path, "utf-8"));
+    expect(after.theme).toBe("dark");
+    expect(after.mcpServers).toBeUndefined();
+  });
+
+  it("strips foreman from [mcp_servers] in TOML (Codex style)", () => {
+    const path = join(tmpDir, "config.toml");
+    writeFileSync(
+      path,
+      `model = "gpt-5"\n[mcp_servers.foreman]\ncommand = "foreman"\nargs = ["mcp-stdio"]\n`,
+    );
+    expect(removeForemanServer(path)).toBe(true);
+    const after = readFileSync(path, "utf-8");
+    expect(after).toContain('model = "gpt-5"');
+    expect(after).not.toMatch(/\[mcp_servers\.foreman\]/);
+  });
+
+  it("strips foreman from the nested mcp.servers shape and tidies empty parents", () => {
+    const path = join(tmpDir, "config.yaml");
+    writeFileSync(
+      path,
+      "user: fatih\nmcp:\n  servers:\n    foreman:\n      command: foreman\n",
+    );
+    expect(removeForemanServer(path)).toBe(true);
+    const after = readFileSync(path, "utf-8");
+    expect(after).toContain("user: fatih");
+    expect(after).not.toContain("mcp");
+  });
+
+  it("no-ops when foreman is not present (returns false, file untouched)", () => {
+    const path = join(tmpDir, "settings.json");
+    const original = JSON.stringify({ mcpServers: { other: {} } }, null, 2);
+    writeFileSync(path, original);
+    expect(removeForemanServer(path)).toBe(false);
+    expect(readFileSync(path, "utf-8")).toBe(original);
+  });
+
+  it("no-ops when the file does not exist (returns false)", () => {
+    const path = join(tmpDir, "missing.yaml");
+    expect(removeForemanServer(path)).toBe(false);
+  });
+
+  it("no-ops on unsupported formats (returns false, file untouched)", () => {
+    const path = join(tmpDir, "config.ini");
+    writeFileSync(path, "[mcpServers]\nforeman=foreman\n");
+    expect(removeForemanServer(path)).toBe(false);
+    expect(readFileSync(path, "utf-8")).toBe(
+      "[mcpServers]\nforeman=foreman\n",
+    );
   });
 });
