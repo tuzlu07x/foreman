@@ -35,7 +35,7 @@ ${c_bold}USAGE${c_reset}
   curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash -s -- --uninstall
 
 ${c_bold}FLAGS${c_reset}
-  --uninstall     Remove the global ${PACKAGE} package (leaves ~/.foreman/ intact)
+  --uninstall     Remove the global ${PACKAGE} package (leaves Foreman's home directory intact)
   --help, -h      Show this help
 
 ${c_bold}ENVIRONMENT${c_reset}
@@ -138,10 +138,11 @@ verify_install() {
 
 next_steps() {
   printf "\n%sNext:%s\n" "${c_bold}" "${c_reset}"
-  printf "  1. %sforeman init%s        one-time setup of ~/.foreman/\n" "${c_orange}" "${c_reset}"
-  printf "  2. %sforeman agent add%s   wire up Hermes / Claude Code / a custom MCP agent\n" "${c_orange}" "${c_reset}"
+  printf "  1. %sforeman init%s        one-time setup of Foreman's home (identity, policy, db)\n" "${c_orange}" "${c_reset}"
+  printf "  2. %sforeman setup%s       5-minute wizard: API keys, agents, MCP config, policy\n" "${c_orange}" "${c_reset}"
   printf "  3. %sforeman start%s       boot the TUI\n" "${c_orange}" "${c_reset}"
   printf "\n%sREADME: https://github.com/%s%s\n" "${c_dim}" "${REPO}" "${c_reset}"
+  printf "%sRun 'foreman doctor' to see the platform-native paths Foreman uses.%s\n" "${c_dim}" "${c_reset}"
 }
 
 uninstall_foreman() {
@@ -156,8 +157,8 @@ uninstall_foreman() {
     npm uninstall -g "${PACKAGE}" || warn "npm uninstall reported a non-zero exit"
   fi
   ok "${PACKAGE} removed"
-  printf "\n%sNote:%s your ~/.foreman/ (identity, policy, audit log) was NOT removed.\n" "${c_orange}" "${c_reset}"
-  printf "Delete it manually if you want a clean slate: %srm -rf ~/.foreman%s\n" "${c_bold}" "${c_reset}"
+  printf "\n%sNote:%s your Foreman home (identity, policy, audit log) was NOT removed.\n" "${c_orange}" "${c_reset}"
+  printf "Run %sforeman doctor%s before uninstalling to see its location, then remove it manually for a clean slate.\n" "${c_bold}" "${c_reset}"
 }
 
 detect_target() {
