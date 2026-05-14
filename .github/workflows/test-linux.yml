@@ -70,7 +70,13 @@ jobs:
           FH="$(mktemp -d)"
           export FOREMAN_HOME="$FH"
           foreman init
+          # doctor exits 1 on warnings (e.g. 'no agents registered' on a
+          # fresh init); accept that, fail only on 2+ (real check failure).
+          set +e
           foreman doctor
+          rc=$?
+          set -e
+          [ "$rc" -le 1 ] || exit "$rc"
 
       - name: CLI smoke — agent / policy / registry
         run: |
