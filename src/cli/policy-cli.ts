@@ -29,7 +29,15 @@ policyCommand
     }
     const db = getDb();
     const engine = new PolicyEngine(db, bus);
-    if (existsSync(paths.policyPath)) engine.loadFromYaml(paths.policyPath);
+    if (existsSync(paths.policyPath)) {
+      try {
+        engine.loadFromYaml(paths.policyPath);
+      } catch (err) {
+        printPolicyLoadError(paths.policyPath, err);
+        closeDb();
+        process.exit(1);
+      }
+    }
     const rows = engine.list();
     if (options.json) {
       process.stdout.write(
@@ -88,12 +96,28 @@ policyCommand
     await launchEditor(paths.policyPath);
     const db = getDb();
     const engine = new PolicyEngine(db, bus);
-    const result = engine.loadFromYaml(paths.policyPath);
-    console.log(
-      `reloaded ${result.rulesAdded} rule${result.rulesAdded === 1 ? "" : "s"} from ${paths.policyPath}`,
-    );
+    try {
+      const result = engine.loadFromYaml(paths.policyPath);
+      console.log(
+        `reloaded ${result.rulesAdded} rule${result.rulesAdded === 1 ? "" : "s"} from ${paths.policyPath}`,
+      );
+    } catch (err) {
+      printPolicyLoadError(paths.policyPath, err);
+      closeDb();
+      process.exit(1);
+    }
     closeDb();
   });
+
+function printPolicyLoadError(path: string, err: unknown): void {
+  const detail = err instanceof Error ? err.message : String(err);
+  // Strip the YAMLParseError pointer caret block — too noisy for CLI.
+  const oneLine = detail.split("\n")[0] ?? detail;
+  console.error(red("error: ") + `${path} failed to parse: ${oneLine}`);
+  console.error(
+    dim(`  → Open ${path} and fix the syntax (YAML validators online help).`),
+  );
+}
 
 async function promptYesNo(prompt: string): Promise<boolean> {
   if (!process.stdin.isTTY) return false;
