@@ -17,15 +17,13 @@ curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 hermes setup                       # one-time bootstrap
 ```
 
-After Hermes is on PATH, Foreman's agent wizard (from [#60](https://github.com/tuzlu07x/foreman/issues/60)) registers it and wires its config:
+Or have Foreman install Hermes for you when you select it. Hermes ships only via curl (no npm package today), so Foreman pipes the installer to bash on your explicit consent:
 
 ```bash
-foreman agent add hermes --type hermes
+foreman agent add hermes --type hermes --auto-install
 ```
 
-That command finds the installed `hermes` binary, injects the MCP snippet into `~/.hermes/config.yaml`, and registers Hermes with Foreman. Skip the rest of step 2 if this worked.
-
-> **Why not `--auto-install`?** Hermes installs via `curl … | bash`, which Foreman refuses to auto-run unattended — the registry surfaces the command and the user pastes it.
+That command runs the installer, injects the MCP snippet into `~/.hermes/config.yaml`, and registers Hermes with Foreman. The interactive `foreman setup` wizard does the same thing when you check the Hermes box. Unchecking later removes the registration and prints a note with the manual uninstall command (script installers vary; Hermes typically supports `--uninstall`).
 
 ## 2. (Manual) point Hermes at Foreman
 

@@ -58,8 +58,6 @@ export interface RunInstallOptions {
   onLine?: (line: string) => void;
 }
 
-// Streams the install command, line by line, to the caller. Returns the exit
-// code + a copy-pasteable manual command for the failure case.
 export async function runInstall(
   options: RunInstallOptions,
 ): Promise<InstallResult> {
@@ -71,33 +69,58 @@ export async function runInstall(
       manualCommand: "(no install command in registry entry)",
     };
   }
-  // Curl-pipe-to-bash installers (Hermes, OpenClaw) are too dangerous to
-  // auto-run unattended — surface the manual command so the user reviews
-  // it themselves before pasting it into a shell.
-  if (!options.install.npm && !options.install.brew && options.install.script) {
-    return {
-      ok: false,
-      exitCode: -2,
-      manualCommand: command,
-    };
+  return runShell(command, options.onLine);
+}
+
+export async function runUninstall(
+  options: RunInstallOptions,
+): Promise<InstallResult> {
+  const command = preferredUninstallCommand(options.install);
+  if (!command) {
+    const manual = options.install.script
+      ? `(no automated uninstall — re-run the installer with its --uninstall flag, or remove the binary at ${options.install.binary ?? "<binary>"} manually)`
+      : "(no uninstall command in registry entry)";
+    return { ok: false, exitCode: -1, manualCommand: manual };
   }
+  return runShell(command, options.onLine);
+}
+
+export function preferredInstallCommand(install: InstallSpec): string | null {
+  if (install.npm) return `npm install -g ${install.npm}`;
+  if (install.brew) return `brew install ${install.brew}`;
+  if (install.script) return `curl -fsSL ${install.script} | bash`;
+  return null;
+}
+
+export function preferredUninstallCommand(install: InstallSpec): string | null {
+  if (install.npm) return `npm uninstall -g ${install.npm}`;
+  if (install.brew) return `brew uninstall ${install.brew}`;
+  return null;
+}
+
+function runShell(
+  command: string,
+  onLine?: (line: string) => void,
+): Promise<InstallResult> {
   return new Promise<InstallResult>((resolveResult) => {
-    const [cmd, ...args] = command.split(" ");
-    const child = spawn(cmd!, args, { stdio: ["ignore", "pipe", "pipe"] });
+    // Pipes (`curl … | bash`) need a real shell to interpret them.
+    const needsShell = command.includes("|");
+    const child = needsShell
+      ? spawn("bash", ["-c", command], { stdio: ["ignore", "pipe", "pipe"] })
+      : (() => {
+          const [cmd, ...args] = command.split(" ");
+          return spawn(cmd!, args, { stdio: ["ignore", "pipe", "pipe"] });
+        })();
     const onChunk = (chunk: Buffer): void => {
       const text = chunk.toString("utf8");
       for (const line of text.split(/\r?\n/)) {
-        if (line.length > 0) options.onLine?.(line);
+        if (line.length > 0) onLine?.(line);
       }
     };
     child.stdout.on("data", onChunk);
     child.stderr.on("data", onChunk);
     child.on("error", () => {
-      resolveResult({
-        ok: false,
-        exitCode: -1,
-        manualCommand: command,
-      });
+      resolveResult({ ok: false, exitCode: -1, manualCommand: command });
     });
     child.on("close", (code) => {
       resolveResult({
@@ -109,13 +132,6 @@ export async function runInstall(
   });
 }
 
-export function preferredInstallCommand(install: InstallSpec): string | null {
-  if (install.npm) return `npm install -g ${install.npm}`;
-  if (install.brew) return `brew install ${install.brew}`;
-  if (install.script) return `curl -fsSL ${install.script} | bash`;
-  return null;
-}
-
 function candidateBinaries(install: InstallSpec): string[] {
   const out: string[] = [];
   if (install.binary) out.push(install.binary);
@@ -125,13 +141,11 @@ function candidateBinaries(install: InstallSpec): string[] {
 }
 
 function binaryFromNpmPackage(pkg: string): string {
-  // Strip a scope prefix (`@scope/pkg` → `pkg`).
   const withoutScope = pkg.startsWith("@") ? (pkg.split("/")[1] ?? pkg) : pkg;
   return withoutScope;
 }
 
 function binaryFromBrewFormula(formula: string): string {
-  // Strip a tap prefix (`org/tap/formula` → `formula`).
   const parts = formula.split("/");
   return parts[parts.length - 1] ?? formula;
 }
