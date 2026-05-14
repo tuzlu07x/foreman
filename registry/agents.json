@@ -26,7 +26,7 @@
       "tagline": "Multi-channel assistant with a lobster-themed TUI",
       "homepage": "https://openclaw.ai/",
       "install": {
-        "npm": null,
+        "npm": "openclaw",
         "brew": null,
         "script": "https://openclaw.ai/install.sh",
         "binary": "openclaw"
