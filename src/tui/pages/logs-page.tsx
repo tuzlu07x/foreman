@@ -11,7 +11,7 @@ import {
   summariseTool,
   targetLabel,
 } from "../format.js";
-import { theme } from "../theme.js";
+import { singleBorder, theme } from "../theme.js";
 import {
   DEFAULT_FILTERS,
   queryLogs,
@@ -69,7 +69,7 @@ export function LogsPage(props: LogsPageProps): JSX.Element {
   return (
     <Box
       flexDirection="column"
-      borderStyle="single"
+      borderStyle={singleBorder()}
       borderDimColor
       paddingX={1}
       flexGrow={1}
@@ -215,7 +215,7 @@ function ResultRow({
           marginLeft={2}
           marginBottom={1}
           paddingX={1}
-          borderStyle="single"
+          borderStyle={singleBorder()}
           borderDimColor
         >
           <Text color={theme.fg.muted}>id: {row.id}</Text>

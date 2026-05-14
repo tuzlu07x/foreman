@@ -1,7 +1,7 @@
 import { Box, Text } from "ink";
 import type { ApprovalRequest } from "../../core/approval.js";
 import { explain } from "../reason-explanations.js";
-import { theme } from "../theme.js";
+import { doubleBorder, theme } from "../theme.js";
 
 export type ResolvedBy = "user" | "timeout";
 
@@ -23,7 +23,7 @@ export function ApprovalModal({
   return (
     <Box
       flexDirection="column"
-      borderStyle="double"
+      borderStyle={doubleBorder()}
       borderColor={theme.accent.warning}
       paddingX={2}
       paddingY={0}
