@@ -23,9 +23,10 @@ export function buildMcpSnippet(
     command: "foreman",
     args: ["mcp-stdio", "--source", agentId],
   };
+  const topKey = entry.mcp_servers_key ?? "mcpServers";
 
   const json: Record<string, unknown> = entry.mcp_compatible
-    ? { mcpServers: { foreman: block } }
+    ? { [topKey]: { foreman: block } }
     : {
         mcp: {
           enabled: true,

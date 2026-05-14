@@ -43,6 +43,26 @@
       "min_foreman_version": "0.1.2"
     },
     {
+      "id": "codex",
+      "name": "Codex",
+      "tagline": "OpenAI's terminal coding agent",
+      "homepage": "https://developers.openai.com/codex",
+      "install": {
+        "npm": "@openai/codex",
+        "brew": null,
+        "script": null,
+        "binary": "codex"
+      },
+      "config_paths": ["~/.codex/config.toml"],
+      "config_snippet": null,
+      "mcp_servers_key": "mcp_servers",
+      "required_secrets": [],
+      "optional_secrets": ["openai-key"],
+      "mcp_compatible": true,
+      "supported_versions": ">=0.100.0",
+      "min_foreman_version": "0.1.2"
+    },
+    {
       "id": "claude-code",
       "name": "Claude Code",
       "tagline": "Anthropic's official terminal coding agent",

@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
-export type ConfigFormat = "yaml" | "json";
+export type ConfigFormat = "yaml" | "json" | "toml";
 
 export interface InjectionPlan {
   alreadyHasForeman: boolean;
@@ -14,7 +15,7 @@ export interface InjectionPlan {
 export class UnsupportedConfigFormatError extends Error {
   constructor(public readonly path: string) {
     super(
-      `Cannot inject MCP snippet into ${path} — only .yaml/.yml/.json are supported`,
+      `Cannot inject MCP snippet into ${path} — only .yaml/.yml/.json/.toml are supported`,
     );
     this.name = "UnsupportedConfigFormatError";
   }
@@ -24,6 +25,7 @@ export function detectConfigFormat(path: string): ConfigFormat {
   const ext = extname(path).toLowerCase();
   if (ext === ".yaml" || ext === ".yml") return "yaml";
   if (ext === ".json") return "json";
+  if (ext === ".toml") return "toml";
   throw new UnsupportedConfigFormatError(path);
 }
 
@@ -46,7 +48,9 @@ export function planInjection(
   const after =
     format === "yaml"
       ? stringifyYaml(merged)
-      : `${JSON.stringify(merged, null, 2)}\n`;
+      : format === "toml"
+        ? stringifyToml(merged) + "\n"
+        : `${JSON.stringify(merged, null, 2)}\n`;
   return { alreadyHasForeman, before, after, format };
 }
 
@@ -60,7 +64,9 @@ function parseDoc(text: string, format: ConfigFormat): Record<string, unknown> {
   const raw =
     format === "yaml"
       ? (parseYaml(text) as unknown)
-      : (JSON.parse(text) as unknown);
+      : format === "toml"
+        ? (parseToml(text) as unknown)
+        : (JSON.parse(text) as unknown);
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     return {};
   }
@@ -68,14 +74,20 @@ function parseDoc(text: string, format: ConfigFormat): Record<string, unknown> {
 }
 
 function hasForemanServer(doc: Record<string, unknown>): boolean {
-  const mcpServers = doc.mcpServers;
-  if (
-    mcpServers &&
-    typeof mcpServers === "object" &&
-    !Array.isArray(mcpServers) &&
-    "foreman" in (mcpServers as Record<string, unknown>)
-  ) {
-    return true;
+  // Three conventions cover every agent in the registry:
+  //   mcpServers.foreman    (Claude Code / Hermes / OpenClaw style)
+  //   mcp_servers.foreman   (Codex / TOML style)
+  //   mcp.servers.foreman   (older nested pattern)
+  for (const key of ["mcpServers", "mcp_servers"]) {
+    const node = doc[key];
+    if (
+      node &&
+      typeof node === "object" &&
+      !Array.isArray(node) &&
+      "foreman" in (node as Record<string, unknown>)
+    ) {
+      return true;
+    }
   }
   const mcp = doc.mcp;
   if (mcp && typeof mcp === "object" && !Array.isArray(mcp)) {

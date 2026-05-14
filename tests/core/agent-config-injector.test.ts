@@ -10,14 +10,18 @@ import {
 } from "../../src/core/agent-config-injector.js";
 
 describe("detectConfigFormat", () => {
-  it("detects yaml/yml/json by extension", () => {
+  it("detects yaml/yml/json/toml by extension", () => {
     expect(detectConfigFormat("/x/config.yaml")).toBe("yaml");
     expect(detectConfigFormat("/x/config.yml")).toBe("yaml");
     expect(detectConfigFormat("/x/config.json")).toBe("json");
+    expect(detectConfigFormat("/x/config.toml")).toBe("toml");
   });
 
   it("throws for unsupported extensions", () => {
-    expect(() => detectConfigFormat("/x/config.toml")).toThrow(
+    expect(() => detectConfigFormat("/x/config.ini")).toThrow(
+      UnsupportedConfigFormatError,
+    );
+    expect(() => detectConfigFormat("/x/config.xml")).toThrow(
       UnsupportedConfigFormatError,
     );
   });
@@ -128,5 +132,67 @@ describe("applyInjection", () => {
     applyInjection(path, plan);
     const after = JSON.parse(readFileSync(path, "utf-8"));
     expect(after.mcpServers.foreman.command).toBe("old");
+  });
+});
+
+describe("planInjection — TOML (Codex)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "foreman-inj-toml-"));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("creates a TOML config from scratch with the foreman block", () => {
+    const path = join(tmpDir, "config.toml");
+    const plan = planInjection(path, {
+      mcp_servers: {
+        foreman: {
+          command: "foreman",
+          args: ["mcp-stdio", "--source", "codex"],
+        },
+      },
+    });
+    expect(plan.format).toBe("toml");
+    expect(plan.alreadyHasForeman).toBe(false);
+    expect(plan.after).toContain("[mcp_servers.foreman]");
+    expect(plan.after).toContain('command = "foreman"');
+  });
+
+  it("preserves existing TOML keys when merging", () => {
+    const path = join(tmpDir, "config.toml");
+    writeFileSync(
+      path,
+      `model = "gpt-5"\nsandbox = "docker"\n`,
+      "utf-8",
+    );
+    const plan = planInjection(path, {
+      mcp_servers: {
+        foreman: {
+          command: "foreman",
+          args: ["mcp-stdio", "--source", "codex"],
+        },
+      },
+    });
+    expect(plan.alreadyHasForeman).toBe(false);
+    expect(plan.after).toContain('model = "gpt-5"');
+    expect(plan.after).toContain('sandbox = "docker"');
+    expect(plan.after).toContain("[mcp_servers.foreman]");
+  });
+
+  it("is a no-op when foreman is already in [mcp_servers]", () => {
+    const path = join(tmpDir, "config.toml");
+    writeFileSync(
+      path,
+      `[mcp_servers.foreman]\ncommand = "foreman"\nargs = ["mcp-stdio"]\n`,
+      "utf-8",
+    );
+    const plan = planInjection(path, {
+      mcp_servers: { foreman: { command: "foreman", args: [] } },
+    });
+    expect(plan.alreadyHasForeman).toBe(true);
   });
 });
