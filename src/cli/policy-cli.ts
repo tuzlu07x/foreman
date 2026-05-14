@@ -44,7 +44,7 @@ policyCommand
         JSON.stringify(rows.map(renderPolicyJson), null, 2) + "\n",
       );
     } else if (rows.length === 0) {
-      console.log("(no policy rules — edit ~/.foreman/policy.yaml)");
+      console.log(`(no policy rules — edit ${paths.policyPath})`);
     } else {
       for (const row of rows) console.log(renderPolicyLine(row));
     }
@@ -54,7 +54,7 @@ policyCommand
 policyCommand
   .command("reset")
   .description(
-    "Overwrite ~/.foreman/policy.yaml with the smart-default template",
+    "Overwrite the active policy.yaml with the smart-default template",
   )
   .option("--yes", "skip the confirmation prompt")
   .action(async (options: { yes?: boolean }) => {
