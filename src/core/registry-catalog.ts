@@ -29,6 +29,10 @@ export const AgentEntrySchema = z
       .strict(),
     config_paths: z.array(z.string()),
     config_snippet: z.string().nullable().optional(),
+    /** Override the top-level key for the MCP server block in this agent's
+     * config. Defaults to `mcpServers` (Claude Code / Hermes / OpenClaw).
+     * Codex uses `mcp_servers` (snake_case). */
+    mcp_servers_key: z.string().nullable().optional(),
     required_secrets: z.array(z.string()),
     optional_secrets: z.array(z.string()),
     mcp_compatible: z.boolean(),
