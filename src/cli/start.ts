@@ -14,6 +14,7 @@ import { PolicyEngine } from "../core/policy-engine.js";
 import { RegistryService } from "../core/registry.js";
 import { RiskScorer } from "../core/risk-scorer.js";
 import { SessionManager } from "../core/session.js";
+import { checkForUpdate } from "../core/update-check.js";
 import { closeDb, getDb, getSqlite } from "../db/client.js";
 import { loadOrCreateMasterKey } from "../identity/keypair.js";
 import { App } from "../tui/app.js";
@@ -91,6 +92,16 @@ export function startForeman(
   let instance: Instance | null = null;
   let exitResolve: (() => void) | null = null;
   let keepAlive: NodeJS.Timeout | null = null;
+
+  void checkForUpdate(APP_VERSION).then((result) => {
+    if (result && result.hasUpdate) {
+      bus.emit("update:available", {
+        current: result.current,
+        latest: result.latest,
+        source: result.source,
+      });
+    }
+  });
 
   if (withTui) {
     instance = render(

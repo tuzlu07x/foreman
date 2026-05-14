@@ -5,6 +5,7 @@ import { doctorCommand } from "./doctor.js";
 import { initCommand } from "./init.js";
 import { logCommand } from "./log.js";
 import { mcpStdioCommand } from "./mcp-stdio.js";
+import { migrateCommand } from "./migrate.js";
 import { migrateConfigCommand } from "./migrate-config.js";
 import { policyCommand } from "./policy-cli.js";
 import { registryCommand } from "./registry-cli.js";
@@ -30,6 +31,7 @@ program.addCommand(secretsCommand);
 program.addCommand(registryCommand);
 program.addCommand(doctorCommand);
 program.addCommand(migrateConfigCommand);
+program.addCommand(migrateCommand);
 program.addCommand(wrapCommand);
 program.addCommand(createCompletionCommand(() => program));
 

@@ -89,6 +89,11 @@ export interface ForemanEventMap {
     agentId: string;
     rotatedAt: number;
   };
+  "update:available": {
+    current: string;
+    latest: string;
+    source: "cache" | "network";
+  };
 }
 
 export type ForemanEvent = keyof ForemanEventMap;
@@ -105,9 +110,6 @@ export class EventBus<EventMap> {
 
   constructor() {
     this.emitter = new EventEmitter();
-    // Foreman is a single long-running process. The default cap of 10
-    // listeners per event will trip in a real run once every service
-    // subscribes; bump it up.
     this.emitter.setMaxListeners(100);
   }
 
