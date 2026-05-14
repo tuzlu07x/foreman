@@ -32,3 +32,36 @@ export type Theme = typeof theme;
 export function isAsciiMode(): boolean {
   return process.env.FOREMAN_ASCII === "1";
 }
+
+const ASCII_SINGLE = {
+  topLeft: "+",
+  top: "-",
+  topRight: "+",
+  right: "|",
+  bottomRight: "+",
+  bottom: "-",
+  bottomLeft: "+",
+  left: "|",
+} as const;
+
+const ASCII_DOUBLE = {
+  topLeft: "+",
+  top: "=",
+  topRight: "+",
+  right: "|",
+  bottomRight: "+",
+  bottom: "=",
+  bottomLeft: "+",
+  left: "|",
+} as const;
+
+// borderStyle that honours FOREMAN_ASCII=1 (TUI spec §8.2). Returns Ink's
+// built-in "single" / "double" key when Unicode borders are fine, or a
+// concrete shape object built from ASCII glyphs when the env asks for it.
+export function singleBorder(): "single" | typeof ASCII_SINGLE {
+  return isAsciiMode() ? ASCII_SINGLE : "single";
+}
+
+export function doubleBorder(): "double" | typeof ASCII_DOUBLE {
+  return isAsciiMode() ? ASCII_DOUBLE : "double";
+}
