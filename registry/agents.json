@@ -67,7 +67,11 @@
       "name": "Claude Code",
       "tagline": "Anthropic's official terminal coding agent",
       "homepage": "https://github.com/anthropics/claude-code",
-      "install": { "npm": "@anthropic-ai/claude-code", "brew": null },
+      "install": {
+        "npm": "@anthropic-ai/claude-code",
+        "brew": null,
+        "binary": "claude"
+      },
       "config_paths": [
         "~/.claude/settings.json",
         "~/.config/claude-code/settings.json"
