@@ -11,7 +11,7 @@ export const agents = sqliteTable("agents", {
   id: text("id").primaryKey(),
   displayName: text("display_name").notNull(),
   publicKey: blob("public_key", { mode: "buffer" }).notNull(),
-  transport: text("transport", { enum: ["stdio", "ws"] }).notNull(),
+  transport: text("transport", { enum: ["stdio", "ws", "wrap"] }).notNull(),
   endpoint: text("endpoint"),
   registeredAt: integer("registered_at").notNull(),
   lastSeenAt: integer("last_seen_at"),

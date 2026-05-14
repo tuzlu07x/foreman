@@ -9,7 +9,7 @@ import {
   type ForemanEventMap,
 } from "./event-bus.js";
 
-export type Transport = "stdio" | "ws";
+export type Transport = "stdio" | "ws" | "wrap";
 export type AgentStatus = "active" | "inactive" | "blocked";
 
 export interface AgentManifest {

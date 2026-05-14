@@ -8,6 +8,7 @@ import { policyCommand } from "./policy-cli.js";
 import { registryCommand } from "./registry-cli.js";
 import { secretsCommand } from "./secrets-cli.js";
 import { startCommand } from "./start.js";
+import { wrapCommand } from "./wrap.js";
 
 const program = new Command();
 program
@@ -26,5 +27,6 @@ program.addCommand(agentsCommand);
 program.addCommand(secretsCommand);
 program.addCommand(registryCommand);
 program.addCommand(doctorCommand);
+program.addCommand(wrapCommand);
 
 program.parse();
