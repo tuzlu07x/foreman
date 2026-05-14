@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   detectInstall,
   preferredInstallCommand,
+  preferredUninstallCommand,
 } from "../../src/core/agent-install.js";
 
 describe("preferredInstallCommand", () => {
@@ -29,8 +30,42 @@ describe("preferredInstallCommand", () => {
     ).toBe("brew install openclaw/tap/openclaw");
   });
 
-  it("returns null when both are null", () => {
+  it("falls back to curl script when npm and brew are both null", () => {
+    expect(
+      preferredInstallCommand({
+        npm: null,
+        brew: null,
+        script: "https://example.com/install.sh",
+      }),
+    ).toBe("curl -fsSL https://example.com/install.sh | bash");
+  });
+
+  it("returns null when nothing is set", () => {
     expect(preferredInstallCommand({ npm: null, brew: null })).toBeNull();
+  });
+});
+
+describe("preferredUninstallCommand", () => {
+  it("returns npm uninstall -g for npm-installed", () => {
+    expect(preferredUninstallCommand({ npm: "openclaw", brew: null })).toBe(
+      "npm uninstall -g openclaw",
+    );
+  });
+
+  it("returns brew uninstall for brew-installed", () => {
+    expect(preferredUninstallCommand({ npm: null, brew: "tap/foo" })).toBe(
+      "brew uninstall tap/foo",
+    );
+  });
+
+  it("returns null for script-only installs (manual uninstall path)", () => {
+    expect(
+      preferredUninstallCommand({
+        npm: null,
+        brew: null,
+        script: "https://example.com/install.sh",
+      }),
+    ).toBeNull();
   });
 });
 

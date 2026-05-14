@@ -16,7 +16,12 @@ import {
   planInjection,
   UnsupportedConfigFormatError,
 } from "../core/agent-config-injector.js";
-import { detectInstall, runInstall } from "../core/agent-install.js";
+import {
+  detectInstall,
+  preferredUninstallCommand,
+  runInstall,
+  runUninstall,
+} from "../core/agent-install.js";
 import { buildMcpSnippet } from "../core/agent-mcp-snippet.js";
 import {
   findAgent,
@@ -87,8 +92,16 @@ export function SetupWizard({
   const [secretIdx, setSecretIdx] = useState(0);
   const [secretsDone, setSecretsDone] = useState(false);
 
-  const [agentsSelected, setAgentsSelected] =
-    useState<string[]>(DEFAULT_AGENTS);
+  // Agents already registered in this Foreman home — drive the wizard's
+  // diff logic: still-checked = no-op or re-verify; newly-checked = install;
+  // previously-checked-now-unchecked = uninstall + remove.
+  const initialRegistered = useMemo(
+    () => services.registry.list().map((a) => a.id),
+    [services.registry],
+  );
+  const [agentsSelected, setAgentsSelected] = useState<string[]>(() =>
+    initialRegistered.length > 0 ? initialRegistered : DEFAULT_AGENTS,
+  );
   const [agentsDone, setAgentsDone] = useState(false);
 
   const [installLog, setInstallLog] = useState<string[]>([]);
@@ -188,18 +201,23 @@ export function SetupWizard({
     const { doc } = loadActiveRegistry();
     const options = doc.agents.map((a) => ({
       value: a.id,
-      label: `${a.name} — ${a.tagline}`,
+      label: initialRegistered.includes(a.id)
+        ? `${a.name} (installed) — ${a.tagline}`
+        : `${a.name} — ${a.tagline}`,
     }));
+    const defaults =
+      initialRegistered.length > 0 ? initialRegistered : DEFAULT_AGENTS;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <Text bold>Step 2 / 4 — Agents</Text>
         <Text color={theme.fg.muted}>
           Pick the agents you want Foreman to mediate. (Space to toggle, Enter
-          to confirm.)
+          to confirm.) Newly-checked agents are installed; previously-installed
+          agents you uncheck are uninstalled.
         </Text>
         <MultiSelect
           options={options}
-          defaultValue={DEFAULT_AGENTS}
+          defaultValue={defaults}
           onSubmit={(values) => {
             setAgentsSelected(values);
             setAgentsDone(true);
@@ -214,7 +232,13 @@ export function SetupWizard({
   if (currentStep === "install") {
     if (!installRunning) {
       setInstallRunning(true);
-      void runInstallStep(agentsSelected, services, (line) =>
+      const toAdd = agentsSelected.filter(
+        (id) => !initialRegistered.includes(id),
+      );
+      const toRemove = initialRegistered.filter(
+        (id) => !agentsSelected.includes(id),
+      );
+      void runInstallStep(toAdd, toRemove, services, (line) =>
         setInstallLog((prev) => [...prev, line]),
       ).then(() => {
         advance("install");
@@ -281,12 +305,45 @@ export function SetupWizard({
 }
 
 async function runInstallStep(
-  selectedIds: string[],
+  toAdd: string[],
+  toRemove: string[],
   services: WizardServices,
   log: (line: string) => void,
 ): Promise<void> {
   const { doc } = loadActiveRegistry();
-  for (const id of selectedIds) {
+
+  // --- Process unchecks first: uninstall the binary, remove the row -----
+  for (const id of toRemove) {
+    const existing = services.registry.get(id);
+    if (!existing) continue;
+    const registryId =
+      typeof existing.metadata?.registryId === "string"
+        ? existing.metadata.registryId
+        : null;
+    const entry = registryId ? safeFind(doc, registryId) : null;
+    log(`▸ Removing ${existing.displayName}`);
+    services.registry.remove(id);
+    log(`  ✓ unregistered "${id}"`);
+    if (entry) {
+      const cmd = preferredUninstallCommand(entry.install);
+      if (cmd) {
+        log(`  uninstalling (${cmd})…`);
+        const result = await runUninstall({
+          install: entry.install,
+          onLine: (l) => log(`  ${l}`),
+        });
+        if (result.ok) log(`  ✓ ${entry.name} uninstalled`);
+        else log(`  ⚠ uninstall failed (exit ${result.exitCode}); run manually: ${result.manualCommand}`);
+      } else if (entry.install.script) {
+        log(
+          `  ⚠ ${entry.name} was installed via a script — remove the ${entry.install.binary ?? id} binary manually.`,
+        );
+      }
+    }
+  }
+
+  // --- Then add: install, configure, register ---------------------------
+  for (const id of toAdd) {
     let entry: AgentEntry;
     try {
       entry = findAgent(doc, id);
@@ -297,12 +354,18 @@ async function runInstallStep(
     log(`▸ ${entry.name}`);
 
     // Each substep is best-effort — install / secret-check / config-inject
-    // failures degrade to a warning, but registration always runs at the
-    // end so the agent shows up in 'foreman agent list'.
+    // failures degrade to a warning, but registration always runs at the end.
     const detection = detectInstall(entry.install);
     if (!detection.found) {
-      if (entry.install.npm || entry.install.brew) {
-        log(`  installing ${entry.install.npm ?? entry.install.brew}…`);
+      const installCmd = entry.install.npm
+        ? `npm install -g ${entry.install.npm}`
+        : entry.install.brew
+          ? `brew install ${entry.install.brew}`
+          : entry.install.script
+            ? `curl -fsSL ${entry.install.script} | bash`
+            : null;
+      if (installCmd) {
+        log(`  installing (${installCmd})…`);
         const result = await runInstall({
           install: entry.install,
           onLine: (l) => log(`  ${l}`),
@@ -311,10 +374,6 @@ async function runInstallStep(
           log(`  ⚠ install failed (exit ${result.exitCode})`);
           log(`    run manually: ${result.manualCommand}`);
         }
-      } else if (entry.install.script) {
-        log(
-          `  ⚠ ${entry.name} is not detected — install manually: curl -fsSL ${entry.install.script} | bash`,
-        );
       }
     } else {
       log(`  ✓ already installed at ${detection.path}`);
@@ -368,5 +427,20 @@ async function runInstallStep(
         `  ✗ register failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  if (toAdd.length === 0 && toRemove.length === 0) {
+    log("(no agent changes — selection matches current registration)");
+  }
+}
+
+function safeFind(
+  doc: ReturnType<typeof loadActiveRegistry>["doc"],
+  id: string,
+): AgentEntry | null {
+  try {
+    return findAgent(doc, id);
+  } catch {
+    return null;
   }
 }
