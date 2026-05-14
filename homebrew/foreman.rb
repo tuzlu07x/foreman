@@ -13,11 +13,17 @@ class Foreman < Formula
   def install
     system "npm", "install", *Language::Node.std_npm_install_args(libexec)
     bin.install_symlink Dir["#{libexec}/bin/*"]
+
+    # Generate + drop shell completions into the right Homebrew dirs.
+    generate_completions_from_executable(bin/"foreman", "completion")
   end
 
   test do
     assert_match version.to_s, shell_output("#{bin}/foreman --version")
     system bin/"foreman", "--help"
+    assert_match "complete -F", shell_output("#{bin}/foreman completion bash")
+    assert_match "#compdef foreman", shell_output("#{bin}/foreman completion zsh")
+    assert_match "foreman_no_subcommand", shell_output("#{bin}/foreman completion fish")
   end
 
   def caveats

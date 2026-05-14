@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { agentsCommand } from "./agents-cli.js";
+import { createCompletionCommand } from "./completion.js";
 import { doctorCommand } from "./doctor.js";
 import { initCommand } from "./init.js";
 import { logCommand } from "./log.js";
@@ -30,5 +31,6 @@ program.addCommand(registryCommand);
 program.addCommand(doctorCommand);
 program.addCommand(migrateConfigCommand);
 program.addCommand(wrapCommand);
+program.addCommand(createCompletionCommand(() => program));
 
 program.parse();
