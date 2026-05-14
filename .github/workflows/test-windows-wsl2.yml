@@ -52,18 +52,15 @@ jobs:
           node --version
           npm --version
 
-      - name: Clone foreman at $FOREMAN_REF into WSL2 ext4 home
+      - name: Clone foreman at the PR head into WSL2 ext4 home
         shell: wsl-bash {0}
-        env:
-          FOREMAN_REF: ${{ env.FOREMAN_REF }}
-          FOREMAN_REPO: ${{ env.FOREMAN_REPO }}
         run: |
           set -eu
           cd "$HOME"
-          git clone "https://github.com/${FOREMAN_REPO}.git" foreman
+          git clone "https://github.com/${{ env.FOREMAN_REPO }}.git" foreman
           cd foreman
-          git fetch origin "${FOREMAN_REF}"
-          git checkout "${FOREMAN_REF}"
+          git fetch origin "${{ env.FOREMAN_REF }}"
+          git checkout "${{ env.FOREMAN_REF }}"
           git --no-pager log -1 --oneline
 
       - name: npm ci / lint / test / build inside WSL2
