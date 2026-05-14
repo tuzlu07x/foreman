@@ -1,3 +1,6 @@
+import { and, eq, lt } from "drizzle-orm";
+import type { ForemanDb } from "../db/client.js";
+import { pendingApprovals } from "../db/schema.js";
 import {
   bus as defaultBus,
   type EventBus,
@@ -148,6 +151,232 @@ export class BusApprovalService implements ApprovalService {
         resolve(decision);
       };
     });
+  }
+}
+
+// Cross-process approval IPC (#117). Writes the pending row to SQLite,
+// polls for a resolution decision, then emits the resolved event on the
+// local bus. The TUI in `foreman start` is responsible for spotting the
+// pending row (via ApprovalBridge) and writing the decision back.
+export interface DbApprovalOptions {
+  bus?: EventBus<ForemanEventMap>;
+  /** Total wait before we time-out the request and auto-deny. */
+  timeoutMs?: number;
+  /** How often to poll the DB for a resolution. */
+  pollIntervalMs?: number;
+}
+
+const DEFAULT_POLL_INTERVAL_MS = 200;
+
+export class DbApprovalService implements ApprovalService {
+  private readonly bus: EventBus<ForemanEventMap>;
+  private readonly timeoutMs: number;
+  private readonly pollIntervalMs: number;
+
+  constructor(
+    private readonly db: ForemanDb,
+    opts: DbApprovalOptions = {},
+  ) {
+    this.bus = opts.bus ?? defaultBus;
+    this.timeoutMs = opts.timeoutMs ?? envTimeoutMs() ?? DEFAULT_TIMEOUT_MS;
+    this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  }
+
+  async request(req: ApprovalRequest): Promise<ApprovalDecision> {
+    const requestedAt = Date.now();
+    this.db
+      .insert(pendingApprovals)
+      .values({
+        requestId: req.requestId,
+        sourceAgent: req.sourceAgent,
+        targetAgent: req.targetAgent ?? null,
+        targetTool: req.targetTool ?? null,
+        args: JSON.stringify(req.args ?? null),
+        riskScore: req.riskScore,
+        riskReasons: JSON.stringify(req.riskReasons),
+        status: "pending",
+        requestedAt,
+      })
+      .run();
+
+    const deadline = requestedAt + this.timeoutMs;
+    while (Date.now() < deadline) {
+      const row = this.db
+        .select()
+        .from(pendingApprovals)
+        .where(eq(pendingApprovals.requestId, req.requestId))
+        .get();
+      if (row && row.status === "resolved") {
+        const decision: ApprovalDecision = {
+          decision: row.decision ?? "denied",
+          ...(row.remember ? { remember: row.remember } : {}),
+        };
+        this.bus.emit("approval:resolved", {
+          requestId: req.requestId,
+          decision: decision.decision,
+          remember: decision.remember,
+          resolvedBy: row.resolvedBy ?? "timeout",
+        });
+        return decision;
+      }
+      await sleep(this.pollIntervalMs);
+    }
+
+    // Timeout — best-effort mark the row resolved so the TUI poller stops
+    // surfacing it. We always deny on timeout (the safe default).
+    this.db
+      .update(pendingApprovals)
+      .set({
+        status: "resolved",
+        decision: "denied",
+        resolvedBy: "timeout",
+        resolvedAt: Date.now(),
+      })
+      .where(
+        and(
+          eq(pendingApprovals.requestId, req.requestId),
+          eq(pendingApprovals.status, "pending"),
+        ),
+      )
+      .run();
+    this.bus.emit("approval:resolved", {
+      requestId: req.requestId,
+      decision: "denied",
+      resolvedBy: "timeout",
+    });
+    return { decision: "denied" };
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Bridges the SQLite pending_approvals table into the `foreman start`
+// process's local bus. Run inside the TUI process: it polls for new pending
+// rows, emits `approval:requested` so the existing modal UI fires, and
+// listens for `approval:resolved` to write the decision back.
+export interface ApprovalBridgeOptions {
+  bus?: EventBus<ForemanEventMap>;
+  pollIntervalMs?: number;
+  /** Cap on how old a pending row can be before we auto-deny it (defensive). */
+  staleMs?: number;
+}
+
+export class ApprovalBridge {
+  private readonly bus: EventBus<ForemanEventMap>;
+  private readonly pollIntervalMs: number;
+  private readonly staleMs: number;
+  private readonly seen = new Set<string>();
+  private timer: NodeJS.Timeout | null = null;
+  private offResolved: (() => void) | null = null;
+
+  constructor(
+    private readonly db: ForemanDb,
+    opts: ApprovalBridgeOptions = {},
+  ) {
+    this.bus = opts.bus ?? defaultBus;
+    this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+    this.staleMs = opts.staleMs ?? 5 * 60 * 1000;
+  }
+
+  start(): void {
+    if (this.timer) return;
+    this.offResolved = this.bus.on("approval:resolved", (e) => {
+      this.db
+        .update(pendingApprovals)
+        .set({
+          status: "resolved",
+          decision: e.decision,
+          remember: e.remember ?? null,
+          resolvedBy: e.resolvedBy,
+          resolvedAt: Date.now(),
+        })
+        .where(
+          and(
+            eq(pendingApprovals.requestId, e.requestId),
+            eq(pendingApprovals.status, "pending"),
+          ),
+        )
+        .run();
+      this.seen.delete(e.requestId);
+    });
+    this.timer = setInterval(() => this.poll(), this.pollIntervalMs);
+    this.timer.unref?.();
+    this.poll(); // immediate first pass so the modal pops without a 200ms gap
+  }
+
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    if (this.offResolved) {
+      this.offResolved();
+      this.offResolved = null;
+    }
+  }
+
+  private poll(): void {
+    const rows = this.db
+      .select()
+      .from(pendingApprovals)
+      .where(eq(pendingApprovals.status, "pending"))
+      .all();
+    const stale = Date.now() - this.staleMs;
+    for (const row of rows) {
+      if (row.requestedAt < stale) {
+        // Defensive: anything that's been pending for over staleMs gets
+        // auto-denied so the table doesn't grow forever.
+        this.db
+          .update(pendingApprovals)
+          .set({
+            status: "resolved",
+            decision: "denied",
+            resolvedBy: "timeout",
+            resolvedAt: Date.now(),
+          })
+          .where(eq(pendingApprovals.requestId, row.requestId))
+          .run();
+        continue;
+      }
+      if (this.seen.has(row.requestId)) continue;
+      this.seen.add(row.requestId);
+      this.bus.emit("approval:requested", {
+        requestId: row.requestId,
+        sourceAgent: row.sourceAgent,
+        targetAgent: row.targetAgent ?? undefined,
+        targetTool: row.targetTool ?? undefined,
+        args: safeParse(row.args),
+        riskScore: row.riskScore,
+        riskReasons: safeParseArray(row.riskReasons),
+      });
+    }
+    // Forget seen ids that have left the table (resolved + cleared later).
+    if (this.seen.size > 100) {
+      const live = new Set(rows.map((r) => r.requestId));
+      for (const id of this.seen) {
+        if (!live.has(id)) this.seen.delete(id);
+      }
+    }
+    void lt;
+  }
+}
+
+function safeParse(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+function safeParseArray(s: string): string[] {
+  try {
+    const parsed = JSON.parse(s);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
   }
 }
 

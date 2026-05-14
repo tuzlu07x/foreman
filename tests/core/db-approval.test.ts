@@ -1,0 +1,216 @@
+import type Database from "better-sqlite3";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  ApprovalBridge,
+  DbApprovalService,
+  type ApprovalRequest,
+} from "../../src/core/approval.js";
+import {
+  EventBus,
+  type ForemanEventMap,
+} from "../../src/core/event-bus.js";
+import { createInMemoryDb, type ForemanDb } from "../../src/db/client.js";
+import { pendingApprovals } from "../../src/db/schema.js";
+
+function req(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
+  return {
+    requestId: "req_test_1",
+    sourceAgent: "claude-code",
+    targetTool: "read_file",
+    args: { path: ".env" },
+    riskScore: 80,
+    riskReasons: ["secret_file_pattern"],
+    ...overrides,
+  };
+}
+
+describe("DbApprovalService", () => {
+  let db: ForemanDb;
+  let sqlite: Database.Database;
+  let bus: EventBus<ForemanEventMap>;
+
+  beforeEach(() => {
+    const handle = createInMemoryDb();
+    db = handle.db;
+    sqlite = handle.sqlite;
+    bus = new EventBus<ForemanEventMap>();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it("inserts a pending row and polls until the bridge resolves it", async () => {
+    const service = new DbApprovalService(db, {
+      bus,
+      timeoutMs: 5000,
+      pollIntervalMs: 25,
+    });
+
+    const promise = service.request(req());
+
+    // Simulate the TUI bridge writing the decision back.
+    await new Promise((r) => setTimeout(r, 60));
+    db.update(pendingApprovals)
+      .set({
+        status: "resolved",
+        decision: "allowed",
+        resolvedBy: "user",
+        resolvedAt: Date.now(),
+      })
+      .run();
+
+    const decision = await promise;
+    expect(decision.decision).toBe("allowed");
+  });
+
+  it("times out and resolves denied when no decision arrives", async () => {
+    const service = new DbApprovalService(db, {
+      bus,
+      timeoutMs: 100,
+      pollIntervalMs: 25,
+    });
+    const decision = await service.request(req({ requestId: "to-deny" }));
+    expect(decision.decision).toBe("denied");
+    const row = db
+      .select()
+      .from(pendingApprovals)
+      .all()
+      .find((r) => r.requestId === "to-deny");
+    expect(row?.status).toBe("resolved");
+    expect(row?.resolvedBy).toBe("timeout");
+  });
+
+  it("emits approval:resolved on the local bus once decided", async () => {
+    const service = new DbApprovalService(db, {
+      bus,
+      timeoutMs: 1000,
+      pollIntervalMs: 25,
+    });
+    const resolved: ForemanEventMap["approval:resolved"][] = [];
+    bus.on("approval:resolved", (e) => resolved.push(e));
+
+    const promise = service.request(req({ requestId: "to-emit" }));
+    await new Promise((r) => setTimeout(r, 50));
+    db.update(pendingApprovals)
+      .set({
+        status: "resolved",
+        decision: "denied",
+        resolvedBy: "user",
+        resolvedAt: Date.now(),
+      })
+      .run();
+    await promise;
+    expect(resolved.length).toBe(1);
+    expect(resolved[0]?.decision).toBe("denied");
+    expect(resolved[0]?.resolvedBy).toBe("user");
+  });
+});
+
+describe("ApprovalBridge", () => {
+  let db: ForemanDb;
+  let sqlite: Database.Database;
+  let bus: EventBus<ForemanEventMap>;
+
+  beforeEach(() => {
+    const handle = createInMemoryDb();
+    db = handle.db;
+    sqlite = handle.sqlite;
+    bus = new EventBus<ForemanEventMap>();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it("forwards pending DB rows to the local bus as approval:requested", async () => {
+    const requests: ForemanEventMap["approval:requested"][] = [];
+    bus.on("approval:requested", (e) => requests.push(e));
+
+    const bridge = new ApprovalBridge(db, { bus, pollIntervalMs: 25 });
+    bridge.start();
+
+    // Service inserts a pending row (cross-process simulation).
+    db.insert(pendingApprovals)
+      .values({
+        requestId: "bridge-1",
+        sourceAgent: "claude-code",
+        targetTool: "read_file",
+        args: JSON.stringify({ path: ".env" }),
+        riskScore: 80,
+        riskReasons: JSON.stringify(["secret_file"]),
+        status: "pending",
+        requestedAt: Date.now(),
+      })
+      .run();
+
+    await new Promise((r) => setTimeout(r, 80));
+    bridge.stop();
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.requestId).toBe("bridge-1");
+    expect(requests[0]?.targetTool).toBe("read_file");
+    expect(requests[0]?.riskReasons).toEqual(["secret_file"]);
+  });
+
+  it("writes approval:resolved decisions back to the pending row", async () => {
+    db.insert(pendingApprovals)
+      .values({
+        requestId: "bridge-2",
+        sourceAgent: "claude-code",
+        args: "{}",
+        riskScore: 0,
+        riskReasons: "[]",
+        status: "pending",
+        requestedAt: Date.now(),
+      })
+      .run();
+
+    const bridge = new ApprovalBridge(db, { bus, pollIntervalMs: 25 });
+    bridge.start();
+    await new Promise((r) => setTimeout(r, 40));
+
+    bus.emit("approval:resolved", {
+      requestId: "bridge-2",
+      decision: "allowed",
+      remember: "allow",
+      resolvedBy: "user",
+    });
+    await new Promise((r) => setTimeout(r, 40));
+    bridge.stop();
+
+    const row = db
+      .select()
+      .from(pendingApprovals)
+      .all()
+      .find((r) => r.requestId === "bridge-2");
+    expect(row?.status).toBe("resolved");
+    expect(row?.decision).toBe("allowed");
+    expect(row?.remember).toBe("allow");
+    expect(row?.resolvedBy).toBe("user");
+  });
+
+  it("does not re-emit the same pending row twice", async () => {
+    db.insert(pendingApprovals)
+      .values({
+        requestId: "bridge-3",
+        sourceAgent: "claude-code",
+        args: "{}",
+        riskScore: 0,
+        riskReasons: "[]",
+        status: "pending",
+        requestedAt: Date.now(),
+      })
+      .run();
+
+    const requests: ForemanEventMap["approval:requested"][] = [];
+    bus.on("approval:requested", (e) => requests.push(e));
+
+    const bridge = new ApprovalBridge(db, { bus, pollIntervalMs: 25 });
+    bridge.start();
+    await new Promise((r) => setTimeout(r, 120));
+    bridge.stop();
+
+    expect(requests).toHaveLength(1);
+  });
+});

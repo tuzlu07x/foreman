@@ -104,6 +104,37 @@ export const secrets = sqliteTable("secrets", {
   lastAccessedAt: integer("last_accessed_at"),
 });
 
+// Cross-process approval IPC (#117). Foreman's bus is in-memory; a spawned
+// `foreman mcp-stdio` or `foreman wrap` process can't reach the TUI's bus
+// in `foreman start`. Pending approvals land here; the TUI polls, surfaces
+// them in the modal, and writes the decision back.
+export const pendingApprovals = sqliteTable(
+  "pending_approvals",
+  {
+    requestId: text("request_id").primaryKey(),
+    sourceAgent: text("source_agent").notNull(),
+    targetAgent: text("target_agent"),
+    targetTool: text("target_tool"),
+    args: text("args").notNull(),
+    riskScore: integer("risk_score").notNull(),
+    riskReasons: text("risk_reasons").notNull(),
+    status: text("status", { enum: ["pending", "resolved"] })
+      .notNull()
+      .default("pending"),
+    decision: text("decision", { enum: ["allowed", "denied"] }),
+    remember: text("remember", { enum: ["allow", "deny"] }),
+    resolvedBy: text("resolved_by", { enum: ["user", "timeout"] }),
+    requestedAt: integer("requested_at").notNull(),
+    resolvedAt: integer("resolved_at"),
+  },
+  (t) => ({
+    statusIdx: index("pending_approvals_status_idx").on(
+      t.status,
+      t.requestedAt,
+    ),
+  }),
+);
+
 export type Agent = typeof agents.$inferSelect;
 export type NewAgent = typeof agents.$inferInsert;
 export type Policy = typeof policies.$inferSelect;
@@ -116,6 +147,8 @@ export type AuditEvent = typeof auditEvents.$inferSelect;
 export type NewAuditEvent = typeof auditEvents.$inferInsert;
 export type Secret = typeof secrets.$inferSelect;
 export type NewSecret = typeof secrets.$inferInsert;
+export type PendingApproval = typeof pendingApprovals.$inferSelect;
+export type NewPendingApproval = typeof pendingApprovals.$inferInsert;
 
 // FTS5 virtual table and triggers live in a hand-written migration
 // (drizzle-kit cannot emit virtual tables). See:
