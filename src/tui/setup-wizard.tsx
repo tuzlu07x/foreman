@@ -304,7 +304,10 @@ export function SetupWizard({
   );
 }
 
-async function runInstallStep(
+// Exported for tests. The wizard's core diff loop: install + register the
+// newly-checked agents, uninstall + remove the previously-checked-now-unchecked
+// ones. Idempotent — running it twice with the same toAdd/toRemove no-ops.
+export async function runInstallStep(
   toAdd: string[],
   toRemove: string[],
   services: WizardServices,
