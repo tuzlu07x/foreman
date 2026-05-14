@@ -1,0 +1,88 @@
+name: test-windows-wsl2
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "scripts/**"
+      - "registry/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - "tsup.config.ts"
+      - "drizzle.config.ts"
+      - "docs/windows-wsl2.md"
+      - ".github/workflows/test-windows-wsl2.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "package.json"
+      - "package-lock.json"
+      - "docs/windows-wsl2.md"
+      - ".github/workflows/test-windows-wsl2.yml"
+  workflow_dispatch:
+
+jobs:
+  wsl2:
+    name: windows-latest · WSL2 (Ubuntu-22.04)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up WSL2 + Ubuntu-22.04
+        uses: Vampire/setup-wsl@v3
+        with:
+          distribution: Ubuntu-22.04
+          set-as-default: "true"
+
+      - name: Stage checkout into WSL2's ext4 home (NTFS bridge is fsync-slow)
+        shell: wsl-bash {0}
+        run: |
+          set -eu
+          mkdir -p "$HOME/foreman"
+          # WSL maps the runner's checkout to /mnt/<drive>/...
+          cp -R "$GITHUB_WORKSPACE/." "$HOME/foreman/"
+
+      - name: Install Node 20 + python3 + chafa inside WSL2
+        shell: wsl-bash {0}
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates python3 chafa
+          curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+          sudo apt-get install -y nodejs
+          node --version
+          npm --version
+
+      - name: npm ci / lint / test / build inside WSL2
+        shell: wsl-bash {0}
+        run: |
+          set -eu
+          cd "$HOME/foreman"
+          npm ci
+          npm run lint
+          npm test
+          npm run build
+
+      - name: Install foreman globally from the checkout
+        shell: wsl-bash {0}
+        run: |
+          set -eu
+          cd "$HOME/foreman"
+          npm install -g .
+
+      - name: foreman init / doctor / smoke against tmp FOREMAN_HOME
+        shell: wsl-bash {0}
+        run: |
+          set -eu
+          FH="$(mktemp -d)"
+          export FOREMAN_HOME="$FH"
+          foreman init
+          foreman doctor
+          foreman agent --help | grep -q "Agent commands"
+          foreman policy show
+          foreman registry list >/dev/null
