@@ -12,11 +12,14 @@ type BootPhase = "morph" | "wordmark" | "checks" | "idle";
 export interface BootBannerProps {
   info: BootInfo;
   animationsEnabled?: boolean;
+  /** When set, renders a one-line "Update available" notice under the checks. */
+  updateNotice?: { current: string; latest: string } | null;
 }
 
 export function BootBanner({
   info,
   animationsEnabled = true,
+  updateNotice = null,
 }: BootBannerProps): JSX.Element {
   const lines = buildBootLines(info);
   const { stdout } = useStdout();
@@ -79,6 +82,17 @@ export function BootBanner({
             <Text color={theme.fg.muted}>{line.detail}</Text>
           </Text>
         ))}
+        {updateNotice && visibleChecks >= lines.length ? (
+          <Text>
+            <Text color={theme.accent.warning}>{theme.symbols.bullet}</Text>{" "}
+            <Text color={theme.accent.warning}>
+              Update available: {updateNotice.latest}
+            </Text>{" "}
+            <Text color={theme.fg.muted}>
+              (run: npm install -g foreman-agent@latest)
+            </Text>
+          </Text>
+        ) : null}
       </Box>
 
       <Box marginTop={1}>
