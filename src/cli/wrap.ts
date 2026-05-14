@@ -27,7 +27,10 @@ export const wrapCommand = new Command("wrap")
     "Launch a child process under Foreman; intercept its MCP-framed stdout, sign responses, audit every call",
   )
   .requiredOption("--name <agentId>", "agent id Foreman records on every call")
-  .option("--policy <path>", "load this policy.yaml instead of ~/.foreman/policy.yaml")
+  .option(
+    "--policy <path>",
+    "load this policy.yaml instead of the active one (see 'foreman doctor' for its path)",
+  )
   .option(
     "--restart <mode>",
     "child restart policy ('never' or 'on-failure')",

@@ -20,7 +20,7 @@ export function PolicyPage({
   expanded,
   notice,
 }: PolicyPageProps): JSX.Element {
-  const { policy, bus } = useDashboardServices();
+  const { policy, policyPath, bus } = useDashboardServices();
   const [rows, setRows] = useState<PolicyRow[]>(() =>
     policy ? policy.list() : [],
   );
@@ -75,7 +75,8 @@ export function PolicyPage({
       <Box flexDirection="column" marginTop={1}>
         {rows.length === 0 ? (
           <Text color={theme.fg.muted}>
-            (no rules — edit ~/.foreman/policy.yaml then press e to reload)
+            (no rules — edit {policyPath ?? "policy.yaml"} then press e to
+            reload)
           </Text>
         ) : (
           visible.map((row, i) => {

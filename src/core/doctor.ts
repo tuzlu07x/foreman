@@ -254,8 +254,7 @@ export function checkPolicyYaml(): CheckResult {
         name: "policy_yaml",
         status: "fail",
         message: "policy.yaml top-level must be an object (or empty)",
-        remediation:
-          "Edit ~/.foreman/policy.yaml — see the comments in the template for shape.",
+        remediation: `Edit ${paths.policyPath} — see the comments in the template for shape.`,
       };
     }
     return {
@@ -268,8 +267,7 @@ export function checkPolicyYaml(): CheckResult {
       name: "policy_yaml",
       status: "fail",
       message: `policy.yaml failed to parse: ${err instanceof Error ? err.message : String(err)}`,
-      remediation:
-        "Open ~/.foreman/policy.yaml and fix the syntax (YAML validators online help).",
+      remediation: `Open ${paths.policyPath} and fix the syntax (YAML validators online help).`,
     };
   }
 }
