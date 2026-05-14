@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { getForemanHome } from "../utils/config.js";
+import { getForemanPaths } from "../utils/config.js";
 
 const REGISTRY_VERSION = 1;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -84,7 +84,7 @@ export function resolveBundledRegistryPath(): string | null {
 }
 
 export function getRegistryCachePath(): string {
-  return resolve(getForemanHome(), "cache", "registry.json");
+  return resolve(getForemanPaths().cacheDir, "registry.json");
 }
 
 export function getUpstreamRegistryUrl(): string {
