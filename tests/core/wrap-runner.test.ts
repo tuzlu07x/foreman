@@ -261,6 +261,23 @@ rules:
     await expect(session.done).resolves.toBe(0);
   });
 
+  it("resolves done with exit 1 on transport error (e.g. spawn ENOENT)", async () => {
+    const t = makeFakeTransport();
+    const logs: string[] = [];
+    const session = runWrap({
+      agentId: "py-agent",
+      command: "x",
+      args: [],
+      registry,
+      mediator,
+      transportFactory: t.factory,
+      onLog: (line) => logs.push(line),
+    });
+    t.instance().triggerError(new Error("spawn /bin/false ENOENT"));
+    await expect(session.done).resolves.toBe(1);
+    expect(logs.some((l) => l.includes("transport error"))).toBe(true);
+  });
+
   it("stop() flags the transport and resolves with the exit code", async () => {
     const t = makeFakeTransport();
     const session = runWrap({
