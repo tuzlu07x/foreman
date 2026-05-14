@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { Command } from "commander";
-import { BusApprovalService, type ApprovalService } from "../core/approval.js";
+import { DbApprovalService, type ApprovalService } from "../core/approval.js";
 import { AuditLogger } from "../core/audit.js";
 import { bus } from "../core/event-bus.js";
 import { MediatorService } from "../core/mediator.js";
@@ -58,7 +58,9 @@ function bootServices(): Services {
   const db = getDb();
   const registry = new RegistryService(db, bus);
   const audit = new AuditLogger(db, bus);
-  const approval = new BusApprovalService({ bus, timeoutMs: 60_000 });
+  // Cross-process IPC via SQLite — the TUI in `foreman start` (a separate
+  // process) bridges these via ApprovalBridge.
+  const approval = new DbApprovalService(db, { bus, timeoutMs: 60_000 });
   const policy = new PolicyEngine(db, bus);
   const paths = getForemanPaths();
   if (existsSync(paths.policyPath)) policy.loadFromYaml(paths.policyPath);
