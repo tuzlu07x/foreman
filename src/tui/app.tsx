@@ -54,6 +54,17 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
 
   const [page, setPage] = useState<Page>("dashboard");
   const [quitConfirm, setQuitConfirm] = useState(false);
+  const [updateNotice, setUpdateNotice] = useState<{
+    current: string;
+    latest: string;
+  } | null>(null);
+
+  useEffect(() => {
+    const off = bus.on("update:available", (e) => {
+      setUpdateNotice({ current: e.current, latest: e.latest });
+    });
+    return off;
+  }, [bus]);
 
   const [policySelectedIdx, setPolicySelectedIdx] = useState(0);
   const [policyExpanded, setPolicyExpanded] = useState(false);
@@ -256,7 +267,11 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           onSessionHalt={onSessionHalt}
         />
       )}
-      <BootBanner info={bootInfo} animationsEnabled={isRawModeSupported} />
+      <BootBanner
+        info={bootInfo}
+        animationsEnabled={isRawModeSupported}
+        updateNotice={updateNotice}
+      />
       {pendingApproval ? (
         inspectOpen ? (
           <InspectView
