@@ -5,6 +5,10 @@ import { delimiter } from "node:path";
 export interface InstallSpec {
   npm: string | null;
   brew: string | null;
+  /** URL of a `curl | bash` style installer (Hermes, OpenClaw). */
+  script?: string | null;
+  /** Override the binary name to look for on PATH when it differs from the npm package. */
+  binary?: string | null;
 }
 
 export interface InstallDetection {
@@ -67,6 +71,16 @@ export async function runInstall(
       manualCommand: "(no install command in registry entry)",
     };
   }
+  // Curl-pipe-to-bash installers (Hermes, OpenClaw) are too dangerous to
+  // auto-run unattended — surface the manual command so the user reviews
+  // it themselves before pasting it into a shell.
+  if (!options.install.npm && !options.install.brew && options.install.script) {
+    return {
+      ok: false,
+      exitCode: -2,
+      manualCommand: command,
+    };
+  }
   return new Promise<InstallResult>((resolveResult) => {
     const [cmd, ...args] = command.split(" ");
     const child = spawn(cmd!, args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -98,11 +112,13 @@ export async function runInstall(
 export function preferredInstallCommand(install: InstallSpec): string | null {
   if (install.npm) return `npm install -g ${install.npm}`;
   if (install.brew) return `brew install ${install.brew}`;
+  if (install.script) return `curl -fsSL ${install.script} | bash`;
   return null;
 }
 
 function candidateBinaries(install: InstallSpec): string[] {
   const out: string[] = [];
+  if (install.binary) out.push(install.binary);
   if (install.npm) out.push(binaryFromNpmPackage(install.npm));
   if (install.brew) out.push(binaryFromBrewFormula(install.brew));
   return Array.from(new Set(out));

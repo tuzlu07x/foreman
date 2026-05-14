@@ -7,35 +7,47 @@ This recipe is intentionally short. OpenClaw ≥ 1.4 speaks MCP, so we hand its 
 ## 1. Install Foreman + OpenClaw
 
 ```bash
+# Foreman
 curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash
 foreman init                       # ~/.foreman/ (identity, policy, db)
 foreman secrets add anthropic-key  # stored once, every agent reads it back
+
+# OpenClaw — official installer (curl on macOS / Linux; PowerShell on Windows).
+# OpenClaw recommends Node 24; Node 22.16+ also works.
+curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-The fast path uses Foreman's agent wizard ([#60](https://github.com/tuzlu07x/foreman/issues/60)) and the curated registry ([#73](https://github.com/tuzlu07x/foreman/issues/73)):
+After OpenClaw is on PATH, Foreman's agent wizard ([#60](https://github.com/tuzlu07x/foreman/issues/60)) registers it and wires its config:
 
 ```bash
-foreman agent add openclaw --type openclaw --auto-install
+foreman agent add openclaw --type openclaw
 ```
 
-That command looks up OpenClaw in `registry/agents.json`, runs `npm install -g openclaw` (or `brew install openclaw/tap/openclaw`) when missing, injects the MCP snippet into `~/.openclaw/config.toml`, and registers OpenClaw with Foreman. Skip step 2 if that worked.
+That command finds the installed `openclaw` binary, injects the MCP snippet into `~/.openclaw/config.json`, and registers OpenClaw with Foreman. Skip step 2 if that worked.
+
+> **Why not `--auto-install`?** OpenClaw installs via `curl … | bash`, which Foreman refuses to auto-run unattended — the registry surfaces the command and the user pastes it.
 
 ## 2. (Manual) point OpenClaw at Foreman
 
-If you'd rather wire things by hand, append the foreman block to OpenClaw's TOML config:
+If you'd rather wire things by hand, merge the foreman block into OpenClaw's JSON config (default path `~/.openclaw/config.json`):
 
-```toml
-# ~/.openclaw/config.toml — append this section, leave the rest alone
-[mcp]
-enabled = true
-
-[mcp.servers.foreman]
-command = "foreman"
-args = ["mcp-stdio", "--source", "openclaw"]
-
-[secrets]
-source = "foreman"
-required = ["anthropic-key"]
+```jsonc
+// ~/.openclaw/config.json — merge with your existing config, leave the rest alone
+{
+  "mcp": {
+    "enabled": true,
+    "servers": {
+      "foreman": {
+        "command": "foreman",
+        "args": ["mcp-stdio", "--source", "openclaw"],
+      },
+    },
+  },
+  "secrets": {
+    "source": "foreman",
+    "required": ["anthropic-key"],
+  },
+}
 ```
 
 `--source openclaw` is the agent id Foreman records on every request. Match it to the rules in your policy below.
@@ -66,7 +78,7 @@ foreman start            # boots the TUI
 In another:
 
 ```bash
-openclaw serve           # OpenClaw's daemon
+openclaw                 # OpenClaw's TUI / gateway
 ```
 
 Now drive OpenClaw the way you normally do. Foreman's Activity panel scrolls every MCP tool call live.
@@ -82,20 +94,20 @@ foreman log search ".openclaw/skills"    # specific to ClawHub skill activity
 foreman log show <request-id>            # full payload of a single call
 ```
 
-## What this recipe does *not* do
+## What this recipe does _not_ do
 
 - **Fork OpenClaw or ship a "safer fork."** Foreman is a guardian, not a platform — keep using upstream OpenClaw and let Foreman mediate.
-- **Scan installed ClawHub skills for known-bad signatures.** That's a separate v0.2+ idea ([#76 / out-of-scope](https://github.com/tuzlu07x/foreman/issues/76)). The policy catches *behaviour*, not skill metadata.
+- **Scan installed ClawHub skills for known-bad signatures.** That's a separate v0.2+ idea ([#76 / out-of-scope](https://github.com/tuzlu07x/foreman/issues/76)). The policy catches _behaviour_, not skill metadata.
 - **Editorialise OpenClaw's security history.** The public advisories are linked from the policy file; we're not piling on.
 
 ## Troubleshooting
 
-| Symptom                                                | Fix                                                                                                                                                                    |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| OpenClaw logs `MCP server foreman: connection refused` | `which foreman` — update `command` to the absolute path. Try `foreman mcp-stdio --source openclaw` manually to confirm it stays alive.                                 |
-| Activity panel stays empty                             | OpenClaw only fires tool calls when a skill or conversation needs one. Trigger a skill that reads a file or runs a command.                                            |
-| `foreman` not on PATH after the curl installer         | `export PATH="$(npm prefix -g)/bin:$PATH"` or source nvm first if the installer bootstrapped it.                                                                       |
-| OpenClaw < 1.4 (no MCP support)                        | Use `foreman wrap --name openclaw -- openclaw serve` — Foreman launches OpenClaw as a child and signs every MCP-framed response. See [`../wrap-example/README.md`](../wrap-example/README.md). |
+| Symptom                                                | Fix                                                                                                                                                                                      |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OpenClaw logs `MCP server foreman: connection refused` | `which foreman` — update `command` to the absolute path. Try `foreman mcp-stdio --source openclaw` manually to confirm it stays alive.                                                   |
+| Activity panel stays empty                             | OpenClaw only fires tool calls when a skill or conversation needs one. Trigger a skill that reads a file or runs a command.                                                              |
+| `foreman` not on PATH after the curl installer         | `export PATH="$(npm prefix -g)/bin:$PATH"` or source nvm first if the installer bootstrapped it.                                                                                         |
+| OpenClaw < 1.4 (no MCP support)                        | Use `foreman wrap --name openclaw -- openclaw` — Foreman launches OpenClaw as a child and signs every MCP-framed response. See [`../wrap-example/README.md`](../wrap-example/README.md). |
 
 ## Related
 
