@@ -79,6 +79,7 @@ Per-agent recipes:
 
 - [`examples/claude-code/`](examples/claude-code/) — Anthropic's terminal coding agent
 - [`examples/hermes-integration/`](examples/hermes-integration/) — Nous Research's personal assistant (Telegram + Discord) with a phishing-safe policy
+- [`examples/openclaw-integration/`](examples/openclaw-integration/) — OpenClaw with a skill-compromise policy (CVE-2026-25253, Koi Security advisory)
 - [`examples/mock-agent/`](examples/mock-agent/) — minimal MCP client that exercises the gateway end-to-end
 
 ## 5-minute demo
