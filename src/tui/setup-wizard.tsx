@@ -28,9 +28,11 @@ import {
   loadActiveRegistry,
   type AgentEntry,
 } from "../core/registry-catalog.js";
+import { applyForemanSoul } from "../core/foreman-soul.js";
 import { RegistryService } from "../core/registry.js";
 import { SecretStore } from "../core/secret-store.js";
 import type { ForemanDb } from "../db/client.js";
+import { getForemanPaths } from "../utils/config.js";
 import {
   markCompleted,
   saveSetupState,
@@ -425,6 +427,21 @@ export async function runInstallStep(
         registry: services.registry,
       });
       log(`  ✓ registered as "${id}"`);
+      if (entry.identity_path) {
+        try {
+          const soulResult = applyForemanSoul(
+            entry,
+            getForemanPaths().soulPath,
+          );
+          if (soulResult?.changed) {
+            log(`  ✓ wrote Foreman identity to ${soulResult.path}`);
+          }
+        } catch (err) {
+          log(
+            `  ⚠ identity write skipped: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
     } catch (err) {
       log(
         `  ✗ register failed: ${err instanceof Error ? err.message : String(err)}`,
