@@ -126,7 +126,27 @@ These are not v0.1.0 blockers; they're release-day prep that's outside the QA-pa
 4. **Homebrew tap** `tuzlu07x/foreman` published with `homebrew/foreman.rb`.
 5. **Phase D verification** after items 1–4 land — re-run A1.5, A1.6, D1, D2 from the catalog.
 6. **Interactive TUI re-verify** of A9.13–A9.18 (approval modal hotkeys, timer color shifts, inspect view) — these need a real TTY-driving owner. The cross-process plumbing is proven; the visual layer is owner-eyeball.
-7. **Telegram hero shot** on the Linux server — Hermes is wired through Foreman; a rotated bot token and a 30-second video would close the marketing loop.
+7. **Telegram hero shot** on the Linux server — Hermes is wired through Foreman; a rotated bot token and a 30-second video would close the marketing loop. *Partially attempted during this QA pass — see "Known limitations" below.*
+
+---
+
+## Known limitations (surfaced during QA, not v0.1.0 blockers)
+
+### Foreman identity priority over the partner runtime (issue #132)
+
+**What was tried:** During Phase C, attempted to make Hermes-on-Telegram identify as **"Foreman"** instead of "Hermes Agent" — Foreman is what the user installed and configured, so Foreman should be the user-facing brand. Approach was Yol-C-compatible (config layer only): `display.personality: foreman`, a strong `personalities.foreman` prompt, a 1.7 KB `SOUL.md` with explicit "DO NOT mention Hermes" hard rules, plus full session prune and `MEMORY.md` reset.
+
+**What happened:** Three independent fresh-session Telegram probes ("who are you", "who are you aiming?", "hello") all returned **"I'm Hermes Agent…"** verbatim, despite `SOUL.md` forbidding that exact word. Hermes's **core system prompt** outranks user-supplied SOUL.md content.
+
+**Implication:** Foreman ships v0.1.0 as a **guardian** (audit + policy + secret store) — that works end-to-end. Foreman as a **platform brand** — i.e. the agent the user thinks they're talking to — requires either its own chat surface (currently marked "not in v0.1") or per-agent deep identity hooks, neither of which fit Yol-C-cosmetic-config-only. Tracked in [#132](https://github.com/tuzlu07x/foreman/issues/132) as a design ticket for v0.1.x or v0.2; release v0.1.0 is unaffected.
+
+### Hermes does not read the `mcpServers.foreman` block we inject
+
+**What we found:** `hermes mcp list` reports "No MCP servers configured" even though `foreman agent add hermes` injected a `mcpServers.foreman` block into `~/.hermes/config.yaml`. Hermes maintains its own MCP registry via `hermes mcp add …`; the YAML key Foreman writes is the Claude-Code / OpenClaw / Codex convention.
+
+**Implication:** Hermes does not currently route its tool calls through Foreman MCP, so Foreman's audit log stays empty when an end user drives Hermes via Telegram. The `secrets/get` tool that Foreman exposes is never reachable from a Hermes session.
+
+**Fix shape (follow-up issue to file post-v0.1.0):** during `foreman agent add hermes`, additionally invoke `hermes mcp add foreman --command foreman --args mcp-stdio --args --source --args hermes`. Same for other partner runtimes whose MCP-registry path differs from the YAML convention.
 
 ---
 
