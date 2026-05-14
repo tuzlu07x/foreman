@@ -94,6 +94,22 @@ export interface ForemanEventMap {
     latest: string;
     source: "cache" | "network";
   };
+  "agent-update:available": {
+    updates: Array<{
+      id: string;
+      displayName: string;
+      current: string;
+      latest: string;
+    }>;
+  };
+  "agent-update:overshoot": {
+    warnings: Array<{
+      id: string;
+      displayName: string;
+      installed: string;
+      supportedRange: string;
+    }>;
+  };
 }
 
 export type ForemanEvent = keyof ForemanEventMap;
