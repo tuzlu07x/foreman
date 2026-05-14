@@ -3,6 +3,7 @@ import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { delimiter } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { createInMemoryDb, getDb } from "../db/client.js";
+import { getMigrationStatus } from "../db/migration-status.js";
 import { derivePublicKey } from "../identity/keypair.js";
 import { sign, verify } from "../identity/signing.js";
 import { MCPGateway } from "../mcp/gateway.js";
@@ -10,6 +11,7 @@ import { getForemanPaths } from "../utils/config.js";
 import { legacyHasInterestingFiles } from "../utils/migrate-config.js";
 import { EventBus, type ForemanEventMap } from "./event-bus.js";
 import { RegistryService } from "./registry.js";
+import { getUpdateCachePath, isNewer } from "./update-check.js";
 
 export type CheckStatus = "ok" | "warn" | "fail";
 
@@ -330,6 +332,93 @@ export function checkMcpGateway(): CheckResult {
   }
 }
 
+const APP_VERSION = "0.1.0";
+
+export function checkUpdate(): CheckResult {
+  if (process.env.FOREMAN_NO_UPDATE_CHECK === "1") {
+    return {
+      name: "update",
+      status: "ok",
+      message: "skipped (FOREMAN_NO_UPDATE_CHECK=1)",
+    };
+  }
+  const path = getUpdateCachePath();
+  if (!existsSync(path)) {
+    return {
+      name: "update",
+      status: "ok",
+      message: "no cached check yet — 'foreman start' will refresh on next run",
+    };
+  }
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf-8")) as {
+      latest?: unknown;
+      observedAt?: unknown;
+    };
+    if (typeof raw.latest !== "string") {
+      return {
+        name: "update",
+        status: "ok",
+        message: "cache present but unreadable — will refresh on next start",
+      };
+    }
+    if (isNewer(raw.latest, APP_VERSION)) {
+      return {
+        name: "update",
+        status: "warn",
+        message: `installed ${APP_VERSION}, latest ${raw.latest}`,
+        remediation:
+          "npm install -g foreman-agent@latest  (or 'brew upgrade foreman' if you tapped it)",
+      };
+    }
+    return {
+      name: "update",
+      status: "ok",
+      message: `up to date (latest ${raw.latest})`,
+    };
+  } catch {
+    return {
+      name: "update",
+      status: "ok",
+      message: "cache unreadable — will refresh on next start",
+    };
+  }
+}
+
+export function checkMigrations(): CheckResult {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.dbPath)) {
+    return {
+      name: "migrations",
+      status: "ok",
+      message: "no DB yet — schema lands on 'foreman init'",
+    };
+  }
+  try {
+    const status = getMigrationStatus(paths.dbPath, paths.migrationsPath);
+    if (status.pendingCount === 0) {
+      return {
+        name: "migrations",
+        status: "ok",
+        message: `up to date (${status.appliedCount} applied)`,
+      };
+    }
+    return {
+      name: "migrations",
+      status: "warn",
+      message: `${status.pendingCount} pending: ${status.pendingTags.join(", ")}`,
+      remediation:
+        "Run 'foreman migrate --apply' — it backs up to foreman.db.bak first.",
+    };
+  } catch (err) {
+    return {
+      name: "migrations",
+      status: "fail",
+      message: `could not read migration status: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 export function checkChafa(env: NodeJS.ProcessEnv = process.env): CheckResult {
   if (whichOnPath("chafa", env)) {
     return {
@@ -363,11 +452,13 @@ const CHECKS: (() => CheckResult)[] = [
   checkExpectedFiles,
   checkIdentityKey,
   checkDatabase,
+  checkMigrations,
   checkFts5,
   checkPolicyYaml,
   checkAgentsRegistered,
   checkMcpGateway,
   checkLegacyHome,
+  checkUpdate,
   () => checkChafa(),
 ];
 
