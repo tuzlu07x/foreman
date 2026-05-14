@@ -33,6 +33,11 @@ export const AgentEntrySchema = z
      * config. Defaults to `mcpServers` (Claude Code / Hermes / OpenClaw).
      * Codex uses `mcp_servers` (snake_case). */
     mcp_servers_key: z.string().nullable().optional(),
+    /** Path Foreman writes its canonical identity into (e.g. `~/.hermes/SOUL.md`,
+     * `~/.codex/AGENTS.md`). When set, `foreman agent add` propagates the
+     * contents of `<foreman_home>/SOUL.md` here so the partner runtime greets
+     * the user as Foreman, not its own brand. */
+    identity_path: z.string().nullable().optional(),
     required_secrets: z.array(z.string()),
     optional_secrets: z.array(z.string()),
     mcp_compatible: z.boolean(),

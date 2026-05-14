@@ -23,6 +23,12 @@ export interface ForemanPaths {
   // Specific file paths (derived from the dirs above).
   policyPath: string;
   identityPath: string;
+  /**
+   * Canonical Foreman persona file (`<configDir>/SOUL.md`). Foreman writes its
+   * contents into each registered agent's identity hook (e.g. `~/.hermes/SOUL.md`)
+   * so the user-facing brand is "Foreman" instead of the partner runtime.
+   */
+  soulPath: string;
   secretsKeyPath: string;
   dbPath: string;
 
@@ -105,6 +111,7 @@ export function getForemanPaths(): ForemanPaths {
     legacyHome: legacyDetected ? legacy : null,
     policyPath: resolve(dirs.configDir, "policy.yaml"),
     identityPath: resolve(dirs.configDir, "identity.key"),
+    soulPath: resolve(dirs.configDir, "SOUL.md"),
     secretsKeyPath: resolve(dirs.configDir, "secrets.key"),
     dbPath: resolve(dirs.stateDir, "foreman.db"),
     migrationsPath: resolveMigrationsDir(),
