@@ -12,7 +12,11 @@ import {
   planInjection,
   UnsupportedConfigFormatError,
 } from "../core/agent-config-injector.js";
-import { detectInstall, runInstall } from "../core/agent-install.js";
+import {
+  detectInstall,
+  preferredInstallCommand,
+  runInstall,
+} from "../core/agent-install.js";
 import { buildMcpSnippet } from "../core/agent-mcp-snippet.js";
 import {
   AgentNotInRegistryError,
@@ -62,6 +66,7 @@ export async function runAgentAddScripted(
   }
 
   const detection = detectInstall(entry.install);
+  const manualInstallCmd = preferredInstallCommand(entry.install);
   if (!detection.found) {
     if (options.autoInstall && (entry.install.npm || entry.install.brew)) {
       log(orange(`installing ${entry.install.npm ?? entry.install.brew}…`));
@@ -75,14 +80,19 @@ export async function runAgentAddScripted(
         );
         return 1;
       }
-    } else if (entry.install.npm || entry.install.brew) {
+    } else if (manualInstallCmd) {
       log(
         orange("note: ") +
-          `${entry.name} is not detected on this machine. Pass --auto-install or run: ${
-            entry.install.npm
-              ? `npm install -g ${entry.install.npm}`
-              : `brew install ${entry.install.brew}`
-          }`,
+          `${entry.name} is not detected on this machine. ${
+            entry.install.npm || entry.install.brew
+              ? "Pass --auto-install or run"
+              : "Install it manually"
+          }: ${manualInstallCmd}`,
+      );
+    } else {
+      log(
+        orange("note: ") +
+          `${entry.name} is not detected on this machine — bring your own binary.`,
       );
     }
   } else {
@@ -95,7 +105,16 @@ export async function runAgentAddScripted(
     const missing = secretCheck.required
       .filter((s) => !s.present)
       .map((s) => s.name);
-    throw new MissingRequiredSecretsError(missing);
+    if (options.skipConfig) {
+      // --skip-config signals "I'm wiring this up by hand" — missing secrets
+      // are then the user's call. Warn but still register the agent.
+      log(
+        orange("warn: ") +
+          `required secrets missing: ${missing.join(", ")} — add via 'foreman secrets add <name>' before 'foreman start'`,
+      );
+    } else {
+      throw new MissingRequiredSecretsError(missing);
+    }
   }
 
   if (!options.skipConfig) {

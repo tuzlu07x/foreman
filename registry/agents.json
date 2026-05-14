@@ -5,12 +5,14 @@
       "id": "hermes",
       "name": "Hermes",
       "tagline": "Personal AI assistant on Telegram and Discord",
-      "homepage": "https://github.com/NousResearch/hermes-agent",
-      "install": { "npm": "hermes-agent", "brew": null },
-      "config_paths": [
-        "~/.hermes/config.yaml",
-        "~/.config/hermes/config.yaml"
-      ],
+      "homepage": "https://hermes-agent.nousresearch.com/",
+      "install": {
+        "npm": null,
+        "brew": null,
+        "script": "https://hermes-agent.nousresearch.com/install.sh",
+        "binary": "hermes"
+      },
+      "config_paths": ["~/.hermes/config.yaml", "~/.config/hermes/config.yaml"],
       "config_snippet": "registry/snippets/hermes.yaml",
       "required_secrets": ["anthropic-key"],
       "optional_secrets": ["telegram-bot-token", "discord-bot-token"],
@@ -22,11 +24,16 @@
       "id": "openclaw",
       "name": "OpenClaw",
       "tagline": "Multi-channel assistant with a lobster-themed TUI",
-      "homepage": "https://github.com/openclaw/openclaw",
-      "install": { "npm": "openclaw", "brew": "openclaw/tap/openclaw" },
+      "homepage": "https://openclaw.ai/",
+      "install": {
+        "npm": null,
+        "brew": null,
+        "script": "https://openclaw.ai/install.sh",
+        "binary": "openclaw"
+      },
       "config_paths": [
-        "~/.openclaw/config.toml",
-        "~/.config/openclaw/config.toml"
+        "~/.openclaw/config.json",
+        "~/.config/openclaw/config.json"
       ],
       "config_snippet": "registry/snippets/openclaw.yaml",
       "required_secrets": ["anthropic-key"],
