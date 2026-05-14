@@ -339,7 +339,11 @@ export function checkChafa(env: NodeJS.ProcessEnv = process.env): CheckResult {
     };
   }
   try {
-    execFileSync("chafa", ["--version"], { stdio: "ignore", timeout: 1000 });
+    execFileSync("chafa", ["--version"], {
+      stdio: "ignore",
+      timeout: 1000,
+      env,
+    });
     return {
       name: "chafa",
       status: "ok",
