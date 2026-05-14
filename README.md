@@ -37,6 +37,17 @@ brew tap tuzlu07x/foreman
 brew install foreman
 ```
 
+Standalone binary (no Node required — single ~75 MB file):
+
+```bash
+FOREMAN_USE_BINARY=1 \
+  curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash
+# or grab directly from the release page
+# https://github.com/tuzlu07x/foreman/releases/latest
+```
+
+The binary covers `darwin-arm64`, `darwin-x64`, `linux-x64`, and `linux-arm64`. Windows users should use WSL2 for now.
+
 If you already manage Node yourself:
 
 ```bash

@@ -15,12 +15,28 @@
   ],
   "scripts": {
     "build": "tsup",
+    "build:binaries": "node scripts/build-binaries.mjs",
     "dev": "tsup --watch --onSuccess \"node dist/cli/index.js\"",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
     "db:generate": "drizzle-kit generate:sqlite",
     "db:check": "drizzle-kit check:sqlite"
+  },
+  "pkg": {
+    "scripts": [],
+    "assets": [
+      "dist/db/migrations/**/*",
+      "dist/assets/mascot/**/*",
+      "dist/registry/**/*"
+    ],
+    "targets": [
+      "node20-macos-arm64",
+      "node20-macos-x64",
+      "node20-linux-x64",
+      "node20-linux-arm64"
+    ],
+    "outputPath": "dist-binaries"
   },
   "engines": {
     "node": ">=20"
@@ -63,6 +79,7 @@
     "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^20.0.0",
     "@types/react": "^18.0.0",
+    "@yao-pkg/pkg": "^6.19.0",
     "drizzle-kit": "^0.20.0",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0",
