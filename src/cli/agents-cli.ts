@@ -6,8 +6,17 @@ import {
   loadActiveRegistry,
   AgentNotInRegistryError,
 } from "../core/registry-catalog.js";
-import { AgentNotFoundError, RegistryService } from "../core/registry.js";
+import {
+  AgentNotFoundError,
+  RegistryService,
+  type RegisteredAgent,
+} from "../core/registry.js";
 import { buildMcpSnippet } from "../core/agent-mcp-snippet.js";
+import {
+  checkAgentUpdates,
+  type AgentUpdateStatus,
+} from "../core/agent-update-check.js";
+import { runInstall } from "../core/agent-install.js";
 import { closeDb, getDb } from "../db/client.js";
 import { getForemanPaths } from "../utils/config.js";
 import {
@@ -16,7 +25,7 @@ import {
   type AddScriptedOptions,
 } from "./agent-add.js";
 import { MissingRequiredSecretsError } from "../core/agent-add-flow.js";
-import { bold, dim, orange, red } from "./colors.js";
+import { bold, dim, green, orange, red } from "./colors.js";
 import { renderAgentJson, renderAgentLine } from "./render.js";
 
 function getRegistry(): RegistryService {
@@ -33,7 +42,7 @@ function getRegistry(): RegistryService {
 export const agentsCommand = new Command("agent")
   .alias("agents")
   .description(
-    "Agent commands (list / add / remove / regenerate-key / show / block / unblock)",
+    "Agent commands (list / add / remove / regenerate-key / show / update / block / unblock)",
   );
 
 agentsCommand
@@ -209,6 +218,32 @@ agentsCommand
   });
 
 agentsCommand
+  .command("update [name]")
+  .description(
+    "Upgrade an agent's npm package (omit name or pass 'all' for every agent)",
+  )
+  .action(async (name: string | undefined) => {
+    const registry = getRegistry();
+    try {
+      const target = name ?? "all";
+      const agents = registry.list();
+      const { doc } = loadActiveRegistry();
+      if (target === "all") {
+        await runAgentUpdateAll(agents, doc);
+      } else {
+        const agent = registry.get(target);
+        if (!agent) throw new AgentNotFoundError(target);
+        const exit = await runAgentUpdateOne(agent, doc, { force: true });
+        process.exitCode = exit;
+      }
+    } catch (err) {
+      handleAgentError(err);
+    } finally {
+      closeDb();
+    }
+  });
+
+agentsCommand
   .command("block <agentId>")
   .description("Mark an agent as blocked")
   .action((agentId: string) => {
@@ -261,6 +296,80 @@ async function confirmYes(prompt: string): Promise<boolean> {
       res(/^y(es)?$/i.test(answer.trim()));
     });
   });
+}
+
+async function runAgentUpdateOne(
+  agent: RegisteredAgent,
+  doc: ReturnType<typeof loadActiveRegistry>["doc"],
+  options: { force: boolean },
+): Promise<number> {
+  const registryId =
+    typeof agent.metadata?.registryId === "string"
+      ? agent.metadata.registryId
+      : null;
+  if (!registryId) {
+    console.error(
+      red("error: ") +
+        `agent ${agent.id} has no registry mapping (no install command known)`,
+    );
+    return 1;
+  }
+  const entry = safeFindAgent(doc, registryId);
+  if (!entry) {
+    console.error(
+      red("error: ") +
+        `registry entry "${registryId}" not found — run 'foreman registry update' first`,
+    );
+    return 1;
+  }
+  if (!entry.install.npm) {
+    console.error(
+      red("error: ") +
+        `registry entry "${registryId}" has no npm package (nothing to update)`,
+    );
+    return 1;
+  }
+
+  if (!options.force) {
+    const [status] = await checkAgentUpdates([agent], doc, {
+      cacheTtlMs: 0,
+    }).catch(() => [undefined as AgentUpdateStatus | undefined]);
+    if (status && !status.hasUpdate && status.current !== null) {
+      console.log(`${green("✓")} ${agent.id} is up to date (v${status.current})`);
+      return 0;
+    }
+  }
+
+  console.log(orange(`updating ${agent.id} (${entry.install.npm})…`));
+  const result = await runInstall({
+    install: entry.install,
+    onLine: (line) => console.log(`  ${dim(line)}`),
+  });
+  if (!result.ok) {
+    console.error(
+      red("error: ") +
+        `update failed (exit ${result.exitCode}). Manual command: ${result.manualCommand}`,
+    );
+    return 1;
+  }
+  console.log(`${green("✓")} ${agent.id} updated`);
+  return 0;
+}
+
+async function runAgentUpdateAll(
+  agents: RegisteredAgent[],
+  doc: ReturnType<typeof loadActiveRegistry>["doc"],
+): Promise<void> {
+  if (agents.length === 0) {
+    console.log("(no agents registered)");
+    return;
+  }
+  let firstFailure: number | null = null;
+  for (const agent of agents) {
+    const exit = await runAgentUpdateOne(agent, doc, { force: false });
+    if (exit !== 0 && firstFailure === null) firstFailure = exit;
+  }
+  process.exitCode = firstFailure ?? 0;
 }
 
 function handleAgentError(err: unknown): void {
