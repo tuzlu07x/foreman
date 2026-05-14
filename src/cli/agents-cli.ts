@@ -322,10 +322,20 @@ async function runAgentUpdateOne(
     );
     return 1;
   }
-  if (!entry.install.npm) {
+  if (!entry.install.npm && !entry.install.brew) {
+    // Script-installed agents (Hermes, OpenClaw) — there's no auto-update
+    // command; tell the user how to re-run their installer instead of erroring.
+    if (entry.install.script) {
+      console.log(
+        orange("note: ") +
+          `${entry.name} installs via a script. Foreman won't auto-run it; re-run manually: ` +
+          `curl -fsSL ${entry.install.script} | bash`,
+      );
+      return 0;
+    }
     console.error(
       red("error: ") +
-        `registry entry "${registryId}" has no npm package (nothing to update)`,
+        `registry entry "${registryId}" has no install command (bring-your-own binary)`,
     );
     return 1;
   }
