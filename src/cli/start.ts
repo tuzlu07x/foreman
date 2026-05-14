@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { render, type Instance } from "ink";
 import React from "react";
 import {
+  ApprovalBridge,
   BusApprovalService,
   ReadlineApprovalService,
   type ApprovalService,
@@ -82,6 +83,12 @@ export function startForeman(
     db,
     bus,
   });
+
+  // Surface pending approvals from spawned `foreman mcp-stdio` / `foreman
+  // wrap` processes into this process's bus, so the TUI's approval modal
+  // fires for cross-process requests too (#117).
+  const approvalBridge = new ApprovalBridge(db, { bus });
+  approvalBridge.start();
 
   const bootInfo: BootInfo = {
     publicKey,
@@ -178,6 +185,7 @@ export function startForeman(
       exitResolve = null;
       r();
     }
+    approvalBridge.stop();
     audit.dispose();
     closeDb();
   };
