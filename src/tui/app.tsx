@@ -58,12 +58,33 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     current: string;
     latest: string;
   } | null>(null);
+  const [agentUpdates, setAgentUpdates] = useState<
+    Array<{ id: string; displayName: string; current: string; latest: string }>
+  >([]);
+  const [agentOvershoots, setAgentOvershoots] = useState<
+    Array<{
+      id: string;
+      displayName: string;
+      installed: string;
+      supportedRange: string;
+    }>
+  >([]);
 
   useEffect(() => {
-    const off = bus.on("update:available", (e) => {
+    const offUpdate = bus.on("update:available", (e) => {
       setUpdateNotice({ current: e.current, latest: e.latest });
     });
-    return off;
+    const offAgentUpdate = bus.on("agent-update:available", (e) => {
+      setAgentUpdates(e.updates);
+    });
+    const offAgentOvershoot = bus.on("agent-update:overshoot", (e) => {
+      setAgentOvershoots(e.warnings);
+    });
+    return () => {
+      offUpdate();
+      offAgentUpdate();
+      offAgentOvershoot();
+    };
   }, [bus]);
 
   const [policySelectedIdx, setPolicySelectedIdx] = useState(0);
@@ -271,6 +292,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
         info={bootInfo}
         animationsEnabled={isRawModeSupported}
         updateNotice={updateNotice}
+        agentUpdates={agentUpdates}
+        agentOvershoots={agentOvershoots}
       />
       {pendingApproval ? (
         inspectOpen ? (

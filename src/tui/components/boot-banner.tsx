@@ -9,17 +9,37 @@ const CHECK_STAGGER_MS = 80;
 
 type BootPhase = "morph" | "wordmark" | "checks" | "idle";
 
+export interface AgentUpdateNotice {
+  id: string;
+  displayName: string;
+  current: string;
+  latest: string;
+}
+
+export interface AgentOvershootNotice {
+  id: string;
+  displayName: string;
+  installed: string;
+  supportedRange: string;
+}
+
 export interface BootBannerProps {
   info: BootInfo;
   animationsEnabled?: boolean;
   /** When set, renders a one-line "Update available" notice under the checks. */
   updateNotice?: { current: string; latest: string } | null;
+  /** Per-agent npm update offers (#75). */
+  agentUpdates?: AgentUpdateNotice[];
+  /** Per-agent supported_versions overshoot warnings (#75). */
+  agentOvershoots?: AgentOvershootNotice[];
 }
 
 export function BootBanner({
   info,
   animationsEnabled = true,
   updateNotice = null,
+  agentUpdates = [],
+  agentOvershoots = [],
 }: BootBannerProps): JSX.Element {
   const lines = buildBootLines(info);
   const { stdout } = useStdout();
@@ -93,6 +113,39 @@ export function BootBanner({
             </Text>
           </Text>
         ) : null}
+        {agentUpdates.length > 0 && visibleChecks >= lines.length ? (
+          <Box flexDirection="column" marginTop={1}>
+            <Text color={theme.accent.warning}>
+              {theme.symbols.bullet} Agent updates available:
+            </Text>
+            {agentUpdates.map((u) => (
+              <Text key={u.id}>
+                {"   "}
+                <Text color={theme.fg.emphasis}>{padRight(u.id, 14)}</Text>{" "}
+                <Text color={theme.fg.muted}>v{u.current} → </Text>
+                <Text color={theme.accent.success}>v{u.latest}</Text>
+              </Text>
+            ))}
+            <Text color={theme.fg.muted}>
+              {"   Run: foreman agent update [name|all]"}
+            </Text>
+          </Box>
+        ) : null}
+        {agentOvershoots.length > 0 && visibleChecks >= lines.length ? (
+          <Box flexDirection="column" marginTop={1}>
+            {agentOvershoots.map((w) => (
+              <Box flexDirection="column" key={w.id}>
+                <Text color={theme.accent.warning}>
+                  {theme.symbols.bullet} {w.id} v{w.installed} is newer than
+                  Foreman's tested range ({w.supportedRange}).
+                </Text>
+                <Text color={theme.fg.muted}>
+                  {"   Foreman may still work, but new flows aren't verified."}
+                </Text>
+              </Box>
+            ))}
+          </Box>
+        ) : null}
       </Box>
 
       <Box marginTop={1}>
@@ -103,4 +156,9 @@ export function BootBanner({
       </Box>
     </Box>
   );
+}
+
+function padRight(s: string, width: number): string {
+  if (s.length >= width) return s;
+  return s + " ".repeat(width - s.length);
 }

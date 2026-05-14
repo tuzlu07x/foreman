@@ -14,6 +14,8 @@ import { PolicyEngine } from "../core/policy-engine.js";
 import { RegistryService } from "../core/registry.js";
 import { RiskScorer } from "../core/risk-scorer.js";
 import { SessionManager } from "../core/session.js";
+import { checkAgentUpdates } from "../core/agent-update-check.js";
+import { loadActiveRegistry } from "../core/registry-catalog.js";
 import { checkForUpdate } from "../core/update-check.js";
 import { closeDb, getDb, getSqlite } from "../db/client.js";
 import { loadOrCreateMasterKey } from "../identity/keypair.js";
@@ -102,6 +104,37 @@ export function startForeman(
       });
     }
   });
+
+  void (async (): Promise<void> => {
+    try {
+      const { doc } = loadActiveRegistry();
+      const statuses = await checkAgentUpdates(registry.list(), doc);
+      const updates = statuses
+        .filter((s) => s.hasUpdate && s.current && s.latest)
+        .map((s) => ({
+          id: s.agentId,
+          displayName: s.displayName,
+          current: s.current as string,
+          latest: s.latest as string,
+        }));
+      if (updates.length > 0) {
+        bus.emit("agent-update:available", { updates });
+      }
+      const warnings = statuses
+        .filter((s) => s.isOvershoot && s.current)
+        .map((s) => ({
+          id: s.agentId,
+          displayName: s.displayName,
+          installed: s.current as string,
+          supportedRange: s.supportedRange,
+        }));
+      if (warnings.length > 0) {
+        bus.emit("agent-update:overshoot", { warnings });
+      }
+    } catch {
+      /* never surface boot-time check errors */
+    }
+  })();
 
   if (withTui) {
     instance = render(
