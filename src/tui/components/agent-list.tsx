@@ -1,7 +1,7 @@
 import { Box, Text } from "ink";
 import { useEffect, useState } from "react";
 import type { RegisteredAgent } from "../../core/registry.js";
-import { theme } from "../theme.js";
+import { singleBorder, theme } from "../theme.js";
 import { useDashboardState } from "../use-dashboard-state.js";
 
 export interface AgentListProps {
@@ -15,7 +15,7 @@ export function AgentList({ width, compact }: AgentListProps): JSX.Element {
 
   if (compact) {
     return (
-      <Box borderStyle="single" borderDimColor paddingX={1}>
+      <Box borderStyle={singleBorder()} borderDimColor paddingX={1}>
         <Text color={theme.accent.primary}>Agents </Text>
         {agents.length === 0 ? (
           <Text color={theme.fg.muted}>(none registered)</Text>
@@ -39,7 +39,7 @@ export function AgentList({ width, compact }: AgentListProps): JSX.Element {
     <Box
       width={width}
       flexDirection="column"
-      borderStyle="single"
+      borderStyle={singleBorder()}
       borderDimColor
       paddingX={1}
     >
