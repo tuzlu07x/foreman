@@ -21,6 +21,10 @@ export const AgentEntrySchema = z
       .object({
         npm: z.string().nullable(),
         brew: z.string().nullable(),
+        /** URL of a `curl | bash` style installer (Hermes, OpenClaw). */
+        script: z.string().url().nullable().optional(),
+        /** Override the binary name when it differs from the npm package basename. */
+        binary: z.string().nullable().optional(),
       })
       .strict(),
     config_paths: z.array(z.string()),

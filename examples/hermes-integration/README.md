@@ -7,25 +7,33 @@ This recipe is intentionally short — when Hermes changes its config format, fo
 ## 1. Install Foreman + Hermes
 
 ```bash
+# Foreman
 curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash
 foreman init                       # ~/.foreman/ (identity, policy, db)
 foreman secrets add anthropic-key  # stored once, every agent reads it back
+
+# Hermes — official installer (curl on macOS / Linux / WSL2; PowerShell on Windows).
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+hermes setup                       # one-time bootstrap
 ```
 
-The fast path uses Foreman's agent wizard (from [#60](https://github.com/tuzlu07x/foreman/issues/60)) and the curated registry (from [#73](https://github.com/tuzlu07x/foreman/issues/73)):
+After Hermes is on PATH, Foreman's agent wizard (from [#60](https://github.com/tuzlu07x/foreman/issues/60)) registers it and wires its config:
 
 ```bash
-foreman agent add hermes --type hermes --auto-install
+foreman agent add hermes --type hermes
 ```
 
-That command looks up Hermes in `registry/agents.json`, runs `npm install -g hermes-agent` when missing, injects the MCP snippet into `~/.hermes/config.yaml`, and registers Hermes with Foreman. Skip the rest of step 2 if this worked.
+That command finds the installed `hermes` binary, injects the MCP snippet into `~/.hermes/config.yaml`, and registers Hermes with Foreman. Skip the rest of step 2 if this worked.
+
+> **Why not `--auto-install`?** Hermes installs via `curl … | bash`, which Foreman refuses to auto-run unattended — the registry surfaces the command and the user pastes it.
 
 ## 2. (Manual) point Hermes at Foreman
 
-If you'd rather wire things by hand, install Hermes yourself and append the foreman block:
+If you'd rather wire things by hand, install Hermes from the official installer and merge the foreman block into its config:
 
 ```bash
-npm install -g hermes-agent
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+hermes setup     # one-time bootstrap; writes ~/.hermes/config.yaml
 ```
 
 ```yaml
@@ -42,7 +50,7 @@ secrets:
     - anthropic-key
 ```
 
-Hermes' real config keys evolve faster than this doc — pull the current skeleton from upstream and just merge in the `foreman:` server entry.
+Hermes' real config keys evolve faster than this doc — pull the current skeleton from upstream (`hermes setup` regenerates it) and just merge in the `foreman:` server entry.
 
 ## 3. Apply the phishing-safe policy
 
@@ -69,7 +77,7 @@ foreman start            # boots the TUI
 In another:
 
 ```bash
-hermes serve             # whatever your Hermes process is
+hermes                   # whatever your Hermes process is (TUI or daemon)
 ```
 
 Now message Hermes through Telegram or Discord. Foreman's Activity panel scrolls every MCP tool call live.
@@ -87,9 +95,9 @@ foreman log show <request-id>        # full payload of a single call
 
 ## Troubleshooting
 
-| Symptom                                              | Fix                                                                                                                                                                    |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hermes logs `MCP server foreman: connection refused` | `which foreman` — update the `command` in the Hermes config to the absolute path. Try `foreman mcp-stdio --source hermes` manually to confirm it stays alive.          |
-| Activity panel stays empty                           | Hermes only fires tool calls when the conversation needs one. Ask it to read a file or run a command.                                                                  |
-| `foreman` not on PATH after the curl installer       | `export PATH="$(npm prefix -g)/bin:$PATH"` or source nvm first if the installer bootstrapped it.                                                                       |
-| Hermes < 2.0 (no MCP support)                        | Use `foreman wrap --name hermes -- hermes serve` — Foreman launches Hermes as a child and signs every MCP-framed response. See [`examples/wrap-example/README.md`](../wrap-example/README.md) for the mechanics. |
+| Symptom                                              | Fix                                                                                                                                                                                                        |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hermes logs `MCP server foreman: connection refused` | `which foreman` — update the `command` in the Hermes config to the absolute path. Try `foreman mcp-stdio --source hermes` manually to confirm it stays alive.                                              |
+| Activity panel stays empty                           | Hermes only fires tool calls when the conversation needs one. Ask it to read a file or run a command.                                                                                                      |
+| `foreman` not on PATH after the curl installer       | `export PATH="$(npm prefix -g)/bin:$PATH"` or source nvm first if the installer bootstrapped it.                                                                                                           |
+| Hermes < 2.0 (no MCP support)                        | Use `foreman wrap --name hermes -- hermes` — Foreman launches Hermes as a child and signs every MCP-framed response. See [`examples/wrap-example/README.md`](../wrap-example/README.md) for the mechanics. |

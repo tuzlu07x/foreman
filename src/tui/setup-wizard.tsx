@@ -87,7 +87,8 @@ export function SetupWizard({
   const [secretIdx, setSecretIdx] = useState(0);
   const [secretsDone, setSecretsDone] = useState(false);
 
-  const [agentsSelected, setAgentsSelected] = useState<string[]>(DEFAULT_AGENTS);
+  const [agentsSelected, setAgentsSelected] =
+    useState<string[]>(DEFAULT_AGENTS);
   const [agentsDone, setAgentsDone] = useState(false);
 
   const [installLog, setInstallLog] = useState<string[]>([]);
@@ -122,8 +123,8 @@ export function SetupWizard({
       <Box flexDirection="column" gap={1} paddingY={1}>
         <Text bold>Step 1 / 4 — API keys</Text>
         <Text color={theme.fg.muted}>
-          Pick the keys you'll use. Foreman encrypts them on disk and hands
-          them to agents on demand. (Space to toggle, Enter to confirm.)
+          Pick the keys you'll use. Foreman encrypts them on disk and hands them
+          to agents on demand. (Space to toggle, Enter to confirm.)
         </Text>
         <MultiSelect
           options={COMMON_SECRETS}
@@ -213,10 +214,8 @@ export function SetupWizard({
   if (currentStep === "install") {
     if (!installRunning) {
       setInstallRunning(true);
-      void runInstallStep(
-        agentsSelected,
-        services,
-        (line) => setInstallLog((prev) => [...prev, line]),
+      void runInstallStep(agentsSelected, services, (line) =>
+        setInstallLog((prev) => [...prev, line]),
       ).then(() => {
         advance("install");
       });
@@ -261,11 +260,18 @@ export function SetupWizard({
         Setup complete — run 'foreman start' to launch the gateway.
       </StatusMessage>
       <Text color={theme.fg.muted}>
-        Stored secrets: {services.secretStore.list().map((s) => s.name).join(", ") || "none"}
+        Stored secrets:{" "}
+        {services.secretStore
+          .list()
+          .map((s) => s.name)
+          .join(", ") || "none"}
       </Text>
       <Text color={theme.fg.muted}>
         Registered agents:{" "}
-        {services.registry.list().map((a) => a.id).join(", ") || "none"}
+        {services.registry
+          .list()
+          .map((a) => a.id)
+          .join(", ") || "none"}
       </Text>
       <Box marginTop={1}>
         <ConfirmInput onConfirm={() => exit()} onCancel={() => exit()} />
@@ -289,19 +295,28 @@ async function runInstallStep(
       continue;
     }
     log(`▸ ${entry.name}`);
+
+    // Each substep is best-effort — install / secret-check / config-inject
+    // failures degrade to a warning, but registration always runs at the
+    // end so the agent shows up in 'foreman agent list'.
     const detection = detectInstall(entry.install);
-    if (!detection.found && (entry.install.npm || entry.install.brew)) {
-      log(`  installing ${entry.install.npm ?? entry.install.brew}…`);
-      const result = await runInstall({
-        install: entry.install,
-        onLine: (l) => log(`  ${l}`),
-      });
-      if (!result.ok) {
-        log(`  ✗ install failed (exit ${result.exitCode})`);
-        log(`    manual: ${result.manualCommand}`);
-        continue;
+    if (!detection.found) {
+      if (entry.install.npm || entry.install.brew) {
+        log(`  installing ${entry.install.npm ?? entry.install.brew}…`);
+        const result = await runInstall({
+          install: entry.install,
+          onLine: (l) => log(`  ${l}`),
+        });
+        if (!result.ok) {
+          log(`  ⚠ install failed (exit ${result.exitCode})`);
+          log(`    run manually: ${result.manualCommand}`);
+        }
+      } else if (entry.install.script) {
+        log(
+          `  ⚠ ${entry.name} is not detected — install manually: curl -fsSL ${entry.install.script} | bash`,
+        );
       }
-    } else if (detection.found) {
+    } else {
       log(`  ✓ already installed at ${detection.path}`);
     }
 
@@ -310,8 +325,9 @@ async function runInstallStep(
       const missing = secretCheck.required
         .filter((s) => !s.present)
         .map((s) => s.name);
-      log(`  ✗ required secrets missing: ${missing.join(", ")} — re-run with -- setup`);
-      continue;
+      log(
+        `  ⚠ required secrets missing: ${missing.join(", ")} — add via 'foreman secrets add <name>'`,
+      );
     }
 
     const configPath = pickConfigPath(entry);
@@ -330,14 +346,14 @@ async function runInstallStep(
           log(`  ⚠ ${configPath} unsupported format — paste manually`);
         } else {
           log(
-            `  ✗ config inject failed: ${err instanceof Error ? err.message : String(err)}`,
+            `  ⚠ config inject skipped: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       }
     }
 
     if (services.registry.get(id)) {
-      log(`  ◦ already registered — skipping`);
+      log(`  ◦ already registered`);
       continue;
     }
     try {
