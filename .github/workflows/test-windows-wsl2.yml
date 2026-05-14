@@ -1,0 +1,99 @@
+name: test-windows-wsl2
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "scripts/**"
+      - "registry/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - "tsup.config.ts"
+      - "drizzle.config.ts"
+      - "docs/windows-wsl2.md"
+      - ".github/workflows/test-windows-wsl2.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "package.json"
+      - "package-lock.json"
+      - "docs/windows-wsl2.md"
+      - ".github/workflows/test-windows-wsl2.yml"
+  workflow_dispatch:
+
+jobs:
+  wsl2:
+    name: windows-latest · WSL2 (Ubuntu-22.04)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # Ref to test: PR head sha when available, otherwise the pushed commit.
+      FOREMAN_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+      FOREMAN_REPO: ${{ github.repository }}
+    steps:
+      - name: Set up WSL2 + Ubuntu-22.04
+        uses: Vampire/setup-wsl@v3
+        with:
+          distribution: Ubuntu-22.04
+          set-as-default: "true"
+
+      - name: Install OS deps inside WSL2
+        shell: wsl-bash {0}
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates git python3 chafa
+          curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+          sudo apt-get install -y nodejs
+          node --version
+          npm --version
+
+      - name: Clone foreman at the PR head into WSL2 ext4 home
+        shell: wsl-bash {0}
+        run: |
+          set -eu
+          cd "$HOME"
+          git clone "https://github.com/${{ env.FOREMAN_REPO }}.git" foreman
+          cd foreman
+          git fetch origin "${{ env.FOREMAN_REF }}"
+          git checkout "${{ env.FOREMAN_REF }}"
+          git --no-pager log -1 --oneline
+
+      - name: npm ci / lint / test / build inside WSL2
+        shell: wsl-bash {0}
+        run: |
+          set -eu
+          cd "$HOME/foreman"
+          npm ci
+          npm run lint
+          npm test
+          npm run build
+
+      - name: Install foreman globally from the checkout
+        shell: wsl-bash {0}
+        run: |
+          set -eu
+          cd "$HOME/foreman"
+          sudo npm install -g .
+
+      - name: foreman init / doctor / smoke against tmp FOREMAN_HOME
+        shell: wsl-bash {0}
+        run: |
+          set -eu
+          FH="$(mktemp -d)"
+          export FOREMAN_HOME="$FH"
+          foreman init
+          # doctor exits 1 on warnings (e.g. 'no agents registered' on a
+          # fresh init); accept that, fail only on 2+ (real check failure).
+          set +e
+          foreman doctor
+          rc=$?
+          set -e
+          [ "$rc" -le 1 ] || exit "$rc"
+          foreman agent --help | grep -q "Agent commands"
+          foreman policy show
+          foreman registry list >/dev/null
