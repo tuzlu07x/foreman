@@ -62,6 +62,10 @@ logCommand
         process.stdout.write(
           JSON.stringify(initial.rows.map(renderRequestJson), null, 2) + "\n",
         );
+      } else if (initial.rows.length === 0) {
+        console.log(
+          "(no requests logged yet — drive an agent through 'foreman mcp-stdio' or 'foreman wrap' first)",
+        );
       } else {
         for (const row of [...initial.rows].reverse())
           console.log(renderRequestLine(row));
