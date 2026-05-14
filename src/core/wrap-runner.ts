@@ -184,6 +184,9 @@ export function runWrap(options: WrapRunnerOptions): WrapSession {
       },
       onError: (err) => {
         log(`(wrap) transport error: ${err.message}`);
+        // Spawn errors (ENOENT, EACCES) may not be followed by an 'exit'
+        // event — resolve with a non-zero code so the CLI exits accordingly.
+        if (!stopRequested) resolveDone(1);
       },
     });
     currentTransport = transport;
