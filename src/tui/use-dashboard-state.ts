@@ -13,9 +13,16 @@ import {
 const RECENT_LIMIT = 50;
 const POLL_INTERVAL_MS = 2000;
 
+export interface PendingRequest {
+  requestId: string;
+  sourceAgent: string;
+  targetTool?: string;
+}
+
 export interface DashboardState {
   agents: RegisteredAgent[];
   recentRequests: Request[];
+  pendingRequests: PendingRequest[];
   todayStats: DecisionStats;
   perAgentToday: Record<string, number>;
   activeSessions: number;
@@ -23,15 +30,38 @@ export interface DashboardState {
 
 export function useDashboardState(): DashboardState {
   const { db, bus, registry } = useDashboardServices();
-  const [state, setState] = useState<DashboardState>(() =>
-    collectState(db, registry),
+  const [pending, setPending] = useState<PendingRequest[]>([]);
+  const [state, setState] = useState<Omit<DashboardState, "pendingRequests">>(
+    () => collectState(db, registry),
   );
 
   useEffect(() => {
     const refresh = (): void => setState(collectState(db, registry));
+    const onReceived = (e: {
+      requestId: string;
+      sourceAgent: string;
+      targetTool?: string;
+    }): void => {
+      setPending((prev) => {
+        if (prev.some((p) => p.requestId === e.requestId)) return prev;
+        return [
+          ...prev,
+          {
+            requestId: e.requestId,
+            sourceAgent: e.sourceAgent,
+            targetTool: e.targetTool,
+          },
+        ];
+      });
+      refresh();
+    };
+    const onDecided = (e: { requestId: string }): void => {
+      setPending((prev) => prev.filter((p) => p.requestId !== e.requestId));
+      refresh();
+    };
     const unsubs = [
-      bus.on("request:decided", refresh),
-      bus.on("request:received", refresh),
+      bus.on("request:received", onReceived),
+      bus.on("request:decided", onDecided),
       bus.on("agent:registered", refresh),
       bus.on("agent:heartbeat", refresh),
       bus.on("session:halted", refresh),
@@ -43,13 +73,13 @@ export function useDashboardState(): DashboardState {
     };
   }, [db, bus, registry]);
 
-  return state;
+  return { ...state, pendingRequests: pending };
 }
 
 function collectState(
   db: ForemanDb,
   registry: RegistryService,
-): DashboardState {
+): Omit<DashboardState, "pendingRequests"> {
   const todayStart = startOfTodayMs();
   const agents = registry.list();
   const recentRequests = db

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import type { policies } from "../../db/schema.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { formatTime } from "../format.js";
-import { theme } from "../theme.js";
+import { singleBorder, theme } from "../theme.js";
 
 export type PolicyRow = typeof policies.$inferSelect;
 
@@ -35,7 +35,7 @@ export function PolicyPage({
     return (
       <Box
         flexDirection="column"
-        borderStyle="single"
+        borderStyle={singleBorder()}
         borderDimColor
         paddingX={1}
         flexGrow={1}
@@ -58,7 +58,7 @@ export function PolicyPage({
   return (
     <Box
       flexDirection="column"
-      borderStyle="single"
+      borderStyle={singleBorder()}
       borderDimColor
       paddingX={1}
       flexGrow={1}
@@ -146,7 +146,7 @@ function RuleRow({
           marginLeft={2}
           marginBottom={1}
           paddingX={1}
-          borderStyle="single"
+          borderStyle={singleBorder()}
           borderDimColor
         >
           <Text color={theme.fg.muted}>rule id: {row.id}</Text>

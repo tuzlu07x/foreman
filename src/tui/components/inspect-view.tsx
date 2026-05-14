@@ -8,7 +8,7 @@ import {
   type InspectLine,
   type LineColor,
 } from '../inspect-content.js'
-import { theme } from '../theme.js'
+import { doubleBorder, theme } from '../theme.js'
 
 const VISIBLE_LINES = 22
 
@@ -41,7 +41,7 @@ export function InspectView({
   return (
     <Box
       flexDirection="column"
-      borderStyle="double"
+      borderStyle={doubleBorder()}
       borderColor={theme.accent.warning}
       paddingX={2}
     >

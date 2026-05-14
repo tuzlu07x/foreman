@@ -11,7 +11,7 @@ import {
   summariseTool,
   targetLabel,
 } from "../format.js";
-import { theme } from "../theme.js";
+import { singleBorder, theme } from "../theme.js";
 
 export interface SessionsPageProps {
   selectedIdx: number;
@@ -52,7 +52,7 @@ export function SessionsPage({
     return (
       <Box
         flexDirection="column"
-        borderStyle="single"
+        borderStyle={singleBorder()}
         borderDimColor
         paddingX={1}
         flexGrow={1}
@@ -72,7 +72,7 @@ export function SessionsPage({
   return (
     <Box
       flexDirection="column"
-      borderStyle="single"
+      borderStyle={singleBorder()}
       borderDimColor
       paddingX={1}
       flexGrow={1}
@@ -209,7 +209,7 @@ function SessionDetail({
       marginLeft={2}
       marginBottom={1}
       paddingX={1}
-      borderStyle="single"
+      borderStyle={singleBorder()}
       borderDimColor
     >
       <Text color={theme.fg.muted}>session id: {session.id}</Text>
