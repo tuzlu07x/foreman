@@ -110,9 +110,30 @@ policyCommand
   });
 
 function printPolicyLoadError(path: string, err: unknown): void {
-  const detail = err instanceof Error ? err.message : String(err);
-  // Strip the YAMLParseError pointer caret block — too noisy for CLI.
-  const oneLine = detail.split("\n")[0] ?? detail;
+  // ZodError serialises message as a JSON array (\`[\n  { code: ... }\n]\`);
+  // the old split('\\n')[0] reduced it to a useless '['. Detect Zod issues
+  // and render the first one's path + message instead. YAML library errors
+  // (multi-line with a caret pointer) stay first-line-only.
+  let oneLine: string;
+  if (
+    err !== null &&
+    typeof err === "object" &&
+    "issues" in err &&
+    Array.isArray((err as { issues: unknown }).issues)
+  ) {
+    const issues = (err as {
+      issues: { path: (string | number)[]; message: string }[];
+    }).issues;
+    const first = issues[0];
+    oneLine = first
+      ? first.path.length > 0
+        ? `${first.path.join(".")}: ${first.message}`
+        : first.message
+      : String(err);
+  } else {
+    const detail = err instanceof Error ? err.message : String(err);
+    oneLine = detail.split("\n")[0] ?? detail;
+  }
   console.error(red("error: ") + `${path} failed to parse: ${oneLine}`);
   console.error(
     dim(`  → Open ${path} and fix the syntax (YAML validators online help).`),
