@@ -68,8 +68,10 @@ export async function runAgentAddScripted(
   const detection = detectInstall(entry.install);
   const manualInstallCmd = preferredInstallCommand(entry.install);
   if (!detection.found) {
-    if (options.autoInstall && (entry.install.npm || entry.install.brew)) {
-      log(orange(`installing ${entry.install.npm ?? entry.install.brew}…`));
+    if (options.autoInstall && manualInstallCmd) {
+      // --auto-install IS the user's consent — runInstall handles all three
+      // transports (npm, brew, curl script) since PR #107.
+      log(orange(`installing ${entry.name} (${manualInstallCmd})…`));
       const result = await runInstall({
         install: entry.install,
         onLine: (line) => log(dim(`  ${line}`)),
@@ -83,11 +85,7 @@ export async function runAgentAddScripted(
     } else if (manualInstallCmd) {
       log(
         orange("note: ") +
-          `${entry.name} is not detected on this machine. ${
-            entry.install.npm || entry.install.brew
-              ? "Pass --auto-install or run"
-              : "Install it manually"
-          }: ${manualInstallCmd}`,
+          `${entry.name} is not detected on this machine. Pass --auto-install or run: ${manualInstallCmd}`,
       );
     } else {
       log(
@@ -202,16 +200,13 @@ export async function runAgentAddInteractive(deps: AddDeps): Promise<number> {
   const agentId = idAnswer.trim() === "" ? defaultId : idAnswer.trim();
 
   const detection = detectInstall(entry.install);
+  const installCmd = preferredInstallCommand(entry.install);
   let autoInstall = false;
-  if (!detection.found && (entry.install.npm || entry.install.brew)) {
+  if (!detection.found && installCmd) {
     log(
       red("✗") +
         ` ${entry.name} is not installed. ` +
-        `Install it now? Foreman will run: ${
-          entry.install.npm
-            ? `npm install -g ${entry.install.npm}`
-            : `brew install ${entry.install.brew}`
-        }`,
+        `Install it now? Foreman will run: ${installCmd}`,
     );
     const yn = await promptLine("[Y/n]: ");
     autoInstall = !/^n/i.test(yn.trim());
