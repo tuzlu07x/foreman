@@ -46,7 +46,9 @@ FOREMAN_USE_BINARY=1 \
 # https://github.com/tuzlu07x/foreman/releases/latest
 ```
 
-The binary covers `darwin-arm64`, `darwin-x64`, `linux-x64`, and `linux-arm64`. Windows users should use WSL2 for now.
+The binary covers `darwin-arm64`, `darwin-x64`, `linux-x64`, and `linux-arm64`.
+
+**Windows:** Foreman runs through WSL2 (Ubuntu 22.04). Full walkthrough + the WSL2-specific quirks are in [`docs/windows-wsl2.md`](docs/windows-wsl2.md). Native Windows lands in v0.2+.
 
 If you already manage Node yourself:
 
