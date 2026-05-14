@@ -28,7 +28,11 @@ import {
   runAgentAddScripted,
   type AddScriptedOptions,
 } from "./agent-add.js";
-import { MissingRequiredSecretsError } from "../core/agent-add-flow.js";
+import {
+  expandHome,
+  MissingRequiredSecretsError,
+} from "../core/agent-add-flow.js";
+import { removeForemanServer } from "../core/agent-config-injector.js";
 import { bold, dim, green, orange, red } from "./colors.js";
 import { renderAgentJson, renderAgentLine } from "./render.js";
 
@@ -161,6 +165,16 @@ agentsCommand
         const entry = registryId ? safeFindAgent(doc, registryId) : null;
         registry.remove(name);
         console.log(`${green("✓")} agent ${name} removed`);
+        if (entry) {
+          for (const raw of entry.config_paths) {
+            const expanded = expandHome(raw);
+            if (removeForemanServer(expanded)) {
+              console.log(
+                `${green("✓")} stripped foreman entry from ${expanded}`,
+              );
+            }
+          }
+        }
         if (!options.keepBinary && entry) {
           const uninstallCmd = preferredUninstallCommand(entry.install);
           if (uninstallCmd) {

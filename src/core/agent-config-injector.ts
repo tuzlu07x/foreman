@@ -60,6 +60,75 @@ export function applyInjection(configPath: string, plan: InjectionPlan): void {
   writeFileSync(configPath, plan.after, "utf-8");
 }
 
+// Inverse of applyInjection — strip the foreman entry from an agent's config
+// when the agent is unregistered. Returns true if the file was rewritten.
+// No-op for missing files, unsupported formats, and configs that never had
+// the foreman block.
+export function removeForemanServer(configPath: string): boolean {
+  if (!existsSync(configPath)) return false;
+  let format: ConfigFormat;
+  try {
+    format = detectConfigFormat(configPath);
+  } catch {
+    return false;
+  }
+  const before = readFileSync(configPath, "utf-8");
+  if (before.length === 0) return false;
+  let doc: Record<string, unknown>;
+  try {
+    doc = parseDoc(before, format);
+  } catch {
+    return false;
+  }
+  if (!deleteForemanFrom(doc)) return false;
+  const after =
+    format === "yaml"
+      ? stringifyYaml(doc)
+      : format === "toml"
+        ? stringifyToml(doc) + "\n"
+        : `${JSON.stringify(doc, null, 2)}\n`;
+  writeFileSync(configPath, after, "utf-8");
+  return true;
+}
+
+function deleteForemanFrom(doc: Record<string, unknown>): boolean {
+  let changed = false;
+  for (const key of ["mcpServers", "mcp_servers"]) {
+    const node = doc[key];
+    if (
+      node &&
+      typeof node === "object" &&
+      !Array.isArray(node) &&
+      "foreman" in (node as Record<string, unknown>)
+    ) {
+      const obj = node as Record<string, unknown>;
+      delete obj.foreman;
+      changed = true;
+      if (Object.keys(obj).length === 0) delete doc[key];
+    }
+  }
+  const mcp = doc.mcp;
+  if (mcp && typeof mcp === "object" && !Array.isArray(mcp)) {
+    const mcpObj = mcp as Record<string, unknown>;
+    const servers = mcpObj.servers;
+    if (
+      servers &&
+      typeof servers === "object" &&
+      !Array.isArray(servers) &&
+      "foreman" in (servers as Record<string, unknown>)
+    ) {
+      const srvObj = servers as Record<string, unknown>;
+      delete srvObj.foreman;
+      changed = true;
+      if (Object.keys(srvObj).length === 0) {
+        delete mcpObj.servers;
+        if (Object.keys(mcpObj).length === 0) delete doc.mcp;
+      }
+    }
+  }
+  return changed;
+}
+
 function parseDoc(text: string, format: ConfigFormat): Record<string, unknown> {
   const raw =
     format === "yaml"
