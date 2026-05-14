@@ -10,6 +10,7 @@ import { migrateConfigCommand } from "./migrate-config.js";
 import { policyCommand } from "./policy-cli.js";
 import { registryCommand } from "./registry-cli.js";
 import { secretsCommand } from "./secrets-cli.js";
+import { setupCommand } from "./setup.js";
 import { startCommand } from "./start.js";
 import { wrapCommand } from "./wrap.js";
 
@@ -22,6 +23,7 @@ program
   .version("0.1.0");
 
 program.addCommand(initCommand);
+program.addCommand(setupCommand);
 program.addCommand(startCommand);
 program.addCommand(mcpStdioCommand);
 program.addCommand(logCommand);
