@@ -30,6 +30,8 @@ gh release create v0.1.0 --generate-notes --title "v0.1.0 — initial release"
 
 If the auto-generated notes are noisy, edit them in the GitHub UI after creation — keep the "What's new" punchy, hide the per-PR list under a collapsible if needed.
 
+The `release-binaries` workflow (`.github/workflows/release-binaries.yml`) fires on release-published and attaches the four standalone binaries (`foreman-{darwin,linux}-{arm64,x64}`) to the release automatically. Watch the run from the Actions tab — if anything fails, the workflow re-runnable via "Run workflow" once fixed.
+
 ## npm publish
 
 ```bash
