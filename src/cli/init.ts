@@ -75,5 +75,9 @@ export const initCommand = new Command("init")
         ),
       );
     }
-    console.log(dim("Next: run 'foreman start' to boot the gateway."));
+    console.log(
+      dim(
+        "Next: run 'foreman setup' to configure agents and keys in 5 minutes, or 'foreman start' to boot straight to the TUI.",
+      ),
+    );
   });
