@@ -32,7 +32,7 @@ export interface ForemanEventMap {
   "agent:registered": {
     agentId: string;
     displayName: string;
-    transport: "stdio" | "ws";
+    transport: "stdio" | "ws" | "wrap";
     registeredAt: number;
   };
   "agent:heartbeat": {
