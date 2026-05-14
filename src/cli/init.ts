@@ -5,10 +5,12 @@ import { loadOrCreateMasterKey } from "../identity/keypair.js";
 import { getForemanPaths, type ForemanPaths } from "../utils/config.js";
 import { legacyHasInterestingFiles } from "../utils/migrate-config.js";
 import { bold, dim, green, orange, red } from "./colors.js";
+import { DEFAULT_FOREMAN_SOUL } from "./identity-template.js";
 import { DEFAULT_POLICY_YAML } from "./policy-template.js";
 
 export interface InitOptions {
   resetPolicy?: boolean;
+  resetSoul?: boolean;
 }
 
 export interface InitResult {
@@ -17,6 +19,8 @@ export interface InitResult {
   identityWasNew: boolean;
   policyWasNew: boolean;
   policyWasReset: boolean;
+  soulWasNew: boolean;
+  soulWasReset: boolean;
 }
 
 /** Pure logic — no console output, no process.exit. CLI action wraps this. */
@@ -32,9 +36,23 @@ export function runInit(options: InitOptions = {}): InitResult {
   if (policyWasNew || policyWasReset) {
     writeFileSync(paths.policyPath, DEFAULT_POLICY_YAML);
   }
+  const soulExisted = existsSync(paths.soulPath);
+  const soulWasNew = !soulExisted;
+  const soulWasReset = soulExisted && options.resetSoul === true;
+  if (soulWasNew || soulWasReset) {
+    writeFileSync(paths.soulPath, DEFAULT_FOREMAN_SOUL);
+  }
   getDb();
   closeDb();
-  return { paths, publicKey, identityWasNew, policyWasNew, policyWasReset };
+  return {
+    paths,
+    publicKey,
+    identityWasNew,
+    policyWasNew,
+    policyWasReset,
+    soulWasNew,
+    soulWasReset,
+  };
 }
 
 export const initCommand = new Command("init")
@@ -43,6 +61,10 @@ export const initCommand = new Command("init")
     "--reset-policy",
     "overwrite policy.yaml with the smart-default template",
   )
+  .option(
+    "--reset-soul",
+    "overwrite SOUL.md with the default Foreman identity template",
+  )
   .action((options: InitOptions) => {
     if (legacyHasInterestingFiles()) {
       console.error(
@@ -50,12 +72,24 @@ export const initCommand = new Command("init")
           "found a legacy ~/.foreman/ install with config or state files. Run 'foreman migrate-config' before you keep going — this init will write to the new platform-native dirs and ignore the legacy ones.",
       );
     }
-    const { paths, publicKey, identityWasNew, policyWasNew, policyWasReset } =
-      runInit(options);
+    const {
+      paths,
+      publicKey,
+      identityWasNew,
+      policyWasNew,
+      policyWasReset,
+      soulWasNew,
+      soulWasReset,
+    } = runInit(options);
     const fp = publicKey.subarray(0, 4).toString("hex");
     const policyTag = policyWasNew
       ? "(template)"
       : policyWasReset
+        ? "(reset to template)"
+        : "(kept)";
+    const soulTag = soulWasNew
+      ? "(template)"
+      : soulWasReset
         ? "(reset to template)"
         : "(kept)";
     console.log(`${orange(bold("Foreman"))} initialised`);
@@ -66,6 +100,7 @@ export const initCommand = new Command("init")
     console.log(
       `  ${green("✓")} policy     ${paths.policyPath} ${dim(policyTag)}`,
     );
+    console.log(`  ${green("✓")} soul       ${paths.soulPath} ${dim(soulTag)}`);
     console.log(`  ${green("✓")} database   ${paths.dbPath}`);
     console.log();
     if (!policyWasNew && !policyWasReset) {
