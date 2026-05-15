@@ -36,6 +36,13 @@
       "when": 1779000000000,
       "tag": "0004_agent_config",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1779200000000,
+      "tag": "0005_agent_disabled",
+      "breakpoints": true
     }
   ]
 }
