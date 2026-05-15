@@ -41,10 +41,35 @@ import {
 } from "./setup-state.js";
 import { theme } from "./theme.js";
 
+// Each secret entry carries a help URL so the wizard can tell the user where
+// to grab the key from. Add new entries here when a new partner integration
+// requires its own credential.
 const COMMON_SECRETS = [
-  { value: "anthropic-key", label: "Anthropic API key" },
-  { value: "openai-key", label: "OpenAI API key" },
-  { value: "gemini-api-key", label: "Google Gemini API key" },
+  {
+    value: "anthropic-key",
+    label: "Anthropic API key",
+    helpUrl: "https://console.anthropic.com/settings/keys",
+  },
+  {
+    value: "openai-key",
+    label: "OpenAI API key",
+    helpUrl: "https://platform.openai.com/api-keys",
+  },
+  {
+    value: "gemini-api-key",
+    label: "Google Gemini API key",
+    helpUrl: "https://aistudio.google.com/app/apikey",
+  },
+  {
+    value: "telegram-bot-token",
+    label: "Telegram bot token",
+    helpUrl: "https://t.me/BotFather",
+  },
+  {
+    value: "discord-bot-token",
+    label: "Discord bot token",
+    helpUrl: "https://discord.com/developers/applications",
+  },
 ];
 
 const DEFAULT_AGENTS = ["hermes", "claude-code"];
@@ -166,14 +191,24 @@ export function SetupWizard({
       advance("secrets");
       return <Text>…</Text>;
     }
+    const helpUrl = COMMON_SECRETS.find((s) => s.value === name)?.helpUrl;
+    const progress = `(${secretIdx + 1}/${secretsSelected.length})`;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <Text>
           {theme.symbols.bullet} Value for{" "}
           <Text bold color={theme.accent.primary}>
             {name}
+          </Text>{" "}
+          <Text color={theme.fg.muted}>{progress}</Text>
+        </Text>
+        {helpUrl && (
+          <Text color={theme.fg.muted}>
+            Get yours at: <Text color={theme.accent.primary}>{helpUrl}</Text>
           </Text>
-          :
+        )}
+        <Text color={theme.fg.muted}>
+          (paste the value below — it stays hidden as you type)
         </Text>
         <PasswordInput
           placeholder="…"
