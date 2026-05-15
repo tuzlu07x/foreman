@@ -9,7 +9,7 @@ import {
   StatusMessage,
   TextInput,
 } from "@inkjs/ui";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   checkSecrets,
   pickConfigPath,
@@ -51,7 +51,7 @@ import {
   type SetupState,
   type Step,
 } from "./setup-state.js";
-import { theme } from "./theme.js";
+import { singleBorder, theme } from "./theme.js";
 
 const DEFAULT_AGENTS = ["hermes", "claude-code"];
 
@@ -468,6 +468,12 @@ export function SetupWizard({
   const [installRunning, setInstallRunning] = useState(false);
   const [installSummary, setInstallSummary] =
     useState<InstallStepSummary | null>(null);
+  const [pendingFailure, setPendingFailure] =
+    useState<AgentInstallFailure | null>(null);
+  const [manualFixOpen, setManualFixOpen] = useState(false);
+  const failureResolverRef = useRef<
+    ((resolution: FailureResolution) => void) | null
+  >(null);
 
   const [policyReview, setPolicyReview] = useState(false);
   const [donePhase, setDonePhase] = useState<"main" | "doctor" | "log">("main");
@@ -552,6 +558,33 @@ export function SetupWizard({
       }
       // Esc on welcome: defer to the user. We don't auto-exit because the
       // user might be exploring; a deliberate `q` is the affordance.
+      return;
+    }
+
+    // Install-failure prompt (#177). When pendingFailure is set, runInstall
+    // is awaiting a resolution — [r] retry, [s] skip, [m] open manual-fix
+    // overlay. Esc on the overlay just closes it (re-shows the prompt).
+    if (pendingFailure) {
+      if (manualFixOpen) {
+        if (key.escape) setManualFixOpen(false);
+        return;
+      }
+      if (input === "r") {
+        failureResolverRef.current?.("retry");
+        failureResolverRef.current = null;
+        setPendingFailure(null);
+        return;
+      }
+      if (input === "s") {
+        failureResolverRef.current?.("skip");
+        failureResolverRef.current = null;
+        setPendingFailure(null);
+        return;
+      }
+      if (input === "m") {
+        setManualFixOpen(true);
+        return;
+      }
       return;
     }
 
@@ -1249,12 +1282,21 @@ export function SetupWizard({
             : "",
         ].filter(Boolean),
       );
+      const onFailure = (
+        failure: AgentInstallFailure,
+      ): Promise<FailureResolution> => {
+        setPendingFailure(failure);
+        return new Promise<FailureResolution>((resolveResolution) => {
+          failureResolverRef.current = resolveResolution;
+        });
+      };
       void runInstallStep(
         toAdd,
         toRemove,
         services,
         (line) => setInstallLog((prev) => [...prev, line]),
         agentConfigs,
+        onFailure,
       ).then((summary) => {
         setInstallSummary(summary);
         advance("install");
@@ -1277,9 +1319,45 @@ export function SetupWizard({
             </Text>
           );
         })}
-        <Text color={theme.fg.muted}>
-          (install running — back-navigation disabled mid-flight)
-        </Text>
+        {pendingFailure && !manualFixOpen && (
+          <Box
+            flexDirection="column"
+            marginTop={1}
+            paddingX={1}
+            borderStyle={singleBorder()}
+            borderColor={theme.accent.danger}
+          >
+            <Text bold color={theme.accent.danger}>
+              ✗ {pendingFailure.agentName} — {pendingFailure.stage} failed
+            </Text>
+            <Text color={theme.fg.muted}>{pendingFailure.error}</Text>
+            <Text color={theme.fg.muted}>
+              [r] retry · [s] skip this agent · [m] manual fix instructions
+            </Text>
+          </Box>
+        )}
+        {pendingFailure && manualFixOpen && (
+          <Box
+            flexDirection="column"
+            marginTop={1}
+            paddingX={1}
+            borderStyle={singleBorder()}
+            borderColor={theme.accent.warning}
+          >
+            <Text bold color={theme.accent.warning}>
+              Manual fix — {pendingFailure.agentName}
+            </Text>
+            <Text>{pendingFailure.manualHint}</Text>
+            <Text color={theme.fg.muted}>
+              [Esc] back to the retry / skip prompt
+            </Text>
+          </Box>
+        )}
+        {!pendingFailure && (
+          <Text color={theme.fg.muted}>
+            (install running — back-navigation disabled mid-flight)
+          </Text>
+        )}
       </Box>
     );
   }
@@ -1495,12 +1573,29 @@ export interface InstallStepSummary {
   removed: string[];
 }
 
+export type AgentInstallStage = "install" | "config-inject" | "register";
+
+export interface AgentInstallFailure {
+  agentId: string;
+  agentName: string;
+  stage: AgentInstallStage;
+  error: string;
+  manualHint: string;
+}
+
+export type FailureResolution = "retry" | "skip" | "continue";
+
+export type OnAgentInstallFailure = (
+  failure: AgentInstallFailure,
+) => Promise<FailureResolution>;
+
 export async function runInstallStep(
   toAdd: string[],
   toRemove: string[],
   services: WizardServices,
   log: (line: string) => void,
   agentConfigs: AgentConfigsMap = {},
+  onFailure?: OnAgentInstallFailure,
 ): Promise<InstallStepSummary> {
   const summary: InstallStepSummary = {
     registered: [],
@@ -1553,10 +1648,16 @@ export async function runInstallStep(
     }
     log(`▸ ${entry.name}`);
 
-    // Each substep is best-effort — install / secret-check / config-inject
-    // failures degrade to a warning, but registration always runs at the end.
-    const detection = detectInstall(entry.install);
-    if (!detection.found) {
+    // Each substep is best-effort — secret-check / config-inject / identity
+    // failures degrade to a warning. Binary install can pause for user
+    // input via onFailure (#177); register always runs at the end.
+    let skipThisAgent = false;
+    while (true) {
+      const detection = detectInstall(entry.install);
+      if (detection.found) {
+        log(`  ✓ already installed at ${detection.path}`);
+        break;
+      }
       const installCmd = entry.install.npm
         ? `npm install -g ${entry.install.npm}`
         : entry.install.brew
@@ -1564,20 +1665,35 @@ export async function runInstallStep(
           : entry.install.script
             ? `curl -fsSL ${entry.install.script} | bash`
             : null;
-      if (installCmd) {
-        log(`  installing (${installCmd})…`);
-        const result = await runInstall({
-          install: entry.install,
-          onLine: (l) => log(`  ${l}`),
-        });
-        if (!result.ok) {
-          log(`  ⚠ install failed (exit ${result.exitCode})`);
-          log(`    run manually: ${result.manualCommand}`);
-        }
+      if (!installCmd) break;
+      log(`  installing (${installCmd})…`);
+      const result = await runInstall({
+        install: entry.install,
+        onLine: (l) => log(`  ${l}`),
+      });
+      if (result.ok) break;
+      log(`  ⚠ install failed (exit ${result.exitCode})`);
+      log(`    run manually: ${result.manualCommand}`);
+      if (!onFailure) break;
+      const resolution = await onFailure({
+        agentId: id,
+        agentName: entry.name,
+        stage: "install",
+        error: `install command exited with code ${result.exitCode}`,
+        manualHint: `Run \`${result.manualCommand}\` from your shell, then re-run \`foreman setup --resume\` to pick up where you left off.`,
+      });
+      if (resolution === "retry") {
+        log(`  ↻ retrying…`);
+        continue;
       }
-    } else {
-      log(`  ✓ already installed at ${detection.path}`);
+      if (resolution === "skip") {
+        log(`  ✗ skipped by user`);
+        summary.failed.push(id);
+        skipThisAgent = true;
+      }
+      break;
     }
+    if (skipThisAgent) continue;
 
     const secretCheck = checkSecrets(entry, services.secretStore);
     if (!secretCheck.hasAllRequired) {
