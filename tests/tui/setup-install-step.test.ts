@@ -147,4 +147,34 @@ describe("setup-wizard.runInstallStep diff logic", () => {
     );
     expect(registry.list()).toHaveLength(0);
   });
+
+  it("persists llmProvider + responsibilityNote from agentConfigs on registration", async () => {
+    await runInstallStep(
+      ["generic-mcp"],
+      [],
+      services(),
+      (line) => logs.push(line),
+      {
+        "generic-mcp": {
+          llmProvider: "anthropic",
+          responsibilityNote: "Smoke test agent",
+        },
+      },
+    );
+    const agent = registry.get("generic-mcp");
+    expect(agent?.llmProvider).toBe("anthropic");
+    expect(agent?.responsibilityNote).toBe("Smoke test agent");
+  });
+
+  it("registers without per-agent config when none is supplied (backward compat)", async () => {
+    await runInstallStep(
+      ["generic-mcp"],
+      [],
+      services(),
+      (line) => logs.push(line),
+    );
+    const agent = registry.get("generic-mcp");
+    expect(agent?.llmProvider).toBeNull();
+    expect(agent?.responsibilityNote).toBeNull();
+  });
 });

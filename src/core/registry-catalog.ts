@@ -40,6 +40,12 @@ export const AgentEntrySchema = z
     identity_path: z.string().nullable().optional(),
     required_secrets: z.array(z.string()),
     optional_secrets: z.array(z.string()),
+    /** Provider ids from registry/providers.json the agent can run on.
+     * Empty array means "no constraint" (e.g. generic-mcp). Single-element
+     * arrays mean fixed (Claude Code → anthropic). Multi-element arrays
+     * drive the wizard's per-agent LLM picker (#174). Optional for
+     * backward-compat — callers should read it as `entry.llm_compat ?? []`. */
+    llm_compat: z.array(z.string()).optional(),
     mcp_compatible: z.boolean(),
     supported_versions: z.string().min(1),
     min_foreman_version: z.string().min(1),
