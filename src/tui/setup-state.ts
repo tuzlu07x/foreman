@@ -6,6 +6,7 @@ export const STEPS = [
   "welcome",
   "providers",
   "agents",
+  "services",
   "install",
   "policy",
   "done",
