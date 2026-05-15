@@ -140,11 +140,7 @@ function HotkeyRow(): JSX.Element {
         <Text color={theme.accent.primary} bold>
           D
         </Text>
-        ]eny always [
-        <Text color={theme.accent.primary} bold>
-          r
-        </Text>
-        ]emember rule
+        ]eny always
       </Text>
     </Box>
   );
