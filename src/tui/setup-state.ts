@@ -17,6 +17,9 @@ export interface SetupState {
   completed: Step[];
   startedAt: number;
   lastUpdatedAt: number;
+  /** Set when the user explicitly chose to skip setup from `foreman start`.
+   * Prevents the prompt from re-firing on every subsequent run (#160). */
+  skippedAt?: number;
 }
 
 export function getSetupStatePath(): string {
@@ -76,6 +79,25 @@ export function markCompleted(state: SetupState, step: Step): SetupState {
     completed: [...state.completed, step],
     lastUpdatedAt: Date.now(),
   };
+}
+
+export function markSetupSkipped(
+  state: SetupState,
+  at: number = Date.now(),
+): SetupState {
+  return {
+    ...state,
+    skippedAt: at,
+    lastUpdatedAt: at,
+  };
+}
+
+// True if the user has either completed a setup step or explicitly opted out
+// via `foreman start` → [s]. Used to decide whether to re-prompt on every
+// subsequent run (#160).
+export function hasUserOptedOut(state: SetupState): boolean {
+  if (state.completed.length > 0) return true;
+  return typeof state.skippedAt === "number";
 }
 
 // Removes the step and every later step from `completed` so the wizard
