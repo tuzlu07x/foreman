@@ -1,6 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { delimiter } from "node:path";
+import { homedir } from "node:os";
 
 export interface InstallSpec {
   npm: string | null;
@@ -14,7 +15,7 @@ export interface InstallSpec {
 export interface InstallDetection {
   found: boolean;
   path?: string;
-  source?: "PATH" | "npm-global";
+  source?: "PATH" | "npm-global" | "user-dirs";
 }
 
 // Synchronously detects whether the agent is already on the system. We deliberately
@@ -40,6 +41,26 @@ export function detectInstall(
         if (existsSync(candidate)) {
           return { found: true, path: candidate, source: "npm-global" };
         }
+      }
+    }
+  }
+
+  // Script installers (Hermes, ZeroClaw) and many curl|bash flows drop the
+  // binary under ~/.local/bin, ~/bin, or ~/.cargo/bin — directories users
+  // routinely have on disk but not necessarily on PATH. Without this fallback
+  // a returning user gets re-installed (and re-installs that hit interactive
+  // wizards block the whole setup — see #209).
+  const home = env.HOME ?? homedir();
+  const userDirs = [
+    `${home}/.local/bin`,
+    `${home}/bin`,
+    `${home}/.cargo/bin`,
+  ];
+  for (const bin of binCandidates) {
+    for (const dir of userDirs) {
+      const candidate = `${dir}/${bin}`;
+      if (existsSync(candidate)) {
+        return { found: true, path: candidate, source: "user-dirs" };
       }
     }
   }
