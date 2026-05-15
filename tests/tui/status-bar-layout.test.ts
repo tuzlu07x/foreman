@@ -17,7 +17,7 @@ describe("buildStatusBarLayout", () => {
     it("renders single-letter hotkeys on one line, keeps the version badge", () => {
       const result = buildStatusBarLayout("medium");
       expect(result.rows).toHaveLength(1);
-      expect(result.rows[0]).toBe("[h] [a] [v] [c] [g] [k] [l] [p] [s] [q]");
+      expect(result.rows[0]).toBe("[h] [a] [v] [V] [c] [g] [k] [l] [p] [s] [q]");
       expect(result.showVersion).toBe(true);
     });
 
@@ -54,7 +54,7 @@ describe("buildStatusBarLayout", () => {
       const wide = flatten(buildStatusBarLayout("wide").rows);
       const medium = flatten(buildStatusBarLayout("medium").rows);
       const narrow = flatten(buildStatusBarLayout("narrow").rows);
-      for (const key of ["h", "a", "v", "c", "g", "k", "l", "p", "s", "q"]) {
+      for (const key of ["h", "a", "v", "V", "c", "g", "k", "l", "p", "s", "q"]) {
         expect(wide).toContain(`[${key}]`);
         expect(medium).toContain(`[${key}]`);
         expect(narrow).toContain(`[${key}]`);
