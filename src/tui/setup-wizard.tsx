@@ -239,7 +239,7 @@ export function SetupWizard({
     const options = doc.agents.map((a) => ({
       value: a.id,
       label: initialRegistered.includes(a.id)
-        ? `${a.name} (installed) — ${a.tagline}`
+        ? `${a.name}  (installed) — ${a.tagline}`
         : `${a.name} — ${a.tagline}`,
     }));
     const defaults =
@@ -248,9 +248,13 @@ export function SetupWizard({
       <Box flexDirection="column" gap={1} paddingY={1}>
         <Text bold>Step 2 / 4 — Agents</Text>
         <Text color={theme.fg.muted}>
-          Pick the agents you want Foreman to mediate. (Space to toggle, Enter
-          to confirm.) Newly-checked agents are installed; previously-installed
-          agents you uncheck are uninstalled.
+          ↑↓ move · <Text bold>Space toggle</Text> · Enter confirm. Defaults
+          are pre-checked — toggle off any you don't want, toggle on any you
+          do. Newly-checked agents are installed; previously-installed agents
+          you uncheck are uninstalled.
+        </Text>
+        <Text color={theme.accent.primary}>
+          Pre-checked: {defaults.length > 0 ? defaults.join(", ") : "(none)"}
         </Text>
         <MultiSelect
           options={options}
@@ -275,6 +279,18 @@ export function SetupWizard({
       const toRemove = initialRegistered.filter(
         (id) => !agentsSelected.includes(id),
       );
+      // Surface what's about to happen so the user catches a missed Space toggle
+      // (e.g. wanted openclaw but never selected it) before install starts.
+      setInstallLog([
+        `Selected agents: ${agentsSelected.length > 0 ? agentsSelected.join(", ") : "(none)"}`,
+        ...(toAdd.length > 0 ? [`▸ Will install: ${toAdd.join(", ")}`] : []),
+        ...(toRemove.length > 0
+          ? [`▸ Will remove: ${toRemove.join(", ")}`]
+          : []),
+        toAdd.length === 0 && toRemove.length === 0
+          ? "▸ No changes — every selection is already registered."
+          : "",
+      ].filter(Boolean));
       void runInstallStep(toAdd, toRemove, services, (line) =>
         setInstallLog((prev) => [...prev, line]),
       ).then(() => {
