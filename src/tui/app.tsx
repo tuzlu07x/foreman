@@ -38,6 +38,7 @@ import {
 } from "./pages/secrets-page.js";
 import { AgentsPage } from "./pages/agents-page.js";
 import { ProvidersPage } from "./pages/providers-page.js";
+import { ServicesPage } from "./pages/services-page.js";
 import { SessionsPage } from "./pages/sessions-page.js";
 import { buildSettingsItems, SettingsPage } from "./pages/settings-page.js";
 import { launchEditor } from "./launch-editor.js";
@@ -51,6 +52,7 @@ export type Page =
   | "sessions"
   | "agents"
   | "providers"
+  | "services"
   | "secrets"
   | "settings"
   | "chat";
@@ -810,6 +812,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
         />
       ) : page === "providers" ? (
         <ProvidersPage onLeave={() => setPage("dashboard")} />
+      ) : page === "services" ? (
+        <ServicesPage onLeave={() => setPage("dashboard")} />
       ) : (
         <Box flexGrow={1}>{renderPanels(layout)}</Box>
       )}
@@ -1200,10 +1204,10 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "q") exit();
       return;
     }
-    // ProvidersPage runs its own useInput; short-circuit here so a key
-    // (e.g. `s` for show-value) isn't double-handled by the global dispatch
-    // (which would simultaneously try to setPage('sessions')).
-    if (page === "providers") {
+    // ProvidersPage / ServicesPage run their own useInput; short-circuit
+    // here so a key (e.g. `s` for show-value) isn't double-handled by the
+    // global dispatch (which would simultaneously try to setPage('sessions')).
+    if (page === "providers" || page === "services") {
       if (input === "q") exit();
       return;
     }
@@ -1221,6 +1225,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     else if (input === "k") setPage("secrets");
     else if (input === "a") setPage("agents");
     else if (input === "v") setPage("providers");
+    else if (input === "V") setPage("services");
     else if (input === "l") setPage("logs");
     else if (input === "p") setPage("policy");
     else if (input === "s") setPage("sessions");
