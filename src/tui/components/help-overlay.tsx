@@ -25,6 +25,7 @@ export function HelpOverlay(): JSX.Element {
             ["k", "keys (secrets) page"],
             ["a", "agents page"],
             ["v", "LLM providers page"],
+            ["V", "services page (Telegram / Discord / GitHub / …)"],
             ["l", "logs page"],
             ["p", "policy page"],
             ["s", "sessions page"],
@@ -80,6 +81,17 @@ export function HelpOverlay(): JSX.Element {
             ["r", "rotate the selected configured provider's value"],
             ["d", "remove the selected configured provider"],
             ["s", "show value for 10s (auto-hides)"],
+          ]}
+        />
+        <Section
+          title="Services page"
+          rows={[
+            ["↑ ↓", "navigate (configured + available rows)"],
+            ["n", "configure the selected available service"],
+            ["r", "rotate the selected configured service's token"],
+            ["d", "remove the selected configured service"],
+            ["s", "show value for 10s (auto-hides)"],
+            ["w", "open the setup walkthrough for the selected row"],
           ]}
         />
         <Section
