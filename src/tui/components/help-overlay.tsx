@@ -19,11 +19,21 @@ export function HelpOverlay(): JSX.Element {
         <Section
           title="Navigation"
           rows={[
+            ["a", "agents page"],
             ["l", "logs page"],
             ["p", "policy page"],
             ["s", "sessions page"],
             ["Esc", "back to dashboard"],
             ["q / Ctrl-C", "quit (with confirm)"],
+          ]}
+        />
+        <Section
+          title="Agents page"
+          rows={[
+            ["↑ ↓ / Enter", "select / expand row"],
+            ["b", "block / unblock selected agent"],
+            ["r", "regenerate Ed25519 keypair (shown once)"],
+            ["d", "remove (hard delete)"],
           ]}
         />
         <Section
