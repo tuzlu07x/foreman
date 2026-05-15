@@ -21,6 +21,7 @@ export function StatusBar({
     <Box paddingX={1} justifyContent="space-between">
       <Text color={theme.fg.muted}>
         [?] help · [k] keys · [l] logs · [p] policy · [s] sessions · [q] quit
+        [?] help · [a] agents · [l] logs · [p] policy · [s] sessions · [q] quit
       </Text>
       <Text color={theme.fg.muted}>🦫 v{version}</Text>
     </Box>
