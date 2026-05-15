@@ -72,6 +72,15 @@ const COMMON_SECRETS = [
   },
 ];
 
+// Pre-checked secrets on fresh install — the three any new user is most likely
+// to want. They can Space-toggle off the ones they don't need; pressing Enter
+// on the default lands them straight on the PasswordInput for each.
+const DEFAULT_SECRETS = [
+  "anthropic-key",
+  "openai-key",
+  "telegram-bot-token",
+];
+
 const DEFAULT_AGENTS = ["hermes", "claude-code"];
 
 export interface WizardServices {
@@ -159,16 +168,27 @@ export function SetupWizard({
 
   // ---------------- Secrets — picker ----------------
   if (currentStep === "secrets" && !secretsDone) {
+    const presentSecrets = DEFAULT_SECRETS.filter((s) =>
+      services.secretStore.exists(s),
+    );
+    const defaults = DEFAULT_SECRETS.filter(
+      (s) => !presentSecrets.includes(s),
+    );
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <Text bold>Step 1 / 4 — API keys</Text>
         <Text color={theme.fg.muted}>
-          Pick the keys you'll use. Foreman encrypts them on disk and hands them
-          to agents on demand. (Space to toggle, Enter to confirm.)
+          ↑↓ move · <Text bold>Space toggle</Text> · Enter confirm. Foreman
+          encrypts these on disk and hands them to agents on demand. Toggle off
+          any you don't have yet; you can always come back via
+          'foreman secrets add &lt;name&gt;'.
+        </Text>
+        <Text color={theme.accent.primary}>
+          Pre-checked: {defaults.length > 0 ? defaults.join(", ") : "(none — all already stored)"}
         </Text>
         <MultiSelect
           options={COMMON_SECRETS}
-          defaultValue={[]}
+          defaultValue={defaults}
           onSubmit={(values) => {
             setSecretsSelected(values);
             if (values.length === 0) {
