@@ -79,6 +79,28 @@ export const ProviderCatalogSchema = z.object({
 export type ProviderEntry = z.infer<typeof ProviderEntrySchema>;
 export type ProviderCatalog = z.infer<typeof ProviderCatalogSchema>;
 
+// Service entries are also non-strict so v0.2+ can add fields like
+// rate_limit_hints or oauth_redirect_uri without forcing a parser release.
+export const ServiceEntrySchema = z.object({
+  id: z.string().regex(/^[a-z][a-z0-9-]*$/, "id must be lowercase kebab-case"),
+  name: z.string().min(1),
+  description: z.string().min(1),
+  secret_name: z.string().min(1),
+  where_to_get: z.string().url(),
+  format_hint: z.string().min(1),
+  setup_steps: z.array(z.string().min(1)).min(1),
+  used_by_agents: z.array(z.string()),
+  open_url_hotkey: z.boolean(),
+});
+
+export const ServiceCatalogSchema = z.object({
+  version: z.literal(REGISTRY_VERSION),
+  services: z.array(ServiceEntrySchema),
+});
+
+export type ServiceEntry = z.infer<typeof ServiceEntrySchema>;
+export type ServiceCatalog = z.infer<typeof ServiceCatalogSchema>;
+
 export class RegistryNotFoundError extends Error {
   constructor() {
     super(
@@ -118,6 +140,32 @@ export class ProviderCatalogValidationError extends Error {
   ) {
     super(message);
     this.name = "ProviderCatalogValidationError";
+  }
+}
+
+export class ServiceCatalogNotFoundError extends Error {
+  constructor() {
+    super(
+      "Bundled registry/services.json was not found. Re-install the foreman-agent package or run from a checked-out repo.",
+    );
+    this.name = "ServiceCatalogNotFoundError";
+  }
+}
+
+export class ServiceNotInCatalogError extends Error {
+  constructor(public readonly serviceId: string) {
+    super(`No service with id "${serviceId}" in the catalog`);
+    this.name = "ServiceNotInCatalogError";
+  }
+}
+
+export class ServiceCatalogValidationError extends Error {
+  constructor(
+    message: string,
+    public readonly issues: { path: string; message: string }[],
+  ) {
+    super(message);
+    this.name = "ServiceCatalogValidationError";
   }
 }
 
@@ -283,6 +331,82 @@ export function findProvider(
   const entry = doc.providers.find((p) => p.id === providerId);
   if (!entry) throw new ProviderNotInCatalogError(providerId);
   return entry;
+}
+
+export function resolveBundledServicesPath(): string | null {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    resolve(here, "..", "..", "..", "registry", "services.json"),
+    resolve(here, "..", "..", "registry", "services.json"),
+    resolve(here, "..", "registry", "services.json"),
+    resolve(process.cwd(), "registry", "services.json"),
+  ];
+  for (const c of candidates) if (existsSync(c)) return c;
+  return null;
+}
+
+export function parseServiceCatalogText(text: string): ServiceCatalog {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (err) {
+    throw new ServiceCatalogValidationError(
+      `registry/services.json is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+      [],
+    );
+  }
+  const parsed = ServiceCatalogSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new ServiceCatalogValidationError(
+      "registry/services.json failed schema validation",
+      parsed.error.issues.map((i) => ({
+        path: i.path.join("."),
+        message: i.message,
+      })),
+    );
+  }
+  return parsed.data;
+}
+
+export function loadBundledServices(): ServiceCatalog {
+  const path = resolveBundledServicesPath();
+  if (!path) throw new ServiceCatalogNotFoundError();
+  return parseServiceCatalogText(readFileSync(path, "utf-8"));
+}
+
+export function loadActiveServices(): {
+  doc: ServiceCatalog;
+  source: "bundled";
+} {
+  return { doc: loadBundledServices(), source: "bundled" };
+}
+
+export function findService(
+  doc: ServiceCatalog,
+  serviceId: string,
+): ServiceEntry {
+  const entry = doc.services.find((s) => s.id === serviceId);
+  if (!entry) throw new ServiceNotInCatalogError(serviceId);
+  return entry;
+}
+
+// Cross-catalog check: every id in any service.used_by_agents must exist as an
+// agent entry. Run from CI / tests to catch typos when a service or agent is
+// renamed; not called at runtime to keep the load path cheap.
+export function validateServicesAgainstAgents(
+  services: ServiceCatalog,
+  agents: RegistryDoc,
+): { ok: true } | { ok: false; missing: { service: string; agent: string }[] } {
+  const agentIds = new Set(agents.agents.map((a) => a.id));
+  const missing: { service: string; agent: string }[] = [];
+  for (const service of services.services) {
+    for (const agentId of service.used_by_agents) {
+      if (!agentIds.has(agentId)) {
+        missing.push({ service: service.id, agent: agentId });
+      }
+    }
+  }
+  return missing.length === 0 ? { ok: true } : { ok: false, missing };
 }
 
 export const REGISTRY_CACHE_TTL_MS = CACHE_TTL_MS;
