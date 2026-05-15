@@ -13,6 +13,18 @@ interface DoctorOptions {
 
 export const doctorCommand = new Command("doctor")
   .description("Diagnose the Foreman environment and report any issues")
+  .addHelpText(
+    "after",
+    `
+Exit codes:
+  0  all checks passed
+  1  one or more warnings (e.g. optional dependency missing, no agents yet)
+  2  one or more failures (e.g. corrupt database, missing identity)
+
+Pipe-friendly: redirect stderr to suppress the human report and rely on the
+exit code, or use --json for a parseable summary.
+`,
+  )
   .option("--json", "output a structured JSON report")
   .action((options: DoctorOptions) => {
     const report = runDoctor();
@@ -49,24 +61,17 @@ export function formatCheckLine(check: CheckResult): string {
 }
 
 function summaryLine(report: DoctorReport): string {
-  const counts = countByStatus(report.checks);
+  const { ok, warn, fail } = report.summary;
   const parts = [
-    counts.ok > 0 ? green(`${counts.ok} ok`) : null,
-    counts.warn > 0 ? orange(`${counts.warn} warning`) : null,
-    counts.fail > 0 ? red(`${counts.fail} failing`) : null,
+    ok > 0 ? green(`${ok} ok`) : null,
+    warn > 0 ? orange(`${warn} warning`) : null,
+    fail > 0 ? red(`${fail} failing`) : null,
   ].filter((p): p is string => p !== null);
-  if (counts.fail > 0) return parts.join("  ·  ");
-  if (counts.warn > 0)
-    return parts.join("  ·  ") + "  " + dim("(exit 1 — warnings)");
+  if (fail > 0) {
+    return parts.join("  ·  ") + "  " + dim("(exit 2 — action required)");
+  }
+  if (warn > 0) {
+    return parts.join("  ·  ") + "  " + dim("(exit 1 — warnings only)");
+  }
   return green("all checks passed") + "  " + dim("(exit 0)");
-}
-
-function countByStatus(checks: CheckResult[]): {
-  ok: number;
-  warn: number;
-  fail: number;
-} {
-  const out = { ok: 0, warn: 0, fail: 0 };
-  for (const c of checks) out[c.status]++;
-  return out;
 }

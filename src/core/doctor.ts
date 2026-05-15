@@ -22,9 +22,18 @@ export interface CheckResult {
   remediation?: string;
 }
 
+export interface DoctorSummary {
+  ok: number;
+  warn: number;
+  fail: number;
+}
+
 export interface DoctorReport {
   checks: CheckResult[];
-  /** 0 if all ok; 1 if any warn (but no fail); 2 if any fail. */
+  /** Counts by status — surfaced in --json output so consumers don't have to
+   * iterate `checks[]` to drive their own monitoring thresholds. */
+  summary: DoctorSummary;
+  /** 0 = all ok, 1 = warnings only, 2 = any failure. */
   exitCode: 0 | 1 | 2;
 }
 
@@ -487,8 +496,15 @@ export function runDoctor(_options: DoctorOptions = {}): DoctorReport {
       });
     }
   }
+  const summary = computeSummary(checks);
   const exitCode = computeExitCode(checks);
-  return { checks, exitCode };
+  return { checks, summary, exitCode };
+}
+
+export function computeSummary(checks: CheckResult[]): DoctorSummary {
+  const out: DoctorSummary = { ok: 0, warn: 0, fail: 0 };
+  for (const c of checks) out[c.status]++;
+  return out;
 }
 
 export function computeExitCode(checks: CheckResult[]): 0 | 1 | 2 {
