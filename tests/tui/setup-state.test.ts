@@ -10,8 +10,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   freshState,
+  hasUserOptedOut,
   loadSetupState,
   markCompleted,
+  markSetupSkipped,
   markUncompleted,
   nextStep,
   resetSetupState,
@@ -78,6 +80,50 @@ describe("setup-state", () => {
       await new Promise((r) => setTimeout(r, 2));
       const s2 = markCompleted(s1, "welcome");
       expect(s2.lastUpdatedAt).toBeGreaterThan(s1.lastUpdatedAt);
+    });
+  });
+
+  describe("markSetupSkipped + hasUserOptedOut", () => {
+    it("marks a state as skipped with the supplied timestamp", () => {
+      const s = markSetupSkipped(freshState(), 12345);
+      expect(s.skippedAt).toBe(12345);
+      expect(s.lastUpdatedAt).toBe(12345);
+    });
+
+    it("hasUserOptedOut is false on a brand-new state", () => {
+      expect(hasUserOptedOut(freshState())).toBe(false);
+    });
+
+    it("hasUserOptedOut is true after markSetupSkipped", () => {
+      expect(hasUserOptedOut(markSetupSkipped(freshState()))).toBe(true);
+    });
+
+    it("hasUserOptedOut is true once any step is completed", () => {
+      const s = markCompleted(freshState(), "welcome");
+      expect(hasUserOptedOut(s)).toBe(true);
+    });
+
+    it("skippedAt round-trips through save / load", () => {
+      const s = markSetupSkipped(freshState(), 999);
+      saveSetupState(s, statePath);
+      const loaded = loadSetupState(statePath);
+      expect(loaded.skippedAt).toBe(999);
+      expect(hasUserOptedOut(loaded)).toBe(true);
+    });
+
+    it("a state file written by an older Foreman without skippedAt still loads", () => {
+      writeFileSync(
+        statePath,
+        JSON.stringify({
+          version: 1,
+          completed: [],
+          startedAt: 1,
+          lastUpdatedAt: 1,
+        }),
+      );
+      const loaded = loadSetupState(statePath);
+      expect(loaded.skippedAt).toBeUndefined();
+      expect(hasUserOptedOut(loaded)).toBe(false);
     });
   });
 
