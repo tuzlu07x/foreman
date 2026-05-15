@@ -38,6 +38,7 @@ import {
 } from "../core/registry-catalog.js";
 import { runDoctor, type DoctorReport } from "../core/doctor.js";
 import { applyForemanSoul } from "../core/foreman-soul.js";
+import { useLayout } from "./hooks.js";
 import { osc8 } from "./osc8.js";
 import { RegistryService } from "../core/registry.js";
 import { SecretStore } from "../core/secret-store.js";
@@ -53,6 +54,43 @@ import {
 import { theme } from "./theme.js";
 
 const DEFAULT_AGENTS = ["hermes", "claude-code"];
+
+export interface WelcomeStep {
+  number: number;
+  name: string;
+  estimateMinutes: number;
+  optional?: boolean;
+}
+
+// Step preview rendered on the Welcome screen. Names must line up with
+// the actual step labels in the rest of the wizard so the user's mental
+// model from this screen matches what they see in Steps 1–4.
+export const WELCOME_STEPS: WelcomeStep[] = [
+  { number: 1, name: "LLM Providers", estimateMinutes: 2 },
+  { number: 2, name: "Agents", estimateMinutes: 2 },
+  { number: 3, name: "Services", estimateMinutes: 1, optional: true },
+  { number: 4, name: "Install + Verify", estimateMinutes: 3 },
+];
+
+export function totalEstimatedMinutes(
+  steps: readonly WelcomeStep[] = WELCOME_STEPS,
+): number {
+  return steps.reduce((sum, s) => sum + s.estimateMinutes, 0);
+}
+
+// Tiny ASCII mascot for the Welcome screen — kept small enough to fit a
+// 22-col left column without dominating the layout. Rendered only on
+// terminals wide enough for the side-by-side layout (>= 80 cols).
+const WELCOME_MASCOT = [
+  "   ___[F]___   ",
+  "  /         \\  ",
+  " |__/ o o \\__| ",
+  "    | \\_/ |    ",
+  "   /|_____|\\   ",
+  "  / |==VST=| \\ ",
+  " /__|=====|__\\ ",
+  "    |_____|    ",
+];
 
 export interface WizardServices {
   db: ForemanDb;
@@ -353,6 +391,7 @@ export function SetupWizard({
 }: SetupWizardProps): JSX.Element {
   const { exit } = useApp();
   const [state, setState] = useState<SetupState>(initialState);
+  const welcomeLayout = useLayout();
   const currentStep: Step = useMemo(() => {
     for (const s of [
       "welcome",
@@ -502,8 +541,21 @@ export function SetupWizard({
       return;
     }
 
+    if (currentStep === "welcome") {
+      if (key.return) {
+        advance("welcome");
+        return;
+      }
+      if (input === "q") {
+        exit();
+        return;
+      }
+      // Esc on welcome: defer to the user. We don't auto-exit because the
+      // user might be exploring; a deliberate `q` is the affordance.
+      return;
+    }
+
     if (!key.escape) return;
-    if (currentStep === "welcome") return;
     if (currentStep === "providers") {
       if (providersPhase === "values" || providersPhase === "summary") {
         setProvidersPhase("picker");
@@ -548,24 +600,53 @@ export function SetupWizard({
 
   // ---------------- Welcome ----------------
   if (currentStep === "welcome") {
-    return (
-      <Box flexDirection="column" gap={1} paddingY={1}>
+    const total = totalEstimatedMinutes();
+    const stepList = (
+      <Box flexDirection="column">
         <Text bold color={theme.accent.primary}>
-          Foreman setup — 5 minutes to a working multi-agent workspace
+          Welcome to Foreman
         </Text>
         <Text color={theme.fg.muted}>
-          We'll add API keys to the encrypted secret store, install the agents
-          you want to wire up, inject the foreman MCP block into each agent's
-          config, and review the safe-default policy.
+          Foreman is the single pane of glass for your AI agent setup.
         </Text>
-        <Text>Continue? (y/n)</Text>
-        <ConfirmInput
-          onConfirm={() => advance("welcome")}
-          onCancel={() => exit()}
-        />
-        <Text color={theme.fg.muted}>
-          [y] continue · [n] quit
-        </Text>
+        <Box marginTop={1} flexDirection="column">
+          <Text color={theme.fg.default}>
+            We'll wire this up in {WELCOME_STEPS.length} steps:
+          </Text>
+          {WELCOME_STEPS.map((s) => (
+            <Text key={s.number} color={theme.fg.muted}>
+              {"  "}
+              {s.number}. {s.name.padEnd(18, " ")}~{s.estimateMinutes} min
+              {s.optional ? "  (optional)" : ""}
+            </Text>
+          ))}
+          <Text color={theme.fg.muted}>
+            {"  "}Total time: about {total} minutes.
+          </Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text color={theme.fg.muted}>
+            Quit any time with Ctrl-C and resume with `foreman setup --resume`.
+          </Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text>[Enter] Start setup     [q] Quit</Text>
+        </Box>
+      </Box>
+    );
+    if (welcomeLayout === "narrow") {
+      return <Box paddingY={1}>{stepList}</Box>;
+    }
+    return (
+      <Box paddingY={1}>
+        <Box flexDirection="column" marginRight={2}>
+          {WELCOME_MASCOT.map((row, i) => (
+            <Text key={i} color={theme.accent.primary}>
+              {row}
+            </Text>
+          ))}
+        </Box>
+        {stepList}
       </Box>
     );
   }
