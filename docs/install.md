@@ -207,7 +207,7 @@ foreman agent list
 ### Drop the dummy keys, paste real ones
 ```bash
 foreman secrets rotate anthropic-key            # interactive; paste new value
-foreman secrets show anthropic-key --yes-i-want-to-see-it
+foreman secrets show anthropic-key --reveal
 ```
 
 ### Look at Foreman's identity persona

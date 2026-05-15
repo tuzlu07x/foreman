@@ -16,6 +16,7 @@ interface AddOptions {
 }
 
 interface ShowOptions {
+  reveal?: boolean;
   yesIWantToSeeIt?: boolean;
   json?: boolean;
 }
@@ -165,18 +166,22 @@ secretsCommand
 
 secretsCommand
   .command("show <name>")
-  .description("Print a secret value (requires --yes-i-want-to-see-it)")
+  .description("Print a secret value (requires --reveal)")
+  .option(
+    "-r, --reveal",
+    "confirm you really want to print the value to your terminal",
+  )
   .option(
     "--yes-i-want-to-see-it",
-    "confirm you really want to print the value to your terminal",
+    "deprecated alias for --reveal (kept for back-compat)",
   )
   .option("--json", "output JSON")
   .action((name: string, options: ShowOptions) => {
     const store = getStore();
-    if (!options.yesIWantToSeeIt) {
+    if (!options.reveal && !options.yesIWantToSeeIt) {
       console.error(
         red("error: ") +
-          "refusing to print without --yes-i-want-to-see-it (guards typo'd commands)",
+          "refusing to print without --reveal (guards typo'd commands)",
       );
       closeDb();
       process.exit(1);
