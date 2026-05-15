@@ -52,6 +52,7 @@ export function AgentsPage({
         <Text color={theme.fg.muted}>
           {rows.length} registered ·{" "}
           {rows.filter((r) => r.status === "active").length} active ·{" "}
+          {rows.filter((r) => r.status === "disabled").length} disabled ·{" "}
           {rows.filter((r) => r.status === "blocked").length} blocked
         </Text>
       </Box>
@@ -83,8 +84,8 @@ export function AgentsPage({
         <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>
       </Box>
       <Text color={theme.fg.muted}>
-        [↑↓] move · [Enter] expand · [b] block/unblock · [r] regen-key ·
-        [d] remove · [Esc] back
+        [↑↓] move · [Enter] expand · [d] disable · [e] enable · [b]
+        block/unblock · [r] remove · [R] regen-key · [Esc] back
       </Text>
     </Box>
   );
@@ -101,12 +102,19 @@ function AgentRow({
 }): JSX.Element {
   const isActive = agent.status === "active";
   const isBlocked = agent.status === "blocked";
+  const isDisabled = agent.status === "disabled";
   const dotColor = isBlocked
     ? theme.accent.danger
+    : isDisabled
+      ? theme.fg.muted
+      : isActive
+        ? theme.accent.success
+        : theme.fg.muted;
+  const dot = isBlocked
+    ? theme.symbols.cross
     : isActive
-      ? theme.accent.success
-      : theme.fg.muted;
-  const dot = isActive ? theme.symbols.activeDot : theme.symbols.idleDot;
+      ? theme.symbols.activeDot
+      : theme.symbols.idleDot;
   const registryId =
     typeof agent.metadata?.registryId === "string"
       ? agent.metadata.registryId
@@ -121,10 +129,16 @@ function AgentRow({
           {selected ? "▸ " : "  "}
         </Text>
         <Text color={dotColor}>{dot}</Text>{" "}
-        <Text color={theme.accent.primary}>{agent.id}</Text>{" "}
+        <Text
+          color={isDisabled ? theme.fg.muted : theme.accent.primary}
+          dimColor={isDisabled}
+        >
+          {agent.id}
+        </Text>{" "}
         <Text color={theme.fg.muted}>
           ({agent.displayName}) · {agent.transport}
           {isBlocked ? " · blocked" : ""}
+          {isDisabled ? " · disabled" : ""}
           {" · last "}
           {lastSeen}
         </Text>

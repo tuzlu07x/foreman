@@ -61,9 +61,11 @@ export function HelpOverlay(): JSX.Element {
           title="Agents page"
           rows={[
             ["↑ ↓ / Enter", "select / expand row"],
-            ["b", "block / unblock selected agent"],
-            ["r", "regenerate Ed25519 keypair (shown once)"],
-            ["d", "remove (hard delete)"],
+            ["d", "disable (pause — config preserved)"],
+            ["e", "enable (resume from disabled)"],
+            ["b", "block / unblock (malicious flag)"],
+            ["r", "remove (hard delete + uninstall path)"],
+            ["R", "regenerate Ed25519 keypair (shown once)"],
           ]}
         />
         <Section
