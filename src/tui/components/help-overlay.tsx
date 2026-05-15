@@ -74,8 +74,7 @@ export function HelpOverlay(): JSX.Element {
           title="Approval modal"
           rows={[
             ["a / d", "allow once / deny"],
-            ["A / D", "always allow / always deny"],
-            ["r", "remember rule (allow)"],
+            ["A / D", "always allow / always deny (remember as rule)"],
             ["i", "inspect details"],
           ]}
         />

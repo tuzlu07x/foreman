@@ -998,8 +998,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "d") onResolveApproval({ decision: "denied" }, "user");
       else if (input === "D")
         onResolveApproval({ decision: "denied", remember: "deny" }, "user");
-      else if (input === "r")
-        onResolveApproval({ decision: "allowed", remember: "allow" }, "user");
       else if (input === "i") setInspectOpen(true);
       return;
     }
