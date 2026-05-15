@@ -4,6 +4,7 @@ import {
   MultiSelect,
   PasswordInput,
   StatusMessage,
+  TextInput,
 } from "@inkjs/ui";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -25,8 +26,10 @@ import {
 import { buildMcpSnippet } from "../core/agent-mcp-snippet.js";
 import {
   findAgent,
+  loadActiveProviders,
   loadActiveRegistry,
   type AgentEntry,
+  type ProviderEntry,
 } from "../core/registry-catalog.js";
 import { applyForemanSoul } from "../core/foreman-soul.js";
 import { RegistryService } from "../core/registry.js";
@@ -41,46 +44,6 @@ import {
   type Step,
 } from "./setup-state.js";
 import { theme } from "./theme.js";
-
-// Each secret entry carries a help URL so the wizard can tell the user where
-// to grab the key from. Add new entries here when a new partner integration
-// requires its own credential.
-const COMMON_SECRETS = [
-  {
-    value: "anthropic-key",
-    label: "Anthropic API key",
-    helpUrl: "https://console.anthropic.com/settings/keys",
-  },
-  {
-    value: "openai-key",
-    label: "OpenAI API key",
-    helpUrl: "https://platform.openai.com/api-keys",
-  },
-  {
-    value: "gemini-api-key",
-    label: "Google Gemini API key",
-    helpUrl: "https://aistudio.google.com/app/apikey",
-  },
-  {
-    value: "telegram-bot-token",
-    label: "Telegram bot token",
-    helpUrl: "https://t.me/BotFather",
-  },
-  {
-    value: "discord-bot-token",
-    label: "Discord bot token",
-    helpUrl: "https://discord.com/developers/applications",
-  },
-];
-
-// Pre-checked secrets on fresh install — the three any new user is most likely
-// to want. They can Space-toggle off the ones they don't need; pressing Enter
-// on the default lands them straight on the PasswordInput for each.
-const DEFAULT_SECRETS = [
-  "anthropic-key",
-  "openai-key",
-  "telegram-bot-token",
-];
 
 const DEFAULT_AGENTS = ["hermes", "claude-code"];
 
@@ -97,37 +60,73 @@ export interface SetupWizardProps {
   services: WizardServices;
 }
 
-// Three-phase state machine for the Secrets step. Replaces the old single
-// `secretsDone` flag — `secretsDone` made the picker and value-entry blocks
-// overlap (both gated on `!secretsDone`), so the picker's early return made the
-// value-entry block unreachable (#151).
-export type SecretsPhase = "picker" | "values" | "summary";
+export type ProvidersPhase = "picker" | "values" | "summary";
 
-export interface SecretsPickerSubmitResult {
-  nextPhase: SecretsPhase;
+export interface ProvidersPickerSubmitResult {
+  nextPhase: ProvidersPhase;
   selected: string[];
 }
 
-export function applySecretsPickerSubmit(
+export function applyProvidersPickerSubmit(
   values: string[],
-): SecretsPickerSubmitResult {
+): ProvidersPickerSubmitResult {
   if (values.length === 0) {
     return { nextPhase: "summary", selected: [] };
   }
   return { nextPhase: "values", selected: values };
 }
 
-export interface SecretsValueSubmitInput {
-  name: string;
-  value: string;
-  currentIdx: number;
-  totalSelected: number;
+export type ProviderPromptKind = "endpoint" | "key";
+
+export interface ProviderPrompt {
+  providerId: string;
+  kind: ProviderPromptKind;
 }
 
-export interface SecretsValueSubmitResult {
+// Flattens (provider × required-fields) into the ordered list of input
+// screens the wizard will walk through. Anthropic/OpenAI/Gemini contribute
+// a single "key" prompt; Ollama contributes a single "endpoint" prompt;
+// the Custom OpenAI-compatible provider contributes endpoint THEN key.
+export function buildProviderPromptList(
+  providers: ProviderEntry[],
+  selectedIds: string[],
+): ProviderPrompt[] {
+  const prompts: ProviderPrompt[] = [];
+  for (const id of selectedIds) {
+    const p = providers.find((x) => x.id === id);
+    if (!p) continue;
+    if (p.endpoint_required) prompts.push({ providerId: id, kind: "endpoint" });
+    if (p.secret_name) prompts.push({ providerId: id, kind: "key" });
+  }
+  return prompts;
+}
+
+export function storageNameForPrompt(
+  prompt: ProviderPrompt,
+  provider: ProviderEntry,
+): string {
+  if (prompt.kind === "key") {
+    if (!provider.secret_name) {
+      throw new Error(
+        `provider "${provider.id}" has no secret_name but kind === "key"`,
+      );
+    }
+    return provider.secret_name;
+  }
+  return `${provider.id}-endpoint`;
+}
+
+export interface ProviderValueSubmitInput {
+  prompt: ProviderPrompt;
+  value: string;
+  currentIdx: number;
+  totalPrompts: number;
+}
+
+export interface ProviderValueSubmitResult {
   shouldSave: boolean;
   warning: string | null;
-  nextPhase: SecretsPhase;
+  nextPhase: ProvidersPhase;
   nextIdx: number;
 }
 
@@ -161,14 +160,66 @@ export function computeAgentDiff(
   return { toAdd, toRemove };
 }
 
-export function applySecretsValueSubmit(
-  input: SecretsValueSubmitInput,
-): SecretsValueSubmitResult {
-  const isLast = input.currentIdx + 1 >= input.totalSelected;
+// Side-effecting glue between the pure phase reducer and React state +
+// SecretStore. Kept module-local (not exported) because the call sites are
+// only the two TextInput / PasswordInput onSubmits that share this logic.
+function handleProviderValueSubmit(
+  prompt: ProviderPrompt,
+  provider: ProviderEntry,
+  storageName: string,
+  value: string,
+  services: WizardServices,
+  totalPrompts: number,
+  currentIdx: number,
+  setSaved: (fn: (prev: string[]) => string[]) => void,
+  setSkipped: (fn: (prev: string[]) => string[]) => void,
+  setWarning: (w: string | null) => void,
+  setIdx: (n: number) => void,
+  setPhase: (p: ProvidersPhase) => void,
+): void {
+  const result = applyProviderValueSubmit({
+    prompt,
+    value,
+    currentIdx,
+    totalPrompts,
+  });
+  if (result.shouldSave) {
+    try {
+      if (!services.secretStore.exists(storageName)) {
+        services.secretStore.add(storageName, value);
+      } else {
+        services.secretStore.rotate(storageName, value);
+      }
+      setSaved((prev) => [...prev, storageName]);
+    } catch (err) {
+      setWarning(
+        `failed to store ${storageName}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+  } else {
+    setSkipped((prev) => [...prev, storageName]);
+  }
+  setWarning(result.warning);
+  setIdx(result.nextIdx);
+  setPhase(result.nextPhase);
+  // provider is unused in this body but kept on the signature for the
+  // benefit of future per-provider hooks (event emission, telemetry).
+  void provider;
+}
+
+export function applyProviderValueSubmit(
+  input: ProviderValueSubmitInput,
+): ProviderValueSubmitResult {
+  const isLast = input.currentIdx + 1 >= input.totalPrompts;
   if (input.value.length === 0) {
+    const label =
+      input.prompt.kind === "endpoint"
+        ? `${input.prompt.providerId} endpoint`
+        : `${input.prompt.providerId} key`;
     return {
       shouldSave: false,
-      warning: `Skipped ${input.name} — empty value. Add it later with 'foreman secrets add ${input.name}'.`,
+      warning: `Skipped ${label} — empty value. Add it later from the LLM Providers page.`,
       nextPhase: isLast ? "summary" : "values",
       nextIdx: input.currentIdx + 1,
     };
@@ -190,7 +241,7 @@ export function SetupWizard({
   const currentStep: Step = useMemo(() => {
     for (const s of [
       "welcome",
-      "secrets",
+      "providers",
       "agents",
       "install",
       "policy",
@@ -217,12 +268,18 @@ export function SetupWizard({
     });
   };
 
-  const [secretsSelected, setSecretsSelected] = useState<string[]>([]);
-  const [secretIdx, setSecretIdx] = useState(0);
-  const [secretsPhase, setSecretsPhase] = useState<SecretsPhase>("picker");
-  const [secretsSaved, setSecretsSaved] = useState<string[]>([]);
-  const [secretsSkipped, setSecretsSkipped] = useState<string[]>([]);
-  const [secretsWarning, setSecretsWarning] = useState<string | null>(null);
+  // Memoize the catalog so MultiSelect doesn't re-mount and reset toggles.
+  const providerCatalog = useMemo(
+    () => loadActiveProviders().doc.providers,
+    [],
+  );
+  const [providersSelected, setProvidersSelected] = useState<string[]>([]);
+  const [providerPrompts, setProviderPrompts] = useState<ProviderPrompt[]>([]);
+  const [providerIdx, setProviderIdx] = useState(0);
+  const [providersPhase, setProvidersPhase] = useState<ProvidersPhase>("picker");
+  const [providersSaved, setProvidersSaved] = useState<string[]>([]);
+  const [providersSkipped, setProvidersSkipped] = useState<string[]>([]);
+  const [providersWarning, setProvidersWarning] = useState<string | null>(null);
 
   // Agents already registered in this Foreman home — drive the wizard's
   // diff logic: still-checked = no-op or re-verify; newly-checked = install;
@@ -251,14 +308,13 @@ export function SetupWizard({
   useInput((_input, key) => {
     if (!key.escape) return;
     if (currentStep === "welcome") return;
-    if (currentStep === "secrets") {
-      if (secretsPhase === "values" || secretsPhase === "summary") {
-        setSecretsPhase("picker");
-        setSecretIdx(0);
-        setSecretsWarning(null);
+    if (currentStep === "providers") {
+      if (providersPhase === "values" || providersPhase === "summary") {
+        setProvidersPhase("picker");
+        setProviderIdx(0);
+        setProvidersWarning(null);
         return;
       }
-      // picker → welcome
       uncomplete("welcome");
       return;
     }
@@ -268,15 +324,12 @@ export function SetupWizard({
         return;
       }
       if (agentsPhase === "picker") {
-        // back to secrets summary
-        uncomplete("secrets");
-        setSecretsPhase("summary");
+        uncomplete("providers");
+        setProvidersPhase("summary");
         return;
       }
-      // agentsPhase === "running" — no-op (install is running)
       return;
     }
-    // install / policy / done: don't allow back-nav after install ran.
   });
 
   // ---------------- Welcome ----------------
@@ -303,34 +356,30 @@ export function SetupWizard({
     );
   }
 
-  // ---------------- Secrets — picker ----------------
-  if (currentStep === "secrets" && secretsPhase === "picker") {
-    const presentSecrets = DEFAULT_SECRETS.filter((s) =>
-      services.secretStore.exists(s),
-    );
-    const defaults = DEFAULT_SECRETS.filter(
-      (s) => !presentSecrets.includes(s),
-    );
+  // ---------------- LLM Providers — picker ----------------
+  if (currentStep === "providers" && providersPhase === "picker") {
+    const options = providerCatalog.map((p) => ({
+      value: p.id,
+      label: `${p.name} — ${p.description}`,
+    }));
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <Text bold>Step 1 / 4 — API keys (selection)</Text>
+        <Text bold>Step 1 / 4 — LLM Providers (selection)</Text>
         <Text color={theme.fg.muted}>
-          ↑↓ move · <Text bold>Space toggle</Text> · Enter confirm. Foreman
-          encrypts these on disk and hands them to agents on demand. Toggle off
-          any you don't have yet; you can always come back via
-          'foreman secrets add &lt;name&gt;'.
-        </Text>
-        <Text color={theme.accent.primary}>
-          Pre-checked: {defaults.length > 0 ? defaults.join(", ") : "(none — all already stored)"}
+          ↑↓ move · <Text bold>Space toggle</Text> · Enter confirm. Pick the
+          LLM providers you already have access to. Each one stores its key
+          (and endpoint, if applicable) encrypted on disk.
         </Text>
         <MultiSelect
-          options={COMMON_SECRETS}
-          defaultValue={defaults}
+          options={options}
           onSubmit={(values) => {
-            const result = applySecretsPickerSubmit(values);
-            setSecretsSelected(result.selected);
-            setSecretIdx(0);
-            setSecretsPhase(result.nextPhase);
+            const result = applyProvidersPickerSubmit(values);
+            setProvidersSelected(result.selected);
+            setProviderPrompts(
+              buildProviderPromptList(providerCatalog, result.selected),
+            );
+            setProviderIdx(0);
+            setProvidersPhase(result.nextPhase);
           }}
         />
         <Text color={theme.fg.muted}>
@@ -340,70 +389,107 @@ export function SetupWizard({
     );
   }
 
-  // ---------------- Secrets — value prompts ----------------
-  if (currentStep === "secrets" && secretsPhase === "values") {
-    const name = secretsSelected[secretIdx];
-    if (!name) {
-      setSecretsPhase("summary");
+  // ---------------- LLM Providers — value prompts ----------------
+  if (currentStep === "providers" && providersPhase === "values") {
+    const prompt = providerPrompts[providerIdx];
+    if (!prompt) {
+      setProvidersPhase("summary");
       return <Text>…</Text>;
     }
-    const helpUrl = COMMON_SECRETS.find((s) => s.value === name)?.helpUrl;
-    const progress = `(${secretIdx + 1}/${secretsSelected.length})`;
+    const provider = providerCatalog.find((p) => p.id === prompt.providerId);
+    if (!provider) {
+      setProvidersPhase("summary");
+      return <Text>…</Text>;
+    }
+    const storageName = storageNameForPrompt(prompt, provider);
+    const isEndpoint = prompt.kind === "endpoint";
+    const progress = `(${providerIdx + 1}/${providerPrompts.length})`;
+    const fieldLabel = isEndpoint
+      ? `${provider.name} endpoint`
+      : `${provider.name} API key`;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <Text bold>
-          Step 1 / 4 — API keys (value {secretIdx + 1} of{" "}
-          {secretsSelected.length})
+          Step 1 / 4 — LLM Providers (value {providerIdx + 1} of{" "}
+          {providerPrompts.length})
         </Text>
         <Text>
           {theme.symbols.bullet} Value for{" "}
           <Text bold color={theme.accent.primary}>
-            {name}
+            {fieldLabel}
           </Text>{" "}
           <Text color={theme.fg.muted}>{progress}</Text>
         </Text>
-        {helpUrl && (
+        {provider.where_to_get && (
           <Text color={theme.fg.muted}>
-            Get yours at: <Text color={theme.accent.primary}>{helpUrl}</Text>
+            Get yours at:{" "}
+            <Text color={theme.accent.primary}>{provider.where_to_get}</Text>
           </Text>
         )}
-        <Text color={theme.fg.muted}>
-          (paste the value below — Enter to save · Enter on empty input to skip)
-        </Text>
-        {secretsWarning && (
-          <Text color={theme.accent.warning}>⚠ {secretsWarning}</Text>
+        {provider.format_hint && (
+          <Text color={theme.fg.muted}>
+            Expected format:{" "}
+            <Text color={theme.accent.primary}>{provider.format_hint}</Text>
+          </Text>
         )}
-        <PasswordInput
-          placeholder="…"
-          onSubmit={(value) => {
-            const result = applySecretsValueSubmit({
-              name,
-              value,
-              currentIdx: secretIdx,
-              totalSelected: secretsSelected.length,
-            });
-            if (result.shouldSave) {
-              try {
-                if (!services.secretStore.exists(name)) {
-                  services.secretStore.add(name, value);
-                } else {
-                  services.secretStore.rotate(name, value);
-                }
-                setSecretsSaved((prev) => [...prev, name]);
-              } catch (err) {
-                setSecretsWarning(
-                  `failed to store ${name}: ${err instanceof Error ? err.message : String(err)}`,
-                );
-                return;
-              }
-            } else {
-              setSecretsSkipped((prev) => [...prev, name]);
-            }
-            setSecretsWarning(result.warning);
-            setSecretIdx(result.nextIdx);
-            setSecretsPhase(result.nextPhase);
-          }}
-        />
+        {provider.instructions.length > 0 && (
+          <Box flexDirection="column">
+            {provider.instructions.map((line, i) => (
+              <Text key={i} color={theme.fg.muted}>
+                {"  "}
+                {i + 1}. {line}
+              </Text>
+            ))}
+          </Box>
+        )}
+        <Text color={theme.fg.muted}>
+          (Enter to save · Enter on empty input to skip)
+        </Text>
+        {providersWarning && (
+          <Text color={theme.accent.warning}>⚠ {providersWarning}</Text>
+        )}
+        {isEndpoint ? (
+          <TextInput
+            defaultValue={provider.endpoint_default ?? ""}
+            placeholder={provider.endpoint_default ?? "endpoint URL"}
+            onSubmit={(value) => {
+              handleProviderValueSubmit(
+                prompt,
+                provider,
+                storageName,
+                value,
+                services,
+                providerPrompts.length,
+                providerIdx,
+                setProvidersSaved,
+                setProvidersSkipped,
+                setProvidersWarning,
+                setProviderIdx,
+                setProvidersPhase,
+              );
+            }}
+          />
+        ) : (
+          <PasswordInput
+            placeholder="…"
+            onSubmit={(value) => {
+              handleProviderValueSubmit(
+                prompt,
+                provider,
+                storageName,
+                value,
+                services,
+                providerPrompts.length,
+                providerIdx,
+                setProvidersSaved,
+                setProvidersSkipped,
+                setProvidersWarning,
+                setProviderIdx,
+                setProvidersPhase,
+              );
+            }}
+          />
+        )}
         <Text color={theme.fg.muted}>
           [Enter] save · [Esc] back to selection
         </Text>
@@ -411,19 +497,20 @@ export function SetupWizard({
     );
   }
 
-  // ---------------- Secrets — summary ----------------
-  if (currentStep === "secrets" && secretsPhase === "summary") {
-    const savedCount = secretsSaved.length;
-    const skippedCount = secretsSkipped.length;
+  // ---------------- LLM Providers — summary ----------------
+  if (currentStep === "providers" && providersPhase === "summary") {
+    const savedCount = providersSaved.length;
+    const skippedCount = providersSkipped.length;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <Text bold>Step 1 / 4 — API keys (summary)</Text>
+        <Text bold>Step 1 / 4 — LLM Providers (summary)</Text>
         {savedCount > 0 ? (
           <Box flexDirection="column">
             <Text color={theme.accent.success}>
-              ✓ Saved {savedCount} secret{savedCount === 1 ? "" : "s"}:
+              ✓ Saved {savedCount} provider value
+              {savedCount === 1 ? "" : "s"}:
             </Text>
-            {secretsSaved.map((name) => (
+            {providersSaved.map((name) => (
               <Text key={name} color={theme.fg.muted}>
                 {"  "}• {name}
               </Text>
@@ -431,8 +518,8 @@ export function SetupWizard({
           </Box>
         ) : (
           <Text color={theme.fg.muted}>
-            (no secrets stored — you can add them later with 'foreman secrets
-            add &lt;name&gt;')
+            (no providers configured — you can add them later from the LLM
+            Providers page)
           </Text>
         )}
         {skippedCount > 0 && (
@@ -440,7 +527,7 @@ export function SetupWizard({
             <Text color={theme.accent.warning}>
               ⚠ Skipped {skippedCount} (empty value):
             </Text>
-            {secretsSkipped.map((name) => (
+            {providersSkipped.map((name) => (
               <Text key={name} color={theme.fg.muted}>
                 {"  "}• {name}
               </Text>
@@ -449,8 +536,8 @@ export function SetupWizard({
         )}
         <Text>Continue to agents? (y/n)</Text>
         <ConfirmInput
-          onConfirm={() => advance("secrets")}
-          onCancel={() => advance("secrets")}
+          onConfirm={() => advance("providers")}
+          onCancel={() => advance("providers")}
         />
         <Text color={theme.fg.muted}>
           [y/n] continue · [Esc] back to selection
