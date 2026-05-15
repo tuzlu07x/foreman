@@ -20,6 +20,10 @@ export interface AgentManifest {
   metadata?: Record<string, unknown>;
   /** Optional caller-provided public key. If omitted, Foreman generates a keypair. */
   publicKey?: Buffer;
+  /** LLM provider id for multi-provider agents. Single-provider agents leave NULL. */
+  llmProvider?: string;
+  /** Free-text describing what the agent is for; surfaces in audit + approval. */
+  responsibilityNote?: string;
 }
 
 export interface RegisteredAgent {
@@ -31,6 +35,8 @@ export interface RegisteredAgent {
   registeredAt: number;
   lastSeenAt: number | null;
   metadata: Record<string, unknown> | null;
+  llmProvider: string | null;
+  responsibilityNote: string | null;
 }
 
 export interface RegisterResult {
@@ -73,6 +79,8 @@ export class RegistryService {
         lastSeenAt: null,
         status: "active",
         metadata: manifest.metadata ? JSON.stringify(manifest.metadata) : null,
+        llmProvider: manifest.llmProvider ?? null,
+        responsibilityNote: manifest.responsibilityNote ?? null,
       })
       .run();
     const agent = this.requireAgent(manifest.id);
@@ -192,6 +200,38 @@ export class RegistryService {
     return { privateKey: kp.privateKey, publicKey: kp.publicKey };
   }
 
+  setLlmProvider(agentId: string, providerId: string | null): void {
+    const existing = this.get(agentId);
+    if (!existing) throw new AgentNotFoundError(agentId);
+    this.db
+      .update(agents)
+      .set({ llmProvider: providerId })
+      .where(eq(agents.id, agentId))
+      .run();
+    this.bus.emit("agent:config-updated", {
+      agentId,
+      llmProvider: providerId,
+      responsibilityNote: existing.responsibilityNote,
+      updatedAt: Date.now(),
+    });
+  }
+
+  setResponsibilityNote(agentId: string, note: string | null): void {
+    const existing = this.get(agentId);
+    if (!existing) throw new AgentNotFoundError(agentId);
+    this.db
+      .update(agents)
+      .set({ responsibilityNote: note })
+      .where(eq(agents.id, agentId))
+      .run();
+    this.bus.emit("agent:config-updated", {
+      agentId,
+      llmProvider: existing.llmProvider,
+      responsibilityNote: note,
+      updatedAt: Date.now(),
+    });
+  }
+
   private requireAgent(agentId: string): RegisteredAgent {
     const agent = this.get(agentId);
     if (!agent) throw new AgentNotFoundError(agentId);
@@ -211,5 +251,7 @@ function toRegisteredAgent(row: typeof agents.$inferSelect): RegisteredAgent {
     metadata: row.metadata
       ? (JSON.parse(row.metadata) as Record<string, unknown>)
       : null,
+    llmProvider: row.llmProvider,
+    responsibilityNote: row.responsibilityNote,
   };
 }
