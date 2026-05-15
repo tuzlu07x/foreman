@@ -1,5 +1,10 @@
+import { Select, TextInput } from "@inkjs/ui";
 import { Box, Text } from "ink";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  loadActiveProviders,
+  type ProviderEntry,
+} from "../../core/registry-catalog.js";
 import type { RegisteredAgent } from "../../core/registry.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { formatTime } from "../format.js";
@@ -9,15 +14,24 @@ export interface AgentsPageProps {
   selectedIdx: number;
   expanded: boolean;
   notice: string | null;
+  editMode?: "none" | "note" | "llm";
+  llmDraft?: string | null;
+  onLlmDraftChange?: (value: string) => void;
+  onNoteSubmit?: (value: string) => void;
 }
 
 export function AgentsPage({
   selectedIdx,
   expanded,
   notice,
+  editMode = "none",
+  llmDraft = null,
+  onLlmDraftChange,
+  onNoteSubmit,
 }: AgentsPageProps): JSX.Element {
   const { registry, bus } = useDashboardServices();
   const [rows, setRows] = useState<RegisteredAgent[]>(() => registry.listAll());
+  const providers = useMemo(() => loadActiveProviders().doc.providers, []);
 
   useEffect(() => {
     const refresh = (): void => setRows(registry.listAll());
@@ -25,12 +39,14 @@ export function AgentsPage({
     const offRemoved = bus.on("agent:removed", refresh);
     const offHeartbeat = bus.on("agent:heartbeat", refresh);
     const offRotated = bus.on("agent:key-rotated", refresh);
+    const offConfig = bus.on("agent:config-updated", refresh);
     const interval = setInterval(refresh, 2000);
     return () => {
       offRegistered();
       offRemoved();
       offHeartbeat();
       offRotated();
+      offConfig();
       clearInterval(interval);
     };
   }, [registry, bus]);
@@ -69,6 +85,11 @@ export function AgentsPage({
               agent={agent}
               selected={i === safeSelected}
               expanded={expanded && i === safeSelected}
+              providers={providers}
+              editMode={i === safeSelected ? editMode : "none"}
+              llmDraft={llmDraft}
+              onLlmDraftChange={onLlmDraftChange}
+              onNoteSubmit={onNoteSubmit}
             />
           ))
         )}
@@ -84,8 +105,9 @@ export function AgentsPage({
         <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>
       </Box>
       <Text color={theme.fg.muted}>
-        [↑↓] move · [Enter] expand · [d] disable · [e] enable · [b]
-        block/unblock · [r] remove · [R] regen-key · [Esc] back
+        [↑↓] move · [Enter] expand · [N] edit note · [L] change LLM · [d]
+        disable · [e] enable · [b] block/unblock · [r] remove · [R] regen-key
+        · [Esc] back
       </Text>
     </Box>
   );
@@ -95,10 +117,20 @@ function AgentRow({
   agent,
   selected,
   expanded,
+  providers,
+  editMode,
+  llmDraft,
+  onLlmDraftChange,
+  onNoteSubmit,
 }: {
   agent: RegisteredAgent;
   selected: boolean;
   expanded: boolean;
+  providers: ProviderEntry[];
+  editMode: "none" | "note" | "llm";
+  llmDraft: string | null;
+  onLlmDraftChange?: (value: string) => void;
+  onNoteSubmit?: (value: string) => void;
 }): JSX.Element {
   const isActive = agent.status === "active";
   const isBlocked = agent.status === "blocked";
@@ -165,6 +197,41 @@ function AgentRow({
           <Text color={theme.fg.muted}>
             mcp source key: --source {agent.id}
           </Text>
+          {editMode === "note" ? (
+            <Box flexDirection="column" marginTop={1}>
+              <Text color={theme.accent.warning}>
+                responsibility (Enter saves · empty clears · Esc cancels):
+              </Text>
+              <TextInput
+                defaultValue={agent.responsibilityNote ?? ""}
+                placeholder="e.g. Code review and refactoring"
+                onSubmit={(value) => onNoteSubmit?.(value)}
+              />
+            </Box>
+          ) : (
+            <Text color={theme.fg.muted}>
+              responsibility: {agent.responsibilityNote ?? "(unset)"}
+            </Text>
+          )}
+          {editMode === "llm" ? (
+            <Box flexDirection="column" marginTop={1}>
+              <Text color={theme.accent.warning}>
+                LLM provider (↑↓ to pick · Enter saves · Esc cancels):
+              </Text>
+              <Select
+                options={providers.map((p) => ({
+                  value: p.id,
+                  label: p.name,
+                }))}
+                defaultValue={llmDraft ?? agent.llmProvider ?? undefined}
+                onChange={(value) => onLlmDraftChange?.(value)}
+              />
+            </Box>
+          ) : (
+            <Text color={theme.fg.muted}>
+              llm provider: {agent.llmProvider ?? "(unset)"}
+            </Text>
+          )}
         </Box>
       )}
     </Box>

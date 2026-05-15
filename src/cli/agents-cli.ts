@@ -253,6 +253,14 @@ agentsCommand
       console.log(
         `  ${dim("registry:")}    ${registryId ?? dim("(custom / unknown)")}`,
       );
+      if (agent.llmProvider) {
+        console.log(`  ${dim("llm:")}         ${agent.llmProvider}`);
+      }
+      if (agent.responsibilityNote) {
+        console.log(
+          `  ${dim("note:")}        ${agent.responsibilityNote}`,
+        );
+      }
       if (registryEntry) {
         console.log("");
         console.log(bold("MCP snippet:"));
