@@ -43,15 +43,15 @@ import { launchEditor } from "./launch-editor.js";
 
 const APPROVAL_TIMEOUT_MS = 60_000;
 
-export type Page = "dashboard" | "logs" | "policy" | "sessions" | "chat";
 export type Page =
   | "dashboard"
   | "logs"
   | "policy"
   | "sessions"
-  | "settings";
-export type Page = "dashboard" | "logs" | "policy" | "sessions" | "secrets";
-export type Page = "dashboard" | "logs" | "policy" | "sessions" | "agents";
+  | "agents"
+  | "secrets"
+  | "settings"
+  | "chat";
 
 export interface AppProps {
   bootInfo: BootInfo;
@@ -69,10 +69,17 @@ export function App({ bootInfo, services }: AppProps): JSX.Element {
 function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const layout = useLayout();
   const { isRawModeSupported } = useStdin();
-  const { bus, mediator, sqlite, policy, policyPath, sessionManager, soulPath } =
-  const { bus, mediator, sqlite, policy, policyPath, sessionManager, secretStore } =
-  const { bus, mediator, sqlite, policy, policyPath, sessionManager, registry } =
-    useDashboardServices();
+  const {
+    bus,
+    mediator,
+    sqlite,
+    policy,
+    policyPath,
+    sessionManager,
+    soulPath,
+    secretStore,
+    registry,
+  } = useDashboardServices();
 
   const [page, setPage] = useState<Page>("dashboard");
   const [quitConfirm, setQuitConfirm] = useState(false);
@@ -655,10 +662,12 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           scrollback={chatScrollback}
           onSubmit={(raw) => void onChatSubmit(raw)}
           notice={chatNotice}
+        />
       ) : page === "settings" ? (
         <SettingsPage
           selectedIdx={settingsSelectedIdx}
           notice={settingsNotice}
+        />
       ) : page === "secrets" ? (
         <SecretsPage
           selectedIdx={secretsSelectedIdx}
@@ -668,6 +677,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           revealedValue={revealedSecret?.value ?? null}
           rotateMode={rotateMode}
           onSubmitRotate={onSubmitRotate}
+        />
       ) : page === "agents" ? (
         <AgentsPage
           selectedIdx={agentsSelectedIdx}
@@ -942,12 +952,10 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       return;
     }
     if (page === "chat") {
-      // While typing, only Esc reaches us — TextInput owns the rest.
       if (chatInputMode) {
         if (key.escape) setChatInputMode(false);
         return;
       }
-    if (page === "settings") {
       if (key.escape) {
         setPage("dashboard");
         return;
@@ -967,6 +975,13 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         return;
       }
       if (input === "q") exit();
+      return;
+    }
+    if (page === "settings") {
+      if (key.escape) {
+        setPage("dashboard");
+        return;
+      }
       if (key.upArrow) {
         setSettingsSelectedIdx(Math.max(0, settingsSelectedIdx - 1));
         return;
@@ -982,19 +997,16 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "P") setPage("policy");
       else if (input === "w") onWizardInstruction();
       else if (key.return) {
-        // Enter runs the selected row — letter is encoded in the row order.
         if (settingsSelectedIdx === 0) void onEditSoul();
         else if (settingsSelectedIdx === 1) void onEditPolicyFromSettings();
         else if (settingsSelectedIdx === 2) setPage("policy");
         else if (settingsSelectedIdx === 3) onWizardInstruction();
       } else if (input === "q") exit();
+      return;
+    }
     if (page === "secrets") {
-      // While in rotate-input mode the PasswordInput owns the keystrokes;
-      // we only consume Esc here to bail out of the rotate flow.
       if (rotateMode) {
-        if (key.escape) {
-          setRotateMode(null);
-        }
+        if (key.escape) setRotateMode(null);
         return;
       }
       if (key.escape) {
@@ -1012,6 +1024,9 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "v") onSecretReveal();
       else if (input === "r") onSecretRotate();
       else if (input === "d") onSecretRemove();
+      else if (input === "q") exit();
+      return;
+    }
     if (page === "agents") {
       if (key.escape) {
         setPage("dashboard");
