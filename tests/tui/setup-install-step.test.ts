@@ -177,4 +177,38 @@ describe("setup-wizard.runInstallStep diff logic", () => {
     expect(agent?.llmProvider).toBeNull();
     expect(agent?.responsibilityNote).toBeNull();
   });
+
+  it("returns an InstallStepSummary describing what happened", async () => {
+    const summary = await runInstallStep(
+      ["generic-mcp"],
+      [],
+      services(),
+      (line) => logs.push(line),
+    );
+    expect(summary.registered).toContain("generic-mcp");
+    expect(summary.failed).toEqual([]);
+    expect(summary.removed).toEqual([]);
+    // generic-mcp has no identity_path → skipped with a clear reason.
+    expect(summary.identityPushed).toEqual([]);
+    expect(summary.identitySkipped).toEqual([
+      { agentId: "generic-mcp", reason: "no identity_path in registry entry" },
+    ]);
+  });
+
+  it("records removed agents in the summary", async () => {
+    registry.register({
+      id: "generic-mcp",
+      displayName: "Generic MCP server",
+      transport: "stdio",
+      metadata: { registryId: "generic-mcp" },
+    });
+    const summary = await runInstallStep(
+      [],
+      ["generic-mcp"],
+      services(),
+      (line) => logs.push(line),
+    );
+    expect(summary.removed).toEqual(["generic-mcp"]);
+    expect(summary.registered).toEqual([]);
+  });
 });
