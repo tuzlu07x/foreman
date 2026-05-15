@@ -22,8 +22,17 @@ import { closeDb, getDb, getSqlite } from "../db/client.js";
 import { loadOrCreateMasterKey } from "../identity/keypair.js";
 import { App } from "../tui/app.js";
 import type { BootInfo } from "../tui/boot-info.js";
+import {
+  freshState,
+  loadSetupState,
+} from "../tui/setup-state.js";
+import { SetupWizard } from "../tui/setup-wizard.js";
+import { SecretStore } from "../core/secret-store.js";
+import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
+import { launchEditor } from "../tui/launch-editor.js";
 import { getForemanPaths } from "../utils/config.js";
-import { red } from "./colors.js";
+import { runInit } from "./init.js";
+import { bold, dim, green, orange, red } from "./colors.js";
 
 const APP_VERSION = "0.1.0";
 
@@ -213,15 +222,77 @@ export function startForeman(
   };
 }
 
+// Returns true when the user appears to be a first-time user: no foreman home
+// or no registered agents. Triggers the auto-onboarding flow.
+function looksLikeFreshInstall(): boolean {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.root) || !existsSync(paths.identityPath)) {
+    return true;
+  }
+  try {
+    const db = getDb();
+    const registry = new RegistryService(db, bus);
+    const count = registry.list().length;
+    closeDb();
+    return count === 0;
+  } catch {
+    closeDb();
+    return true;
+  }
+}
+
+async function runOnboardingWizard(): Promise<void> {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.root) || !existsSync(paths.identityPath)) {
+    console.log(
+      `${orange(bold("Foreman"))} ${dim("— first run, seeding home…")}`,
+    );
+    runInit({});
+    console.log(`${green("✓")} initialised at ${paths.root}\n`);
+  } else {
+    console.log(
+      `${orange(bold("Foreman"))} ${dim("— no agents yet, starting setup wizard…")}\n`,
+    );
+  }
+  const db = getDb();
+  const registry = new RegistryService(db, bus);
+  const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
+  const instance = render(
+    React.createElement(SetupWizard, {
+      initialState: loadSetupState() ?? freshState(),
+      services: {
+        db,
+        secretStore,
+        registry,
+        policyPath: paths.policyPath,
+        launchEditor,
+      },
+    }),
+    { exitOnCtrlC: false },
+  );
+  await instance.waitUntilExit();
+  closeDb();
+}
+
 export const startCommand = new Command("start")
   .description("Start the Foreman gateway with the Ink TUI")
-  .action(async () => {
+  .option(
+    "--no-onboarding",
+    "skip the auto setup wizard even when the foreman home is fresh",
+  )
+  .action(async (options: { onboarding?: boolean }) => {
+    if (options.onboarding !== false && looksLikeFreshInstall()) {
+      await runOnboardingWizard();
+    }
     let started: StartedForeman;
     try {
       started = startForeman();
     } catch (err) {
       if (err instanceof NotInitialisedError) {
-        console.error(red("error: ") + err.message);
+        console.error(
+          red("error: ") +
+            `${err.message} Tip: run 'foreman start' and the onboarding wizard will guide you, or 'foreman init' for a manual setup.`,
+        );
         process.exit(1);
       }
       throw err;
