@@ -285,8 +285,11 @@ export function checkAgentsRegistered(): CheckResult {
   try {
     const db = getDb();
     const registry = new RegistryService(db, new EventBus<ForemanEventMap>());
-    const count = registry.list().length;
-    if (count === 0) {
+    const allRows = registry.listAll();
+    const activeCount = allRows.filter((r) => r.status === "active").length;
+    const disabledCount = allRows.filter((r) => r.status === "disabled").length;
+    const blockedCount = allRows.filter((r) => r.status === "blocked").length;
+    if (allRows.length === 0) {
       return {
         name: "agents_registered",
         status: "warn",
@@ -295,10 +298,17 @@ export function checkAgentsRegistered(): CheckResult {
           "Add one with 'foreman agent add' or 'foreman registry list' to pick from the curated catalog.",
       };
     }
+    const detail = [
+      `${activeCount} active`,
+      disabledCount > 0 ? `${disabledCount} disabled` : null,
+      blockedCount > 0 ? `${blockedCount} blocked` : null,
+    ]
+      .filter((s): s is string => s !== null)
+      .join(", ");
     return {
       name: "agents_registered",
       status: "ok",
-      message: `${count} registered`,
+      message: `${allRows.length} registered (${detail})`,
     };
   } catch (err) {
     return {

@@ -10,7 +10,7 @@ import {
 } from "./event-bus.js";
 
 export type Transport = "stdio" | "ws" | "wrap";
-export type AgentStatus = "active" | "inactive" | "blocked";
+export type AgentStatus = "active" | "inactive" | "blocked" | "disabled";
 
 export interface AgentManifest {
   id: string;
@@ -103,7 +103,8 @@ export class RegistryService {
       .from(agents)
       .where(eq(agents.id, agentId))
       .get();
-    if (!row || row.status === "blocked") return false;
+    if (!row) return false;
+    if (row.status === "blocked" || row.status === "disabled") return false;
     try {
       return verify(message, signature, Buffer.from(row.publicKey));
     } catch {
@@ -115,7 +116,9 @@ export class RegistryService {
     const rows = this.db
       .select()
       .from(agents)
-      .where(ne(agents.status, "blocked"))
+      .where(
+        and(ne(agents.status, "blocked"), ne(agents.status, "disabled")),
+      )
       .all();
     return rows.map(toRegisteredAgent);
   }
@@ -162,6 +165,27 @@ export class RegistryService {
   }
 
   unblock(agentId: string): void {
+    const result = this.db
+      .update(agents)
+      .set({ status: "active" })
+      .where(eq(agents.id, agentId))
+      .run();
+    if (result.changes === 0) throw new AgentNotFoundError(agentId);
+  }
+
+  // Temporary pause — config + MCP wiring stay intact, but the mediator and
+  // auth path reject requests. Use enable() to resume. Distinct from block(),
+  // which is the "flagged as malicious" path.
+  disable(agentId: string): void {
+    const result = this.db
+      .update(agents)
+      .set({ status: "disabled" })
+      .where(eq(agents.id, agentId))
+      .run();
+    if (result.changes === 0) throw new AgentNotFoundError(agentId);
+  }
+
+  enable(agentId: string): void {
     const result = this.db
       .update(agents)
       .set({ status: "active" })
