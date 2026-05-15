@@ -195,6 +195,20 @@ describe("setup-wizard.runInstallStep diff logic", () => {
     ]);
   });
 
+  it("does not call onFailure on the happy path (no install command, register succeeds)", async () => {
+    const onFailure = vi.fn();
+    await runInstallStep(
+      ["generic-mcp"],
+      [],
+      services(),
+      (line) => logs.push(line),
+      {},
+      onFailure,
+    );
+    expect(onFailure).not.toHaveBeenCalled();
+    expect(registry.list().map((a) => a.id)).toContain("generic-mcp");
+  });
+
   it("records removed agents in the summary", async () => {
     registry.register({
       id: "generic-mcp",
