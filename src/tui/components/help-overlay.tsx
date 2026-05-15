@@ -19,6 +19,7 @@ export function HelpOverlay(): JSX.Element {
         <Section
           title="Navigation"
           rows={[
+            ["c", "chat / test console"],
             ["g", "settings page (identity, policy, wizard)"],
             ["k", "keys (secrets) page"],
             ["a", "agents page"],
@@ -30,6 +31,12 @@ export function HelpOverlay(): JSX.Element {
           ]}
         />
         <Section
+          title="Chat / test console"
+          rows={[
+            ["← →", "switch source agent"],
+            ["i", "enter input mode"],
+            ["Enter", "send through mediator (records audit log)"],
+            ["Esc", "exit input mode / leave page"],
           title="Settings page"
           rows={[
             ["e", "edit Foreman SOUL.md (agent identity)"],

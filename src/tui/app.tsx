@@ -26,6 +26,11 @@ import {
   queryLogs,
   type LogFilters,
 } from "./pages/logs-query.js";
+import {
+  ChatPage,
+  parseChatPrompt,
+  type ChatScrollbackEntry,
+} from "./pages/chat-page.js";
 import { PolicyPage } from "./pages/policy-page.js";
 import {
   REVEAL_AUTO_HIDE_MS,
@@ -38,6 +43,7 @@ import { launchEditor } from "./launch-editor.js";
 
 const APPROVAL_TIMEOUT_MS = 60_000;
 
+export type Page = "dashboard" | "logs" | "policy" | "sessions" | "chat";
 export type Page =
   | "dashboard"
   | "logs"
@@ -112,6 +118,13 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const [sessionExpanded, setSessionExpanded] = useState(false);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
 
+  const [chatAgentIdx, setChatAgentIdx] = useState(0);
+  const [chatInputMode, setChatInputMode] = useState(false);
+  const [chatInputBuffer, setChatInputBuffer] = useState("");
+  const [chatScrollback, setChatScrollback] = useState<ChatScrollbackEntry[]>(
+    [],
+  );
+  const [chatNotice, setChatNotice] = useState<string | null>(null);
   const [settingsSelectedIdx, setSettingsSelectedIdx] = useState(0);
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [secretsSelectedIdx, setSecretsSelectedIdx] = useState(0);
@@ -279,6 +292,79 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     sessionManager.halt(target.id, "manual");
     setSessionNotice(`session ${target.id} halted`);
   }, [sessionManager, sessionSelectedIdx]);
+
+  const onChatSubmit = useCallback(
+    async (raw: string): Promise<void> => {
+      if (!mediator) {
+        setChatNotice("mediator unavailable");
+        setChatInputMode(false);
+        return;
+      }
+      const agents = registry.list();
+      const picked = agents[chatAgentIdx];
+      if (!picked) {
+        setChatNotice("no registered agent to send through");
+        setChatInputMode(false);
+        return;
+      }
+      const { tool, args } = parseChatPrompt(raw);
+      if (!tool) {
+        setChatNotice("input parses as empty — type a tool name first");
+        return;
+      }
+      try {
+        const result = await mediator.handleRequest({
+          sourceAgent: picked.id,
+          targetTool: tool,
+          message: {
+            jsonrpc: "2.0" as const,
+            id: Date.now(),
+            method: "tools/call",
+            params: { name: tool, arguments: args ?? {} },
+          } as never,
+        });
+        const entry: ChatScrollbackEntry = {
+          id: result.requestId,
+          ts: Date.now(),
+          sourceAgent: picked.id,
+          rawPrompt: raw,
+          parsedTool: tool,
+          parsedArgs: args,
+          decision: result.decision,
+          decidedBy: result.decidedBy,
+          riskScore: result.riskScore,
+          riskReasons: result.riskReasons,
+          durationMs: result.durationMs,
+        };
+        setChatScrollback((prev) => [...prev, entry]);
+        setChatInputBuffer("");
+        setChatNotice(null);
+      } catch (err) {
+        setChatScrollback((prev) => [
+          ...prev,
+          {
+            id: `err-${Date.now()}`,
+            ts: Date.now(),
+            sourceAgent: picked.id,
+            rawPrompt: raw,
+            parsedTool: tool,
+            parsedArgs: args,
+            decision: "error" as const,
+            decidedBy: "exception",
+            riskScore: 0,
+            riskReasons: [],
+            durationMs: 0,
+          },
+        ]);
+        setChatNotice(
+          `error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        setChatInputMode(false);
+      }
+    },
+    [mediator, registry, chatAgentIdx],
+  );
 
   const onEditSoul = useCallback(async (): Promise<void> => {
     if (!soulPath) {
@@ -484,6 +570,11 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           sessionExpanded={sessionExpanded}
           setSessionExpanded={setSessionExpanded}
           onSessionHalt={onSessionHalt}
+          chatAgentIdx={chatAgentIdx}
+          setChatAgentIdx={setChatAgentIdx}
+          chatInputMode={chatInputMode}
+          setChatInputMode={setChatInputMode}
+          registeredAgentCount={registry.list().length}
           settingsSelectedIdx={settingsSelectedIdx}
           setSettingsSelectedIdx={setSettingsSelectedIdx}
           onEditSoul={onEditSoul}
@@ -555,6 +646,15 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           expanded={sessionExpanded}
           notice={sessionNotice}
         />
+      ) : page === "chat" ? (
+        <ChatPage
+          selectedAgentIdx={chatAgentIdx}
+          inputMode={chatInputMode}
+          inputBuffer={chatInputBuffer}
+          setInputBuffer={setChatInputBuffer}
+          scrollback={chatScrollback}
+          onSubmit={(raw) => void onChatSubmit(raw)}
+          notice={chatNotice}
       ) : page === "settings" ? (
         <SettingsPage
           selectedIdx={settingsSelectedIdx}
@@ -618,6 +718,11 @@ interface KeyboardHandlerProps {
   sessionExpanded: boolean;
   setSessionExpanded: (v: boolean) => void;
   onSessionHalt: () => void;
+  chatAgentIdx: number;
+  setChatAgentIdx: (next: number | ((prev: number) => number)) => void;
+  chatInputMode: boolean;
+  setChatInputMode: (v: boolean) => void;
+  registeredAgentCount: number;
   settingsSelectedIdx: number;
   setSettingsSelectedIdx: (next: number) => void;
   settingsItemCount: number;
@@ -680,6 +785,11 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     sessionExpanded,
     setSessionExpanded,
     onSessionHalt,
+    chatAgentIdx,
+    setChatAgentIdx,
+    chatInputMode,
+    setChatInputMode,
+    registeredAgentCount,
     settingsSelectedIdx,
     setSettingsSelectedIdx,
     settingsItemCount,
@@ -831,11 +941,32 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "q") exit();
       return;
     }
+    if (page === "chat") {
+      // While typing, only Esc reaches us — TextInput owns the rest.
+      if (chatInputMode) {
+        if (key.escape) setChatInputMode(false);
+        return;
+      }
     if (page === "settings") {
       if (key.escape) {
         setPage("dashboard");
         return;
       }
+      if (input === "i") {
+        setChatInputMode(true);
+        return;
+      }
+      if (key.leftArrow) {
+        setChatAgentIdx((idx) => Math.max(0, idx - 1));
+        return;
+      }
+      if (key.rightArrow) {
+        setChatAgentIdx((idx) =>
+          Math.min(Math.max(0, registeredAgentCount - 1), idx + 1),
+        );
+        return;
+      }
+      if (input === "q") exit();
       if (key.upArrow) {
         setSettingsSelectedIdx(Math.max(0, settingsSelectedIdx - 1));
         return;
@@ -909,6 +1040,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     if (input === "?") setHelpOpen(true);
     else if (input === "q") exit();
     else if (key.ctrl && input === "c") setQuitConfirm(true);
+    else if (input === "c") setPage("chat");
     else if (input === "g") setPage("settings");
     else if (input === "k") setPage("secrets");
     else if (input === "a") setPage("agents");
