@@ -84,6 +84,18 @@ Per-agent recipes:
 - [`examples/openclaw-integration/`](examples/openclaw-integration/) — OpenClaw with a skill-compromise policy (CVE-2026-25253, Koi Security advisory)
 - [`examples/mock-agent/`](examples/mock-agent/) — minimal MCP client that exercises the gateway end-to-end
 
+## Supported integrations
+
+Foreman ships three bundled catalogs that drive the wizard, the TUI management pages, and the CLI surfaces. Tier-1 entries below; see the linked guides for setup walkthroughs.
+
+**LLM providers** ([docs/llm-providers.md](docs/llm-providers.md)) — Anthropic · OpenAI · Google Gemini · Ollama (local) · Custom OpenAI-compatible (Groq / Together / OpenRouter / vLLM / LiteLLM)
+
+**Agents** ([docs/agent-lifecycle.md](docs/agent-lifecycle.md)) — Claude Code · Codex · Hermes · OpenClaw · ZeroClaw · Generic MCP
+
+**Services** ([docs/services.md](docs/services.md)) — Telegram · Discord · Slack · GitHub · Atlassian (Jira / Confluence) · Notion
+
+Adding entries to the bundled catalogs is documented in [docs/registry-maintenance.md](docs/registry-maintenance.md). A user-editable upstream registry URL is on the v0.2 roadmap.
+
 ## 5-minute demo
 
 A scripted phishing scenario walks through the boot banner → idle dashboard → ⚠ approval modal → inspect → remember → audit log. Run it locally:
@@ -119,6 +131,10 @@ The closest mental model: a personal-scale gateway with an audit log, for the mu
 
 - [`FOREMAN.md`](./FOREMAN.md) — full design doc (architecture, services, schema).
 - [`FOREMAN-TUI.md`](./FOREMAN-TUI.md) — TUI / brand spec (palette, mascot, layout, screens).
+- [`docs/llm-providers.md`](./docs/llm-providers.md) — LLM provider catalog reference.
+- [`docs/services.md`](./docs/services.md) — service catalog + setup walkthroughs.
+- [`docs/agent-lifecycle.md`](./docs/agent-lifecycle.md) — install / disable / enable / block / remove.
+- [`docs/registry-maintenance.md`](./docs/registry-maintenance.md) — adding entries to the bundled catalogs.
 
 ## Contributing
 
