@@ -39,4 +39,21 @@ program.addCommand(migrateCommand);
 program.addCommand(wrapCommand);
 program.addCommand(createCompletionCommand(() => program));
 
+function isForemanFriendlyError(
+  err: unknown,
+): err is Error & { foremanFriendly: true } {
+  return (
+    err instanceof Error &&
+    (err as Error & { foremanFriendly?: boolean }).foremanFriendly === true
+  );
+}
+
+process.on("uncaughtException", (err) => {
+  if (isForemanFriendlyError(err)) {
+    process.stderr.write(`error: ${err.message}\n`);
+    process.exit(1);
+  }
+  throw err;
+});
+
 program.parse();

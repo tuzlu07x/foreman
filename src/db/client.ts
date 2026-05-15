@@ -22,12 +22,39 @@ export function getDb(): ForemanDb {
   if (cached) return cached.db;
   const { dbPath, migrationsPath } = getForemanPaths();
   mkdirSync(dirname(dbPath), { recursive: true });
-  const sqlite = new Database(dbPath);
-  configureSqlite(sqlite);
+  let sqlite: Database.Database;
+  try {
+    sqlite = new Database(dbPath);
+    configureSqlite(sqlite);
+  } catch (err) {
+    throw wrapDbOpenError(err, dbPath);
+  }
   const db = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder: migrationsPath });
   cached = { sqlite, db };
   return db;
+}
+
+function wrapDbOpenError(err: unknown, dbPath: string): Error {
+  const code =
+    err instanceof Error && "code" in err && typeof err.code === "string"
+      ? err.code
+      : null;
+  if (code === "SQLITE_NOTADB") {
+    const friendly = new Error(
+      `${dbPath} is not a valid Foreman database (corrupt or wrong file format).\n  → Restore from backup, or move it aside and run 'foreman init' to recreate.`,
+    );
+    (friendly as Error & { foremanFriendly?: boolean }).foremanFriendly = true;
+    return friendly;
+  }
+  if (code === "SQLITE_CORRUPT") {
+    const friendly = new Error(
+      `${dbPath} is corrupt.\n  → Restore from backup, or move it aside and run 'foreman init' to recreate.`,
+    );
+    (friendly as Error & { foremanFriendly?: boolean }).foremanFriendly = true;
+    return friendly;
+  }
+  return err instanceof Error ? err : new Error(String(err));
 }
 
 export function getSqlite(): Database.Database {
