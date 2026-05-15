@@ -72,6 +72,8 @@ export interface RegisterAgentInput {
   agentId: string;
   entry: AgentEntry;
   registry: RegistryService;
+  llmProvider?: string;
+  responsibilityNote?: string;
 }
 
 export interface RegisterAgentResult {
@@ -91,6 +93,8 @@ export function registerAgent(input: RegisterAgentInput): RegisterAgentResult {
       registryId: input.entry.id,
       registryHomepage: input.entry.homepage,
     },
+    llmProvider: input.llmProvider,
+    responsibilityNote: input.responsibilityNote,
   });
   if (!result.privateKey) {
     throw new Error(
