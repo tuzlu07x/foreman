@@ -96,6 +96,60 @@ export interface SetupWizardProps {
   services: WizardServices;
 }
 
+// Three-phase state machine for the Secrets step. Replaces the old single
+// `secretsDone` flag — `secretsDone` made the picker and value-entry blocks
+// overlap (both gated on `!secretsDone`), so the picker's early return made the
+// value-entry block unreachable (#151).
+export type SecretsPhase = "picker" | "values" | "summary";
+
+export interface SecretsPickerSubmitResult {
+  nextPhase: SecretsPhase;
+  selected: string[];
+}
+
+export function applySecretsPickerSubmit(
+  values: string[],
+): SecretsPickerSubmitResult {
+  if (values.length === 0) {
+    return { nextPhase: "summary", selected: [] };
+  }
+  return { nextPhase: "values", selected: values };
+}
+
+export interface SecretsValueSubmitInput {
+  name: string;
+  value: string;
+  currentIdx: number;
+  totalSelected: number;
+}
+
+export interface SecretsValueSubmitResult {
+  shouldSave: boolean;
+  warning: string | null;
+  nextPhase: SecretsPhase;
+  nextIdx: number;
+}
+
+export function applySecretsValueSubmit(
+  input: SecretsValueSubmitInput,
+): SecretsValueSubmitResult {
+  const isLast = input.currentIdx + 1 >= input.totalSelected;
+  if (input.value.length === 0) {
+    return {
+      shouldSave: false,
+      warning: `Skipped ${input.name} — empty value. Add it later with 'foreman secrets add ${input.name}'.`,
+      nextPhase: isLast ? "summary" : "values",
+      nextIdx: input.currentIdx + 1,
+    };
+  }
+  return {
+    shouldSave: true,
+    warning: null,
+    nextPhase: isLast ? "summary" : "values",
+    nextIdx: input.currentIdx + 1,
+  };
+}
+
 export function SetupWizard({
   initialState,
   services,
@@ -126,7 +180,10 @@ export function SetupWizard({
 
   const [secretsSelected, setSecretsSelected] = useState<string[]>([]);
   const [secretIdx, setSecretIdx] = useState(0);
-  const [secretsDone, setSecretsDone] = useState(false);
+  const [secretsPhase, setSecretsPhase] = useState<SecretsPhase>("picker");
+  const [secretsSaved, setSecretsSaved] = useState<string[]>([]);
+  const [secretsSkipped, setSecretsSkipped] = useState<string[]>([]);
+  const [secretsWarning, setSecretsWarning] = useState<string | null>(null);
 
   // Agents already registered in this Foreman home — drive the wizard's
   // diff logic: still-checked = no-op or re-verify; newly-checked = install;
@@ -167,7 +224,7 @@ export function SetupWizard({
   }
 
   // ---------------- Secrets — picker ----------------
-  if (currentStep === "secrets" && !secretsDone) {
+  if (currentStep === "secrets" && secretsPhase === "picker") {
     const presentSecrets = DEFAULT_SECRETS.filter((s) =>
       services.secretStore.exists(s),
     );
@@ -176,7 +233,7 @@ export function SetupWizard({
     );
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <Text bold>Step 1 / 4 — API keys</Text>
+        <Text bold>Step 1 / 4 — API keys (selection)</Text>
         <Text color={theme.fg.muted}>
           ↑↓ move · <Text bold>Space toggle</Text> · Enter confirm. Foreman
           encrypts these on disk and hands them to agents on demand. Toggle off
@@ -190,13 +247,10 @@ export function SetupWizard({
           options={COMMON_SECRETS}
           defaultValue={defaults}
           onSubmit={(values) => {
-            setSecretsSelected(values);
-            if (values.length === 0) {
-              setSecretsDone(true);
-              advance("secrets");
-            } else {
-              setSecretIdx(0);
-            }
+            const result = applySecretsPickerSubmit(values);
+            setSecretsSelected(result.selected);
+            setSecretIdx(0);
+            setSecretsPhase(result.nextPhase);
           }}
         />
       </Box>
@@ -204,17 +258,20 @@ export function SetupWizard({
   }
 
   // ---------------- Secrets — value prompts ----------------
-  if (currentStep === "secrets" && !secretsDone && secretsSelected.length > 0) {
+  if (currentStep === "secrets" && secretsPhase === "values") {
     const name = secretsSelected[secretIdx];
     if (!name) {
-      setSecretsDone(true);
-      advance("secrets");
+      setSecretsPhase("summary");
       return <Text>…</Text>;
     }
     const helpUrl = COMMON_SECRETS.find((s) => s.value === name)?.helpUrl;
     const progress = `(${secretIdx + 1}/${secretsSelected.length})`;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
+        <Text bold>
+          Step 1 / 4 — API keys (value {secretIdx + 1} of{" "}
+          {secretsSelected.length})
+        </Text>
         <Text>
           {theme.symbols.bullet} Value for{" "}
           <Text bold color={theme.accent.primary}>
@@ -228,26 +285,86 @@ export function SetupWizard({
           </Text>
         )}
         <Text color={theme.fg.muted}>
-          (paste the value below — it stays hidden as you type)
+          (paste the value below — Enter to save · Enter on empty input to skip)
         </Text>
+        {secretsWarning && (
+          <Text color={theme.accent.warning}>⚠ {secretsWarning}</Text>
+        )}
         <PasswordInput
           placeholder="…"
           onSubmit={(value) => {
-            if (value.length > 0) {
-              if (!services.secretStore.exists(name)) {
-                services.secretStore.add(name, value);
-              } else {
-                services.secretStore.rotate(name, value);
+            const result = applySecretsValueSubmit({
+              name,
+              value,
+              currentIdx: secretIdx,
+              totalSelected: secretsSelected.length,
+            });
+            if (result.shouldSave) {
+              try {
+                if (!services.secretStore.exists(name)) {
+                  services.secretStore.add(name, value);
+                } else {
+                  services.secretStore.rotate(name, value);
+                }
+                setSecretsSaved((prev) => [...prev, name]);
+              } catch (err) {
+                setSecretsWarning(
+                  `failed to store ${name}: ${err instanceof Error ? err.message : String(err)}`,
+                );
+                return;
               }
-            }
-            const nextIdx = secretIdx + 1;
-            if (nextIdx >= secretsSelected.length) {
-              setSecretsDone(true);
-              advance("secrets");
             } else {
-              setSecretIdx(nextIdx);
+              setSecretsSkipped((prev) => [...prev, name]);
             }
+            setSecretsWarning(result.warning);
+            setSecretIdx(result.nextIdx);
+            setSecretsPhase(result.nextPhase);
           }}
+        />
+      </Box>
+    );
+  }
+
+  // ---------------- Secrets — summary ----------------
+  if (currentStep === "secrets" && secretsPhase === "summary") {
+    const savedCount = secretsSaved.length;
+    const skippedCount = secretsSkipped.length;
+    return (
+      <Box flexDirection="column" gap={1} paddingY={1}>
+        <Text bold>Step 1 / 4 — API keys (summary)</Text>
+        {savedCount > 0 ? (
+          <Box flexDirection="column">
+            <Text color={theme.accent.success}>
+              ✓ Saved {savedCount} secret{savedCount === 1 ? "" : "s"}:
+            </Text>
+            {secretsSaved.map((name) => (
+              <Text key={name} color={theme.fg.muted}>
+                {"  "}• {name}
+              </Text>
+            ))}
+          </Box>
+        ) : (
+          <Text color={theme.fg.muted}>
+            (no secrets stored — you can add them later with 'foreman secrets
+            add &lt;name&gt;')
+          </Text>
+        )}
+        {skippedCount > 0 && (
+          <Box flexDirection="column">
+            <Text color={theme.accent.warning}>
+              ⚠ Skipped {skippedCount} (empty value):
+            </Text>
+            {secretsSkipped.map((name) => (
+              <Text key={name} color={theme.fg.muted}>
+                {"  "}• {name}
+              </Text>
+            ))}
+          </Box>
+        )}
+        <Text>Continue to agents? (y/n)</Text>
+        <ConfirmInput
+          onConfirm={() => advance("secrets")}
+          onCancel={() => advance("secrets")}
         />
       </Box>
     );
