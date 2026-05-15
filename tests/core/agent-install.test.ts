@@ -120,4 +120,62 @@ describe("detectInstall", () => {
     const result = detectInstall({ npm: null, brew: null }, { PATH: "/" });
     expect(result.found).toBe(false);
   });
+
+  it("finds a script-installed binary in ~/.local/bin even when PATH is empty (#209)", () => {
+    const fakeHome = join(tmpDir, "home");
+    const localBin = join(fakeHome, ".local", "bin");
+    mkdirSync(localBin, { recursive: true });
+    const binPath = join(localBin, "hermes");
+    writeFileSync(binPath, "#!/bin/sh\n");
+    chmodSync(binPath, 0o755);
+    const result = detectInstall(
+      {
+        npm: null,
+        brew: null,
+        script: "https://hermes-agent.nousresearch.com/install.sh",
+        binary: "hermes",
+      },
+      { PATH: "/empty/dir", HOME: fakeHome },
+    );
+    expect(result.found).toBe(true);
+    expect(result.source).toBe("user-dirs");
+    expect(result.path).toBe(binPath);
+  });
+
+  it("also probes ~/bin and ~/.cargo/bin as user-local install dirs", () => {
+    const fakeHome = join(tmpDir, "home");
+    const cargoBin = join(fakeHome, ".cargo", "bin");
+    mkdirSync(cargoBin, { recursive: true });
+    const binPath = join(cargoBin, "zeroclaw");
+    writeFileSync(binPath, "#!/bin/sh\n");
+    chmodSync(binPath, 0o755);
+    const result = detectInstall(
+      {
+        npm: null,
+        brew: null,
+        script: "https://example.com/install.sh",
+        binary: "zeroclaw",
+      },
+      { PATH: "/empty/dir", HOME: fakeHome },
+    );
+    expect(result.found).toBe(true);
+    expect(result.source).toBe("user-dirs");
+  });
+
+  it("PATH still wins when a binary exists in both PATH and ~/.local/bin", () => {
+    const fakeHome = join(tmpDir, "home");
+    const localBin = join(fakeHome, ".local", "bin");
+    const pathBin = join(tmpDir, "path-bin");
+    mkdirSync(localBin, { recursive: true });
+    mkdirSync(pathBin, { recursive: true });
+    writeFileSync(join(localBin, "hermes"), "#!/bin/sh\n");
+    writeFileSync(join(pathBin, "hermes"), "#!/bin/sh\n");
+    const result = detectInstall(
+      { npm: null, brew: null, binary: "hermes" },
+      { PATH: pathBin, HOME: fakeHome },
+    );
+    expect(result.found).toBe(true);
+    expect(result.source).toBe("PATH");
+    expect(result.path).toBe(join(pathBin, "hermes"));
+  });
 });
