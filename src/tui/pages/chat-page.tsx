@@ -103,7 +103,7 @@ export function ChatPage({
       </Box>
 
       <Box marginTop={1}>
-        <Text color={theme.accent.primary}>{">"}</Text>{" "}
+        <Text color={theme.accent.primary}>{"> "}</Text>
         {inputMode ? (
           <TextInput
             placeholder="tool_name [json args]"
