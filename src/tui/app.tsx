@@ -33,10 +33,17 @@ import {
 } from "./pages/secrets-page.js";
 import { AgentsPage } from "./pages/agents-page.js";
 import { SessionsPage } from "./pages/sessions-page.js";
+import { buildSettingsItems, SettingsPage } from "./pages/settings-page.js";
 import { launchEditor } from "./launch-editor.js";
 
 const APPROVAL_TIMEOUT_MS = 60_000;
 
+export type Page =
+  | "dashboard"
+  | "logs"
+  | "policy"
+  | "sessions"
+  | "settings";
 export type Page = "dashboard" | "logs" | "policy" | "sessions" | "secrets";
 export type Page = "dashboard" | "logs" | "policy" | "sessions" | "agents";
 
@@ -56,6 +63,7 @@ export function App({ bootInfo, services }: AppProps): JSX.Element {
 function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const layout = useLayout();
   const { isRawModeSupported } = useStdin();
+  const { bus, mediator, sqlite, policy, policyPath, sessionManager, soulPath } =
   const { bus, mediator, sqlite, policy, policyPath, sessionManager, secretStore } =
   const { bus, mediator, sqlite, policy, policyPath, sessionManager, registry } =
     useDashboardServices();
@@ -104,6 +112,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const [sessionExpanded, setSessionExpanded] = useState(false);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
 
+  const [settingsSelectedIdx, setSettingsSelectedIdx] = useState(0);
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [secretsSelectedIdx, setSecretsSelectedIdx] = useState(0);
   const [secretsExpanded, setSecretsExpanded] = useState(false);
   const [secretsNotice, setSecretsNotice] = useState<string | null>(null);
@@ -270,6 +280,46 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     setSessionNotice(`session ${target.id} halted`);
   }, [sessionManager, sessionSelectedIdx]);
 
+  const onEditSoul = useCallback(async (): Promise<void> => {
+    if (!soulPath) {
+      setSettingsNotice("Foreman SOUL.md path unavailable");
+      return;
+    }
+    try {
+      await launchEditor(soulPath);
+      setSettingsNotice(
+        `✓ saved ${soulPath} — run 'foreman identity push' to propagate to agents`,
+      );
+    } catch (err) {
+      setSettingsNotice(
+        `editor failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, [soulPath]);
+
+  const onEditPolicyFromSettings = useCallback(async (): Promise<void> => {
+    if (!policy || !policyPath) {
+      setSettingsNotice("policy yaml path unavailable");
+      return;
+    }
+    try {
+      await launchEditor(policyPath);
+      const result = policy.loadFromYaml(policyPath);
+      setSettingsNotice(
+        `✓ saved ${policyPath} — reloaded ${result.rulesAdded} rule${result.rulesAdded === 1 ? "" : "s"}`,
+      );
+    } catch (err) {
+      setSettingsNotice(
+        `editor / reload failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, [policy, policyPath]);
+
+  const onWizardInstruction = useCallback((): void => {
+    setSettingsNotice(
+      "press q to quit, then run: foreman setup --resume (or --reset for a clean wizard)",
+    );
+  }, []);
   const onSecretReveal = useCallback((): void => {
     if (!secretStore) return;
     const all = secretStore.list();
@@ -434,6 +484,14 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           sessionExpanded={sessionExpanded}
           setSessionExpanded={setSessionExpanded}
           onSessionHalt={onSessionHalt}
+          settingsSelectedIdx={settingsSelectedIdx}
+          setSettingsSelectedIdx={setSettingsSelectedIdx}
+          onEditSoul={onEditSoul}
+          onEditPolicyFromSettings={onEditPolicyFromSettings}
+          onWizardInstruction={onWizardInstruction}
+          settingsItemCount={
+            buildSettingsItems(soulPath ?? null, policyPath ?? null).length
+          }
           secretsSelectedIdx={secretsSelectedIdx}
           setSecretsSelectedIdx={setSecretsSelectedIdx}
           secretsExpanded={secretsExpanded}
@@ -497,6 +555,10 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           expanded={sessionExpanded}
           notice={sessionNotice}
         />
+      ) : page === "settings" ? (
+        <SettingsPage
+          selectedIdx={settingsSelectedIdx}
+          notice={settingsNotice}
       ) : page === "secrets" ? (
         <SecretsPage
           selectedIdx={secretsSelectedIdx}
@@ -556,6 +618,12 @@ interface KeyboardHandlerProps {
   sessionExpanded: boolean;
   setSessionExpanded: (v: boolean) => void;
   onSessionHalt: () => void;
+  settingsSelectedIdx: number;
+  setSettingsSelectedIdx: (next: number) => void;
+  settingsItemCount: number;
+  onEditSoul: () => Promise<void>;
+  onEditPolicyFromSettings: () => Promise<void>;
+  onWizardInstruction: () => void;
   secretsSelectedIdx: number;
   setSecretsSelectedIdx: (next: number | ((prev: number) => number)) => void;
   secretsExpanded: boolean;
@@ -612,6 +680,12 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     sessionExpanded,
     setSessionExpanded,
     onSessionHalt,
+    settingsSelectedIdx,
+    setSettingsSelectedIdx,
+    settingsItemCount,
+    onEditSoul,
+    onEditPolicyFromSettings,
+    onWizardInstruction,
     secretsSelectedIdx,
     setSecretsSelectedIdx,
     secretsExpanded,
@@ -757,6 +831,32 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "q") exit();
       return;
     }
+    if (page === "settings") {
+      if (key.escape) {
+        setPage("dashboard");
+        return;
+      }
+      if (key.upArrow) {
+        setSettingsSelectedIdx(Math.max(0, settingsSelectedIdx - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setSettingsSelectedIdx(
+          Math.min(settingsItemCount - 1, settingsSelectedIdx + 1),
+        );
+        return;
+      }
+      if (input === "e") void onEditSoul();
+      else if (input === "p") void onEditPolicyFromSettings();
+      else if (input === "P") setPage("policy");
+      else if (input === "w") onWizardInstruction();
+      else if (key.return) {
+        // Enter runs the selected row — letter is encoded in the row order.
+        if (settingsSelectedIdx === 0) void onEditSoul();
+        else if (settingsSelectedIdx === 1) void onEditPolicyFromSettings();
+        else if (settingsSelectedIdx === 2) setPage("policy");
+        else if (settingsSelectedIdx === 3) onWizardInstruction();
+      } else if (input === "q") exit();
     if (page === "secrets") {
       // While in rotate-input mode the PasswordInput owns the keystrokes;
       // we only consume Esc here to bail out of the rotate flow.
@@ -809,6 +909,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     if (input === "?") setHelpOpen(true);
     else if (input === "q") exit();
     else if (key.ctrl && input === "c") setQuitConfirm(true);
+    else if (input === "g") setPage("settings");
     else if (input === "k") setPage("secrets");
     else if (input === "a") setPage("agents");
     else if (input === "l") setPage("logs");
