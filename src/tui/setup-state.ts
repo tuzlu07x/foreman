@@ -4,7 +4,7 @@ import { getForemanPaths } from "../utils/config.js";
 
 export const STEPS = [
   "welcome",
-  "secrets",
+  "providers",
   "agents",
   "install",
   "policy",
