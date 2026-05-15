@@ -130,6 +130,36 @@ export interface SecretsValueSubmitResult {
   nextIdx: number;
 }
 
+// Same phase-machine pattern as Secrets — the old `agentsDone` boolean made
+// the picker drop straight into install with no confirmation step, so a
+// silently-defaulted selection couldn't be caught before it ran (#152).
+export type AgentsPhase = "picker" | "confirm" | "running";
+
+export interface AgentsPickerSubmitResult {
+  nextPhase: AgentsPhase;
+  selected: string[];
+}
+
+export function applyAgentsPickerSubmit(
+  values: string[],
+): AgentsPickerSubmitResult {
+  return { nextPhase: "confirm", selected: values };
+}
+
+export interface AgentDiff {
+  toAdd: string[];
+  toRemove: string[];
+}
+
+export function computeAgentDiff(
+  selected: string[],
+  initialRegistered: string[],
+): AgentDiff {
+  const toAdd = selected.filter((id) => !initialRegistered.includes(id));
+  const toRemove = initialRegistered.filter((id) => !selected.includes(id));
+  return { toAdd, toRemove };
+}
+
 export function applySecretsValueSubmit(
   input: SecretsValueSubmitInput,
 ): SecretsValueSubmitResult {
@@ -195,7 +225,10 @@ export function SetupWizard({
   const [agentsSelected, setAgentsSelected] = useState<string[]>(() =>
     initialRegistered.length > 0 ? initialRegistered : DEFAULT_AGENTS,
   );
-  const [agentsDone, setAgentsDone] = useState(false);
+  const [agentsPhase, setAgentsPhase] = useState<AgentsPhase>("picker");
+  // Memoize the catalog so MultiSelect doesn't re-mount on every render —
+  // re-mount would reset the user's toggles back to defaultValue (#152).
+  const agentCatalog = useMemo(() => loadActiveRegistry().doc.agents, []);
 
   const [installLog, setInstallLog] = useState<string[]>([]);
   const [installRunning, setInstallRunning] = useState(false);
@@ -370,10 +403,9 @@ export function SetupWizard({
     );
   }
 
-  // ---------------- Agents picker ----------------
-  if (currentStep === "agents" && !agentsDone) {
-    const { doc } = loadActiveRegistry();
-    const options = doc.agents.map((a) => ({
+  // ---------------- Agents — picker ----------------
+  if (currentStep === "agents" && agentsPhase === "picker") {
+    const options = agentCatalog.map((a) => ({
       value: a.id,
       label: initialRegistered.includes(a.id)
         ? `${a.name}  (installed) — ${a.tagline}`
@@ -383,7 +415,7 @@ export function SetupWizard({
       initialRegistered.length > 0 ? initialRegistered : DEFAULT_AGENTS;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <Text bold>Step 2 / 4 — Agents</Text>
+        <Text bold>Step 2 / 4 — Agents (selection)</Text>
         <Text color={theme.fg.muted}>
           ↑↓ move · <Text bold>Space toggle</Text> · Enter confirm. Defaults
           are pre-checked — toggle off any you don't want, toggle on any you
@@ -397,9 +429,64 @@ export function SetupWizard({
           options={options}
           defaultValue={defaults}
           onSubmit={(values) => {
-            setAgentsSelected(values);
-            setAgentsDone(true);
+            const result = applyAgentsPickerSubmit(values);
+            setAgentsSelected(result.selected);
+            setAgentsPhase(result.nextPhase);
+          }}
+        />
+      </Box>
+    );
+  }
+
+  // ---------------- Agents — confirm ----------------
+  // Show the diff before install starts. If the user's selection wasn't what
+  // they expected (silent MultiSelect quirk, missed Space toggle), they get
+  // one more chance to fix it.
+  if (currentStep === "agents" && agentsPhase === "confirm") {
+    const { toAdd, toRemove } = computeAgentDiff(
+      agentsSelected,
+      initialRegistered,
+    );
+    const noChanges = toAdd.length === 0 && toRemove.length === 0;
+    const nothingSelected = agentsSelected.length === 0;
+    return (
+      <Box flexDirection="column" gap={1} paddingY={1}>
+        <Text bold>Step 2 / 4 — Agents (confirm)</Text>
+        <Text color={theme.fg.muted}>
+          Selected:{" "}
+          {agentsSelected.length > 0 ? agentsSelected.join(", ") : "(none)"}
+        </Text>
+        {toAdd.length > 0 && (
+          <Text color={theme.accent.primary}>
+            ▸ Will install: {toAdd.join(", ")}
+          </Text>
+        )}
+        {toRemove.length > 0 && (
+          <Text color={theme.accent.warning}>
+            ▸ Will remove: {toRemove.join(", ")}
+          </Text>
+        )}
+        {nothingSelected ? (
+          <Text color={theme.accent.warning}>
+            ⚠ No agents selected — skip this step? (y/n)
+          </Text>
+        ) : noChanges ? (
+          <Text color={theme.fg.muted}>
+            (no changes — every selection is already registered)
+          </Text>
+        ) : (
+          <Text>Proceed with install? (y/n)</Text>
+        )}
+        <Text color={theme.fg.muted}>
+          (n / Esc returns to the selection screen)
+        </Text>
+        <ConfirmInput
+          onConfirm={() => {
+            setAgentsPhase("running");
             advance("agents");
+          }}
+          onCancel={() => {
+            setAgentsPhase("picker");
           }}
         />
       </Box>
@@ -410,24 +497,26 @@ export function SetupWizard({
   if (currentStep === "install") {
     if (!installRunning) {
       setInstallRunning(true);
-      const toAdd = agentsSelected.filter(
-        (id) => !initialRegistered.includes(id),
-      );
-      const toRemove = initialRegistered.filter(
-        (id) => !agentsSelected.includes(id),
+      const { toAdd, toRemove } = computeAgentDiff(
+        agentsSelected,
+        initialRegistered,
       );
       // Surface what's about to happen so the user catches a missed Space toggle
       // (e.g. wanted openclaw but never selected it) before install starts.
-      setInstallLog([
-        `Selected agents: ${agentsSelected.length > 0 ? agentsSelected.join(", ") : "(none)"}`,
-        ...(toAdd.length > 0 ? [`▸ Will install: ${toAdd.join(", ")}`] : []),
-        ...(toRemove.length > 0
-          ? [`▸ Will remove: ${toRemove.join(", ")}`]
-          : []),
-        toAdd.length === 0 && toRemove.length === 0
-          ? "▸ No changes — every selection is already registered."
-          : "",
-      ].filter(Boolean));
+      setInstallLog(
+        [
+          `Selected agents: ${agentsSelected.length > 0 ? agentsSelected.join(", ") : "(none)"}`,
+          ...(toAdd.length > 0
+            ? [`▸ Will install: ${toAdd.join(", ")}`]
+            : []),
+          ...(toRemove.length > 0
+            ? [`▸ Will remove: ${toRemove.join(", ")}`]
+            : []),
+          toAdd.length === 0 && toRemove.length === 0
+            ? "▸ No changes — every selection is already registered."
+            : "",
+        ].filter(Boolean),
+      );
       void runInstallStep(toAdd, toRemove, services, (line) =>
         setInstallLog((prev) => [...prev, line]),
       ).then(() => {
@@ -437,9 +526,20 @@ export function SetupWizard({
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <Text bold>Step 3 / 4 — Install + configure</Text>
-        {installLog.map((line, i) => (
-          <Text key={i}>{line}</Text>
-        ))}
+        {installLog.map((line, i) => {
+          const isError = line.trimStart().startsWith("✗");
+          const isWarning = line.trimStart().startsWith("⚠");
+          const color = isError
+            ? theme.accent.danger
+            : isWarning
+              ? theme.accent.warning
+              : undefined;
+          return (
+            <Text key={i} color={color}>
+              {line}
+            </Text>
+          );
+        })}
       </Box>
     );
   }
