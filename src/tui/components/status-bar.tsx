@@ -20,7 +20,7 @@ export function StatusBar({
   return (
     <Box paddingX={1} justifyContent="space-between">
       <Text color={theme.fg.muted}>
-        [?] help · [a] agents · [c] chat · [g] settings · [k] keys · [l] logs · [p] policy · [s] sessions · [q] quit
+        [?] help · [l] logs · [p] policy · [s] sessions · [q] quit
       </Text>
       <Text color={theme.fg.muted}>🦫 v{version}</Text>
     </Box>
