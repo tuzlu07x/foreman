@@ -27,12 +27,17 @@ import {
   type LogFilters,
 } from "./pages/logs-query.js";
 import { PolicyPage } from "./pages/policy-page.js";
+import {
+  REVEAL_AUTO_HIDE_MS,
+  SecretsPage,
+} from "./pages/secrets-page.js";
 import { AgentsPage } from "./pages/agents-page.js";
 import { SessionsPage } from "./pages/sessions-page.js";
 import { launchEditor } from "./launch-editor.js";
 
 const APPROVAL_TIMEOUT_MS = 60_000;
 
+export type Page = "dashboard" | "logs" | "policy" | "sessions" | "secrets";
 export type Page = "dashboard" | "logs" | "policy" | "sessions" | "agents";
 
 export interface AppProps {
@@ -51,6 +56,7 @@ export function App({ bootInfo, services }: AppProps): JSX.Element {
 function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const layout = useLayout();
   const { isRawModeSupported } = useStdin();
+  const { bus, mediator, sqlite, policy, policyPath, sessionManager, secretStore } =
   const { bus, mediator, sqlite, policy, policyPath, sessionManager, registry } =
     useDashboardServices();
 
@@ -98,6 +104,14 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const [sessionExpanded, setSessionExpanded] = useState(false);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
 
+  const [secretsSelectedIdx, setSecretsSelectedIdx] = useState(0);
+  const [secretsExpanded, setSecretsExpanded] = useState(false);
+  const [secretsNotice, setSecretsNotice] = useState<string | null>(null);
+  const [revealedSecret, setRevealedSecret] = useState<{
+    name: string;
+    value: string;
+  } | null>(null);
+  const [rotateMode, setRotateMode] = useState<{ name: string } | null>(null);
   const [agentsSelectedIdx, setAgentsSelectedIdx] = useState(0);
   const [agentsExpanded, setAgentsExpanded] = useState(false);
   const [agentsNotice, setAgentsNotice] = useState<string | null>(null);
@@ -256,6 +270,80 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     setSessionNotice(`session ${target.id} halted`);
   }, [sessionManager, sessionSelectedIdx]);
 
+  const onSecretReveal = useCallback((): void => {
+    if (!secretStore) return;
+    const all = secretStore.list();
+    const target = all[secretsSelectedIdx];
+    if (!target) return;
+    try {
+      const value = secretStore.get(target.name);
+      setRevealedSecret({ name: target.name, value });
+      setSecretsNotice(
+        `revealing ${target.name} for ${REVEAL_AUTO_HIDE_MS / 1000}s`,
+      );
+    } catch (err) {
+      setSecretsNotice(
+        `error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, [secretStore, secretsSelectedIdx]);
+
+  // Auto-hide revealed secret after the configured TTL.
+  useEffect(() => {
+    if (!revealedSecret) return;
+    const t = setTimeout(() => {
+      setRevealedSecret(null);
+      setSecretsNotice("value auto-hidden");
+    }, REVEAL_AUTO_HIDE_MS);
+    return () => clearTimeout(t);
+  }, [revealedSecret]);
+
+  const onSecretRotate = useCallback((): void => {
+    if (!secretStore) return;
+    const all = secretStore.list();
+    const target = all[secretsSelectedIdx];
+    if (!target) return;
+    setRotateMode({ name: target.name });
+    setRevealedSecret(null);
+  }, [secretStore, secretsSelectedIdx]);
+
+  const onSubmitRotate = useCallback(
+    (value: string): void => {
+      if (!secretStore || !rotateMode) return;
+      try {
+        if (value.length === 0) {
+          setSecretsNotice("rotate cancelled (empty input)");
+        } else {
+          secretStore.rotate(rotateMode.name, value);
+          setSecretsNotice(`✓ ${rotateMode.name} rotated`);
+        }
+      } catch (err) {
+        setSecretsNotice(
+          `error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        setRotateMode(null);
+      }
+    },
+    [secretStore, rotateMode],
+  );
+
+  const onSecretRemove = useCallback((): void => {
+    if (!secretStore) return;
+    const all = secretStore.list();
+    const target = all[secretsSelectedIdx];
+    if (!target) return;
+    try {
+      secretStore.remove(target.name);
+      setSecretsNotice(`✓ ${target.name} removed`);
+      setRevealedSecret(null);
+      setSecretsSelectedIdx((idx) => Math.max(0, idx - 1));
+    } catch (err) {
+      setSecretsNotice(
+        `error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, [secretStore, secretsSelectedIdx]);
   const onAgentToggleBlock = useCallback((): void => {
     const all = registry.listAll();
     const target = all[agentsSelectedIdx];
@@ -346,6 +434,15 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           sessionExpanded={sessionExpanded}
           setSessionExpanded={setSessionExpanded}
           onSessionHalt={onSessionHalt}
+          secretsSelectedIdx={secretsSelectedIdx}
+          setSecretsSelectedIdx={setSecretsSelectedIdx}
+          secretsExpanded={secretsExpanded}
+          setSecretsExpanded={setSecretsExpanded}
+          rotateMode={rotateMode}
+          setRotateMode={setRotateMode}
+          onSecretReveal={onSecretReveal}
+          onSecretRotate={onSecretRotate}
+          onSecretRemove={onSecretRemove}
           agentsSelectedIdx={agentsSelectedIdx}
           setAgentsSelectedIdx={setAgentsSelectedIdx}
           agentsExpanded={agentsExpanded}
@@ -400,6 +497,15 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           expanded={sessionExpanded}
           notice={sessionNotice}
         />
+      ) : page === "secrets" ? (
+        <SecretsPage
+          selectedIdx={secretsSelectedIdx}
+          expanded={secretsExpanded}
+          notice={secretsNotice}
+          revealedName={revealedSecret?.name ?? null}
+          revealedValue={revealedSecret?.value ?? null}
+          rotateMode={rotateMode}
+          onSubmitRotate={onSubmitRotate}
       ) : page === "agents" ? (
         <AgentsPage
           selectedIdx={agentsSelectedIdx}
@@ -450,6 +556,15 @@ interface KeyboardHandlerProps {
   sessionExpanded: boolean;
   setSessionExpanded: (v: boolean) => void;
   onSessionHalt: () => void;
+  secretsSelectedIdx: number;
+  setSecretsSelectedIdx: (next: number | ((prev: number) => number)) => void;
+  secretsExpanded: boolean;
+  setSecretsExpanded: (v: boolean) => void;
+  rotateMode: { name: string } | null;
+  setRotateMode: (next: { name: string } | null) => void;
+  onSecretReveal: () => void;
+  onSecretRotate: () => void;
+  onSecretRemove: () => void;
   agentsSelectedIdx: number;
   setAgentsSelectedIdx: (next: number | ((prev: number) => number)) => void;
   agentsExpanded: boolean;
@@ -497,6 +612,15 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     sessionExpanded,
     setSessionExpanded,
     onSessionHalt,
+    secretsSelectedIdx,
+    setSecretsSelectedIdx,
+    secretsExpanded,
+    setSecretsExpanded,
+    rotateMode,
+    setRotateMode,
+    onSecretReveal,
+    onSecretRotate,
+    onSecretRemove,
     agentsSelectedIdx,
     setAgentsSelectedIdx,
     agentsExpanded,
@@ -633,6 +757,30 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "q") exit();
       return;
     }
+    if (page === "secrets") {
+      // While in rotate-input mode the PasswordInput owns the keystrokes;
+      // we only consume Esc here to bail out of the rotate flow.
+      if (rotateMode) {
+        if (key.escape) {
+          setRotateMode(null);
+        }
+        return;
+      }
+      if (key.escape) {
+        setPage("dashboard");
+        setSecretsExpanded(false);
+        return;
+      }
+      if (key.upArrow) {
+        setSecretsSelectedIdx(Math.max(0, secretsSelectedIdx - 1));
+        setSecretsExpanded(false);
+      } else if (key.downArrow) {
+        setSecretsSelectedIdx(secretsSelectedIdx + 1);
+        setSecretsExpanded(false);
+      } else if (key.return) setSecretsExpanded(!secretsExpanded);
+      else if (input === "v") onSecretReveal();
+      else if (input === "r") onSecretRotate();
+      else if (input === "d") onSecretRemove();
     if (page === "agents") {
       if (key.escape) {
         setPage("dashboard");
@@ -661,6 +809,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     if (input === "?") setHelpOpen(true);
     else if (input === "q") exit();
     else if (key.ctrl && input === "c") setQuitConfirm(true);
+    else if (input === "k") setPage("secrets");
     else if (input === "a") setPage("agents");
     else if (input === "l") setPage("logs");
     else if (input === "p") setPage("policy");
