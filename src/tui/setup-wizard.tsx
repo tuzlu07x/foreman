@@ -48,6 +48,7 @@ import {
   markCompleted,
   markUncompleted,
   saveSetupState,
+  STEPS,
   type SetupState,
   type Step,
 } from "./setup-state.js";
@@ -393,14 +394,7 @@ export function SetupWizard({
   const [state, setState] = useState<SetupState>(initialState);
   const welcomeLayout = useLayout();
   const currentStep: Step = useMemo(() => {
-    for (const s of [
-      "welcome",
-      "providers",
-      "agents",
-      "install",
-      "policy",
-      "done",
-    ] as Step[]) {
+    for (const s of STEPS) {
       if (!state.completed.includes(s)) return s;
     }
     return "done";
@@ -475,7 +469,6 @@ export function SetupWizard({
     ((resolution: FailureResolution) => void) | null
   >(null);
 
-  const [policyReview, setPolicyReview] = useState(false);
   const [donePhase, setDonePhase] = useState<"main" | "doctor" | "log">("main");
   const [doctorReport, setDoctorReport] = useState<DoctorReport | null>(null);
 
@@ -1363,29 +1356,10 @@ export function SetupWizard({
   }
 
   // ---------------- Policy ----------------
-  if (currentStep === "policy") {
-    return (
-      <Box flexDirection="column" gap={1} paddingY={1}>
-        <Text bold>Optional — review policy?</Text>
-        <Text color={theme.fg.muted}>
-          Foreman ships safe defaults (asks before any agent reads .env-shaped
-          files or runs destructive shell). Want to review {services.policyPath}{" "}
-          now? (y/n)
-        </Text>
-        <ConfirmInput
-          onConfirm={async () => {
-            setPolicyReview(true);
-            await services.launchEditor(services.policyPath);
-            advance("policy");
-          }}
-          onCancel={() => advance("policy")}
-        />
-      </Box>
-    );
-  }
-
   // ---------------- Done ----------------
-  void policyReview;
+  // Policy review used to be its own labelless step here; it's now reachable
+  // via the Done screen's [p] hotkey (#178), so STEPS no longer carries
+  // "policy" and the dedicated render block is gone (#155).
   const storedNames = new Set(
     services.secretStore.list().map((s) => s.name),
   );
