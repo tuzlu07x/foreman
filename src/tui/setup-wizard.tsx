@@ -1,4 +1,6 @@
+import { existsSync, readFileSync } from "node:fs";
 import { Box, Text, useApp, useInput } from "ink";
+import { parse as parseYaml } from "yaml";
 import {
   ConfirmInput,
   MultiSelect,
@@ -29,9 +31,11 @@ import {
   findAgent,
   loadActiveProviders,
   loadActiveRegistry,
+  loadActiveServices,
   type AgentEntry,
   type ProviderEntry,
 } from "../core/registry-catalog.js";
+import { runDoctor, type DoctorReport } from "../core/doctor.js";
 import { applyForemanSoul } from "../core/foreman-soul.js";
 import { RegistryService } from "../core/registry.js";
 import { SecretStore } from "../core/secret-store.js";
@@ -353,14 +357,18 @@ export function SetupWizard({
 
   const [installLog, setInstallLog] = useState<string[]>([]);
   const [installRunning, setInstallRunning] = useState(false);
+  const [installSummary, setInstallSummary] =
+    useState<InstallStepSummary | null>(null);
 
   const [policyReview, setPolicyReview] = useState(false);
+  const [donePhase, setDonePhase] = useState<"main" | "doctor" | "log">("main");
+  const [doctorReport, setDoctorReport] = useState<DoctorReport | null>(null);
 
   // Esc handler — phase-aware back navigation (#153). Stays out of the way
   // during install (no cancel mid-flight) and during welcome (let
   // ConfirmInput handle n=exit). Selections held in React state are
   // preserved across back-steps because we only mutate phase / completion.
-  useInput((_input, key) => {
+  useInput((input, key) => {
     if (
       key.return &&
       currentStep === "agents" &&
@@ -388,6 +396,42 @@ export function SetupWizard({
         return;
       }
     }
+
+    if (currentStep === "done" && donePhase === "main") {
+      if (key.return) {
+        exit();
+        return;
+      }
+      if (input === "d") {
+        setDoctorReport(runDoctor());
+        setDonePhase("doctor");
+        return;
+      }
+      if (input === "p") {
+        void services.launchEditor(services.policyPath);
+        return;
+      }
+      if (input === "l") {
+        setDonePhase("log");
+        return;
+      }
+      if (input === "q") {
+        // Quit without launching the gateway. exec'ing process.exit instead
+        // of exit() so the parent runOnboardingWizard's caller (start.ts)
+        // never reaches startForeman().
+        process.exit(0);
+      }
+    }
+
+    if (
+      key.escape &&
+      currentStep === "done" &&
+      (donePhase === "doctor" || donePhase === "log")
+    ) {
+      setDonePhase("main");
+      return;
+    }
+
     if (!key.escape) return;
     if (currentStep === "welcome") return;
     if (currentStep === "providers") {
@@ -870,7 +914,8 @@ export function SetupWizard({
         services,
         (line) => setInstallLog((prev) => [...prev, line]),
         agentConfigs,
-      ).then(() => {
+      ).then((summary) => {
+        setInstallSummary(summary);
         advance("install");
       });
     }
@@ -922,27 +967,124 @@ export function SetupWizard({
 
   // ---------------- Done ----------------
   void policyReview;
+  const storedNames = new Set(
+    services.secretStore.list().map((s) => s.name),
+  );
+  const providerIds = configuredProviderIds(providerCatalog, storedNames);
+  const serviceCatalog = loadActiveServices().doc.services;
+  const serviceIds = configuredServiceIds(serviceCatalog, storedNames);
+  const agentRows = services.registry.list();
+  const policyRuleCount = countPolicyRules(services.policyPath);
+
+  if (donePhase === "doctor" && doctorReport) {
+    return (
+      <Box flexDirection="column" gap={1} paddingY={1}>
+        <Text bold color={theme.accent.primary}>
+          foreman doctor
+        </Text>
+        {doctorReport.checks.map((c) => {
+          const icon =
+            c.status === "ok" ? "✓" : c.status === "warn" ? "⚠" : "✗";
+          const color =
+            c.status === "ok"
+              ? theme.accent.success
+              : c.status === "warn"
+                ? theme.accent.warning
+                : theme.accent.danger;
+          return (
+            <Text key={c.name} color={color}>
+              {"  "}
+              {icon} {c.name.padEnd(20)} {c.message}
+            </Text>
+          );
+        })}
+        <Text color={theme.fg.muted}>
+          (exit code {doctorReport.exitCode}) — [Esc] back
+        </Text>
+      </Box>
+    );
+  }
+
+  if (donePhase === "log") {
+    return (
+      <Box flexDirection="column" gap={1} paddingY={1}>
+        <Text bold color={theme.accent.primary}>
+          Install log
+        </Text>
+        {installLog.map((line, i) => {
+          const trimmed = line.trimStart();
+          const color = trimmed.startsWith("✗")
+            ? theme.accent.danger
+            : trimmed.startsWith("⚠")
+              ? theme.accent.warning
+              : undefined;
+          return (
+            <Text key={i} color={color}>
+              {line}
+            </Text>
+          );
+        })}
+        <Text color={theme.fg.muted}>[Esc] back</Text>
+      </Box>
+    );
+  }
+
   return (
     <Box flexDirection="column" gap={1} paddingY={1}>
       <StatusMessage variant="success">
-        Setup complete — run 'foreman start' to launch the gateway.
+        Setup complete — Foreman is ready to guard your agents.
       </StatusMessage>
-      <Text color={theme.fg.muted}>
-        Stored secrets:{" "}
-        {services.secretStore
-          .list()
-          .map((s) => s.name)
-          .join(", ") || "none"}
-      </Text>
-      <Text color={theme.fg.muted}>
-        Registered agents:{" "}
-        {services.registry
-          .list()
-          .map((a) => a.id)
-          .join(", ") || "none"}
-      </Text>
-      <Box marginTop={1}>
-        <ConfirmInput onConfirm={() => exit()} onCancel={() => exit()} />
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold>Summary</Text>
+        <Text color={theme.fg.muted}>
+          {"  "}
+          {providerIds.length} LLM provider
+          {providerIds.length === 1 ? "" : "s"}
+          {providerIds.length > 0 ? `   ${providerIds.join(", ")}` : ""}
+        </Text>
+        <Text color={theme.fg.muted}>
+          {"  "}
+          {agentRows.length} agent{agentRows.length === 1 ? "" : "s"}
+          {agentRows.length > 0
+            ? `         ${agentRows.map((a) => a.id).join(", ")}`
+            : ""}
+        </Text>
+        <Text color={theme.fg.muted}>
+          {"  "}
+          {serviceIds.length} service{serviceIds.length === 1 ? "" : "s"}
+          {serviceIds.length > 0 ? `       ${serviceIds.join(", ")}` : ""}
+        </Text>
+        <Text color={theme.fg.muted}>
+          {"  "}
+          {policyRuleCount} policy rule
+          {policyRuleCount === 1 ? "" : "s"}   smart defaults active
+        </Text>
+      </Box>
+      {installSummary && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color={theme.fg.muted}>
+            Foreman identity pushed to{" "}
+            {installSummary.identityPushed.length} of{" "}
+            {installSummary.registered.length} agent
+            {installSummary.registered.length === 1 ? "" : "s"}
+            {installSummary.identitySkipped.length > 0
+              ? ` (${installSummary.identitySkipped.length} skipped)`
+              : ""}
+            .
+          </Text>
+        </Box>
+      )}
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold>What next?</Text>
+        <Text color={theme.fg.muted}>
+          {"  "}[Enter] Launch Foreman TUI
+        </Text>
+        <Text color={theme.fg.muted}>{"  "}[d]     Run foreman doctor</Text>
+        <Text color={theme.fg.muted}>
+          {"  "}[p]     Review policy file
+        </Text>
+        <Text color={theme.fg.muted}>{"  "}[l]     Show install log</Text>
+        <Text color={theme.fg.muted}>{"  "}[q]     Exit</Text>
       </Box>
     </Box>
   );
@@ -951,6 +1093,53 @@ export function SetupWizard({
 // Exported for tests. The wizard's core diff loop: install + register the
 // newly-checked agents, uninstall + remove the previously-checked-now-unchecked
 // ones. Idempotent — running it twice with the same toAdd/toRemove no-ops.
+// Returns the ids of catalog entries whose required secrets/endpoints are
+// present in the store. Used by the Done screen to render real counts for
+// providers and services rather than a fragile string parse of install log.
+export function configuredProviderIds(
+  providers: ProviderEntry[],
+  storedNames: Set<string>,
+): string[] {
+  return providers
+    .filter((p) => {
+      if (p.secret_name && storedNames.has(p.secret_name)) return true;
+      if (p.endpoint_required && storedNames.has(`${p.id}-endpoint`))
+        return true;
+      return false;
+    })
+    .map((p) => p.id);
+}
+
+export function configuredServiceIds(
+  services: { id: string; secret_name: string }[],
+  storedNames: Set<string>,
+): string[] {
+  return services
+    .filter((s) => storedNames.has(s.secret_name))
+    .map((s) => s.id);
+}
+
+// Read the policy.yaml rule count without instantiating a PolicyEngine.
+// Returns 0 on missing / malformed file rather than throwing — the Done
+// screen is best-effort reporting, not the canonical policy validator.
+export function countPolicyRules(policyPath: string): number {
+  if (!existsSync(policyPath)) return 0;
+  try {
+    const parsed = parseYaml(readFileSync(policyPath, "utf-8")) as unknown;
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      "rules" in parsed &&
+      Array.isArray((parsed as { rules: unknown[] }).rules)
+    ) {
+      return (parsed as { rules: unknown[] }).rules.length;
+    }
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
 export interface AgentConfig {
   llmProvider?: string;
   responsibilityNote?: string;
@@ -958,13 +1147,28 @@ export interface AgentConfig {
 
 export type AgentConfigsMap = Record<string, AgentConfig | undefined>;
 
+export interface InstallStepSummary {
+  registered: string[];
+  identityPushed: string[];
+  identitySkipped: { agentId: string; reason: string }[];
+  failed: string[];
+  removed: string[];
+}
+
 export async function runInstallStep(
   toAdd: string[],
   toRemove: string[],
   services: WizardServices,
   log: (line: string) => void,
   agentConfigs: AgentConfigsMap = {},
-): Promise<void> {
+): Promise<InstallStepSummary> {
+  const summary: InstallStepSummary = {
+    registered: [],
+    identityPushed: [],
+    identitySkipped: [],
+    failed: [],
+    removed: [],
+  };
   const { doc } = loadActiveRegistry();
 
   // --- Process unchecks first: uninstall the binary, remove the row -----
@@ -978,6 +1182,7 @@ export async function runInstallStep(
     const entry = registryId ? safeFind(doc, registryId) : null;
     log(`▸ Removing ${existing.displayName}`);
     services.registry.remove(id);
+    summary.removed.push(id);
     log(`  ✓ unregistered "${id}"`);
     if (entry) {
       const cmd = preferredUninstallCommand(entry.install);
@@ -1079,6 +1284,7 @@ export async function runInstallStep(
         llmProvider: cfg?.llmProvider,
         responsibilityNote: cfg?.responsibilityNote,
       });
+      summary.registered.push(id);
       log(`  ✓ registered as "${id}"`);
       if (cfg?.llmProvider) log(`    LLM provider: ${cfg.llmProvider}`);
       if (cfg?.responsibilityNote)
@@ -1090,15 +1296,23 @@ export async function runInstallStep(
             getForemanPaths().soulPath,
           );
           if (soulResult?.changed) {
+            summary.identityPushed.push(id);
             log(`  ✓ wrote Foreman identity to ${soulResult.path}`);
           }
         } catch (err) {
-          log(
-            `  ⚠ identity write skipped: ${err instanceof Error ? err.message : String(err)}`,
-          );
+          const reason =
+            err instanceof Error ? err.message : String(err);
+          summary.identitySkipped.push({ agentId: id, reason });
+          log(`  ⚠ identity write skipped: ${reason}`);
         }
+      } else {
+        summary.identitySkipped.push({
+          agentId: id,
+          reason: "no identity_path in registry entry",
+        });
       }
     } catch (err) {
+      summary.failed.push(id);
       log(
         `  ✗ register failed: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -1108,6 +1322,8 @@ export async function runInstallStep(
   if (toAdd.length === 0 && toRemove.length === 0) {
     log("(no agent changes — selection matches current registration)");
   }
+
+  return summary;
 }
 
 function safeFind(
