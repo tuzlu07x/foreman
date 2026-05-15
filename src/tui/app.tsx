@@ -145,6 +145,10 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const [agentsSelectedIdx, setAgentsSelectedIdx] = useState(0);
   const [agentsExpanded, setAgentsExpanded] = useState(false);
   const [agentsNotice, setAgentsNotice] = useState<string | null>(null);
+  const [agentsEditMode, setAgentsEditMode] = useState<"none" | "note" | "llm">(
+    "none",
+  );
+  const [agentsLlmDraft, setAgentsLlmDraft] = useState<string | null>(null);
 
   const [pendingApproval, setPendingApproval] =
     useState<ApprovalRequest | null>(null);
@@ -578,6 +582,73 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     }
   }, [registry, agentsSelectedIdx]);
 
+  const onAgentStartNoteEdit = useCallback((): void => {
+    const all = registry.listAll();
+    const target = all[agentsSelectedIdx];
+    if (!target) return;
+    setAgentsExpanded(true);
+    setAgentsEditMode("note");
+    setAgentsNotice(null);
+  }, [registry, agentsSelectedIdx]);
+
+  const onAgentStartLlmEdit = useCallback((): void => {
+    const all = registry.listAll();
+    const target = all[agentsSelectedIdx];
+    if (!target) return;
+    setAgentsExpanded(true);
+    setAgentsLlmDraft(target.llmProvider ?? null);
+    setAgentsEditMode("llm");
+    setAgentsNotice(null);
+  }, [registry, agentsSelectedIdx]);
+
+  const onAgentSaveNote = useCallback(
+    (value: string): void => {
+      const all = registry.listAll();
+      const target = all[agentsSelectedIdx];
+      if (!target) return;
+      try {
+        const trimmed = value.length > 0 ? value : null;
+        registry.setResponsibilityNote(target.id, trimmed);
+        setAgentsNotice(
+          trimmed
+            ? `✓ ${target.id} responsibility updated`
+            : `✓ ${target.id} responsibility cleared`,
+        );
+      } catch (err) {
+        setAgentsNotice(
+          `error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      setAgentsEditMode("none");
+    },
+    [registry, agentsSelectedIdx],
+  );
+
+  const onAgentSaveLlm = useCallback((): void => {
+    const all = registry.listAll();
+    const target = all[agentsSelectedIdx];
+    if (!target) return;
+    if (!agentsLlmDraft) {
+      setAgentsEditMode("none");
+      return;
+    }
+    try {
+      registry.setLlmProvider(target.id, agentsLlmDraft);
+      setAgentsNotice(`✓ ${target.id} LLM provider → ${agentsLlmDraft}`);
+    } catch (err) {
+      setAgentsNotice(
+        `error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    setAgentsEditMode("none");
+    setAgentsLlmDraft(null);
+  }, [registry, agentsSelectedIdx, agentsLlmDraft]);
+
+  const onAgentCancelEdit = useCallback((): void => {
+    setAgentsEditMode("none");
+    setAgentsLlmDraft(null);
+  }, []);
+
   return (
     <Box flexDirection="column">
       {isRawModeSupported && (
@@ -648,6 +719,11 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           onAgentRemove={onAgentRemove}
           onAgentDisable={onAgentDisable}
           onAgentEnable={onAgentEnable}
+          agentsEditMode={agentsEditMode}
+          onAgentStartNoteEdit={onAgentStartNoteEdit}
+          onAgentStartLlmEdit={onAgentStartLlmEdit}
+          onAgentSaveLlm={onAgentSaveLlm}
+          onAgentCancelEdit={onAgentCancelEdit}
         />
       )}
       <BootBanner
@@ -725,6 +801,10 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           selectedIdx={agentsSelectedIdx}
           expanded={agentsExpanded}
           notice={agentsNotice}
+          editMode={agentsEditMode}
+          llmDraft={agentsLlmDraft}
+          onLlmDraftChange={setAgentsLlmDraft}
+          onNoteSubmit={onAgentSaveNote}
         />
       ) : (
         <Box flexGrow={1}>{renderPanels(layout)}</Box>
@@ -799,6 +879,11 @@ interface KeyboardHandlerProps {
   onAgentRemove: () => void;
   onAgentDisable: () => void;
   onAgentEnable: () => void;
+  agentsEditMode: "none" | "note" | "llm";
+  onAgentStartNoteEdit: () => void;
+  onAgentStartLlmEdit: () => void;
+  onAgentSaveLlm: () => void;
+  onAgentCancelEdit: () => void;
 }
 
 function KeyboardHandler(props: KeyboardHandlerProps): null {
@@ -868,6 +953,11 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     onAgentRemove,
     onAgentDisable,
     onAgentEnable,
+    agentsEditMode,
+    onAgentStartNoteEdit,
+    onAgentStartLlmEdit,
+    onAgentSaveLlm,
+    onAgentCancelEdit,
   } = props;
 
   useInput((input, key) => {
@@ -1074,6 +1164,18 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       return;
     }
     if (page === "agents") {
+      // While editing the responsibility note, TextInput handles Enter via
+      // its own onSubmit; we only intercept Esc to cancel + restore focus.
+      if (agentsEditMode === "note") {
+        if (key.escape) onAgentCancelEdit();
+        return;
+      }
+      // LLM Select has no onSubmit — Enter commits the staged draft.
+      if (agentsEditMode === "llm") {
+        if (key.escape) onAgentCancelEdit();
+        else if (key.return) onAgentSaveLlm();
+        return;
+      }
       if (key.escape) {
         setPage("dashboard");
         setAgentsExpanded(false);
@@ -1091,6 +1193,8 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "e") onAgentEnable();
       else if (input === "r") onAgentRemove();
       else if (input === "R") onAgentRegenKey();
+      else if (input === "N") onAgentStartNoteEdit();
+      else if (input === "L") onAgentStartLlmEdit();
       else if (input === "q") exit();
       return;
     }

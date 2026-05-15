@@ -61,6 +61,8 @@ export function HelpOverlay(): JSX.Element {
           title="Agents page"
           rows={[
             ["↑ ↓ / Enter", "select / expand row"],
+            ["N", "edit responsibility note (TextInput)"],
+            ["L", "change LLM provider (Select · multi-provider only)"],
             ["d", "disable (pause — config preserved)"],
             ["e", "enable (resume from disabled)"],
             ["b", "block / unblock (malicious flag)"],
