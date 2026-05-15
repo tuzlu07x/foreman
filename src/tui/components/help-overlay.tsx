@@ -19,11 +19,21 @@ export function HelpOverlay(): JSX.Element {
         <Section
           title="Navigation"
           rows={[
+            ["k", "keys (secrets) page"],
             ["l", "logs page"],
             ["p", "policy page"],
             ["s", "sessions page"],
             ["Esc", "back to dashboard"],
             ["q / Ctrl-C", "quit (with confirm)"],
+          ]}
+        />
+        <Section
+          title="Secrets page"
+          rows={[
+            ["↑ ↓ / Enter", "select / expand row"],
+            ["v", "reveal value (auto-hides after 10s)"],
+            ["r", "rotate value (inline password input)"],
+            ["d", "remove secret"],
           ]}
         />
         <Section
