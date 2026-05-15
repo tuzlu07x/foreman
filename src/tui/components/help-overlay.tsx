@@ -24,6 +24,7 @@ export function HelpOverlay(): JSX.Element {
             ["g", "settings page (identity, policy, wizard)"],
             ["k", "keys (secrets) page"],
             ["a", "agents page"],
+            ["v", "LLM providers page"],
             ["l", "logs page"],
             ["p", "policy page"],
             ["s", "sessions page"],
@@ -69,6 +70,16 @@ export function HelpOverlay(): JSX.Element {
             ["b", "block / unblock (malicious flag)"],
             ["r", "remove (hard delete + uninstall path)"],
             ["R", "regenerate Ed25519 keypair (shown once)"],
+          ]}
+        />
+        <Section
+          title="LLM Providers page"
+          rows={[
+            ["↑ ↓", "navigate (configured + available rows)"],
+            ["n", "configure the selected available provider"],
+            ["r", "rotate the selected configured provider's value"],
+            ["d", "remove the selected configured provider"],
+            ["s", "show value for 10s (auto-hides)"],
           ]}
         />
         <Section
