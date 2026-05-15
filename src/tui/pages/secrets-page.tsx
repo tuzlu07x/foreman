@@ -1,10 +1,21 @@
-import { PasswordInput } from "@inkjs/ui";
+import { PasswordInput, TextInput } from "@inkjs/ui";
 import { Box, Text } from "ink";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  loadActiveProviders,
+  loadActiveServices,
+  type ProviderEntry,
+  type ServiceEntry,
+} from "../../core/registry-catalog.js";
 import type { StoredSecretMeta } from "../../core/secret-store.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { formatTime } from "../format.js";
 import { singleBorder, theme } from "../theme.js";
+
+export type AddSecretMode =
+  | { phase: "name" }
+  | { phase: "value"; name: string }
+  | null;
 
 export interface SecretsPageProps {
   selectedIdx: number;
@@ -14,6 +25,35 @@ export interface SecretsPageProps {
   revealedValue: string | null;
   rotateMode: { name: string } | null;
   onSubmitRotate: (value: string) => void;
+  addSecretMode: AddSecretMode;
+  onAddSecretNameSubmit: (name: string) => void;
+  onAddSecretValueSubmit: (value: string) => void;
+}
+
+// Determines whether a stored secret is managed by a higher-level TUI page
+// (Providers, Services) or is a raw entry. Drives the "(managed by X)" tag
+// shown next to each row + the help overlay's reframing of this page as
+// the advanced low-level view.
+export type SecretOwnership =
+  | { kind: "providers"; entry: ProviderEntry }
+  | { kind: "services"; entry: ServiceEntry }
+  | { kind: "raw" };
+
+export function ownershipForSecret(
+  name: string,
+  providers: ProviderEntry[],
+  services: ServiceEntry[],
+): SecretOwnership {
+  for (const p of providers) {
+    if (p.secret_name === name) return { kind: "providers", entry: p };
+    if (p.endpoint_required && `${p.id}-endpoint` === name) {
+      return { kind: "providers", entry: p };
+    }
+  }
+  for (const s of services) {
+    if (s.secret_name === name) return { kind: "services", entry: s };
+  }
+  return { kind: "raw" };
 }
 
 const REVEAL_AUTO_HIDE_MS = 10_000;
@@ -26,8 +66,13 @@ export function SecretsPage({
   revealedValue,
   rotateMode,
   onSubmitRotate,
+  addSecretMode,
+  onAddSecretNameSubmit,
+  onAddSecretValueSubmit,
 }: SecretsPageProps): JSX.Element {
   const { secretStore } = useDashboardServices();
+  const providers = useMemo(() => loadActiveProviders().doc.providers, []);
+  const services = useMemo(() => loadActiveServices().doc.services, []);
   const [rows, setRows] = useState<StoredSecretMeta[]>(() =>
     secretStore ? secretStore.list() : [],
   );
@@ -67,15 +112,20 @@ export function SecretsPage({
     >
       <Box justifyContent="space-between">
         <Text color={theme.accent.primary} bold>
-          Secrets
+          Secrets (advanced)
         </Text>
         <Text color={theme.fg.muted}>{rows.length} stored · AES-256-GCM</Text>
       </Box>
+      <Text color={theme.fg.muted}>
+        Low-level view of every encrypted entry. Use [v] Providers or [V]
+        Services for the higher-level surfaces that own most rows here.
+      </Text>
 
       <Box flexDirection="column" marginTop={1}>
         {rows.length === 0 ? (
           <Text color={theme.fg.muted}>
-            (no secrets stored — run 'foreman setup' or 'foreman secrets add &lt;name&gt;')
+            (no secrets stored — press [n] to add a custom entry, or use
+            the Providers / Services pages for the catalog-aware add flow)
           </Text>
         ) : (
           rows.map((row, i) => (
@@ -87,10 +137,47 @@ export function SecretsPage({
               revealedValue={
                 revealedName === row.name ? revealedValue : null
               }
+              ownership={ownershipForSecret(row.name, providers, services)}
             />
           ))
         )}
       </Box>
+
+      {addSecretMode && (
+        <Box
+          flexDirection="column"
+          marginTop={1}
+          paddingX={1}
+          borderStyle={singleBorder()}
+          borderColor={theme.accent.warning}
+        >
+          {addSecretMode.phase === "name" ? (
+            <>
+              <Text bold color={theme.accent.warning}>
+                + Add raw secret — name
+              </Text>
+              <Text color={theme.fg.muted}>
+                (free-form name; Esc to cancel · empty cancels too)
+              </Text>
+              <TextInput
+                placeholder="e.g. my-custom-token"
+                onSubmit={onAddSecretNameSubmit}
+              />
+            </>
+          ) : (
+            <>
+              <Text bold color={theme.accent.warning}>
+                + Add raw secret — value for{" "}
+                <Text color={theme.accent.primary}>{addSecretMode.name}</Text>
+              </Text>
+              <Text color={theme.fg.muted}>
+                (paste below; stays hidden as you type · Esc cancels)
+              </Text>
+              <PasswordInput placeholder="…" onSubmit={onAddSecretValueSubmit} />
+            </>
+          )}
+        </Box>
+      )}
 
       {rotateMode && (
         <Box
@@ -122,8 +209,8 @@ export function SecretsPage({
         <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>
       </Box>
       <Text color={theme.fg.muted}>
-        [↑↓] move · [Enter] expand · [v] reveal {REVEAL_AUTO_HIDE_MS / 1000}s ·
-        [r] rotate · [d] remove · [Esc] back
+        [↑↓] move · [Enter] expand · [n] new raw · [v] reveal{" "}
+        {REVEAL_AUTO_HIDE_MS / 1000}s · [r] rotate · [d] remove · [Esc] back
       </Text>
     </Box>
   );
@@ -134,15 +221,23 @@ function SecretRow({
   selected,
   expanded,
   revealedValue,
+  ownership,
 }: {
   row: StoredSecretMeta;
   selected: boolean;
   expanded: boolean;
   revealedValue: string | null;
+  ownership: SecretOwnership;
 }): JSX.Element {
   const lastAccessed = row.lastAccessedAt
     ? formatTime(row.lastAccessedAt)
     : "never";
+  const tag =
+    ownership.kind === "providers"
+      ? `(managed by Providers page — press [v])`
+      : ownership.kind === "services"
+        ? `(managed by Services page — press [V])`
+        : null;
   return (
     <Box flexDirection="column">
       <Text>
@@ -151,6 +246,12 @@ function SecretRow({
         </Text>
         <Text color={theme.accent.primary}>{row.name}</Text>{" "}
         <Text color={theme.fg.muted}>· last accessed {lastAccessed}</Text>
+        {tag && (
+          <Text color={theme.fg.muted}>
+            {" "}
+            · {tag}
+          </Text>
+        )}
       </Text>
       {revealedValue !== null && (
         <Box marginLeft={2}>

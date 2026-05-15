@@ -146,6 +146,9 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     value: string;
   } | null>(null);
   const [rotateMode, setRotateMode] = useState<{ name: string } | null>(null);
+  const [addSecretMode, setAddSecretMode] = useState<
+    { phase: "name" } | { phase: "value"; name: string } | null
+  >(null);
   const [agentsSelectedIdx, setAgentsSelectedIdx] = useState(0);
   const [agentsExpanded, setAgentsExpanded] = useState(false);
   const [agentsNotice, setAgentsNotice] = useState<string | null>(null);
@@ -495,6 +498,51 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
       );
     }
   }, [secretStore, secretsSelectedIdx]);
+
+  const onSecretAddStart = useCallback((): void => {
+    setSecretsNotice(null);
+    setAddSecretMode({ phase: "name" });
+  }, []);
+
+  const onSecretAddNameSubmit = useCallback((name: string): void => {
+    const trimmed = name.trim();
+    if (trimmed.length === 0) {
+      setAddSecretMode(null);
+      setSecretsNotice("add cancelled (empty name)");
+      return;
+    }
+    setAddSecretMode({ phase: "value", name: trimmed });
+  }, []);
+
+  const onSecretAddValueSubmit = useCallback(
+    (value: string): void => {
+      if (!secretStore) return;
+      if (!addSecretMode || addSecretMode.phase !== "value") return;
+      const name = addSecretMode.name;
+      if (value.length === 0) {
+        setAddSecretMode(null);
+        setSecretsNotice(`add ${name} cancelled (empty value)`);
+        return;
+      }
+      try {
+        if (secretStore.exists(name)) {
+          secretStore.rotate(name, value);
+          setSecretsNotice(
+            `✓ ${name} already existed — value rotated instead`,
+          );
+        } else {
+          secretStore.add(name, value);
+          setSecretsNotice(`✓ stored ${name}`);
+        }
+      } catch (err) {
+        setSecretsNotice(
+          `error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      setAddSecretMode(null);
+    },
+    [secretStore, addSecretMode],
+  );
   const onAgentToggleBlock = useCallback((): void => {
     const all = registry.listAll();
     const target = all[agentsSelectedIdx];
@@ -711,9 +759,12 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           setSecretsExpanded={setSecretsExpanded}
           rotateMode={rotateMode}
           setRotateMode={setRotateMode}
+          addSecretMode={addSecretMode}
+          setAddSecretMode={setAddSecretMode}
           onSecretReveal={onSecretReveal}
           onSecretRotate={onSecretRotate}
           onSecretRemove={onSecretRemove}
+          onSecretAddStart={onSecretAddStart}
           agentsSelectedIdx={agentsSelectedIdx}
           setAgentsSelectedIdx={setAgentsSelectedIdx}
           agentsExpanded={agentsExpanded}
@@ -799,6 +850,9 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           revealedValue={revealedSecret?.value ?? null}
           rotateMode={rotateMode}
           onSubmitRotate={onSubmitRotate}
+          addSecretMode={addSecretMode}
+          onAddSecretNameSubmit={onSecretAddNameSubmit}
+          onAddSecretValueSubmit={onSecretAddValueSubmit}
         />
       ) : page === "agents" ? (
         <AgentsPage
@@ -875,9 +929,17 @@ interface KeyboardHandlerProps {
   setSecretsExpanded: (v: boolean) => void;
   rotateMode: { name: string } | null;
   setRotateMode: (next: { name: string } | null) => void;
+  addSecretMode:
+    | { phase: "name" }
+    | { phase: "value"; name: string }
+    | null;
+  setAddSecretMode: (
+    next: { phase: "name" } | { phase: "value"; name: string } | null,
+  ) => void;
   onSecretReveal: () => void;
   onSecretRotate: () => void;
   onSecretRemove: () => void;
+  onSecretAddStart: () => void;
   agentsSelectedIdx: number;
   setAgentsSelectedIdx: (next: number | ((prev: number) => number)) => void;
   agentsExpanded: boolean;
@@ -949,9 +1011,12 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     setSecretsExpanded,
     rotateMode,
     setRotateMode,
+    addSecretMode,
+    setAddSecretMode,
     onSecretReveal,
     onSecretRotate,
     onSecretRemove,
+    onSecretAddStart,
     agentsSelectedIdx,
     setAgentsSelectedIdx,
     agentsExpanded,
@@ -1147,6 +1212,12 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       return;
     }
     if (page === "secrets") {
+      if (addSecretMode) {
+        // TextInput / PasswordInput inside the page handle Enter via their
+        // own onSubmit; we only intercept Esc to cancel.
+        if (key.escape) setAddSecretMode(null);
+        return;
+      }
       if (rotateMode) {
         if (key.escape) setRotateMode(null);
         return;
@@ -1166,6 +1237,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "v") onSecretReveal();
       else if (input === "r") onSecretRotate();
       else if (input === "d") onSecretRemove();
+      else if (input === "n") onSecretAddStart();
       else if (input === "q") exit();
       return;
     }
