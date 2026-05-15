@@ -18,6 +18,7 @@
       "required_secrets": ["anthropic-key"],
       "optional_secrets": ["telegram-bot-token", "discord-bot-token"],
       "llm_compat": ["anthropic", "openai"],
+      "optional_services": ["telegram", "discord"],
       "mcp_compatible": true,
       "supported_versions": ">=2.0.0",
       "min_foreman_version": "0.1.2"
@@ -41,6 +42,7 @@
       "required_secrets": ["anthropic-key"],
       "optional_secrets": ["openai-key", "slack-bot-token"],
       "llm_compat": ["anthropic", "openai", "gemini"],
+      "optional_services": ["telegram", "discord", "slack"],
       "mcp_compatible": true,
       "supported_versions": ">=1.4.0",
       "min_foreman_version": "0.1.2"
@@ -62,6 +64,7 @@
       "required_secrets": [],
       "optional_secrets": ["openai-key"],
       "llm_compat": ["openai"],
+      "optional_services": ["github"],
       "mcp_compatible": true,
       "supported_versions": ">=0.100.0",
       "min_foreman_version": "0.1.2"
@@ -80,6 +83,7 @@
       "required_secrets": ["anthropic-key"],
       "optional_secrets": [],
       "llm_compat": ["anthropic"],
+      "optional_services": ["github"],
       "mcp_compatible": true,
       "supported_versions": ">=0.5.0",
       "min_foreman_version": "0.1.2"
