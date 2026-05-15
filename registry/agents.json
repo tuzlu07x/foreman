@@ -71,7 +71,11 @@
       "name": "Claude Code",
       "tagline": "Anthropic's official terminal coding agent",
       "homepage": "https://github.com/anthropics/claude-code",
-      "install": { "npm": "@anthropic-ai/claude-code", "brew": null },
+      "install": {
+        "npm": "@anthropic-ai/claude-code",
+        "brew": null,
+        "binary": "claude"
+      },
       "config_paths": [
         "~/.claude/settings.json",
         "~/.config/claude-code/settings.json"
@@ -87,9 +91,14 @@
     {
       "id": "zeroclaw",
       "name": "ZeroClaw",
-      "tagline": "Minimalist self-hosted assistant for low-resource boxes",
-      "homepage": "https://github.com/openclaw/zeroclaw",
-      "install": { "npm": "zeroclaw", "brew": null },
+      "tagline": "Minimalist Rust-based AI agent runtime for low-resource boxes",
+      "homepage": "https://github.com/zeroclaw-labs/zeroclaw",
+      "install": {
+        "npm": null,
+        "brew": null,
+        "script": "https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/master/install.sh",
+        "binary": "zeroclaw"
+      },
       "config_paths": ["~/.zeroclaw/config.toml"],
       "config_snippet": "registry/snippets/zeroclaw.yaml",
       "required_secrets": [],
