@@ -27,12 +27,13 @@ import {
   type LogFilters,
 } from "./pages/logs-query.js";
 import { PolicyPage } from "./pages/policy-page.js";
+import { AgentsPage } from "./pages/agents-page.js";
 import { SessionsPage } from "./pages/sessions-page.js";
 import { launchEditor } from "./launch-editor.js";
 
 const APPROVAL_TIMEOUT_MS = 60_000;
 
-export type Page = "dashboard" | "logs" | "policy" | "sessions";
+export type Page = "dashboard" | "logs" | "policy" | "sessions" | "agents";
 
 export interface AppProps {
   bootInfo: BootInfo;
@@ -50,7 +51,7 @@ export function App({ bootInfo, services }: AppProps): JSX.Element {
 function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const layout = useLayout();
   const { isRawModeSupported } = useStdin();
-  const { bus, mediator, sqlite, policy, policyPath, sessionManager } =
+  const { bus, mediator, sqlite, policy, policyPath, sessionManager, registry } =
     useDashboardServices();
 
   const [page, setPage] = useState<Page>("dashboard");
@@ -96,6 +97,10 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const [sessionSelectedIdx, setSessionSelectedIdx] = useState(0);
   const [sessionExpanded, setSessionExpanded] = useState(false);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
+
+  const [agentsSelectedIdx, setAgentsSelectedIdx] = useState(0);
+  const [agentsExpanded, setAgentsExpanded] = useState(false);
+  const [agentsNotice, setAgentsNotice] = useState<string | null>(null);
 
   const [pendingApproval, setPendingApproval] =
     useState<ApprovalRequest | null>(null);
@@ -251,6 +256,57 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     setSessionNotice(`session ${target.id} halted`);
   }, [sessionManager, sessionSelectedIdx]);
 
+  const onAgentToggleBlock = useCallback((): void => {
+    const all = registry.listAll();
+    const target = all[agentsSelectedIdx];
+    if (!target) return;
+    try {
+      if (target.status === "blocked") {
+        registry.unblock(target.id);
+        setAgentsNotice(`✓ ${target.id} unblocked`);
+      } else {
+        registry.block(target.id);
+        setAgentsNotice(`✓ ${target.id} blocked`);
+      }
+    } catch (err) {
+      setAgentsNotice(
+        `error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, [registry, agentsSelectedIdx]);
+
+  const onAgentRegenKey = useCallback((): void => {
+    const all = registry.listAll();
+    const target = all[agentsSelectedIdx];
+    if (!target) return;
+    try {
+      const result = registry.regenerateKey(target.id);
+      const hex = result.privateKey.toString("hex");
+      setAgentsNotice(
+        `✓ ${target.id} new private key (shown once): ${hex.slice(0, 16)}…${hex.slice(-8)}`,
+      );
+    } catch (err) {
+      setAgentsNotice(
+        `error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, [registry, agentsSelectedIdx]);
+
+  const onAgentRemove = useCallback((): void => {
+    const all = registry.listAll();
+    const target = all[agentsSelectedIdx];
+    if (!target) return;
+    try {
+      registry.remove(target.id);
+      setAgentsNotice(`✓ ${target.id} removed`);
+      setAgentsSelectedIdx((idx) => Math.max(0, idx - 1));
+    } catch (err) {
+      setAgentsNotice(
+        `error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, [registry, agentsSelectedIdx]);
+
   return (
     <Box flexDirection="column">
       {isRawModeSupported && (
@@ -290,6 +346,13 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           sessionExpanded={sessionExpanded}
           setSessionExpanded={setSessionExpanded}
           onSessionHalt={onSessionHalt}
+          agentsSelectedIdx={agentsSelectedIdx}
+          setAgentsSelectedIdx={setAgentsSelectedIdx}
+          agentsExpanded={agentsExpanded}
+          setAgentsExpanded={setAgentsExpanded}
+          onAgentToggleBlock={onAgentToggleBlock}
+          onAgentRegenKey={onAgentRegenKey}
+          onAgentRemove={onAgentRemove}
         />
       )}
       <BootBanner
@@ -337,6 +400,12 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           expanded={sessionExpanded}
           notice={sessionNotice}
         />
+      ) : page === "agents" ? (
+        <AgentsPage
+          selectedIdx={agentsSelectedIdx}
+          expanded={agentsExpanded}
+          notice={agentsNotice}
+        />
       ) : (
         <Box flexGrow={1}>{renderPanels(layout)}</Box>
       )}
@@ -381,6 +450,13 @@ interface KeyboardHandlerProps {
   sessionExpanded: boolean;
   setSessionExpanded: (v: boolean) => void;
   onSessionHalt: () => void;
+  agentsSelectedIdx: number;
+  setAgentsSelectedIdx: (next: number | ((prev: number) => number)) => void;
+  agentsExpanded: boolean;
+  setAgentsExpanded: (v: boolean) => void;
+  onAgentToggleBlock: () => void;
+  onAgentRegenKey: () => void;
+  onAgentRemove: () => void;
 }
 
 function KeyboardHandler(props: KeyboardHandlerProps): null {
@@ -421,6 +497,13 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     sessionExpanded,
     setSessionExpanded,
     onSessionHalt,
+    agentsSelectedIdx,
+    setAgentsSelectedIdx,
+    agentsExpanded,
+    setAgentsExpanded,
+    onAgentToggleBlock,
+    onAgentRegenKey,
+    onAgentRemove,
   } = props;
 
   useInput((input, key) => {
@@ -550,6 +633,25 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "q") exit();
       return;
     }
+    if (page === "agents") {
+      if (key.escape) {
+        setPage("dashboard");
+        setAgentsExpanded(false);
+        return;
+      }
+      if (key.upArrow) {
+        setAgentsSelectedIdx(Math.max(0, agentsSelectedIdx - 1));
+        setAgentsExpanded(false);
+      } else if (key.downArrow) {
+        setAgentsSelectedIdx(agentsSelectedIdx + 1);
+        setAgentsExpanded(false);
+      } else if (key.return) setAgentsExpanded(!agentsExpanded);
+      else if (input === "b") onAgentToggleBlock();
+      else if (input === "r") onAgentRegenKey();
+      else if (input === "d") onAgentRemove();
+      else if (input === "q") exit();
+      return;
+    }
     if (quitConfirm) {
       if (input === "y" || input === "Y") exit();
       else if (input === "n" || input === "N" || key.escape)
@@ -559,6 +661,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     if (input === "?") setHelpOpen(true);
     else if (input === "q") exit();
     else if (key.ctrl && input === "c") setQuitConfirm(true);
+    else if (input === "a") setPage("agents");
     else if (input === "l") setPage("logs");
     else if (input === "p") setPage("policy");
     else if (input === "s") setPage("sessions");
