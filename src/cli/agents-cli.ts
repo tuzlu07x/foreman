@@ -46,7 +46,7 @@ function getRegistry(): RegistryService {
 export const agentsCommand = new Command("agent")
   .alias("agents")
   .description(
-    "Agent commands (list / add / remove / regenerate-key / show / update / block / unblock)",
+    "Agent commands (list / add / remove / regenerate-key / show / update / block / unblock / disable / enable)",
   );
 
 agentsCommand
