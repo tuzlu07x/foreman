@@ -24,7 +24,10 @@ import { App } from "../tui/app.js";
 import type { BootInfo } from "../tui/boot-info.js";
 import {
   freshState,
+  hasUserOptedOut,
   loadSetupState,
+  markSetupSkipped,
+  saveSetupState,
 } from "../tui/setup-state.js";
 import { SetupWizard } from "../tui/setup-wizard.js";
 import { SecretStore } from "../core/secret-store.js";
@@ -244,14 +247,20 @@ function looksLikeFreshInstall(): boolean {
   }
 }
 
+function seedHomeIfMissing(): void {
+  const paths = getForemanPaths();
+  if (existsSync(paths.root) && existsSync(paths.identityPath)) return;
+  console.log(
+    `${orange(bold("Foreman"))} ${dim("— seeding home with defaults…")}`,
+  );
+  runInit({});
+  console.log(`${green("✓")} initialised at ${paths.root}\n`);
+}
+
 async function runOnboardingWizard(): Promise<void> {
   const paths = getForemanPaths();
   if (!existsSync(paths.root) || !existsSync(paths.identityPath)) {
-    console.log(
-      `${orange(bold("Foreman"))} ${dim("— first run, seeding home…")}`,
-    );
-    runInit({});
-    console.log(`${green("✓")} initialised at ${paths.root}\n`);
+    seedHomeIfMissing();
   } else {
     console.log(
       `${orange(bold("Foreman"))} ${dim("— no agents yet, starting setup wizard…")}\n`,
@@ -277,29 +286,88 @@ async function runOnboardingWizard(): Promise<void> {
   closeDb();
 }
 
+export type StartChoice = "setup" | "skip" | "quit";
+
+// Maps an answer line (trimmed, lowercased) to a fresh-install choice.
+// Empty input + 'y' default to running setup (Enter is the affordance shown
+// in the prompt). 's' / 'q' are explicit single-letter shortcuts.
+export function parseStartChoice(answer: string): StartChoice {
+  const trimmed = answer.trim().toLowerCase();
+  if (trimmed === "q") return "quit";
+  if (trimmed === "s") return "skip";
+  return "setup";
+}
+
+async function promptStartChoice(): Promise<StartChoice> {
+  if (!process.stdin.isTTY) return "skip";
+  process.stderr.write(
+    `\n${orange(bold("Foreman"))} ${dim("— not configured yet.")}\n\n` +
+      `  Recommended: run ${bold("foreman setup")} (5-minute wizard)\n` +
+      `  Or:          relaunch with ${bold("--skip-setup")} for defaults only\n\n` +
+      `  [Enter] Run setup now\n` +
+      `  [s]     Skip and launch with defaults\n` +
+      `  [q]     Quit\n\n` +
+      `> `,
+  );
+  const { createInterface } = await import("node:readline");
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  return new Promise<StartChoice>((resolveChoice) => {
+    rl.question("", (answer) => {
+      rl.close();
+      resolveChoice(parseStartChoice(answer));
+    });
+  });
+}
+
 export const startCommand = new Command("start")
   .description("Start the Foreman gateway with the Ink TUI")
   .option(
     "--no-onboarding",
-    "skip the auto setup wizard even when the foreman home is fresh",
+    "skip the auto setup prompt even when the foreman home is fresh",
   )
-  .action(async (options: { onboarding?: boolean }) => {
-    if (options.onboarding !== false && looksLikeFreshInstall()) {
-      await runOnboardingWizard();
-    }
-    let started: StartedForeman;
-    try {
-      started = startForeman();
-    } catch (err) {
-      if (err instanceof NotInitialisedError) {
-        console.error(
-          red("error: ") +
-            `${err.message} Tip: run 'foreman start' and the onboarding wizard will guide you, or 'foreman init' for a manual setup.`,
-        );
-        process.exit(1);
+  .option(
+    "--skip-setup",
+    "launch with default policy only, recording the choice so future runs don't re-prompt",
+  )
+  .action(
+    async (options: { onboarding?: boolean; skipSetup?: boolean }) => {
+      const flagSkip = options.onboarding === false || options.skipSetup;
+      if (!flagSkip && looksLikeFreshInstall()) {
+        const previousState = loadSetupState();
+        if (!hasUserOptedOut(previousState)) {
+          const choice = await promptStartChoice();
+          if (choice === "setup") {
+            await runOnboardingWizard();
+          } else if (choice === "skip") {
+            seedHomeIfMissing();
+            saveSetupState(markSetupSkipped(previousState));
+          } else {
+            process.exit(0);
+          }
+        } else {
+          // Already configured / previously skipped — seed home if it's
+          // missing so startForeman() doesn't throw NotInitialisedError on
+          // a fresh box that flag-skipped before.
+          seedHomeIfMissing();
+        }
+      } else if (flagSkip) {
+        // --no-onboarding / --skip-setup needs the home to exist.
+        seedHomeIfMissing();
       }
-      throw err;
-    }
-    await started.waitForExit();
-    await started.shutdown();
-  });
+      let started: StartedForeman;
+      try {
+        started = startForeman();
+      } catch (err) {
+        if (err instanceof NotInitialisedError) {
+          console.error(
+            red("error: ") +
+              `${err.message} Tip: run 'foreman setup' to configure interactively, or 'foreman init' to seed the home and use defaults.`,
+          );
+          process.exit(1);
+        }
+        throw err;
+      }
+      await started.waitForExit();
+      await started.shutdown();
+    },
+  );
