@@ -19,6 +19,7 @@ export function HelpOverlay(): JSX.Element {
         <Section
           title="Navigation"
           rows={[
+            ["g", "settings page (identity, policy, wizard)"],
             ["k", "keys (secrets) page"],
             ["a", "agents page"],
             ["l", "logs page"],
@@ -29,6 +30,12 @@ export function HelpOverlay(): JSX.Element {
           ]}
         />
         <Section
+          title="Settings page"
+          rows={[
+            ["e", "edit Foreman SOUL.md (agent identity)"],
+            ["p", "edit policy.yaml"],
+            ["P", "open Policy page (read-only view)"],
+            ["w", "show re-run wizard instructions"],
           title="Secrets page"
           rows={[
             ["↑ ↓ / Enter", "select / expand row"],

@@ -16,6 +16,8 @@ export interface DashboardServices {
   mediator?: MediatorService;
   policy?: PolicyEngine;
   policyPath?: string;
+  /** Path to Foreman's canonical SOUL.md (identity propagated to agents). */
+  soulPath?: string;
   sessionManager?: SessionManager;
   secretStore?: SecretStore;
 }

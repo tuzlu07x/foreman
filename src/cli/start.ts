@@ -165,6 +165,7 @@ export function startForeman(
           mediator,
           policy,
           policyPath: paths.policyPath,
+          soulPath: paths.soulPath,
           sessionManager,
           secretStore,
         },
