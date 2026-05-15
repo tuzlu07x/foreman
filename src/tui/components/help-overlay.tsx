@@ -20,6 +20,7 @@ export function HelpOverlay(): JSX.Element {
           title="Navigation"
           rows={[
             ["k", "keys (secrets) page"],
+            ["a", "agents page"],
             ["l", "logs page"],
             ["p", "policy page"],
             ["s", "sessions page"],
@@ -34,6 +35,12 @@ export function HelpOverlay(): JSX.Element {
             ["v", "reveal value (auto-hides after 10s)"],
             ["r", "rotate value (inline password input)"],
             ["d", "remove secret"],
+          title="Agents page"
+          rows={[
+            ["↑ ↓ / Enter", "select / expand row"],
+            ["b", "block / unblock selected agent"],
+            ["r", "regenerate Ed25519 keypair (shown once)"],
+            ["d", "remove (hard delete)"],
           ]}
         />
         <Section
