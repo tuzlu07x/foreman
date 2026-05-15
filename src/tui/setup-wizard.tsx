@@ -3,6 +3,7 @@ import {
   ConfirmInput,
   MultiSelect,
   PasswordInput,
+  Select,
   StatusMessage,
   TextInput,
 } from "@inkjs/ui";
@@ -133,7 +134,55 @@ export interface ProviderValueSubmitResult {
 // Same phase-machine pattern as Secrets — the old `agentsDone` boolean made
 // the picker drop straight into install with no confirmation step, so a
 // silently-defaulted selection couldn't be caught before it ran (#152).
-export type AgentsPhase = "picker" | "confirm" | "running";
+// `per-agent-config` is the sub-step inserted between picker and confirm
+// where multi-provider agents pick an LLM and every agent gets an optional
+// responsibility note (#174).
+export type AgentsPhase = "picker" | "per-agent-config" | "confirm" | "running";
+
+export type AgentConfigPromptKind = "llm-choice" | "responsibility-note";
+
+export interface AgentConfigPrompt {
+  agentId: string;
+  kind: AgentConfigPromptKind;
+}
+
+// Flattens per-agent config requirements into a linear list. Single-provider
+// agents (Claude Code, Codex) contribute only a note prompt; multi-provider
+// agents (Hermes, OpenClaw) contribute an LLM choice followed by a note.
+export function buildAgentConfigPromptList(
+  agents: AgentEntry[],
+  selectedIds: string[],
+): AgentConfigPrompt[] {
+  const prompts: AgentConfigPrompt[] = [];
+  for (const id of selectedIds) {
+    const a = agents.find((x) => x.id === id);
+    if (!a) continue;
+    const compat = a.llm_compat ?? [];
+    if (compat.length > 1) prompts.push({ agentId: id, kind: "llm-choice" });
+    prompts.push({ agentId: id, kind: "responsibility-note" });
+  }
+  return prompts;
+}
+
+export interface AgentConfigSubmitInput {
+  currentIdx: number;
+  totalPrompts: number;
+}
+
+export interface AgentConfigSubmitResult {
+  nextPhase: AgentsPhase;
+  nextIdx: number;
+}
+
+export function applyAgentConfigSubmit(
+  input: AgentConfigSubmitInput,
+): AgentConfigSubmitResult {
+  const isLast = input.currentIdx + 1 >= input.totalPrompts;
+  return {
+    nextPhase: isLast ? "confirm" : "per-agent-config",
+    nextIdx: input.currentIdx + 1,
+  };
+}
 
 export interface AgentsPickerSubmitResult {
   nextPhase: AgentsPhase;
@@ -295,6 +344,12 @@ export function SetupWizard({
   // Memoize the catalog so MultiSelect doesn't re-mount on every render —
   // re-mount would reset the user's toggles back to defaultValue (#152).
   const agentCatalog = useMemo(() => loadActiveRegistry().doc.agents, []);
+  const [agentConfigPrompts, setAgentConfigPrompts] = useState<
+    AgentConfigPrompt[]
+  >([]);
+  const [agentConfigIdx, setAgentConfigIdx] = useState(0);
+  const [agentConfigs, setAgentConfigs] = useState<AgentConfigsMap>({});
+  const [llmDraft, setLlmDraft] = useState<string | null>(null);
 
   const [installLog, setInstallLog] = useState<string[]>([]);
   const [installRunning, setInstallRunning] = useState(false);
@@ -306,6 +361,33 @@ export function SetupWizard({
   // ConfirmInput handle n=exit). Selections held in React state are
   // preserved across back-steps because we only mutate phase / completion.
   useInput((_input, key) => {
+    if (
+      key.return &&
+      currentStep === "agents" &&
+      agentsPhase === "per-agent-config"
+    ) {
+      const prompt = agentConfigPrompts[agentConfigIdx];
+      if (prompt && prompt.kind === "llm-choice") {
+        const chosen = llmDraft;
+        if (chosen) {
+          setAgentConfigs((prev) => {
+            const existing = prev[prompt.agentId] ?? {};
+            return {
+              ...prev,
+              [prompt.agentId]: { ...existing, llmProvider: chosen },
+            };
+          });
+        }
+        const result = applyAgentConfigSubmit({
+          currentIdx: agentConfigIdx,
+          totalPrompts: agentConfigPrompts.length,
+        });
+        setAgentConfigIdx(result.nextIdx);
+        setAgentsPhase(result.nextPhase);
+        setLlmDraft(null);
+        return;
+      }
+    }
     if (!key.escape) return;
     if (currentStep === "welcome") return;
     if (currentStep === "providers") {
@@ -321,6 +403,12 @@ export function SetupWizard({
     if (currentStep === "agents") {
       if (agentsPhase === "confirm") {
         setAgentsPhase("picker");
+        return;
+      }
+      if (agentsPhase === "per-agent-config") {
+        setAgentsPhase("picker");
+        setAgentConfigIdx(0);
+        setLlmDraft(null);
         return;
       }
       if (agentsPhase === "picker") {
@@ -574,11 +662,124 @@ export function SetupWizard({
           onSubmit={(values) => {
             const result = applyAgentsPickerSubmit(values);
             setAgentsSelected(result.selected);
-            setAgentsPhase(result.nextPhase);
+            const prompts = buildAgentConfigPromptList(
+              agentCatalog,
+              result.selected,
+            );
+            setAgentConfigPrompts(prompts);
+            setAgentConfigIdx(0);
+            setLlmDraft(null);
+            // Skip per-agent-config when nothing was picked or every agent is
+            // single-provider with no responsibility note to fill — straight
+            // to confirm.
+            if (prompts.length === 0) {
+              setAgentsPhase("confirm");
+            } else {
+              setAgentsPhase("per-agent-config");
+            }
           }}
         />
         <Text color={theme.fg.muted}>
-          [Space] toggle · [Enter] confirm · [Esc] back to secrets
+          [Space] toggle · [Enter] confirm · [Esc] back to providers
+        </Text>
+      </Box>
+    );
+  }
+
+  // ---------------- Agents — per-agent config ----------------
+  if (currentStep === "agents" && agentsPhase === "per-agent-config") {
+    const prompt = agentConfigPrompts[agentConfigIdx];
+    if (!prompt) {
+      setAgentsPhase("confirm");
+      return <Text>…</Text>;
+    }
+    const agent = agentCatalog.find((a) => a.id === prompt.agentId);
+    if (!agent) {
+      setAgentsPhase("confirm");
+      return <Text>…</Text>;
+    }
+    const progress = `(${agentConfigIdx + 1}/${agentConfigPrompts.length})`;
+    if (prompt.kind === "llm-choice") {
+      const compat = agent.llm_compat ?? [];
+      const options = compat.map((id) => {
+        const provider = providerCatalog.find((p) => p.id === id);
+        const configured = provider?.secret_name
+          ? services.secretStore.exists(provider.secret_name)
+          : provider
+            ? services.secretStore.exists(`${provider.id}-endpoint`)
+            : false;
+        const label = provider
+          ? `${provider.name} ${configured ? "✓" : "✗ missing"}`
+          : `${id} ✗ unknown`;
+        return { value: id, label };
+      });
+      const defaultChoice =
+        compat.find((id) => {
+          const provider = providerCatalog.find((p) => p.id === id);
+          if (!provider) return false;
+          if (provider.secret_name) {
+            return services.secretStore.exists(provider.secret_name);
+          }
+          return services.secretStore.exists(`${provider.id}-endpoint`);
+        }) ?? compat[0];
+      return (
+        <Box flexDirection="column" gap={1} paddingY={1}>
+          <Text bold>
+            Step 2 / 4 — {agent.name} {progress}
+          </Text>
+          <Text color={theme.fg.muted}>
+            Pick the LLM provider this agent should use. Greyed entries are
+            missing a key — configure one in Step 1 first if you want it.
+          </Text>
+          <Select
+            options={options}
+            defaultValue={llmDraft ?? defaultChoice}
+            onChange={(value) => setLlmDraft(value)}
+          />
+          <Text color={theme.fg.muted}>
+            [↑↓] move · [Enter] confirm · [Esc] back to selection
+          </Text>
+        </Box>
+      );
+    }
+    return (
+      <Box flexDirection="column" gap={1} paddingY={1}>
+        <Text bold>
+          Step 2 / 4 — {agent.name} (responsibility note) {progress}
+        </Text>
+        <Text color={theme.fg.muted}>
+          Short description of what this agent is for. Surfaces in the audit
+          log, approval modal, and dashboard. Optional — Enter on empty input
+          to skip.
+        </Text>
+        <Text color={theme.fg.muted}>
+          Examples: "Code review", "Daily personal assistant on Telegram",
+          "Refactor suggestions"
+        </Text>
+        <TextInput
+          placeholder=""
+          onSubmit={(value) => {
+            setAgentConfigs((prev) => {
+              const existing = prev[prompt.agentId] ?? {};
+              return {
+                ...prev,
+                [prompt.agentId]: {
+                  ...existing,
+                  responsibilityNote: value.length > 0 ? value : undefined,
+                },
+              };
+            });
+            const result = applyAgentConfigSubmit({
+              currentIdx: agentConfigIdx,
+              totalPrompts: agentConfigPrompts.length,
+            });
+            setAgentConfigIdx(result.nextIdx);
+            setAgentsPhase(result.nextPhase);
+            setLlmDraft(null);
+          }}
+        />
+        <Text color={theme.fg.muted}>
+          [Enter] save · [Esc] back to selection
         </Text>
       </Box>
     );
@@ -663,8 +864,12 @@ export function SetupWizard({
             : "",
         ].filter(Boolean),
       );
-      void runInstallStep(toAdd, toRemove, services, (line) =>
-        setInstallLog((prev) => [...prev, line]),
+      void runInstallStep(
+        toAdd,
+        toRemove,
+        services,
+        (line) => setInstallLog((prev) => [...prev, line]),
+        agentConfigs,
       ).then(() => {
         advance("install");
       });
@@ -746,11 +951,19 @@ export function SetupWizard({
 // Exported for tests. The wizard's core diff loop: install + register the
 // newly-checked agents, uninstall + remove the previously-checked-now-unchecked
 // ones. Idempotent — running it twice with the same toAdd/toRemove no-ops.
+export interface AgentConfig {
+  llmProvider?: string;
+  responsibilityNote?: string;
+}
+
+export type AgentConfigsMap = Record<string, AgentConfig | undefined>;
+
 export async function runInstallStep(
   toAdd: string[],
   toRemove: string[],
   services: WizardServices,
   log: (line: string) => void,
+  agentConfigs: AgentConfigsMap = {},
 ): Promise<void> {
   const { doc } = loadActiveRegistry();
 
@@ -858,12 +1071,18 @@ export async function runInstallStep(
       continue;
     }
     try {
+      const cfg = agentConfigs[id];
       registerAgent({
         agentId: id,
         entry,
         registry: services.registry,
+        llmProvider: cfg?.llmProvider,
+        responsibilityNote: cfg?.responsibilityNote,
       });
       log(`  ✓ registered as "${id}"`);
+      if (cfg?.llmProvider) log(`    LLM provider: ${cfg.llmProvider}`);
+      if (cfg?.responsibilityNote)
+        log(`    Responsibility: ${cfg.responsibilityNote}`);
       if (entry.identity_path) {
         try {
           const soulResult = applyForemanSoul(
