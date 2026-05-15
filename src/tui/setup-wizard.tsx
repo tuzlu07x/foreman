@@ -34,9 +34,11 @@ import {
   loadActiveServices,
   type AgentEntry,
   type ProviderEntry,
+  type ServiceEntry,
 } from "../core/registry-catalog.js";
 import { runDoctor, type DoctorReport } from "../core/doctor.js";
 import { applyForemanSoul } from "../core/foreman-soul.js";
+import { osc8 } from "./osc8.js";
 import { RegistryService } from "../core/registry.js";
 import { SecretStore } from "../core/secret-store.js";
 import type { ForemanDb } from "../db/client.js";
@@ -213,6 +215,66 @@ export function computeAgentDiff(
   return { toAdd, toRemove };
 }
 
+export type ServicesPhase = "picker" | "values" | "summary";
+
+export interface ServicesPickerSubmitResult {
+  nextPhase: ServicesPhase;
+  selected: string[];
+}
+
+export function applyServicesPickerSubmit(
+  values: string[],
+): ServicesPickerSubmitResult {
+  if (values.length === 0) {
+    return { nextPhase: "summary", selected: [] };
+  }
+  return { nextPhase: "values", selected: values };
+}
+
+export interface ServiceValueSubmitInput {
+  serviceId: string;
+  value: string;
+  currentIdx: number;
+  totalSelected: number;
+}
+
+export interface ServiceValueSubmitResult {
+  shouldSave: boolean;
+  warning: string | null;
+  nextPhase: ServicesPhase;
+  nextIdx: number;
+}
+
+export function applyServiceValueSubmit(
+  input: ServiceValueSubmitInput,
+): ServiceValueSubmitResult {
+  const isLast = input.currentIdx + 1 >= input.totalSelected;
+  if (input.value.length === 0) {
+    return {
+      shouldSave: false,
+      warning: `Skipped ${input.serviceId} — empty value. Add it later from the Services page.`,
+      nextPhase: isLast ? "summary" : "values",
+      nextIdx: input.currentIdx + 1,
+    };
+  }
+  return {
+    shouldSave: true,
+    warning: null,
+    nextPhase: isLast ? "summary" : "values",
+    nextIdx: input.currentIdx + 1,
+  };
+}
+
+// Intersect a service's used_by_agents with the agents the user picked in
+// Step 2 — the wizard hasn't installed them yet, so registry.list() would
+// be empty here. Returns the matching ids in agent-catalog order.
+export function consumingAgentsFor(
+  service: ServiceEntry,
+  agentsSelected: string[],
+): string[] {
+  return service.used_by_agents.filter((id) => agentsSelected.includes(id));
+}
+
 // Side-effecting glue between the pure phase reducer and React state +
 // SecretStore. Kept module-local (not exported) because the call sites are
 // only the two TextInput / PasswordInput onSubmits that share this logic.
@@ -355,6 +417,14 @@ export function SetupWizard({
   const [agentConfigs, setAgentConfigs] = useState<AgentConfigsMap>({});
   const [llmDraft, setLlmDraft] = useState<string | null>(null);
 
+  const serviceCatalog = useMemo(() => loadActiveServices().doc.services, []);
+  const [servicesSelected, setServicesSelected] = useState<string[]>([]);
+  const [serviceIdx, setServiceIdx] = useState(0);
+  const [servicesPhase, setServicesPhase] = useState<ServicesPhase>("picker");
+  const [servicesSaved, setServicesSaved] = useState<string[]>([]);
+  const [servicesSkipped, setServicesSkipped] = useState<string[]>([]);
+  const [servicesWarning, setServicesWarning] = useState<string | null>(null);
+
   const [installLog, setInstallLog] = useState<string[]>([]);
   const [installRunning, setInstallRunning] = useState(false);
   const [installSummary, setInstallSummary] =
@@ -460,6 +530,18 @@ export function SetupWizard({
         setProvidersPhase("summary");
         return;
       }
+      return;
+    }
+    if (currentStep === "services") {
+      if (servicesPhase === "values" || servicesPhase === "summary") {
+        setServicesPhase("picker");
+        setServiceIdx(0);
+        setServicesWarning(null);
+        return;
+      }
+      // picker → agents confirm (the most recent agents phase)
+      uncomplete("agents");
+      setAgentsPhase("confirm");
       return;
     }
   });
@@ -866,7 +948,7 @@ export function SetupWizard({
             (no changes — every selection is already registered)
           </Text>
         ) : (
-          <Text>Proceed with install? (y/n)</Text>
+          <Text>Continue to services? (y/n)</Text>
         )}
         <Text color={theme.fg.muted}>
           (n / Esc returns to the selection screen)
@@ -880,6 +962,184 @@ export function SetupWizard({
             setAgentsPhase("picker");
           }}
         />
+      </Box>
+    );
+  }
+
+  // ---------------- Services — picker ----------------
+  if (currentStep === "services" && servicesPhase === "picker") {
+    const options = serviceCatalog.map((s) => {
+      const consumers = consumingAgentsFor(s, agentsSelected);
+      const usedBy =
+        consumers.length > 0
+          ? `Used by: ${consumers.join(", ")}`
+          : "(no installed agents use this — you can add it anyway)";
+      return {
+        value: s.id,
+        label: `${s.name} — ${usedBy}`,
+      };
+    });
+    return (
+      <Box flexDirection="column" gap={1} paddingY={1}>
+        <Text bold>Step 3 / 4 — Services (selection)</Text>
+        <Text color={theme.fg.muted}>
+          ↑↓ move · <Text bold>Space toggle</Text> · Enter confirm. 3rd-party
+          tokens (Telegram, Discord, Slack, GitHub, …). Each one stores its
+          token encrypted on disk and gets handed to consuming agents on
+          demand. Skippable — leave empty + Enter to bypass.
+        </Text>
+        <MultiSelect
+          options={options}
+          onSubmit={(values) => {
+            const result = applyServicesPickerSubmit(values);
+            setServicesSelected(result.selected);
+            setServiceIdx(0);
+            setServicesPhase(result.nextPhase);
+          }}
+        />
+        <Text color={theme.fg.muted}>
+          [Space] toggle · [Enter] continue · [Esc] back to agents
+        </Text>
+      </Box>
+    );
+  }
+
+  // ---------------- Services — value prompts ----------------
+  if (currentStep === "services" && servicesPhase === "values") {
+    const serviceId = servicesSelected[serviceIdx];
+    if (!serviceId) {
+      setServicesPhase("summary");
+      return <Text>…</Text>;
+    }
+    const service = serviceCatalog.find((s) => s.id === serviceId);
+    if (!service) {
+      setServicesPhase("summary");
+      return <Text>…</Text>;
+    }
+    const progress = `(${serviceIdx + 1}/${servicesSelected.length})`;
+    return (
+      <Box flexDirection="column" gap={1} paddingY={1}>
+        <Text bold>
+          Step 3 / 4 — Services (token {serviceIdx + 1} of{" "}
+          {servicesSelected.length})
+        </Text>
+        <Text>
+          {theme.symbols.bullet} Setting up{" "}
+          <Text bold color={theme.accent.primary}>
+            {service.name}
+          </Text>{" "}
+          <Text color={theme.fg.muted}>{progress}</Text>
+        </Text>
+        <Text color={theme.fg.muted}>
+          Get yours at:{" "}
+          <Text color={theme.accent.primary}>
+            {service.open_url_hotkey
+              ? osc8(service.where_to_get)
+              : service.where_to_get}
+          </Text>
+        </Text>
+        <Text color={theme.fg.muted}>
+          Expected format:{" "}
+          <Text color={theme.accent.primary}>{service.format_hint}</Text>
+        </Text>
+        {service.setup_steps.length > 0 && (
+          <Box flexDirection="column">
+            {service.setup_steps.map((line, i) => (
+              <Text key={i} color={theme.fg.muted}>
+                {"  "}
+                {i + 1}. {line}
+              </Text>
+            ))}
+          </Box>
+        )}
+        <Text color={theme.fg.muted}>
+          (Enter to save · Enter on empty input to skip)
+        </Text>
+        {servicesWarning && (
+          <Text color={theme.accent.warning}>⚠ {servicesWarning}</Text>
+        )}
+        <PasswordInput
+          placeholder="…"
+          onSubmit={(value) => {
+            const result = applyServiceValueSubmit({
+              serviceId,
+              value,
+              currentIdx: serviceIdx,
+              totalSelected: servicesSelected.length,
+            });
+            if (result.shouldSave) {
+              try {
+                if (!services.secretStore.exists(service.secret_name)) {
+                  services.secretStore.add(service.secret_name, value);
+                } else {
+                  services.secretStore.rotate(service.secret_name, value);
+                }
+                setServicesSaved((prev) => [...prev, service.secret_name]);
+              } catch (err) {
+                setServicesWarning(
+                  `failed to store ${service.secret_name}: ${err instanceof Error ? err.message : String(err)}`,
+                );
+                return;
+              }
+            } else {
+              setServicesSkipped((prev) => [...prev, service.secret_name]);
+            }
+            setServicesWarning(result.warning);
+            setServiceIdx(result.nextIdx);
+            setServicesPhase(result.nextPhase);
+          }}
+        />
+        <Text color={theme.fg.muted}>
+          [Enter] save · [Esc] back to selection
+        </Text>
+      </Box>
+    );
+  }
+
+  // ---------------- Services — summary ----------------
+  if (currentStep === "services" && servicesPhase === "summary") {
+    const savedCount = servicesSaved.length;
+    const skippedCount = servicesSkipped.length;
+    return (
+      <Box flexDirection="column" gap={1} paddingY={1}>
+        <Text bold>Step 3 / 4 — Services (summary)</Text>
+        {savedCount > 0 ? (
+          <Box flexDirection="column">
+            <Text color={theme.accent.success}>
+              ✓ Wired {savedCount} service{savedCount === 1 ? "" : "s"}:
+            </Text>
+            {servicesSaved.map((name) => (
+              <Text key={name} color={theme.fg.muted}>
+                {"  "}• {name}
+              </Text>
+            ))}
+          </Box>
+        ) : (
+          <Text color={theme.fg.muted}>
+            (no services configured — you can add them later from the
+            Services page)
+          </Text>
+        )}
+        {skippedCount > 0 && (
+          <Box flexDirection="column">
+            <Text color={theme.accent.warning}>
+              ⚠ Skipped {skippedCount} (empty value):
+            </Text>
+            {servicesSkipped.map((name) => (
+              <Text key={name} color={theme.fg.muted}>
+                {"  "}• {name}
+              </Text>
+            ))}
+          </Box>
+        )}
+        <Text>Continue to install? (y/n)</Text>
+        <ConfirmInput
+          onConfirm={() => advance("services")}
+          onCancel={() => advance("services")}
+        />
+        <Text color={theme.fg.muted}>
+          [y/n] continue · [Esc] back to selection
+        </Text>
       </Box>
     );
   }
@@ -921,7 +1181,7 @@ export function SetupWizard({
     }
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <Text bold>Step 3 / 4 — Install + configure</Text>
+        <Text bold>Step 4 / 4 — Install + configure</Text>
         {installLog.map((line, i) => {
           const isError = line.trimStart().startsWith("✗");
           const isWarning = line.trimStart().startsWith("⚠");
@@ -947,7 +1207,7 @@ export function SetupWizard({
   if (currentStep === "policy") {
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <Text bold>Step 4 / 4 — Policy</Text>
+        <Text bold>Optional — review policy?</Text>
         <Text color={theme.fg.muted}>
           Foreman ships safe defaults (asks before any agent reads .env-shaped
           files or runs destructive shell). Want to review {services.policyPath}{" "}
@@ -971,7 +1231,6 @@ export function SetupWizard({
     services.secretStore.list().map((s) => s.name),
   );
   const providerIds = configuredProviderIds(providerCatalog, storedNames);
-  const serviceCatalog = loadActiveServices().doc.services;
   const serviceIds = configuredServiceIds(serviceCatalog, storedNames);
   const agentRows = services.registry.list();
   const policyRuleCount = countPolicyRules(services.policyPath);
