@@ -8,7 +8,6 @@ export const STEPS = [
   "agents",
   "services",
   "install",
-  "policy",
   "done",
 ] as const;
 export type Step = (typeof STEPS)[number];
