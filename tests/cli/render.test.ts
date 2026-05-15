@@ -42,6 +42,8 @@ const sampleAgent: RegisteredAgent = {
   registeredAt: Date.now() - 60_000,
   lastSeenAt: Date.now() - 5_000,
   metadata: null,
+  llmProvider: null,
+  responsibilityNote: null,
 }
 
 const samplePolicy: PolicyRow = {
