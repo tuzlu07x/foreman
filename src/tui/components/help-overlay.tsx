@@ -20,6 +20,9 @@ export function HelpOverlay(): JSX.Element {
           title="Navigation"
           rows={[
             ["c", "chat / test console"],
+            ["g", "settings page (identity, policy, wizard)"],
+            ["k", "keys (secrets) page"],
+            ["a", "agents page"],
             ["l", "logs page"],
             ["p", "policy page"],
             ["s", "sessions page"],
@@ -34,6 +37,24 @@ export function HelpOverlay(): JSX.Element {
             ["i", "enter input mode"],
             ["Enter", "send through mediator (records audit log)"],
             ["Esc", "exit input mode / leave page"],
+          title="Settings page"
+          rows={[
+            ["e", "edit Foreman SOUL.md (agent identity)"],
+            ["p", "edit policy.yaml"],
+            ["P", "open Policy page (read-only view)"],
+            ["w", "show re-run wizard instructions"],
+          title="Secrets page"
+          rows={[
+            ["↑ ↓ / Enter", "select / expand row"],
+            ["v", "reveal value (auto-hides after 10s)"],
+            ["r", "rotate value (inline password input)"],
+            ["d", "remove secret"],
+          title="Agents page"
+          rows={[
+            ["↑ ↓ / Enter", "select / expand row"],
+            ["b", "block / unblock selected agent"],
+            ["r", "regenerate Ed25519 keypair (shown once)"],
+            ["d", "remove (hard delete)"],
           ]}
         />
         <Section
