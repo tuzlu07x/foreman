@@ -112,6 +112,14 @@ export class RegistryService {
     return rows.map(toRegisteredAgent);
   }
 
+  // Like list() but includes blocked rows — used by the TUI Agents page so the
+  // user can see and unblock entries. The mediator + heartbeat paths stay on
+  // list() so blocked agents remain quarantined from real traffic.
+  listAll(): RegisteredAgent[] {
+    const rows = this.db.select().from(agents).all();
+    return rows.map(toRegisteredAgent);
+  }
+
   get(agentId: string): RegisteredAgent | null {
     const row = this.db
       .select()
