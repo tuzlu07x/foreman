@@ -5,6 +5,7 @@ import type { EventBus, ForemanEventMap } from "../core/event-bus.js";
 import type { MediatorService } from "../core/mediator.js";
 import type { PolicyEngine } from "../core/policy-engine.js";
 import type { RegistryService } from "../core/registry.js";
+import type { SecretStore } from "../core/secret-store.js";
 import type { SessionManager } from "../core/session.js";
 
 export interface DashboardServices {
@@ -18,6 +19,7 @@ export interface DashboardServices {
   /** Path to Foreman's canonical SOUL.md (identity propagated to agents). */
   soulPath?: string;
   sessionManager?: SessionManager;
+  secretStore?: SecretStore;
 }
 
 const DashboardContext = createContext<DashboardServices | null>(null);
