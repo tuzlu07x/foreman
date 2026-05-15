@@ -19,6 +19,7 @@ export function HelpOverlay(): JSX.Element {
         <Section
           title="Navigation"
           rows={[
+            ["h / ?", "open / close this help overlay"],
             ["c", "chat / test console"],
             ["g", "settings page (identity, policy, wizard)"],
             ["k", "keys (secrets) page"],
@@ -92,7 +93,7 @@ export function HelpOverlay(): JSX.Element {
       </Box>
       <Box marginTop={1} justifyContent="center">
         <Text color={theme.fg.muted}>
-          {`docs: github.com/tuzlu07x/foreman  ·  press ? or Esc to close`}
+          {`docs: github.com/tuzlu07x/foreman  ·  press h / ? / Esc to close`}
         </Text>
       </Box>
     </Box>

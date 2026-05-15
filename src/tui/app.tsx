@@ -961,9 +961,9 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
   } = props;
 
   useInput((input, key) => {
-    // Help overlay takes priority — when open, only `?`/Esc close it.
+    // Help overlay takes priority — when open, Esc / `?` / `h` close it.
     if (helpOpen) {
-      if (key.escape || input === "?") setHelpOpen(false);
+      if (key.escape || input === "?" || input === "h") setHelpOpen(false);
       return;
     }
     if (pendingApproval && inspectOpen) {
@@ -1204,7 +1204,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         setQuitConfirm(false);
       return;
     }
-    if (input === "?") setHelpOpen(true);
+    if (input === "?" || input === "h") setHelpOpen(true);
     else if (input === "q") exit();
     else if (key.ctrl && input === "c") setQuitConfirm(true);
     else if (input === "c") setPage("chat");
