@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "services": [
+    {
+      "id": "telegram",
+      "name": "Telegram",
+      "description": "Bot integration for Telegram channel/DM",
+      "secret_name": "telegram-bot-token",
+      "where_to_get": "https://t.me/BotFather",
+      "format_hint": "123456789:ABC-DEF1234567890abcdef",
+      "setup_steps": [
+        "Open Telegram on your phone or desktop",
+        "Search for @BotFather",
+        "Send /newbot",
+        "Choose a display name (e.g. \"My Foreman Bot\")",
+        "Choose a username ending in 'bot' (e.g. fatih_assistant_bot)",
+        "Copy the token BotFather sends"
+      ],
+      "used_by_agents": ["hermes", "openclaw"],
+      "open_url_hotkey": true
+    },
+    {
+      "id": "discord",
+      "name": "Discord",
+      "description": "Bot integration for Discord server",
+      "secret_name": "discord-bot-token",
+      "where_to_get": "https://discord.com/developers/applications",
+      "format_hint": "long opaque string",
+      "setup_steps": [
+        "Open Discord Developer Portal",
+        "Click \"New Application\" and name it",
+        "Bot tab → Add Bot",
+        "Reset Token → Copy"
+      ],
+      "used_by_agents": ["hermes", "openclaw"],
+      "open_url_hotkey": true
+    },
+    {
+      "id": "slack",
+      "name": "Slack",
+      "description": "Bot integration with OAuth scopes",
+      "secret_name": "slack-bot-token",
+      "where_to_get": "https://api.slack.com/apps",
+      "format_hint": "starts with xoxb-",
+      "setup_steps": [
+        "Visit api.slack.com/apps and create a new app",
+        "From Scratch → name + workspace",
+        "OAuth & Permissions → add scopes (chat:write, channels:read at minimum)",
+        "Install to Workspace",
+        "Copy the Bot User OAuth Token"
+      ],
+      "used_by_agents": ["openclaw"],
+      "open_url_hotkey": true
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "description": "Personal Access Token for repo access",
+      "secret_name": "github-pat",
+      "where_to_get": "https://github.com/settings/tokens/new",
+      "format_hint": "starts with ghp_",
+      "setup_steps": [
+        "Visit github.com/settings/tokens/new",
+        "Note: choose a meaningful name (e.g. \"Foreman agent token\")",
+        "Expiration: recommend 90 days",
+        "Scopes: repo (full repo access), read:user",
+        "Generate token",
+        "Copy immediately (won't show again)"
+      ],
+      "used_by_agents": ["claude-code", "codex"],
+      "open_url_hotkey": true
+    },
+    {
+      "id": "atlassian",
+      "name": "Atlassian (Jira / Confluence)",
+      "description": "API token for Atlassian cloud",
+      "secret_name": "atlassian-api-token",
+      "where_to_get": "https://id.atlassian.com/manage-profile/security/api-tokens",
+      "format_hint": "long opaque string",
+      "setup_steps": [
+        "Visit id.atlassian.com/manage-profile/security/api-tokens",
+        "Create API token → name it",
+        "Copy the token"
+      ],
+      "used_by_agents": [],
+      "open_url_hotkey": true
+    },
+    {
+      "id": "notion",
+      "name": "Notion",
+      "description": "Integration token for Notion workspace",
+      "secret_name": "notion-integration-token",
+      "where_to_get": "https://www.notion.so/my-integrations",
+      "format_hint": "starts with secret_",
+      "setup_steps": [
+        "Visit notion.so/my-integrations",
+        "New integration → name it",
+        "Choose workspace + capabilities",
+        "Copy the Internal Integration Token",
+        "Share each Notion page you want the integration to access"
+      ],
+      "used_by_agents": [],
+      "open_url_hotkey": true
+    }
+  ]
+}
