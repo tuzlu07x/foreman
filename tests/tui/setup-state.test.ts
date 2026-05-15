@@ -12,6 +12,7 @@ import {
   freshState,
   loadSetupState,
   markCompleted,
+  markUncompleted,
   nextStep,
   resetSetupState,
   saveSetupState,
@@ -76,6 +77,59 @@ describe("setup-state", () => {
       const s1 = freshState();
       await new Promise((r) => setTimeout(r, 2));
       const s2 = markCompleted(s1, "welcome");
+      expect(s2.lastUpdatedAt).toBeGreaterThan(s1.lastUpdatedAt);
+    });
+  });
+
+  describe("markUncompleted", () => {
+    it("removes the named step from completed", () => {
+      let s = freshState();
+      s = markCompleted(s, "welcome");
+      s = markCompleted(s, "secrets");
+      s = markUncompleted(s, "secrets");
+      expect(s.completed).toEqual(["welcome"]);
+    });
+
+    it("nextStep returns the uncompleted step after markUncompleted", () => {
+      let s = freshState();
+      s = markCompleted(s, "welcome");
+      s = markCompleted(s, "secrets");
+      s = markUncompleted(s, "secrets");
+      expect(nextStep(s)).toBe("secrets");
+    });
+
+    it("also removes every step after the uncompleted one to avoid gaps", () => {
+      let s = freshState();
+      s = markCompleted(s, "welcome");
+      s = markCompleted(s, "secrets");
+      s = markCompleted(s, "agents");
+      s = markUncompleted(s, "secrets");
+      expect(s.completed).toEqual(["welcome"]);
+      expect(nextStep(s)).toBe("secrets");
+    });
+
+    it("is a no-op when the step is not in completed", () => {
+      let s = freshState();
+      s = markCompleted(s, "welcome");
+      const before = s;
+      s = markUncompleted(s, "agents");
+      expect(s).toBe(before);
+    });
+
+    it("is a no-op when the step name is not a known step", () => {
+      let s = freshState();
+      s = markCompleted(s, "welcome");
+      const before = s;
+      s = markUncompleted(s, "not-a-step" as never);
+      expect(s).toBe(before);
+    });
+
+    it("bumps lastUpdatedAt when state changes", async () => {
+      let s = freshState();
+      s = markCompleted(s, "welcome");
+      const s1 = markCompleted(s, "secrets");
+      await new Promise((r) => setTimeout(r, 2));
+      const s2 = markUncompleted(s1, "secrets");
       expect(s2.lastUpdatedAt).toBeGreaterThan(s1.lastUpdatedAt);
     });
   });

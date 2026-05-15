@@ -1,4 +1,4 @@
-import { Box, Text, useApp } from "ink";
+import { Box, Text, useApp, useInput } from "ink";
 import {
   ConfirmInput,
   MultiSelect,
@@ -35,6 +35,7 @@ import type { ForemanDb } from "../db/client.js";
 import { getForemanPaths } from "../utils/config.js";
 import {
   markCompleted,
+  markUncompleted,
   saveSetupState,
   type SetupState,
   type Step,
@@ -208,6 +209,14 @@ export function SetupWizard({
     });
   };
 
+  const uncomplete = (step: Step): void => {
+    setState((prev) => {
+      const next = markUncompleted(prev, step);
+      saveSetupState(next);
+      return next;
+    });
+  };
+
   const [secretsSelected, setSecretsSelected] = useState<string[]>([]);
   const [secretIdx, setSecretIdx] = useState(0);
   const [secretsPhase, setSecretsPhase] = useState<SecretsPhase>("picker");
@@ -235,6 +244,41 @@ export function SetupWizard({
 
   const [policyReview, setPolicyReview] = useState(false);
 
+  // Esc handler — phase-aware back navigation (#153). Stays out of the way
+  // during install (no cancel mid-flight) and during welcome (let
+  // ConfirmInput handle n=exit). Selections held in React state are
+  // preserved across back-steps because we only mutate phase / completion.
+  useInput((_input, key) => {
+    if (!key.escape) return;
+    if (currentStep === "welcome") return;
+    if (currentStep === "secrets") {
+      if (secretsPhase === "values" || secretsPhase === "summary") {
+        setSecretsPhase("picker");
+        setSecretIdx(0);
+        setSecretsWarning(null);
+        return;
+      }
+      // picker → welcome
+      uncomplete("welcome");
+      return;
+    }
+    if (currentStep === "agents") {
+      if (agentsPhase === "confirm") {
+        setAgentsPhase("picker");
+        return;
+      }
+      if (agentsPhase === "picker") {
+        // back to secrets summary
+        uncomplete("secrets");
+        setSecretsPhase("summary");
+        return;
+      }
+      // agentsPhase === "running" — no-op (install is running)
+      return;
+    }
+    // install / policy / done: don't allow back-nav after install ran.
+  });
+
   // ---------------- Welcome ----------------
   if (currentStep === "welcome") {
     return (
@@ -252,6 +296,9 @@ export function SetupWizard({
           onConfirm={() => advance("welcome")}
           onCancel={() => exit()}
         />
+        <Text color={theme.fg.muted}>
+          [y] continue · [n] quit
+        </Text>
       </Box>
     );
   }
@@ -286,6 +333,9 @@ export function SetupWizard({
             setSecretsPhase(result.nextPhase);
           }}
         />
+        <Text color={theme.fg.muted}>
+          [Space] toggle · [Enter] confirm · [Esc] back to welcome
+        </Text>
       </Box>
     );
   }
@@ -354,6 +404,9 @@ export function SetupWizard({
             setSecretsPhase(result.nextPhase);
           }}
         />
+        <Text color={theme.fg.muted}>
+          [Enter] save · [Esc] back to selection
+        </Text>
       </Box>
     );
   }
@@ -399,6 +452,9 @@ export function SetupWizard({
           onConfirm={() => advance("secrets")}
           onCancel={() => advance("secrets")}
         />
+        <Text color={theme.fg.muted}>
+          [y/n] continue · [Esc] back to selection
+        </Text>
       </Box>
     );
   }
@@ -434,6 +490,9 @@ export function SetupWizard({
             setAgentsPhase(result.nextPhase);
           }}
         />
+        <Text color={theme.fg.muted}>
+          [Space] toggle · [Enter] confirm · [Esc] back to secrets
+        </Text>
       </Box>
     );
   }
@@ -540,6 +599,9 @@ export function SetupWizard({
             </Text>
           );
         })}
+        <Text color={theme.fg.muted}>
+          (install running — back-navigation disabled mid-flight)
+        </Text>
       </Box>
     );
   }
