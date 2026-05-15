@@ -52,9 +52,10 @@ export function HelpOverlay(): JSX.Element {
           ]}
         />
         <Section
-          title="Secrets page"
+          title="Secrets page (advanced — low-level view)"
           rows={[
             ["↑ ↓ / Enter", "select / expand row"],
+            ["n", "add a raw custom secret (free-form name + value)"],
             ["v", "reveal value (auto-hides after 10s)"],
             ["r", "rotate value (inline password input)"],
             ["d", "remove secret"],
