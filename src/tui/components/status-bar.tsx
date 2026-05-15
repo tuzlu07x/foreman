@@ -21,19 +21,19 @@ export function buildStatusBarLayout(layout: Layout): StatusBarLayout {
   if (layout === "wide") {
     return {
       rows: [
-        "[h] help · [a] agents · [c] chat · [g] settings · [k] keys · [l] logs · [p] policy · [s] sessions · [q] quit",
+        "[h] help · [a] agents · [v] providers · [c] chat · [g] settings · [k] keys · [l] logs · [p] policy · [s] sessions · [q] quit",
       ],
       showVersion: true,
     };
   }
   if (layout === "medium") {
     return {
-      rows: ["[h] [a] [c] [g] [k] [l] [p] [s] [q]"],
+      rows: ["[h] [a] [v] [c] [g] [k] [l] [p] [s] [q]"],
       showVersion: true,
     };
   }
   return {
-    rows: ["nav:    [h] [a] [c] [g] [k] [l] [p] [s]", "system: [q]"],
+    rows: ["nav:    [h] [a] [v] [c] [g] [k] [l] [p] [s]", "system: [q]"],
     showVersion: false,
   };
 }

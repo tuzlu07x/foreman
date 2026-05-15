@@ -37,6 +37,7 @@ import {
   SecretsPage,
 } from "./pages/secrets-page.js";
 import { AgentsPage } from "./pages/agents-page.js";
+import { ProvidersPage } from "./pages/providers-page.js";
 import { SessionsPage } from "./pages/sessions-page.js";
 import { buildSettingsItems, SettingsPage } from "./pages/settings-page.js";
 import { launchEditor } from "./launch-editor.js";
@@ -49,6 +50,7 @@ export type Page =
   | "policy"
   | "sessions"
   | "agents"
+  | "providers"
   | "secrets"
   | "settings"
   | "chat";
@@ -806,6 +808,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           onLlmDraftChange={setAgentsLlmDraft}
           onNoteSubmit={onAgentSaveNote}
         />
+      ) : page === "providers" ? (
+        <ProvidersPage onLeave={() => setPage("dashboard")} />
       ) : (
         <Box flexGrow={1}>{renderPanels(layout)}</Box>
       )}
@@ -1196,6 +1200,13 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "q") exit();
       return;
     }
+    // ProvidersPage runs its own useInput; short-circuit here so a key
+    // (e.g. `s` for show-value) isn't double-handled by the global dispatch
+    // (which would simultaneously try to setPage('sessions')).
+    if (page === "providers") {
+      if (input === "q") exit();
+      return;
+    }
     if (quitConfirm) {
       if (input === "y" || input === "Y") exit();
       else if (input === "n" || input === "N" || key.escape)
@@ -1209,6 +1220,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     else if (input === "g") setPage("settings");
     else if (input === "k") setPage("secrets");
     else if (input === "a") setPage("agents");
+    else if (input === "v") setPage("providers");
     else if (input === "l") setPage("logs");
     else if (input === "p") setPage("policy");
     else if (input === "s") setPage("sessions");
