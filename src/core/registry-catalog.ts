@@ -56,6 +56,29 @@ export const RegistryDocSchema = z
 export type AgentEntry = z.infer<typeof AgentEntrySchema>;
 export type RegistryDoc = z.infer<typeof RegistryDocSchema>;
 
+// Provider entries are intentionally not strict: unknown keys pass through so
+// v0.2+ can add fields (default_model, rate_limit_hints, …) without forcing
+// an in-lockstep release of the catalog and the parser.
+export const ProviderEntrySchema = z.object({
+  id: z.string().regex(/^[a-z][a-z0-9-]*$/, "id must be lowercase kebab-case"),
+  name: z.string().min(1),
+  description: z.string().min(1),
+  secret_name: z.string().nullable(),
+  where_to_get: z.string().url().nullable(),
+  format_hint: z.string().nullable(),
+  instructions: z.array(z.string()),
+  endpoint_default: z.string().nullable(),
+  endpoint_required: z.boolean(),
+});
+
+export const ProviderCatalogSchema = z.object({
+  version: z.literal(REGISTRY_VERSION),
+  providers: z.array(ProviderEntrySchema),
+});
+
+export type ProviderEntry = z.infer<typeof ProviderEntrySchema>;
+export type ProviderCatalog = z.infer<typeof ProviderCatalogSchema>;
+
 export class RegistryNotFoundError extends Error {
   constructor() {
     super(
@@ -69,6 +92,32 @@ export class AgentNotInRegistryError extends Error {
   constructor(public readonly agentId: string) {
     super(`No agent with id "${agentId}" in the registry`);
     this.name = "AgentNotInRegistryError";
+  }
+}
+
+export class ProviderCatalogNotFoundError extends Error {
+  constructor() {
+    super(
+      "Bundled registry/providers.json was not found. Re-install the foreman-agent package or run from a checked-out repo.",
+    );
+    this.name = "ProviderCatalogNotFoundError";
+  }
+}
+
+export class ProviderNotInCatalogError extends Error {
+  constructor(public readonly providerId: string) {
+    super(`No provider with id "${providerId}" in the catalog`);
+    this.name = "ProviderNotInCatalogError";
+  }
+}
+
+export class ProviderCatalogValidationError extends Error {
+  constructor(
+    message: string,
+    public readonly issues: { path: string; message: string }[],
+  ) {
+    super(message);
+    this.name = "ProviderCatalogValidationError";
   }
 }
 
@@ -173,6 +222,66 @@ export function writeRegistryCache(
 export function findAgent(doc: RegistryDoc, agentId: string): AgentEntry {
   const entry = doc.agents.find((a) => a.id === agentId);
   if (!entry) throw new AgentNotInRegistryError(agentId);
+  return entry;
+}
+
+export function resolveBundledProvidersPath(): string | null {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    resolve(here, "..", "..", "..", "registry", "providers.json"),
+    resolve(here, "..", "..", "registry", "providers.json"),
+    resolve(here, "..", "registry", "providers.json"),
+    resolve(process.cwd(), "registry", "providers.json"),
+  ];
+  for (const c of candidates) if (existsSync(c)) return c;
+  return null;
+}
+
+export function parseProviderCatalogText(text: string): ProviderCatalog {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (err) {
+    throw new ProviderCatalogValidationError(
+      `registry/providers.json is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+      [],
+    );
+  }
+  const parsed = ProviderCatalogSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new ProviderCatalogValidationError(
+      "registry/providers.json failed schema validation",
+      parsed.error.issues.map((i) => ({
+        path: i.path.join("."),
+        message: i.message,
+      })),
+    );
+  }
+  return parsed.data;
+}
+
+export function loadBundledProviders(): ProviderCatalog {
+  const path = resolveBundledProvidersPath();
+  if (!path) throw new ProviderCatalogNotFoundError();
+  return parseProviderCatalogText(readFileSync(path, "utf-8"));
+}
+
+// No cache layer yet — the provider catalog is small and the only writer is
+// the bundled JSON. When/if `foreman registry update` adds providers we can
+// mirror the agent-catalog cache shape; until then bundle is the source.
+export function loadActiveProviders(): {
+  doc: ProviderCatalog;
+  source: "bundled";
+} {
+  return { doc: loadBundledProviders(), source: "bundled" };
+}
+
+export function findProvider(
+  doc: ProviderCatalog,
+  providerId: string,
+): ProviderEntry {
+  const entry = doc.providers.find((p) => p.id === providerId);
+  if (!entry) throw new ProviderNotInCatalogError(providerId);
   return entry;
 }
 

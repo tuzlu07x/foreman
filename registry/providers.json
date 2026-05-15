@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "description": "Claude models — Sonnet, Haiku, Opus",
+      "secret_name": "anthropic-api-key",
+      "where_to_get": "https://console.anthropic.com/settings/keys",
+      "format_hint": "starts with sk-ant-",
+      "instructions": [
+        "Visit console.anthropic.com",
+        "Sign in or create an account",
+        "Settings → API Keys → Create Key",
+        "Copy the key here"
+      ],
+      "endpoint_default": null,
+      "endpoint_required": false
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "description": "GPT-4, GPT-4o, o1, Codex models",
+      "secret_name": "openai-api-key",
+      "where_to_get": "https://platform.openai.com/api-keys",
+      "format_hint": "starts with sk-",
+      "instructions": [
+        "platform.openai.com/api-keys",
+        "Create new secret key",
+        "Copy immediately (won't show again)"
+      ],
+      "endpoint_default": null,
+      "endpoint_required": false
+    },
+    {
+      "id": "gemini",
+      "name": "Google Gemini",
+      "description": "Gemini Pro, Flash, Ultra",
+      "secret_name": "gemini-api-key",
+      "where_to_get": "https://aistudio.google.com/app/apikey",
+      "format_hint": "starts with AI...",
+      "instructions": [
+        "aistudio.google.com/app/apikey",
+        "Create API key in new project",
+        "Copy the key here"
+      ],
+      "endpoint_default": null,
+      "endpoint_required": false
+    },
+    {
+      "id": "ollama",
+      "name": "Local (Ollama)",
+      "description": "Local models — no key, just an endpoint",
+      "secret_name": null,
+      "where_to_get": "https://ollama.com",
+      "format_hint": "http://host:port",
+      "instructions": [
+        "Install Ollama from ollama.com",
+        "Run `ollama serve`",
+        "Default endpoint is http://localhost:11434"
+      ],
+      "endpoint_default": "http://localhost:11434",
+      "endpoint_required": true
+    },
+    {
+      "id": "openai-compatible",
+      "name": "Custom OpenAI-compatible",
+      "description": "Groq, Together, OpenRouter, custom inference endpoints",
+      "secret_name": "openai-compatible-api-key",
+      "where_to_get": null,
+      "format_hint": "varies — provider-specific",
+      "instructions": [
+        "Get your endpoint + API key from your provider",
+        "Common providers: Groq, Together, OpenRouter, vLLM, LiteLLM"
+      ],
+      "endpoint_default": null,
+      "endpoint_required": true
+    }
+  ]
+}
