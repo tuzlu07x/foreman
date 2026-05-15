@@ -19,6 +19,8 @@ export const agents = sqliteTable("agents", {
     .notNull()
     .default("active"),
   metadata: text("metadata"),
+  llmProvider: text("llm_provider"),
+  responsibilityNote: text("responsibility_note"),
 });
 
 export const policies = sqliteTable(

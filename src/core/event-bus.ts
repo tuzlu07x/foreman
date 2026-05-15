@@ -89,6 +89,12 @@ export interface ForemanEventMap {
     agentId: string;
     rotatedAt: number;
   };
+  "agent:config-updated": {
+    agentId: string;
+    llmProvider: string | null;
+    responsibilityNote: string | null;
+    updatedAt: number;
+  };
   "update:available": {
     current: string;
     latest: string;
