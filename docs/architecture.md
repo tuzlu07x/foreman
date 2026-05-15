@@ -43,7 +43,7 @@ Every subcommand lives in its own file under `src/cli/`. The root `src/cli/index
 | `foreman log tail / search / show` | Reads the audit log. FTS5-indexed; `search` queries the index, `tail` paginates, `show <id>` expands one row. |
 | `foreman policy show / edit / reset` | Inspects + edits `policy.yaml`. `edit` opens `$EDITOR`, then reloads + reports the rule count. |
 | `foreman agent add / list / remove / show / regenerate-key / block / unblock / update` | Manages registered agents. Aliased as `agents`. |
-| `foreman secrets add / list / show / rotate / remove` | Manages the encrypted secret store (AES-256-GCM at rest). `show` refuses without `--yes-i-want-to-see-it`. |
+| `foreman secrets add / list / show / rotate / remove` | Manages the encrypted secret store (AES-256-GCM at rest). `show` refuses without `--reveal`. |
 | `foreman registry list / info / update / validate` | Curated catalogue lookup. `update` refreshes from the upstream URL (24 h TTL). |
 | `foreman identity show / edit / reset / push` | Foreman's canonical SOUL.md propagated into each partner runtime's identity hook (`~/.hermes/SOUL.md`, etc.). |
 | `foreman doctor` | 14 checks across paths, identity, db, fts5, policy, agents, mcp gateway, legacy home, updates, chafa. Exit codes 0 / 1 / 2. |
