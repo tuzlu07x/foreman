@@ -538,6 +538,46 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     }
   }, [registry, agentsSelectedIdx]);
 
+  const onAgentDisable = useCallback((): void => {
+    const all = registry.listAll();
+    const target = all[agentsSelectedIdx];
+    if (!target) return;
+    if (target.status === "disabled") {
+      setAgentsNotice(`${target.id} is already disabled`);
+      return;
+    }
+    if (target.status === "blocked") {
+      setAgentsNotice(`${target.id} is blocked — unblock first`);
+      return;
+    }
+    try {
+      registry.disable(target.id);
+      setAgentsNotice(`✓ ${target.id} disabled`);
+    } catch (err) {
+      setAgentsNotice(
+        `error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, [registry, agentsSelectedIdx]);
+
+  const onAgentEnable = useCallback((): void => {
+    const all = registry.listAll();
+    const target = all[agentsSelectedIdx];
+    if (!target) return;
+    if (target.status !== "disabled") {
+      setAgentsNotice(`${target.id} is not disabled (status: ${target.status})`);
+      return;
+    }
+    try {
+      registry.enable(target.id);
+      setAgentsNotice(`✓ ${target.id} enabled`);
+    } catch (err) {
+      setAgentsNotice(
+        `error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, [registry, agentsSelectedIdx]);
+
   return (
     <Box flexDirection="column">
       {isRawModeSupported && (
@@ -606,6 +646,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           onAgentToggleBlock={onAgentToggleBlock}
           onAgentRegenKey={onAgentRegenKey}
           onAgentRemove={onAgentRemove}
+          onAgentDisable={onAgentDisable}
+          onAgentEnable={onAgentEnable}
         />
       )}
       <BootBanner
@@ -755,6 +797,8 @@ interface KeyboardHandlerProps {
   onAgentToggleBlock: () => void;
   onAgentRegenKey: () => void;
   onAgentRemove: () => void;
+  onAgentDisable: () => void;
+  onAgentEnable: () => void;
 }
 
 function KeyboardHandler(props: KeyboardHandlerProps): null {
@@ -822,6 +866,8 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     onAgentToggleBlock,
     onAgentRegenKey,
     onAgentRemove,
+    onAgentDisable,
+    onAgentEnable,
   } = props;
 
   useInput((input, key) => {
@@ -1041,8 +1087,10 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         setAgentsExpanded(false);
       } else if (key.return) setAgentsExpanded(!agentsExpanded);
       else if (input === "b") onAgentToggleBlock();
-      else if (input === "r") onAgentRegenKey();
-      else if (input === "d") onAgentRemove();
+      else if (input === "d") onAgentDisable();
+      else if (input === "e") onAgentEnable();
+      else if (input === "r") onAgentRemove();
+      else if (input === "R") onAgentRegenKey();
       else if (input === "q") exit();
       return;
     }

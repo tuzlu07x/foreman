@@ -15,7 +15,9 @@ export const agents = sqliteTable("agents", {
   endpoint: text("endpoint"),
   registeredAt: integer("registered_at").notNull(),
   lastSeenAt: integer("last_seen_at"),
-  status: text("status", { enum: ["active", "inactive", "blocked"] })
+  status: text("status", {
+    enum: ["active", "inactive", "blocked", "disabled"],
+  })
     .notNull()
     .default("active"),
   metadata: text("metadata"),

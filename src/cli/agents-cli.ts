@@ -51,11 +51,12 @@ export const agentsCommand = new Command("agent")
 
 agentsCommand
   .command("list", { isDefault: true })
-  .description("List registered agents")
+  .description("List registered agents (including disabled + blocked)")
   .option("--json", "output JSON")
-  .action((options: { json?: boolean }) => {
+  .option("--active-only", "show only agents currently accepting requests")
+  .action((options: { json?: boolean; activeOnly?: boolean }) => {
     const registry = getRegistry();
-    const rows = registry.list();
+    const rows = options.activeOnly ? registry.list() : registry.listAll();
     if (options.json) {
       process.stdout.write(
         JSON.stringify(rows.map(renderAgentJson), null, 2) + "\n",
@@ -312,6 +313,34 @@ agentsCommand
     try {
       registry.unblock(agentId);
       console.log(`agent ${agentId} unblocked`);
+    } catch (err) {
+      handleAgentError(err);
+    }
+    closeDb();
+  });
+
+agentsCommand
+  .command("disable <agentId>")
+  .description("Temporarily pause an agent without removing its config")
+  .action((agentId: string) => {
+    const registry = getRegistry();
+    try {
+      registry.disable(agentId);
+      console.log(`agent ${agentId} disabled`);
+    } catch (err) {
+      handleAgentError(err);
+    }
+    closeDb();
+  });
+
+agentsCommand
+  .command("enable <agentId>")
+  .description("Resume a previously disabled agent")
+  .action((agentId: string) => {
+    const registry = getRegistry();
+    try {
+      registry.enable(agentId);
+      console.log(`agent ${agentId} enabled`);
     } catch (err) {
       handleAgentError(err);
     }
