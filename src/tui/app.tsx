@@ -27,6 +27,11 @@ import {
   type LogFilters,
 } from "./pages/logs-query.js";
 import { PolicyPage } from "./pages/policy-page.js";
+import {
+  REVEAL_AUTO_HIDE_MS,
+  SecretsPage,
+} from "./pages/secrets-page.js";
+import { AgentsPage } from "./pages/agents-page.js";
 import { SessionsPage } from "./pages/sessions-page.js";
 import { buildSettingsItems, SettingsPage } from "./pages/settings-page.js";
 import { launchEditor } from "./launch-editor.js";
@@ -39,6 +44,8 @@ export type Page =
   | "policy"
   | "sessions"
   | "settings";
+export type Page = "dashboard" | "logs" | "policy" | "sessions" | "secrets";
+export type Page = "dashboard" | "logs" | "policy" | "sessions" | "agents";
 
 export interface AppProps {
   bootInfo: BootInfo;
@@ -57,6 +64,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const layout = useLayout();
   const { isRawModeSupported } = useStdin();
   const { bus, mediator, sqlite, policy, policyPath, sessionManager, soulPath } =
+  const { bus, mediator, sqlite, policy, policyPath, sessionManager, secretStore } =
+  const { bus, mediator, sqlite, policy, policyPath, sessionManager, registry } =
     useDashboardServices();
 
   const [page, setPage] = useState<Page>("dashboard");
@@ -105,6 +114,17 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
 
   const [settingsSelectedIdx, setSettingsSelectedIdx] = useState(0);
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
+  const [secretsSelectedIdx, setSecretsSelectedIdx] = useState(0);
+  const [secretsExpanded, setSecretsExpanded] = useState(false);
+  const [secretsNotice, setSecretsNotice] = useState<string | null>(null);
+  const [revealedSecret, setRevealedSecret] = useState<{
+    name: string;
+    value: string;
+  } | null>(null);
+  const [rotateMode, setRotateMode] = useState<{ name: string } | null>(null);
+  const [agentsSelectedIdx, setAgentsSelectedIdx] = useState(0);
+  const [agentsExpanded, setAgentsExpanded] = useState(false);
+  const [agentsNotice, setAgentsNotice] = useState<string | null>(null);
 
   const [pendingApproval, setPendingApproval] =
     useState<ApprovalRequest | null>(null);
@@ -300,6 +320,130 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
       "press q to quit, then run: foreman setup --resume (or --reset for a clean wizard)",
     );
   }, []);
+  const onSecretReveal = useCallback((): void => {
+    if (!secretStore) return;
+    const all = secretStore.list();
+    const target = all[secretsSelectedIdx];
+    if (!target) return;
+    try {
+      const value = secretStore.get(target.name);
+      setRevealedSecret({ name: target.name, value });
+      setSecretsNotice(
+        `revealing ${target.name} for ${REVEAL_AUTO_HIDE_MS / 1000}s`,
+      );
+    } catch (err) {
+      setSecretsNotice(
+        `error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, [secretStore, secretsSelectedIdx]);
+
+  // Auto-hide revealed secret after the configured TTL.
+  useEffect(() => {
+    if (!revealedSecret) return;
+    const t = setTimeout(() => {
+      setRevealedSecret(null);
+      setSecretsNotice("value auto-hidden");
+    }, REVEAL_AUTO_HIDE_MS);
+    return () => clearTimeout(t);
+  }, [revealedSecret]);
+
+  const onSecretRotate = useCallback((): void => {
+    if (!secretStore) return;
+    const all = secretStore.list();
+    const target = all[secretsSelectedIdx];
+    if (!target) return;
+    setRotateMode({ name: target.name });
+    setRevealedSecret(null);
+  }, [secretStore, secretsSelectedIdx]);
+
+  const onSubmitRotate = useCallback(
+    (value: string): void => {
+      if (!secretStore || !rotateMode) return;
+      try {
+        if (value.length === 0) {
+          setSecretsNotice("rotate cancelled (empty input)");
+        } else {
+          secretStore.rotate(rotateMode.name, value);
+          setSecretsNotice(`✓ ${rotateMode.name} rotated`);
+        }
+      } catch (err) {
+        setSecretsNotice(
+          `error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        setRotateMode(null);
+      }
+    },
+    [secretStore, rotateMode],
+  );
+
+  const onSecretRemove = useCallback((): void => {
+    if (!secretStore) return;
+    const all = secretStore.list();
+    const target = all[secretsSelectedIdx];
+    if (!target) return;
+    try {
+      secretStore.remove(target.name);
+      setSecretsNotice(`✓ ${target.name} removed`);
+      setRevealedSecret(null);
+      setSecretsSelectedIdx((idx) => Math.max(0, idx - 1));
+    } catch (err) {
+      setSecretsNotice(
+        `error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, [secretStore, secretsSelectedIdx]);
+  const onAgentToggleBlock = useCallback((): void => {
+    const all = registry.listAll();
+    const target = all[agentsSelectedIdx];
+    if (!target) return;
+    try {
+      if (target.status === "blocked") {
+        registry.unblock(target.id);
+        setAgentsNotice(`✓ ${target.id} unblocked`);
+      } else {
+        registry.block(target.id);
+        setAgentsNotice(`✓ ${target.id} blocked`);
+      }
+    } catch (err) {
+      setAgentsNotice(
+        `error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, [registry, agentsSelectedIdx]);
+
+  const onAgentRegenKey = useCallback((): void => {
+    const all = registry.listAll();
+    const target = all[agentsSelectedIdx];
+    if (!target) return;
+    try {
+      const result = registry.regenerateKey(target.id);
+      const hex = result.privateKey.toString("hex");
+      setAgentsNotice(
+        `✓ ${target.id} new private key (shown once): ${hex.slice(0, 16)}…${hex.slice(-8)}`,
+      );
+    } catch (err) {
+      setAgentsNotice(
+        `error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, [registry, agentsSelectedIdx]);
+
+  const onAgentRemove = useCallback((): void => {
+    const all = registry.listAll();
+    const target = all[agentsSelectedIdx];
+    if (!target) return;
+    try {
+      registry.remove(target.id);
+      setAgentsNotice(`✓ ${target.id} removed`);
+      setAgentsSelectedIdx((idx) => Math.max(0, idx - 1));
+    } catch (err) {
+      setAgentsNotice(
+        `error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, [registry, agentsSelectedIdx]);
 
   return (
     <Box flexDirection="column">
@@ -348,6 +492,22 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           settingsItemCount={
             buildSettingsItems(soulPath ?? null, policyPath ?? null).length
           }
+          secretsSelectedIdx={secretsSelectedIdx}
+          setSecretsSelectedIdx={setSecretsSelectedIdx}
+          secretsExpanded={secretsExpanded}
+          setSecretsExpanded={setSecretsExpanded}
+          rotateMode={rotateMode}
+          setRotateMode={setRotateMode}
+          onSecretReveal={onSecretReveal}
+          onSecretRotate={onSecretRotate}
+          onSecretRemove={onSecretRemove}
+          agentsSelectedIdx={agentsSelectedIdx}
+          setAgentsSelectedIdx={setAgentsSelectedIdx}
+          agentsExpanded={agentsExpanded}
+          setAgentsExpanded={setAgentsExpanded}
+          onAgentToggleBlock={onAgentToggleBlock}
+          onAgentRegenKey={onAgentRegenKey}
+          onAgentRemove={onAgentRemove}
         />
       )}
       <BootBanner
@@ -399,6 +559,20 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
         <SettingsPage
           selectedIdx={settingsSelectedIdx}
           notice={settingsNotice}
+      ) : page === "secrets" ? (
+        <SecretsPage
+          selectedIdx={secretsSelectedIdx}
+          expanded={secretsExpanded}
+          notice={secretsNotice}
+          revealedName={revealedSecret?.name ?? null}
+          revealedValue={revealedSecret?.value ?? null}
+          rotateMode={rotateMode}
+          onSubmitRotate={onSubmitRotate}
+      ) : page === "agents" ? (
+        <AgentsPage
+          selectedIdx={agentsSelectedIdx}
+          expanded={agentsExpanded}
+          notice={agentsNotice}
         />
       ) : (
         <Box flexGrow={1}>{renderPanels(layout)}</Box>
@@ -450,6 +624,22 @@ interface KeyboardHandlerProps {
   onEditSoul: () => Promise<void>;
   onEditPolicyFromSettings: () => Promise<void>;
   onWizardInstruction: () => void;
+  secretsSelectedIdx: number;
+  setSecretsSelectedIdx: (next: number | ((prev: number) => number)) => void;
+  secretsExpanded: boolean;
+  setSecretsExpanded: (v: boolean) => void;
+  rotateMode: { name: string } | null;
+  setRotateMode: (next: { name: string } | null) => void;
+  onSecretReveal: () => void;
+  onSecretRotate: () => void;
+  onSecretRemove: () => void;
+  agentsSelectedIdx: number;
+  setAgentsSelectedIdx: (next: number | ((prev: number) => number)) => void;
+  agentsExpanded: boolean;
+  setAgentsExpanded: (v: boolean) => void;
+  onAgentToggleBlock: () => void;
+  onAgentRegenKey: () => void;
+  onAgentRemove: () => void;
 }
 
 function KeyboardHandler(props: KeyboardHandlerProps): null {
@@ -496,6 +686,22 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     onEditSoul,
     onEditPolicyFromSettings,
     onWizardInstruction,
+    secretsSelectedIdx,
+    setSecretsSelectedIdx,
+    secretsExpanded,
+    setSecretsExpanded,
+    rotateMode,
+    setRotateMode,
+    onSecretReveal,
+    onSecretRotate,
+    onSecretRemove,
+    agentsSelectedIdx,
+    setAgentsSelectedIdx,
+    agentsExpanded,
+    setAgentsExpanded,
+    onAgentToggleBlock,
+    onAgentRegenKey,
+    onAgentRemove,
   } = props;
 
   useInput((input, key) => {
@@ -651,6 +857,47 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         else if (settingsSelectedIdx === 2) setPage("policy");
         else if (settingsSelectedIdx === 3) onWizardInstruction();
       } else if (input === "q") exit();
+    if (page === "secrets") {
+      // While in rotate-input mode the PasswordInput owns the keystrokes;
+      // we only consume Esc here to bail out of the rotate flow.
+      if (rotateMode) {
+        if (key.escape) {
+          setRotateMode(null);
+        }
+        return;
+      }
+      if (key.escape) {
+        setPage("dashboard");
+        setSecretsExpanded(false);
+        return;
+      }
+      if (key.upArrow) {
+        setSecretsSelectedIdx(Math.max(0, secretsSelectedIdx - 1));
+        setSecretsExpanded(false);
+      } else if (key.downArrow) {
+        setSecretsSelectedIdx(secretsSelectedIdx + 1);
+        setSecretsExpanded(false);
+      } else if (key.return) setSecretsExpanded(!secretsExpanded);
+      else if (input === "v") onSecretReveal();
+      else if (input === "r") onSecretRotate();
+      else if (input === "d") onSecretRemove();
+    if (page === "agents") {
+      if (key.escape) {
+        setPage("dashboard");
+        setAgentsExpanded(false);
+        return;
+      }
+      if (key.upArrow) {
+        setAgentsSelectedIdx(Math.max(0, agentsSelectedIdx - 1));
+        setAgentsExpanded(false);
+      } else if (key.downArrow) {
+        setAgentsSelectedIdx(agentsSelectedIdx + 1);
+        setAgentsExpanded(false);
+      } else if (key.return) setAgentsExpanded(!agentsExpanded);
+      else if (input === "b") onAgentToggleBlock();
+      else if (input === "r") onAgentRegenKey();
+      else if (input === "d") onAgentRemove();
+      else if (input === "q") exit();
       return;
     }
     if (quitConfirm) {
@@ -663,6 +910,8 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     else if (input === "q") exit();
     else if (key.ctrl && input === "c") setQuitConfirm(true);
     else if (input === "g") setPage("settings");
+    else if (input === "k") setPage("secrets");
+    else if (input === "a") setPage("agents");
     else if (input === "l") setPage("logs");
     else if (input === "p") setPage("policy");
     else if (input === "s") setPage("sessions");
