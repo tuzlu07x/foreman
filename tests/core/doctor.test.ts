@@ -20,11 +20,37 @@ import {
   checkNodeVersion,
   checkPolicyYaml,
   computeExitCode,
+  computeSummary,
   runDoctor,
   type CheckResult,
 } from "../../src/core/doctor.js";
 import { closeDb } from "../../src/db/client.js";
 import { runInit } from "../../src/cli/init.js";
+
+describe("computeSummary", () => {
+  it("returns all zeros for an empty list", () => {
+    expect(computeSummary([])).toEqual({ ok: 0, warn: 0, fail: 0 });
+  });
+
+  it("counts every status independently", () => {
+    expect(
+      computeSummary([
+        { name: "a", status: "ok", message: "" },
+        { name: "b", status: "ok", message: "" },
+        { name: "c", status: "warn", message: "" },
+        { name: "d", status: "fail", message: "" },
+        { name: "e", status: "fail", message: "" },
+      ]),
+    ).toEqual({ ok: 2, warn: 1, fail: 2 });
+  });
+
+  it("runDoctor includes summary on the returned report", () => {
+    const report = runDoctor();
+    expect(report.summary.ok + report.summary.warn + report.summary.fail).toBe(
+      report.checks.length,
+    );
+  });
+});
 
 describe("computeExitCode", () => {
   it("returns 0 when all checks pass", () => {
