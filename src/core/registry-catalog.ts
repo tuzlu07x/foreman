@@ -46,6 +46,11 @@ export const AgentEntrySchema = z
      * drive the wizard's per-agent LLM picker (#174). Optional for
      * backward-compat — callers should read it as `entry.llm_compat ?? []`. */
     llm_compat: z.array(z.string()).optional(),
+    /** Service ids from registry/services.json the agent can integrate
+     * with (Telegram, Discord, etc). Drives the "Used by:" line on the
+     * services step (#175) and the TUI Services page (#180). Optional —
+     * callers read as `entry.optional_services ?? []`. */
+    optional_services: z.array(z.string()).optional(),
     mcp_compatible: z.boolean(),
     supported_versions: z.string().min(1),
     min_foreman_version: z.string().min(1),
@@ -413,6 +418,63 @@ export function validateServicesAgainstAgents(
     }
   }
   return missing.length === 0 ? { ok: true } : { ok: false, missing };
+}
+
+export interface CatalogCrossRefIssue {
+  source: "agent" | "service";
+  sourceId: string;
+  field: "llm_compat" | "optional_services" | "used_by_agents";
+  missing: string;
+}
+
+// Cross-catalog typo check: every id an agent or service refers to must
+// resolve to a real entry in the relevant catalog. Run from CI / tests
+// before publishing the registry; not called at runtime to keep the load
+// path cheap.
+export function validateAgentsAgainstCatalogs(
+  agents: RegistryDoc,
+  providers: ProviderCatalog,
+  services: ServiceCatalog,
+): { ok: true } | { ok: false; issues: CatalogCrossRefIssue[] } {
+  const providerIds = new Set(providers.providers.map((p) => p.id));
+  const serviceIds = new Set(services.services.map((s) => s.id));
+  const agentIds = new Set(agents.agents.map((a) => a.id));
+  const issues: CatalogCrossRefIssue[] = [];
+  for (const agent of agents.agents) {
+    for (const id of agent.llm_compat ?? []) {
+      if (!providerIds.has(id)) {
+        issues.push({
+          source: "agent",
+          sourceId: agent.id,
+          field: "llm_compat",
+          missing: id,
+        });
+      }
+    }
+    for (const id of agent.optional_services ?? []) {
+      if (!serviceIds.has(id)) {
+        issues.push({
+          source: "agent",
+          sourceId: agent.id,
+          field: "optional_services",
+          missing: id,
+        });
+      }
+    }
+  }
+  for (const service of services.services) {
+    for (const id of service.used_by_agents) {
+      if (!agentIds.has(id)) {
+        issues.push({
+          source: "service",
+          sourceId: service.id,
+          field: "used_by_agents",
+          missing: id,
+        });
+      }
+    }
+  }
+  return issues.length === 0 ? { ok: true } : { ok: false, issues };
 }
 
 export const REGISTRY_CACHE_TTL_MS = CACHE_TTL_MS;
