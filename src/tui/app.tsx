@@ -26,13 +26,18 @@ import {
   queryLogs,
   type LogFilters,
 } from "./pages/logs-query.js";
+import {
+  ChatPage,
+  parseChatPrompt,
+  type ChatScrollbackEntry,
+} from "./pages/chat-page.js";
 import { PolicyPage } from "./pages/policy-page.js";
 import { SessionsPage } from "./pages/sessions-page.js";
 import { launchEditor } from "./launch-editor.js";
 
 const APPROVAL_TIMEOUT_MS = 60_000;
 
-export type Page = "dashboard" | "logs" | "policy" | "sessions";
+export type Page = "dashboard" | "logs" | "policy" | "sessions" | "chat";
 
 export interface AppProps {
   bootInfo: BootInfo;
@@ -50,7 +55,7 @@ export function App({ bootInfo, services }: AppProps): JSX.Element {
 function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const layout = useLayout();
   const { isRawModeSupported } = useStdin();
-  const { bus, mediator, sqlite, policy, policyPath, sessionManager } =
+  const { bus, mediator, sqlite, policy, policyPath, sessionManager, registry } =
     useDashboardServices();
 
   const [page, setPage] = useState<Page>("dashboard");
@@ -96,6 +101,14 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const [sessionSelectedIdx, setSessionSelectedIdx] = useState(0);
   const [sessionExpanded, setSessionExpanded] = useState(false);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
+
+  const [chatAgentIdx, setChatAgentIdx] = useState(0);
+  const [chatInputMode, setChatInputMode] = useState(false);
+  const [chatInputBuffer, setChatInputBuffer] = useState("");
+  const [chatScrollback, setChatScrollback] = useState<ChatScrollbackEntry[]>(
+    [],
+  );
+  const [chatNotice, setChatNotice] = useState<string | null>(null);
 
   const [pendingApproval, setPendingApproval] =
     useState<ApprovalRequest | null>(null);
@@ -251,6 +264,79 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     setSessionNotice(`session ${target.id} halted`);
   }, [sessionManager, sessionSelectedIdx]);
 
+  const onChatSubmit = useCallback(
+    async (raw: string): Promise<void> => {
+      if (!mediator) {
+        setChatNotice("mediator unavailable");
+        setChatInputMode(false);
+        return;
+      }
+      const agents = registry.list();
+      const picked = agents[chatAgentIdx];
+      if (!picked) {
+        setChatNotice("no registered agent to send through");
+        setChatInputMode(false);
+        return;
+      }
+      const { tool, args } = parseChatPrompt(raw);
+      if (!tool) {
+        setChatNotice("input parses as empty — type a tool name first");
+        return;
+      }
+      try {
+        const result = await mediator.handleRequest({
+          sourceAgent: picked.id,
+          targetTool: tool,
+          message: {
+            jsonrpc: "2.0" as const,
+            id: Date.now(),
+            method: "tools/call",
+            params: { name: tool, arguments: args ?? {} },
+          } as never,
+        });
+        const entry: ChatScrollbackEntry = {
+          id: result.requestId,
+          ts: Date.now(),
+          sourceAgent: picked.id,
+          rawPrompt: raw,
+          parsedTool: tool,
+          parsedArgs: args,
+          decision: result.decision,
+          decidedBy: result.decidedBy,
+          riskScore: result.riskScore,
+          riskReasons: result.riskReasons,
+          durationMs: result.durationMs,
+        };
+        setChatScrollback((prev) => [...prev, entry]);
+        setChatInputBuffer("");
+        setChatNotice(null);
+      } catch (err) {
+        setChatScrollback((prev) => [
+          ...prev,
+          {
+            id: `err-${Date.now()}`,
+            ts: Date.now(),
+            sourceAgent: picked.id,
+            rawPrompt: raw,
+            parsedTool: tool,
+            parsedArgs: args,
+            decision: "error" as const,
+            decidedBy: "exception",
+            riskScore: 0,
+            riskReasons: [],
+            durationMs: 0,
+          },
+        ]);
+        setChatNotice(
+          `error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        setChatInputMode(false);
+      }
+    },
+    [mediator, registry, chatAgentIdx],
+  );
+
   return (
     <Box flexDirection="column">
       {isRawModeSupported && (
@@ -290,6 +376,11 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           sessionExpanded={sessionExpanded}
           setSessionExpanded={setSessionExpanded}
           onSessionHalt={onSessionHalt}
+          chatAgentIdx={chatAgentIdx}
+          setChatAgentIdx={setChatAgentIdx}
+          chatInputMode={chatInputMode}
+          setChatInputMode={setChatInputMode}
+          registeredAgentCount={registry.list().length}
         />
       )}
       <BootBanner
@@ -337,6 +428,16 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           expanded={sessionExpanded}
           notice={sessionNotice}
         />
+      ) : page === "chat" ? (
+        <ChatPage
+          selectedAgentIdx={chatAgentIdx}
+          inputMode={chatInputMode}
+          inputBuffer={chatInputBuffer}
+          setInputBuffer={setChatInputBuffer}
+          scrollback={chatScrollback}
+          onSubmit={(raw) => void onChatSubmit(raw)}
+          notice={chatNotice}
+        />
       ) : (
         <Box flexGrow={1}>{renderPanels(layout)}</Box>
       )}
@@ -381,6 +482,11 @@ interface KeyboardHandlerProps {
   sessionExpanded: boolean;
   setSessionExpanded: (v: boolean) => void;
   onSessionHalt: () => void;
+  chatAgentIdx: number;
+  setChatAgentIdx: (next: number | ((prev: number) => number)) => void;
+  chatInputMode: boolean;
+  setChatInputMode: (v: boolean) => void;
+  registeredAgentCount: number;
 }
 
 function KeyboardHandler(props: KeyboardHandlerProps): null {
@@ -421,6 +527,11 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     sessionExpanded,
     setSessionExpanded,
     onSessionHalt,
+    chatAgentIdx,
+    setChatAgentIdx,
+    chatInputMode,
+    setChatInputMode,
+    registeredAgentCount,
   } = props;
 
   useInput((input, key) => {
@@ -550,6 +661,33 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "q") exit();
       return;
     }
+    if (page === "chat") {
+      // While typing, only Esc reaches us — TextInput owns the rest.
+      if (chatInputMode) {
+        if (key.escape) setChatInputMode(false);
+        return;
+      }
+      if (key.escape) {
+        setPage("dashboard");
+        return;
+      }
+      if (input === "i") {
+        setChatInputMode(true);
+        return;
+      }
+      if (key.leftArrow) {
+        setChatAgentIdx((idx) => Math.max(0, idx - 1));
+        return;
+      }
+      if (key.rightArrow) {
+        setChatAgentIdx((idx) =>
+          Math.min(Math.max(0, registeredAgentCount - 1), idx + 1),
+        );
+        return;
+      }
+      if (input === "q") exit();
+      return;
+    }
     if (quitConfirm) {
       if (input === "y" || input === "Y") exit();
       else if (input === "n" || input === "N" || key.escape)
@@ -559,6 +697,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     if (input === "?") setHelpOpen(true);
     else if (input === "q") exit();
     else if (key.ctrl && input === "c") setQuitConfirm(true);
+    else if (input === "c") setPage("chat");
     else if (input === "l") setPage("logs");
     else if (input === "p") setPage("policy");
     else if (input === "s") setPage("sessions");

@@ -19,11 +19,21 @@ export function HelpOverlay(): JSX.Element {
         <Section
           title="Navigation"
           rows={[
+            ["c", "chat / test console"],
             ["l", "logs page"],
             ["p", "policy page"],
             ["s", "sessions page"],
             ["Esc", "back to dashboard"],
             ["q / Ctrl-C", "quit (with confirm)"],
+          ]}
+        />
+        <Section
+          title="Chat / test console"
+          rows={[
+            ["← →", "switch source agent"],
+            ["i", "enter input mode"],
+            ["Enter", "send through mediator (records audit log)"],
+            ["Esc", "exit input mode / leave page"],
           ]}
         />
         <Section
