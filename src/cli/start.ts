@@ -75,6 +75,7 @@ export function startForeman(
   const sqlite = getSqlite();
   const registry = new RegistryService(db, bus);
   const audit = new AuditLogger(db, bus);
+  const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
   const withTui = options.withTui ?? true;
   const approval: ApprovalService = withTui
     ? new BusApprovalService({ bus })
@@ -164,7 +165,9 @@ export function startForeman(
           mediator,
           policy,
           policyPath: paths.policyPath,
+          soulPath: paths.soulPath,
           sessionManager,
+          secretStore,
         },
       }),
       { exitOnCtrlC: false },
