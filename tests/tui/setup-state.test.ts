@@ -48,7 +48,7 @@ describe("setup-state", () => {
     });
 
     it("returns the first step not in `completed`", () => {
-      const s = { ...freshState(), completed: ["welcome", "secrets"] as const };
+      const s = { ...freshState(), completed: ["welcome", "providers"] as const };
       expect(nextStep(s as never)).toBe("agents");
     });
 
@@ -62,8 +62,8 @@ describe("setup-state", () => {
     it("appends the step in order", () => {
       let s = freshState();
       s = markCompleted(s, "welcome");
-      s = markCompleted(s, "secrets");
-      expect(s.completed).toEqual(["welcome", "secrets"]);
+      s = markCompleted(s, "providers");
+      expect(s.completed).toEqual(["welcome", "providers"]);
     });
 
     it("is idempotent on the same step", () => {
@@ -85,27 +85,27 @@ describe("setup-state", () => {
     it("removes the named step from completed", () => {
       let s = freshState();
       s = markCompleted(s, "welcome");
-      s = markCompleted(s, "secrets");
-      s = markUncompleted(s, "secrets");
+      s = markCompleted(s, "providers");
+      s = markUncompleted(s, "providers");
       expect(s.completed).toEqual(["welcome"]);
     });
 
     it("nextStep returns the uncompleted step after markUncompleted", () => {
       let s = freshState();
       s = markCompleted(s, "welcome");
-      s = markCompleted(s, "secrets");
-      s = markUncompleted(s, "secrets");
-      expect(nextStep(s)).toBe("secrets");
+      s = markCompleted(s, "providers");
+      s = markUncompleted(s, "providers");
+      expect(nextStep(s)).toBe("providers");
     });
 
     it("also removes every step after the uncompleted one to avoid gaps", () => {
       let s = freshState();
       s = markCompleted(s, "welcome");
-      s = markCompleted(s, "secrets");
+      s = markCompleted(s, "providers");
       s = markCompleted(s, "agents");
-      s = markUncompleted(s, "secrets");
+      s = markUncompleted(s, "providers");
       expect(s.completed).toEqual(["welcome"]);
-      expect(nextStep(s)).toBe("secrets");
+      expect(nextStep(s)).toBe("providers");
     });
 
     it("is a no-op when the step is not in completed", () => {
@@ -127,9 +127,9 @@ describe("setup-state", () => {
     it("bumps lastUpdatedAt when state changes", async () => {
       let s = freshState();
       s = markCompleted(s, "welcome");
-      const s1 = markCompleted(s, "secrets");
+      const s1 = markCompleted(s, "providers");
       await new Promise((r) => setTimeout(r, 2));
-      const s2 = markUncompleted(s1, "secrets");
+      const s2 = markUncompleted(s1, "providers");
       expect(s2.lastUpdatedAt).toBeGreaterThan(s1.lastUpdatedAt);
     });
   });
@@ -144,10 +144,10 @@ describe("setup-state", () => {
     it("save → load round-trips the completed list", () => {
       let s = freshState();
       s = markCompleted(s, "welcome");
-      s = markCompleted(s, "secrets");
+      s = markCompleted(s, "providers");
       saveSetupState(s, statePath);
       const loaded = loadSetupState(statePath);
-      expect(loaded.completed).toEqual(["welcome", "secrets"]);
+      expect(loaded.completed).toEqual(["welcome", "providers"]);
       expect(loaded.version).toBe(1);
     });
 
