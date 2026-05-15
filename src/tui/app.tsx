@@ -26,32 +26,13 @@ import {
   queryLogs,
   type LogFilters,
 } from "./pages/logs-query.js";
-import {
-  ChatPage,
-  parseChatPrompt,
-  type ChatScrollbackEntry,
-} from "./pages/chat-page.js";
 import { PolicyPage } from "./pages/policy-page.js";
-import {
-  REVEAL_AUTO_HIDE_MS,
-  SecretsPage,
-} from "./pages/secrets-page.js";
-import { AgentsPage } from "./pages/agents-page.js";
 import { SessionsPage } from "./pages/sessions-page.js";
-import { buildSettingsItems, SettingsPage } from "./pages/settings-page.js";
 import { launchEditor } from "./launch-editor.js";
 
 const APPROVAL_TIMEOUT_MS = 60_000;
 
-export type Page =
-  | "dashboard"
-  | "logs"
-  | "policy"
-  | "sessions"
-  | "agents"
-  | "secrets"
-  | "settings"
-  | "chat";
+export type Page = "dashboard" | "logs" | "policy" | "sessions";
 
 export interface AppProps {
   bootInfo: BootInfo;
@@ -69,17 +50,8 @@ export function App({ bootInfo, services }: AppProps): JSX.Element {
 function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const layout = useLayout();
   const { isRawModeSupported } = useStdin();
-  const {
-    bus,
-    mediator,
-    sqlite,
-    policy,
-    policyPath,
-    sessionManager,
-    soulPath,
-    secretStore,
-    registry,
-  } = useDashboardServices();
+  const { bus, mediator, sqlite, policy, policyPath, sessionManager } =
+    useDashboardServices();
 
   const [page, setPage] = useState<Page>("dashboard");
   const [quitConfirm, setQuitConfirm] = useState(false);
@@ -124,27 +96,6 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const [sessionSelectedIdx, setSessionSelectedIdx] = useState(0);
   const [sessionExpanded, setSessionExpanded] = useState(false);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
-
-  const [chatAgentIdx, setChatAgentIdx] = useState(0);
-  const [chatInputMode, setChatInputMode] = useState(false);
-  const [chatInputBuffer, setChatInputBuffer] = useState("");
-  const [chatScrollback, setChatScrollback] = useState<ChatScrollbackEntry[]>(
-    [],
-  );
-  const [chatNotice, setChatNotice] = useState<string | null>(null);
-  const [settingsSelectedIdx, setSettingsSelectedIdx] = useState(0);
-  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
-  const [secretsSelectedIdx, setSecretsSelectedIdx] = useState(0);
-  const [secretsExpanded, setSecretsExpanded] = useState(false);
-  const [secretsNotice, setSecretsNotice] = useState<string | null>(null);
-  const [revealedSecret, setRevealedSecret] = useState<{
-    name: string;
-    value: string;
-  } | null>(null);
-  const [rotateMode, setRotateMode] = useState<{ name: string } | null>(null);
-  const [agentsSelectedIdx, setAgentsSelectedIdx] = useState(0);
-  const [agentsExpanded, setAgentsExpanded] = useState(false);
-  const [agentsNotice, setAgentsNotice] = useState<string | null>(null);
 
   const [pendingApproval, setPendingApproval] =
     useState<ApprovalRequest | null>(null);
@@ -300,244 +251,6 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     setSessionNotice(`session ${target.id} halted`);
   }, [sessionManager, sessionSelectedIdx]);
 
-  const onChatSubmit = useCallback(
-    async (raw: string): Promise<void> => {
-      if (!mediator) {
-        setChatNotice("mediator unavailable");
-        setChatInputMode(false);
-        return;
-      }
-      const agents = registry.list();
-      const picked = agents[chatAgentIdx];
-      if (!picked) {
-        setChatNotice("no registered agent to send through");
-        setChatInputMode(false);
-        return;
-      }
-      const { tool, args } = parseChatPrompt(raw);
-      if (!tool) {
-        setChatNotice("input parses as empty — type a tool name first");
-        return;
-      }
-      try {
-        const result = await mediator.handleRequest({
-          sourceAgent: picked.id,
-          targetTool: tool,
-          message: {
-            jsonrpc: "2.0" as const,
-            id: Date.now(),
-            method: "tools/call",
-            params: { name: tool, arguments: args ?? {} },
-          } as never,
-        });
-        const entry: ChatScrollbackEntry = {
-          id: result.requestId,
-          ts: Date.now(),
-          sourceAgent: picked.id,
-          rawPrompt: raw,
-          parsedTool: tool,
-          parsedArgs: args,
-          decision: result.decision,
-          decidedBy: result.decidedBy,
-          riskScore: result.riskScore,
-          riskReasons: result.riskReasons,
-          durationMs: result.durationMs,
-        };
-        setChatScrollback((prev) => [...prev, entry]);
-        setChatInputBuffer("");
-        setChatNotice(null);
-      } catch (err) {
-        setChatScrollback((prev) => [
-          ...prev,
-          {
-            id: `err-${Date.now()}`,
-            ts: Date.now(),
-            sourceAgent: picked.id,
-            rawPrompt: raw,
-            parsedTool: tool,
-            parsedArgs: args,
-            decision: "error" as const,
-            decidedBy: "exception",
-            riskScore: 0,
-            riskReasons: [],
-            durationMs: 0,
-          },
-        ]);
-        setChatNotice(
-          `error: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      } finally {
-        setChatInputMode(false);
-      }
-    },
-    [mediator, registry, chatAgentIdx],
-  );
-
-  const onEditSoul = useCallback(async (): Promise<void> => {
-    if (!soulPath) {
-      setSettingsNotice("Foreman SOUL.md path unavailable");
-      return;
-    }
-    try {
-      await launchEditor(soulPath);
-      setSettingsNotice(
-        `✓ saved ${soulPath} — run 'foreman identity push' to propagate to agents`,
-      );
-    } catch (err) {
-      setSettingsNotice(
-        `editor failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }, [soulPath]);
-
-  const onEditPolicyFromSettings = useCallback(async (): Promise<void> => {
-    if (!policy || !policyPath) {
-      setSettingsNotice("policy yaml path unavailable");
-      return;
-    }
-    try {
-      await launchEditor(policyPath);
-      const result = policy.loadFromYaml(policyPath);
-      setSettingsNotice(
-        `✓ saved ${policyPath} — reloaded ${result.rulesAdded} rule${result.rulesAdded === 1 ? "" : "s"}`,
-      );
-    } catch (err) {
-      setSettingsNotice(
-        `editor / reload failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }, [policy, policyPath]);
-
-  const onWizardInstruction = useCallback((): void => {
-    setSettingsNotice(
-      "press q to quit, then run: foreman setup --resume (or --reset for a clean wizard)",
-    );
-  }, []);
-  const onSecretReveal = useCallback((): void => {
-    if (!secretStore) return;
-    const all = secretStore.list();
-    const target = all[secretsSelectedIdx];
-    if (!target) return;
-    try {
-      const value = secretStore.get(target.name);
-      setRevealedSecret({ name: target.name, value });
-      setSecretsNotice(
-        `revealing ${target.name} for ${REVEAL_AUTO_HIDE_MS / 1000}s`,
-      );
-    } catch (err) {
-      setSecretsNotice(
-        `error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }, [secretStore, secretsSelectedIdx]);
-
-  // Auto-hide revealed secret after the configured TTL.
-  useEffect(() => {
-    if (!revealedSecret) return;
-    const t = setTimeout(() => {
-      setRevealedSecret(null);
-      setSecretsNotice("value auto-hidden");
-    }, REVEAL_AUTO_HIDE_MS);
-    return () => clearTimeout(t);
-  }, [revealedSecret]);
-
-  const onSecretRotate = useCallback((): void => {
-    if (!secretStore) return;
-    const all = secretStore.list();
-    const target = all[secretsSelectedIdx];
-    if (!target) return;
-    setRotateMode({ name: target.name });
-    setRevealedSecret(null);
-  }, [secretStore, secretsSelectedIdx]);
-
-  const onSubmitRotate = useCallback(
-    (value: string): void => {
-      if (!secretStore || !rotateMode) return;
-      try {
-        if (value.length === 0) {
-          setSecretsNotice("rotate cancelled (empty input)");
-        } else {
-          secretStore.rotate(rotateMode.name, value);
-          setSecretsNotice(`✓ ${rotateMode.name} rotated`);
-        }
-      } catch (err) {
-        setSecretsNotice(
-          `error: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      } finally {
-        setRotateMode(null);
-      }
-    },
-    [secretStore, rotateMode],
-  );
-
-  const onSecretRemove = useCallback((): void => {
-    if (!secretStore) return;
-    const all = secretStore.list();
-    const target = all[secretsSelectedIdx];
-    if (!target) return;
-    try {
-      secretStore.remove(target.name);
-      setSecretsNotice(`✓ ${target.name} removed`);
-      setRevealedSecret(null);
-      setSecretsSelectedIdx((idx) => Math.max(0, idx - 1));
-    } catch (err) {
-      setSecretsNotice(
-        `error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }, [secretStore, secretsSelectedIdx]);
-  const onAgentToggleBlock = useCallback((): void => {
-    const all = registry.listAll();
-    const target = all[agentsSelectedIdx];
-    if (!target) return;
-    try {
-      if (target.status === "blocked") {
-        registry.unblock(target.id);
-        setAgentsNotice(`✓ ${target.id} unblocked`);
-      } else {
-        registry.block(target.id);
-        setAgentsNotice(`✓ ${target.id} blocked`);
-      }
-    } catch (err) {
-      setAgentsNotice(
-        `error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }, [registry, agentsSelectedIdx]);
-
-  const onAgentRegenKey = useCallback((): void => {
-    const all = registry.listAll();
-    const target = all[agentsSelectedIdx];
-    if (!target) return;
-    try {
-      const result = registry.regenerateKey(target.id);
-      const hex = result.privateKey.toString("hex");
-      setAgentsNotice(
-        `✓ ${target.id} new private key (shown once): ${hex.slice(0, 16)}…${hex.slice(-8)}`,
-      );
-    } catch (err) {
-      setAgentsNotice(
-        `error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }, [registry, agentsSelectedIdx]);
-
-  const onAgentRemove = useCallback((): void => {
-    const all = registry.listAll();
-    const target = all[agentsSelectedIdx];
-    if (!target) return;
-    try {
-      registry.remove(target.id);
-      setAgentsNotice(`✓ ${target.id} removed`);
-      setAgentsSelectedIdx((idx) => Math.max(0, idx - 1));
-    } catch (err) {
-      setAgentsNotice(
-        `error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }, [registry, agentsSelectedIdx]);
-
   return (
     <Box flexDirection="column">
       {isRawModeSupported && (
@@ -577,35 +290,6 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           sessionExpanded={sessionExpanded}
           setSessionExpanded={setSessionExpanded}
           onSessionHalt={onSessionHalt}
-          chatAgentIdx={chatAgentIdx}
-          setChatAgentIdx={setChatAgentIdx}
-          chatInputMode={chatInputMode}
-          setChatInputMode={setChatInputMode}
-          registeredAgentCount={registry.list().length}
-          settingsSelectedIdx={settingsSelectedIdx}
-          setSettingsSelectedIdx={setSettingsSelectedIdx}
-          onEditSoul={onEditSoul}
-          onEditPolicyFromSettings={onEditPolicyFromSettings}
-          onWizardInstruction={onWizardInstruction}
-          settingsItemCount={
-            buildSettingsItems(soulPath ?? null, policyPath ?? null).length
-          }
-          secretsSelectedIdx={secretsSelectedIdx}
-          setSecretsSelectedIdx={setSecretsSelectedIdx}
-          secretsExpanded={secretsExpanded}
-          setSecretsExpanded={setSecretsExpanded}
-          rotateMode={rotateMode}
-          setRotateMode={setRotateMode}
-          onSecretReveal={onSecretReveal}
-          onSecretRotate={onSecretRotate}
-          onSecretRemove={onSecretRemove}
-          agentsSelectedIdx={agentsSelectedIdx}
-          setAgentsSelectedIdx={setAgentsSelectedIdx}
-          agentsExpanded={agentsExpanded}
-          setAgentsExpanded={setAgentsExpanded}
-          onAgentToggleBlock={onAgentToggleBlock}
-          onAgentRegenKey={onAgentRegenKey}
-          onAgentRemove={onAgentRemove}
         />
       )}
       <BootBanner
@@ -653,37 +337,6 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           expanded={sessionExpanded}
           notice={sessionNotice}
         />
-      ) : page === "chat" ? (
-        <ChatPage
-          selectedAgentIdx={chatAgentIdx}
-          inputMode={chatInputMode}
-          inputBuffer={chatInputBuffer}
-          setInputBuffer={setChatInputBuffer}
-          scrollback={chatScrollback}
-          onSubmit={(raw) => void onChatSubmit(raw)}
-          notice={chatNotice}
-        />
-      ) : page === "settings" ? (
-        <SettingsPage
-          selectedIdx={settingsSelectedIdx}
-          notice={settingsNotice}
-        />
-      ) : page === "secrets" ? (
-        <SecretsPage
-          selectedIdx={secretsSelectedIdx}
-          expanded={secretsExpanded}
-          notice={secretsNotice}
-          revealedName={revealedSecret?.name ?? null}
-          revealedValue={revealedSecret?.value ?? null}
-          rotateMode={rotateMode}
-          onSubmitRotate={onSubmitRotate}
-        />
-      ) : page === "agents" ? (
-        <AgentsPage
-          selectedIdx={agentsSelectedIdx}
-          expanded={agentsExpanded}
-          notice={agentsNotice}
-        />
       ) : (
         <Box flexGrow={1}>{renderPanels(layout)}</Box>
       )}
@@ -728,33 +381,6 @@ interface KeyboardHandlerProps {
   sessionExpanded: boolean;
   setSessionExpanded: (v: boolean) => void;
   onSessionHalt: () => void;
-  chatAgentIdx: number;
-  setChatAgentIdx: (next: number | ((prev: number) => number)) => void;
-  chatInputMode: boolean;
-  setChatInputMode: (v: boolean) => void;
-  registeredAgentCount: number;
-  settingsSelectedIdx: number;
-  setSettingsSelectedIdx: (next: number) => void;
-  settingsItemCount: number;
-  onEditSoul: () => Promise<void>;
-  onEditPolicyFromSettings: () => Promise<void>;
-  onWizardInstruction: () => void;
-  secretsSelectedIdx: number;
-  setSecretsSelectedIdx: (next: number | ((prev: number) => number)) => void;
-  secretsExpanded: boolean;
-  setSecretsExpanded: (v: boolean) => void;
-  rotateMode: { name: string } | null;
-  setRotateMode: (next: { name: string } | null) => void;
-  onSecretReveal: () => void;
-  onSecretRotate: () => void;
-  onSecretRemove: () => void;
-  agentsSelectedIdx: number;
-  setAgentsSelectedIdx: (next: number | ((prev: number) => number)) => void;
-  agentsExpanded: boolean;
-  setAgentsExpanded: (v: boolean) => void;
-  onAgentToggleBlock: () => void;
-  onAgentRegenKey: () => void;
-  onAgentRemove: () => void;
 }
 
 function KeyboardHandler(props: KeyboardHandlerProps): null {
@@ -795,33 +421,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     sessionExpanded,
     setSessionExpanded,
     onSessionHalt,
-    chatAgentIdx,
-    setChatAgentIdx,
-    chatInputMode,
-    setChatInputMode,
-    registeredAgentCount,
-    settingsSelectedIdx,
-    setSettingsSelectedIdx,
-    settingsItemCount,
-    onEditSoul,
-    onEditPolicyFromSettings,
-    onWizardInstruction,
-    secretsSelectedIdx,
-    setSecretsSelectedIdx,
-    secretsExpanded,
-    setSecretsExpanded,
-    rotateMode,
-    setRotateMode,
-    onSecretReveal,
-    onSecretRotate,
-    onSecretRemove,
-    agentsSelectedIdx,
-    setAgentsSelectedIdx,
-    agentsExpanded,
-    setAgentsExpanded,
-    onAgentToggleBlock,
-    onAgentRegenKey,
-    onAgentRemove,
   } = props;
 
   useInput((input, key) => {
@@ -951,101 +550,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "q") exit();
       return;
     }
-    if (page === "chat") {
-      if (chatInputMode) {
-        if (key.escape) setChatInputMode(false);
-        return;
-      }
-      if (key.escape) {
-        setPage("dashboard");
-        return;
-      }
-      if (input === "i") {
-        setChatInputMode(true);
-        return;
-      }
-      if (key.leftArrow) {
-        setChatAgentIdx((idx) => Math.max(0, idx - 1));
-        return;
-      }
-      if (key.rightArrow) {
-        setChatAgentIdx((idx) =>
-          Math.min(Math.max(0, registeredAgentCount - 1), idx + 1),
-        );
-        return;
-      }
-      if (input === "q") exit();
-      return;
-    }
-    if (page === "settings") {
-      if (key.escape) {
-        setPage("dashboard");
-        return;
-      }
-      if (key.upArrow) {
-        setSettingsSelectedIdx(Math.max(0, settingsSelectedIdx - 1));
-        return;
-      }
-      if (key.downArrow) {
-        setSettingsSelectedIdx(
-          Math.min(settingsItemCount - 1, settingsSelectedIdx + 1),
-        );
-        return;
-      }
-      if (input === "e") void onEditSoul();
-      else if (input === "p") void onEditPolicyFromSettings();
-      else if (input === "P") setPage("policy");
-      else if (input === "w") onWizardInstruction();
-      else if (key.return) {
-        if (settingsSelectedIdx === 0) void onEditSoul();
-        else if (settingsSelectedIdx === 1) void onEditPolicyFromSettings();
-        else if (settingsSelectedIdx === 2) setPage("policy");
-        else if (settingsSelectedIdx === 3) onWizardInstruction();
-      } else if (input === "q") exit();
-      return;
-    }
-    if (page === "secrets") {
-      if (rotateMode) {
-        if (key.escape) setRotateMode(null);
-        return;
-      }
-      if (key.escape) {
-        setPage("dashboard");
-        setSecretsExpanded(false);
-        return;
-      }
-      if (key.upArrow) {
-        setSecretsSelectedIdx(Math.max(0, secretsSelectedIdx - 1));
-        setSecretsExpanded(false);
-      } else if (key.downArrow) {
-        setSecretsSelectedIdx(secretsSelectedIdx + 1);
-        setSecretsExpanded(false);
-      } else if (key.return) setSecretsExpanded(!secretsExpanded);
-      else if (input === "v") onSecretReveal();
-      else if (input === "r") onSecretRotate();
-      else if (input === "d") onSecretRemove();
-      else if (input === "q") exit();
-      return;
-    }
-    if (page === "agents") {
-      if (key.escape) {
-        setPage("dashboard");
-        setAgentsExpanded(false);
-        return;
-      }
-      if (key.upArrow) {
-        setAgentsSelectedIdx(Math.max(0, agentsSelectedIdx - 1));
-        setAgentsExpanded(false);
-      } else if (key.downArrow) {
-        setAgentsSelectedIdx(agentsSelectedIdx + 1);
-        setAgentsExpanded(false);
-      } else if (key.return) setAgentsExpanded(!agentsExpanded);
-      else if (input === "b") onAgentToggleBlock();
-      else if (input === "r") onAgentRegenKey();
-      else if (input === "d") onAgentRemove();
-      else if (input === "q") exit();
-      return;
-    }
     if (quitConfirm) {
       if (input === "y" || input === "Y") exit();
       else if (input === "n" || input === "N" || key.escape)
@@ -1055,10 +559,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     if (input === "?") setHelpOpen(true);
     else if (input === "q") exit();
     else if (key.ctrl && input === "c") setQuitConfirm(true);
-    else if (input === "c") setPage("chat");
-    else if (input === "g") setPage("settings");
-    else if (input === "k") setPage("secrets");
-    else if (input === "a") setPage("agents");
     else if (input === "l") setPage("logs");
     else if (input === "p") setPage("policy");
     else if (input === "s") setPage("sessions");
