@@ -151,7 +151,12 @@ export function ApprovalModal({
         <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>
       </Box>
 
-      <HotkeyRow />
+      <HotkeyRow
+        showHalt={
+          Boolean(request.sessionId) &&
+          (request.riskFactors ?? []).some((f) => f.category === "loop")
+        }
+      />
 
       <Box marginTop={1} justifyContent="flex-end">
         <TimerLabel remainingSeconds={remainingSeconds} />
@@ -259,7 +264,7 @@ function FactorLine({ factor }: { factor: RiskFactor }): JSX.Element {
   );
 }
 
-function HotkeyRow(): JSX.Element {
+function HotkeyRow({ showHalt }: { showHalt: boolean }): JSX.Element {
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text>
@@ -277,6 +282,15 @@ function HotkeyRow(): JSX.Element {
           i
         </Text>
         ]nspect
+        {showHalt ? (
+          <>
+            {" "}[
+            <Text color={theme.accent.danger} bold>
+              k
+            </Text>
+            ]halt session
+          </>
+        ) : null}
       </Text>
       <Text>
         {" "}

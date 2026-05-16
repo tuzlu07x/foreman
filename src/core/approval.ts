@@ -23,6 +23,8 @@ export interface ApprovalRequest {
   riskFactors: RiskFactor[];
   riskBucket: RiskBucket;
   llmVerification: LlmVerification | null;
+  /** When set + a `loop` factor fires, the modal exposes `[k] halt session`. */
+  sessionId?: string;
   context?: string;
 }
 
