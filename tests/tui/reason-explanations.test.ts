@@ -5,12 +5,20 @@ import {
 } from "../../src/tui/reason-explanations.js";
 
 describe("reason explanations", () => {
-  it("covers every default factor rule id (secret_pattern + shell_command emit sub-rules)", () => {
+  it("covers every default factor rule id (secret_pattern + network_outbound + shell_command emit sub-rules)", () => {
     for (const name of [
       "secret_path",
       "secret_shape",
       "safe_list_docs",
-      "outbound_network",
+      "network_exfil_destination",
+      "network_paste_share",
+      "network_url_shortener",
+      "network_ip_literal",
+      "network_punycode",
+      "network_suspicious_tld",
+      "network_mining_pool",
+      "network_dark_web",
+      "network_safe_host",
       "shell_rm_rf_catastrophic",
       "shell_sudo",
       "shell_persist_crontab",
@@ -25,9 +33,10 @@ describe("reason explanations", () => {
     }
   });
 
-  it("keeps the legacy keys so pre-#225/#226 audit rows still render prose", () => {
+  it("keeps the legacy keys so pre-#225/#226/#227 audit rows still render prose", () => {
     expect(REASON_EXPLANATIONS).toHaveProperty("secret_file_pattern");
     expect(REASON_EXPLANATIONS).toHaveProperty("shell_exec");
+    expect(REASON_EXPLANATIONS).toHaveProperty("outbound_network");
   });
 
   it("returns undefined for unknown reasons", () => {
