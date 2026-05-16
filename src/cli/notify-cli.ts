@@ -10,7 +10,9 @@ import {
   saveNotifyConfig,
   type ChannelToggle,
 } from '../core/notification/notify-config.js'
+import { SystemNotifyChannel } from '../core/notification/channels/system.js'
 import { TelegramChannel } from '../core/notification/channels/telegram.js'
+import { WebhookChannel } from '../core/notification/channels/webhook.js'
 import type {
   ChannelId,
   Notification,
@@ -42,7 +44,7 @@ notifyCommand
       for (const [id, ch] of channels) {
         if (!ch) continue
         const flag = ch.enabled ? green('●') : dim('○')
-        const detail = describeChannel(ch)
+        const detail = describeChannel(id, ch)
         console.log(`  ${flag} ${id.padEnd(8)} ${detail}`)
       }
     }
@@ -138,49 +140,51 @@ notifyCommand
       )
       process.exit(1)
     }
-    if (channel !== 'telegram') {
+    let ch: NotificationChannel | null = null
+    if (channel === 'telegram') {
+      ch = await buildTelegramChannel(config)
+    } else if (channel === 'webhook') {
+      ch = await buildWebhookChannel(config)
+    } else if (channel === 'system') {
+      ch = new SystemNotifyChannel()
+    } else {
       console.error(
         red('error: ') +
-          `${channel} channel ships in C11b (#235) — only telegram is implemented in this PR`,
+          `${channel} channel ships in C11b-2 (#235) — only telegram / webhook / system are implemented`,
       )
       process.exit(2)
     }
-
-    const ch = await buildTelegramChannel(config)
     if (!ch) process.exit(1)
 
-    const db = getDb()
-    const service = new NotificationService({
-      db,
-      config,
-      channels: new Map<ChannelId, NotificationChannel>([['telegram', ch]]),
-    })
-
-    const test: Omit<Notification, 'id'> = {
+    const test: Notification = {
+      id: 'test-' + Date.now(),
       level: 'info',
       requestId: null,
       title: 'Foreman test ✓',
-      body: `Sent by foreman notify test telegram at ${new Date().toISOString()}`,
+      body: `Sent by \`foreman notify test ${channel}\` at ${new Date().toISOString()}`,
       actions: [],
       agentBlocking: false,
     }
+    // Bypass routing — the test command should hit the channel the user
+    // picked regardless of notify.yaml routing (which may not list the
+    // test channel for the chosen level).
     try {
-      const res = await service.send('warning', test)
-      const outcome = res.outcomes.get('telegram')
-      if (outcome?.status === 'sent') {
-        console.log(`${green('✓')} test message sent (message_id=${outcome.ref.channelMessageId})`)
-      } else if (outcome?.status === 'failed') {
-        console.error(red('error: ') + `delivery failed: ${outcome.error}`)
-        process.exit(1)
-      } else {
-        console.error(
-          red('error: ') +
-            `delivery skipped: ${outcome?.status === 'skipped' ? outcome.reason : 'unknown'}`,
-        )
-        process.exit(1)
-      }
+      const ref = await ch.send(test)
+      console.log(
+        `${green('✓')} test message sent (message_id=${ref.channelMessageId})`,
+      )
+    } catch (err) {
+      console.error(
+        red('error: ') +
+          `delivery failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+      process.exit(1)
     } finally {
-      await service.shutdown()
+      try {
+        await ch.shutdown()
+      } catch {
+        /* ignore */
+      }
       closeDb()
     }
   })
@@ -200,11 +204,15 @@ function requireInitialised(): void {
   }
 }
 
-function describeChannel(ch: ChannelToggle): string {
+function describeChannel(id: string, ch: ChannelToggle): string {
+  // System channel needs no credentials — flag it specially so the user
+  // doesn't see a confusing "credentials missing" status for it.
+  if (id === 'system') return dim('(no credentials required)')
   const bits: string[] = []
   if (ch.bot_token_ref) bits.push(`token=${ch.bot_token_ref}`)
   if (ch.chat_id) bits.push(`chat=${ch.chat_id}`)
-  if (ch.webhook_url_ref) bits.push(`webhook=${ch.webhook_url_ref}`)
+  if (ch.webhook_url_ref) bits.push(`url=${ch.webhook_url_ref}`)
+  if (ch.signing_secret_ref) bits.push(`sig=${ch.signing_secret_ref}`)
   if (ch.channel) bits.push(`#${ch.channel}`)
   return bits.length > 0 ? dim(bits.join(' · ')) : dim('(credentials missing)')
 }
@@ -220,6 +228,48 @@ function setChannel(
 
 function formatTime(ms: number): string {
   return new Date(ms).toISOString().replace('T', ' ').slice(0, 19)
+}
+
+async function buildWebhookChannel(
+  config: Awaited<ReturnType<typeof loadNotifyConfig>>,
+): Promise<WebhookChannel | null> {
+  const wh = channelConfig(config, 'webhook')
+  if (!wh) {
+    console.error(red('error: ') + 'webhook block missing from notify.yaml')
+    return null
+  }
+  if (!wh.webhook_url_ref) {
+    console.error(red('error: ') + 'webhook.webhook_url_ref is unset')
+    console.error(
+      dim('  → store the URL: `foreman secrets add ' + 'webhook-url' + '`'),
+    )
+    return null
+  }
+  const db = getDb()
+  const store = new SecretStore(db, loadOrCreateSecretsMasterKey())
+  let url: string
+  try {
+    url = store.get(wh.webhook_url_ref)
+  } catch (err) {
+    if (err instanceof SecretNotFoundError) {
+      console.error(
+        red('error: ') +
+          `secret '${wh.webhook_url_ref}' not found — \`foreman secrets add ${wh.webhook_url_ref}\``,
+      )
+      return null
+    }
+    throw err
+  }
+  let signingSecret: string | undefined
+  if (wh.signing_secret_ref) {
+    try {
+      signingSecret = store.get(wh.signing_secret_ref)
+    } catch (err) {
+      if (!(err instanceof SecretNotFoundError)) throw err
+      // Optional — fall through without signing
+    }
+  }
+  return new WebhookChannel({ url, signingSecret })
 }
 
 async function buildTelegramChannel(

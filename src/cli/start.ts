@@ -33,6 +33,8 @@ import { SetupWizard } from "../tui/setup-wizard.js";
 import { SecretStore, SecretNotFoundError } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { TelegramChannel } from "../core/notification/channels/telegram.js";
+import { SystemNotifyChannel } from "../core/notification/channels/system.js";
+import { WebhookChannel } from "../core/notification/channels/webhook.js";
 import { NotificationBridge } from "../core/notification/notification-bridge.js";
 import { NotificationService } from "../core/notification/notification-service.js";
 import {
@@ -289,6 +291,28 @@ function setupNotificationBridge(args: {
         // the misconfiguration via `foreman doctor` / `foreman notify test`.
       }
     }
+  }
+
+  if (isChannelEnabled(config, "webhook")) {
+    const wh = channelConfig(config, "webhook");
+    if (wh?.webhook_url_ref) {
+      try {
+        const url = args.secretStore.get(wh.webhook_url_ref);
+        const signingSecret = wh.signing_secret_ref
+          ? args.secretStore.get(wh.signing_secret_ref)
+          : undefined;
+        channels.set("webhook", new WebhookChannel({ url, signingSecret }));
+      } catch (err) {
+        if (!(err instanceof SecretNotFoundError)) throw err;
+      }
+    }
+  }
+
+  if (isChannelEnabled(config, "system")) {
+    const sys = new SystemNotifyChannel();
+    // isReady is async — skip the await because the failure mode is "send
+    // throws on unsupported platforms" and we want to keep setup synchronous.
+    channels.set("system", sys);
   }
 
   if (channels.size === 0) return null;
