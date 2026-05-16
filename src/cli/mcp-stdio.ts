@@ -64,7 +64,9 @@ function bootServices(): Services {
   const policy = new PolicyEngine(db, bus);
   const paths = getForemanPaths();
   if (existsSync(paths.policyPath)) policy.loadFromYaml(paths.policyPath);
-  const risk = new RiskScorer(db);
+  const risk = new RiskScorer(db, undefined, {
+    bucketOverrides: () => policy.getBucketOverrides(),
+  });
   const sessionManager = new SessionManager(db, { bus });
   const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
   const mediator = new MediatorService({

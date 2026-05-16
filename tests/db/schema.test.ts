@@ -113,6 +113,51 @@ describe('migrations', () => {
     db.close()
   })
 
+  it('migration 0007 adds risk_factors / risk_bucket / llm_verification columns', () => {
+    const db = new Database(':memory:')
+    applyAllMigrations(db)
+    const cols = db
+      .prepare(`PRAGMA table_info(requests)`)
+      .all() as { name: string }[]
+    const names = cols.map((c) => c.name)
+    expect(names).toContain('risk_factors')
+    expect(names).toContain('risk_bucket')
+    expect(names).toContain('llm_verification')
+
+    const pending = db
+      .prepare(`PRAGMA table_info(pending_approvals)`)
+      .all() as { name: string }[]
+    const pendingNames = pending.map((c) => c.name)
+    expect(pendingNames).toContain('risk_factors')
+    expect(pendingNames).toContain('risk_bucket')
+    db.close()
+  })
+
+  it('legacy rows (pre-0007) survive with NULL on the new columns', () => {
+    const db = new Database(':memory:')
+    applyAllMigrations(db)
+    // Simulate a pre-0007 row by not setting the new columns.
+    db.prepare(
+      `INSERT INTO requests
+         (id, source_agent, args, risk_score, risk_reasons, decision, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('legacy-r1', 'hermes', '{}', 0, '[]', 'allowed', Date.now())
+
+    const row = db
+      .prepare(
+        `SELECT risk_factors, risk_bucket, llm_verification FROM requests WHERE id = ?`,
+      )
+      .get('legacy-r1') as {
+      risk_factors: string | null
+      risk_bucket: string | null
+      llm_verification: string | null
+    }
+    expect(row.risk_factors).toBeNull()
+    expect(row.risk_bucket).toBeNull()
+    expect(row.llm_verification).toBeNull()
+    db.close()
+  })
+
   it('indexes source_agent, target_tool, decision so log search can find them (#217)', () => {
     const db = new Database(':memory:')
     applyAllMigrations(db)

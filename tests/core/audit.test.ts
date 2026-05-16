@@ -21,6 +21,9 @@ function emitDecided(
     decidedBy: 'policy:7',
     riskScore: 10,
     riskReasons: [],
+    riskFactors: [],
+    riskBucket: 'low',
+    llmVerification: null,
     durationMs: 5,
     createdAt: now - 5,
     decidedAt: now,
@@ -69,6 +72,58 @@ describe('AuditLogger', () => {
       'agent_to_agent',
     ])
     expect(row.result).toBeNull()
+  })
+
+  it('round-trips risk_factors / risk_bucket / llm_verification when present', () => {
+    emitDecided(bus, 'r-rich', {
+      riskScore: 70,
+      riskReasons: ['secret_file_pattern', 'first_agent_to_agent'],
+      riskFactors: [
+        {
+          rule: 'secret_file_pattern',
+          category: 'secret',
+          points: 50,
+          reason: 'path looks like a credential: .env',
+          evidence: '.env',
+        },
+        {
+          rule: 'first_agent_to_agent',
+          category: 'structural',
+          points: 20,
+          reason: 'first hermes → claude-code call in the last hour',
+        },
+      ],
+      riskBucket: 'high',
+      llmVerification: null,
+    })
+    audit.flush()
+    const row = db.select().from(requests).all()[0]!
+    expect(row.riskBucket).toBe('high')
+    expect(row.llmVerification).toBeNull()
+    expect(JSON.parse(row.riskFactors!)).toEqual([
+      expect.objectContaining({
+        rule: 'secret_file_pattern',
+        category: 'secret',
+        points: 50,
+        evidence: '.env',
+      }),
+      expect.objectContaining({
+        rule: 'first_agent_to_agent',
+        category: 'structural',
+        points: 20,
+      }),
+    ])
+  })
+
+  it('leaves risk_factors NULL (not "[]") when no factors are emitted', () => {
+    emitDecided(bus, 'r-empty', {
+      riskFactors: [],
+      riskBucket: 'low',
+    })
+    audit.flush()
+    const row = db.select().from(requests).all()[0]!
+    expect(row.riskFactors).toBeNull()
+    expect(row.riskBucket).toBe('low')
   })
 
   it('flushes a burst of 200 events with no row loss', () => {

@@ -123,6 +123,14 @@ logCommand
       args: row.args as string,
       riskScore: row.risk_score as number,
       riskReasons: row.risk_reasons as string | null,
+      riskFactors: (row.risk_factors ?? null) as string | null,
+      riskBucket: (row.risk_bucket ?? null) as
+        | "low"
+        | "medium"
+        | "high"
+        | "critical"
+        | null,
+      llmVerification: (row.llm_verification ?? null) as string | null,
       decision: row.decision as "allowed" | "denied" | "pending",
       decidedBy: row.decided_by as string | null,
       result: row.result as string | null,

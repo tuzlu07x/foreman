@@ -1,4 +1,9 @@
 import { EventEmitter } from "node:events";
+import type {
+  LlmVerification,
+  RiskBucket,
+  RiskFactor,
+} from "./risk-rules/types.js";
 
 /**
  * Payload shapes for every v0.1 event. Adding a new event = add a key
@@ -24,6 +29,9 @@ export interface ForemanEventMap {
     decidedBy: string;
     riskScore: number;
     riskReasons: string[];
+    riskFactors: RiskFactor[];
+    riskBucket: RiskBucket;
+    llmVerification: LlmVerification | null;
     result?: unknown;
     durationMs: number;
     createdAt: number;
@@ -63,6 +71,9 @@ export interface ForemanEventMap {
     args: unknown;
     riskScore: number;
     riskReasons: string[];
+    riskFactors: RiskFactor[];
+    riskBucket: RiskBucket;
+    llmVerification: LlmVerification | null;
   };
   "approval:resolved": {
     requestId: string;

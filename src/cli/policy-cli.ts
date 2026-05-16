@@ -39,14 +39,29 @@ policyCommand
       }
     }
     const rows = engine.list();
+    const bucketOverrides = engine.getBucketOverrides();
     if (options.json) {
       process.stdout.write(
-        JSON.stringify(rows.map(renderPolicyJson), null, 2) + "\n",
+        JSON.stringify(
+          {
+            rules: rows.map(renderPolicyJson),
+            bucketOverrides,
+          },
+          null,
+          2,
+        ) + "\n",
       );
     } else if (rows.length === 0) {
       console.log(`(no policy rules — edit ${paths.policyPath})`);
     } else {
       for (const row of rows) console.log(renderPolicyLine(row));
+      if (Object.keys(bucketOverrides).length > 0) {
+        console.log("");
+        console.log(dim("bucket overrides:"));
+        for (const [bucket, effect] of Object.entries(bucketOverrides)) {
+          console.log(`  ${bucket.padEnd(9)} ${effect}`);
+        }
+      }
     }
     closeDb();
   });

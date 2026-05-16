@@ -23,6 +23,9 @@ function makeRequest(
     args: { path: ".env" },
     riskScore: 80,
     riskReasons: ["secret_file_pattern", "first_agent_to_agent"],
+    riskFactors: [],
+    riskBucket: "high",
+    llmVerification: null,
     ...overrides,
   };
 }
@@ -68,6 +71,9 @@ describe("DenyAllApprovalService", () => {
       args: {},
       riskScore: 0,
       riskReasons: [],
+      riskFactors: [],
+      riskBucket: "low",
+      llmVerification: null,
     });
     expect(decision.decision).toBe("denied");
   });
