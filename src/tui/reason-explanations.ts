@@ -107,6 +107,12 @@ export const REASON_EXPLANATIONS: Record<string, string> = {
   injection_data_exfil: 'phrase asks the agent to send / share / paste secrets',
   injection_authority: 'phrase impersonates admin / developer / Anthropic / Foreman',
   injection_encoded: 'long encoded block (base64 / hex / unicode-escape) in args',
+
+  // Loop / session anomaly (#229 / C6)
+  loop_pingpong: 'two agents are ping-ponging back and forth',
+  loop_cycle: 'three or more agents form a directed cycle in the call graph',
+  loop_burst: 'one agent is making a burst of calls in a short window',
+  loop_token_budget: 'session is close to / past its token budget — likely runaway',
   first_agent_to_agent: 'first cross-agent call in the last hour for this pair',
   previously_denied_pattern:
     'a similar request from this source was denied before',
