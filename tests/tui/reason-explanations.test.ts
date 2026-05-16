@@ -5,9 +5,11 @@ import {
 } from "../../src/tui/reason-explanations.js";
 
 describe("reason explanations", () => {
-  it("covers every default risk rule name", () => {
+  it("covers every default factor rule id (secret_pattern emits 3 sub-rules)", () => {
     for (const name of [
-      "secret_file_pattern",
+      "secret_path",
+      "secret_shape",
+      "safe_list_docs",
       "outbound_network",
       "shell_exec",
       "first_agent_to_agent",
@@ -16,6 +18,10 @@ describe("reason explanations", () => {
       expect(REASON_EXPLANATIONS).toHaveProperty(name);
       expect(REASON_EXPLANATIONS[name]).toBeTruthy();
     }
+  });
+
+  it("keeps the legacy secret_file_pattern key so pre-#225 audit rows still render prose", () => {
+    expect(REASON_EXPLANATIONS).toHaveProperty("secret_file_pattern");
   });
 
   it("returns undefined for unknown reasons", () => {
