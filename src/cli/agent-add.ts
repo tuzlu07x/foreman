@@ -124,7 +124,13 @@ export async function runAgentAddScripted(
       try {
         const plan = planInjection(configPath, snippet.json);
         if (plan.alreadyHasForeman) {
-          log(dim(`config: foreman entry already present at ${configPath}`));
+          log(dim(`config: foreman entry already current at ${configPath}`));
+        } else if (plan.replacedStale) {
+          applyInjection(configPath, plan);
+          log(
+            orange("⟳") +
+              ` replaced stale foreman MCP entry in ${configPath}`,
+          );
         } else {
           applyInjection(configPath, plan);
           log(green("✓") + ` wrote MCP snippet to ${configPath}`);

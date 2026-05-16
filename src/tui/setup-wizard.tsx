@@ -1686,6 +1686,9 @@ export async function runInstallStep(
         const plan = planInjection(configPath, snippet.json);
         if (plan.alreadyHasForeman) {
           log(`  ✓ config already wired at ${configPath}`);
+        } else if (plan.replacedStale) {
+          applyInjection(configPath, plan);
+          log(`  ⟳ replaced stale foreman entry at ${configPath}`);
         } else {
           applyInjection(configPath, plan);
           log(`  ✓ wrote MCP snippet to ${configPath}`);
