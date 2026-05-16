@@ -2,6 +2,7 @@ import type { ForemanDb } from '../db/client.js'
 import {
   firstAgentToAgent,
   injectionPatternRule,
+  loopDetectionRule,
   networkPatternRule,
   previouslyDeniedPattern,
   secretPatternRule,
@@ -44,6 +45,7 @@ export const DEFAULT_RISK_RULES: readonly RiskRule[] = [
   networkPatternRule,
   shellPatternRule,
   injectionPatternRule,
+  loopDetectionRule,
   firstAgentToAgent,
   previouslyDeniedPattern,
 ]

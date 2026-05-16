@@ -63,6 +63,7 @@ describe('RiskScorer', () => {
       'network_outbound',
       'shell_command',
       'prompt_injection',
+      'loop_detection',
       'first_agent_to_agent',
       'previously_denied_pattern',
     ])

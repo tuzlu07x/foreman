@@ -58,7 +58,7 @@ export interface ForemanEventMap {
   };
   "session:halted": {
     sessionId: string;
-    reason: "turn_limit" | "token_limit" | "manual";
+    reason: "turn_limit" | "token_limit" | "manual" | "loop_detection";
     turnCount: number;
     tokenCount: number;
     haltedAt: number;
@@ -74,6 +74,7 @@ export interface ForemanEventMap {
     riskFactors: RiskFactor[];
     riskBucket: RiskBucket;
     llmVerification: LlmVerification | null;
+    sessionId?: string;
   };
   "approval:resolved": {
     requestId: string;

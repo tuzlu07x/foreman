@@ -229,7 +229,63 @@ Built-in `\b` only knows ASCII `\w` even with the `u` flag — `\bşifre` never 
 
 ---
 
-## 7. Per-bucket overrides in `policy.yaml`
+## 7. Loop / session anomaly detection (C6, #229)
+
+The only rule family that looks at **patterns across calls**. Single-call rules can't see ping-pong loops, multi-hop cycles, runaway bursts, or token budget blowouts — Foreman is the only place that sees the full cross-agent call graph, so this rule is uniquely positioned to catch them.
+
+### 4 patterns
+
+| Pattern | Rule id | Pts | Trigger |
+|---|---|---|---|
+| **Ping-pong** | `loop_pingpong` | 50 | A↔B alternating for ≥4 consecutive turns (incl. the in-flight call) within the 10-call history window |
+| **Cycle** | `loop_cycle` | 60 | Directed cycle A → B → C → … → A of size ≥3 in the recent call graph (DFS with white/gray/black coloring) |
+| **Burst** | `loop_burst` | 45 | ≥30 calls from the same source agent within the last 60 seconds (runaway loop / resource exhaustion) |
+| **Token budget** | `loop_token_budget` | 40 | Session cumulative tokens ≥80% of the configured limit (100K default — early warning before SessionManager auto-halts at the limit) |
+
+### Session-level intervention — the modal `[k]` hotkey
+
+When any `loop` factor fires AND the request carries a `sessionId`, the approval modal shows an extra hotkey:
+
+```
+[a]llow once [d]eny [i]nspect [k]halt session
+```
+
+Pressing `k`:
+1. Calls `sessionManager.halt(sessionId, 'loop_detection')`
+2. Resolves the current approval as `denied`
+3. Audit row gets `session_halted_by: 'loop_detection'`
+4. All subsequent calls on that session are blocked at the mediator (existing `isHalted` gate)
+
+Without a `sessionId` (single-shot / un-sessioned calls) the hotkey doesn't render — halting an empty session is a no-op.
+
+### Auto-halt (deferred)
+
+The spec calls for optional auto-halt at `bucket === 'critical' && hasLoopFactor`. v0.1 ships the **manual `[k]` hotkey only**; auto-halt is deferred to v0.2 because:
+
+1. The user should witness the loop before halting — false-positive on `loop_burst` against a legitimate batch job would silently break it.
+2. Adding the auto-halt path requires new policy.yaml schema (`loop.auto_halt_critical: true`) + audit semantics for "halt without modal approval".
+
+The modal `[k]` covers 95% of the value with no surprises.
+
+### Threading
+
+The rule needs `sessionId` to query the `sessions` table for token budget. The C6 PR added `sessionId?` to `RiskRequest`, `ApprovalRequest`, and the `approval:requested` event payload. The mediator threads `input.sessionId` through every layer; the modal reads it to decide whether to render `[k]`.
+
+### Performance + stability
+
+- DFS-based cycle detection on a 10-node window is O(V + E) — well under 1 ms in practice
+- Burst is a single indexed COUNT query
+- Token budget is a single indexed row lookup
+- `ORDER BY createdAt DESC, id DESC` with ULID ids guarantees stable ordering even when rapid-fire turns share a millisecond timestamp (`requests.id` is a ULID — lexically monotonic)
+
+### Sources
+
+- [Tarjan's SCC algorithm](https://en.wikipedia.org/wiki/Tarjan's_strongly_connected_components_algorithm) — academic reference; v0.1 uses simpler DFS coloring since 10-node window doesn't need full SCC
+- [OWASP — LLM10: Model DoS](https://owasp.org/www-project-top-10-for-large-language-model-applications/)
+
+---
+
+## 8. Per-bucket overrides in `policy.yaml`
 
 A top-level `buckets:` block lets the user pin recommendations differently from the defaults — useful once a deployment has measured its own false-positive rate:
 
@@ -258,7 +314,7 @@ foreman policy show          # → human view, prints a "bucket overrides:" foot
 
 ---
 
-## 8. LLM verification slot (C8 — deferred to #231)
+## 9. LLM verification slot (C8 — deferred to #231)
 
 `RiskAssessment.llmVerification` is reserved for the C8 LLM layer:
 
@@ -278,7 +334,7 @@ Until C8 lands, the field is always `null`.
 
 ---
 
-## 9. Extending detection
+## 10. Extending detection
 
 To add a new rule:
 
