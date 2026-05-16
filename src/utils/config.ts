@@ -22,6 +22,8 @@ export interface ForemanPaths {
 
   // Specific file paths (derived from the dirs above).
   policyPath: string;
+  /** OOB notifications config (`<configDir>/notify.yaml`) — #235 / C11a. */
+  notifyConfigPath: string;
   identityPath: string;
   /**
    * Canonical Foreman persona file (`<configDir>/SOUL.md`). Foreman writes its
@@ -110,6 +112,7 @@ export function getForemanPaths(): ForemanPaths {
     cacheDir: dirs.cacheDir,
     legacyHome: legacyDetected ? legacy : null,
     policyPath: resolve(dirs.configDir, "policy.yaml"),
+    notifyConfigPath: resolve(dirs.configDir, "notify.yaml"),
     identityPath: resolve(dirs.configDir, "identity.key"),
     soulPath: resolve(dirs.configDir, "SOUL.md"),
     secretsKeyPath: resolve(dirs.configDir, "secrets.key"),
