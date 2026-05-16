@@ -5,6 +5,10 @@ export interface RiskRequest {
   targetAgent?: string
   targetTool?: string
   args?: unknown
+  /** Session correlator — required by loop-detection (C6) to bound history queries
+   *  and offer the modal's `[k] halt session` hotkey. Optional so single-shot
+   *  calls outside a session still evaluate cleanly. */
+  sessionId?: string
 }
 
 export interface RiskContext {

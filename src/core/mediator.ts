@@ -159,6 +159,7 @@ export class MediatorService {
       targetAgent: input.targetAgent,
       targetTool: input.targetTool,
       args: this.argsFromMessage(input.message),
+      sessionId: input.sessionId,
     });
 
     let decision: "allowed" | "denied";
@@ -193,6 +194,7 @@ export class MediatorService {
         riskFactors: assessment.factors,
         riskBucket: assessment.bucket,
         llmVerification: assessment.llmVerification,
+        sessionId: input.sessionId,
       });
       const approval = await this.deps.approval.request({
         requestId,
@@ -205,6 +207,7 @@ export class MediatorService {
         riskFactors: assessment.factors,
         riskBucket: assessment.bucket,
         llmVerification: assessment.llmVerification,
+        sessionId: input.sessionId,
       });
       decision = approval.decision;
       decidedBy = "user";

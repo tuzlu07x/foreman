@@ -186,4 +186,61 @@ describe('ApprovalModal — bucket-coloured border + grouped factor view', () =>
     // Ink's double-style border chars (╔ ╗ ╚ ╝ ║ ═). Just check a corner.
     expect(frame).toMatch(/[╔╗╚╝]/)
   })
+
+  it('exposes [k] halt session when a loop factor + sessionId are present (#229)', () => {
+    const { lastFrame } = render(
+      React.createElement(ApprovalModal, {
+        request: makeRequest({
+          riskFactors: [
+            {
+              rule: 'loop_pingpong',
+              category: 'loop',
+              points: 50,
+              reason: 'Ping-pong loop (4 turns between hermes ↔ claude)',
+              evidence: 'hermes ↔ claude',
+            },
+          ],
+          riskScore: 50,
+          riskBucket: 'medium',
+          sessionId: '01H-test-session',
+        }),
+        remainingSeconds: 30,
+      }),
+    )
+    const frame = stripAnsi(lastFrame() ?? '')
+    expect(frame).toContain(']halt session')
+  })
+
+  it('does NOT show [k] halt session without a loop factor', () => {
+    const { lastFrame } = render(
+      React.createElement(ApprovalModal, {
+        request: makeRequest({ sessionId: '01H-test-session' }),
+        remainingSeconds: 30,
+      }),
+    )
+    const frame = stripAnsi(lastFrame() ?? '')
+    expect(frame).not.toContain(']halt session')
+  })
+
+  it('does NOT show [k] halt session when sessionId is missing even with a loop factor', () => {
+    const { lastFrame } = render(
+      React.createElement(ApprovalModal, {
+        request: makeRequest({
+          riskFactors: [
+            {
+              rule: 'loop_pingpong',
+              category: 'loop',
+              points: 50,
+              reason: 'Ping-pong loop',
+              evidence: 'hermes ↔ claude',
+            },
+          ],
+          // sessionId intentionally absent
+        }),
+        remainingSeconds: 30,
+      }),
+    )
+    const frame = stripAnsi(lastFrame() ?? '')
+    expect(frame).not.toContain(']halt session')
+  })
 })

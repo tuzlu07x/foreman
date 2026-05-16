@@ -12,7 +12,11 @@ const DEFAULT_TURN_LIMIT = 5;
 const DEFAULT_TOKEN_LIMIT = 100_000;
 
 export type SessionStatus = "active" | "completed" | "halted";
-export type HaltReason = "turn_limit" | "token_limit" | "manual";
+export type HaltReason =
+  | "turn_limit"
+  | "token_limit"
+  | "manual"
+  | "loop_detection";
 
 export interface SessionInfo {
   id: string;

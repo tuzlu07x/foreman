@@ -215,6 +215,14 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     }
   }, [now, pendingApproval, approvalDeadline, resolveApproval]);
 
+  const onHaltSessionFromApproval = useCallback((): void => {
+    const current = pendingRef.current;
+    if (!current?.sessionId || !sessionManager) return;
+    if (!current.riskFactors?.some((f) => f.category === "loop")) return;
+    sessionManager.halt(current.sessionId, "loop_detection");
+    resolveApproval({ decision: "denied" }, "user");
+  }, [sessionManager, resolveApproval]);
+
   const remainingSeconds =
     approvalDeadline === null
       ? 0
@@ -717,6 +725,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           inspectOffset={inspectOffset}
           setInspectOffset={setInspectOffset}
           onResolveApproval={resolveApproval}
+          onHaltSessionFromApproval={onHaltSessionFromApproval}
           logSearch={logSearch}
           setLogSearch={setLogSearch}
           logSearchMode={logSearchMode}
@@ -889,6 +898,7 @@ interface KeyboardHandlerProps {
   inspectOffset: number;
   setInspectOffset: (next: number) => void;
   onResolveApproval: (r: ApprovalResolution, by: ResolvedBy) => void;
+  onHaltSessionFromApproval: () => void;
   logSearch: string;
   setLogSearch: (next: string) => void;
   logSearchMode: boolean;
@@ -971,6 +981,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     inspectOffset,
     setInspectOffset,
     onResolveApproval,
+    onHaltSessionFromApproval,
     logSearch,
     setLogSearch,
     logSearchMode,
@@ -1072,6 +1083,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "D")
         onResolveApproval({ decision: "denied", remember: "deny" }, "user");
       else if (input === "i") setInspectOpen(true);
+      else if (input === "k") onHaltSessionFromApproval();
       return;
     }
     if (page === "logs") {
