@@ -59,7 +59,7 @@ describe('RiskScorer', () => {
 
   it('ships the documented five default rules in order', () => {
     expect(DEFAULT_RISK_RULES.map((r) => r.name)).toEqual([
-      'secret_file_pattern',
+      'secret_pattern',
       'outbound_network',
       'shell_exec',
       'first_agent_to_agent',
@@ -73,44 +73,46 @@ describe('RiskScorer', () => {
     }
   })
 
-  describe('secret_file_pattern (+50, secret)', () => {
+  describe('secret_pattern rule emits secret_path / secret_shape / safe_list_docs factors', () => {
+    // Per-pattern coverage lives in tests/core/risk-rules/secret-patterns.test.ts (#225).
+    // Here we just confirm the default rule is wired and emits the documented
+    // factor ids when fed canonical inputs.
     it.each([
-      ['.env', true],
-      ['./.env.local', true],
-      ['~/.aws/credentials', true],
-      ['secrets/server.key', true],
-      ['id_rsa', true],
-      ['~/.ssh/known_hosts', true],
-      ['src/auth.ts', false],
-      ['README.md', false],
-    ])('path=%s → matches=%s', (path, matches) => {
+      ['.env', 'secret_path'],
+      ['~/.aws/credentials', 'secret_path'],
+      ['~/.ssh/id_rsa', 'secret_path'],
+      ['secrets/server.key', 'secret_path'],
+    ])('path=%s emits factor rule=%s', (path, expectedRule) => {
       const assessment = scorer.assess({
         sourceAgent: 'hermes',
         targetTool: 'read_file',
         args: { path },
       })
-      if (matches) {
-        const factor = assessment.factors.find(
-          (f) => f.rule === 'secret_file_pattern',
-        )
-        expect(factor).toBeDefined()
-        expect(factor!.category).toBe('secret')
-        expect(factor!.evidence).toBe(path)
-        expect(assessment.totalScore).toBeGreaterThanOrEqual(50)
-      } else {
-        expect(ruleNames(assessment.factors)).not.toContain(
-          'secret_file_pattern',
-        )
-      }
+      const factor = assessment.factors.find((f) => f.rule === expectedRule)
+      expect(factor).toBeDefined()
+      expect(factor!.category).toBe('secret')
     })
 
-    it('does not fire when args has no path field', () => {
-      const { factors } = scorer.assess({
+    it('emits secret_shape for an Anthropic key in args (fingerprinted)', () => {
+      const assessment = scorer.assess({
         sourceAgent: 'hermes',
-        targetTool: 'list_files',
-        args: { directory: '.env' },
+        targetTool: 'post',
+        args: { body: 'token=sk-ant-api03-' + 'a'.repeat(95) },
       })
-      expect(ruleNames(factors)).not.toContain('secret_file_pattern')
+      const factor = assessment.factors.find((f) => f.rule === 'secret_shape')
+      expect(factor).toBeDefined()
+      expect(factor!.reason).toContain('Anthropic API key')
+      // Fingerprint redaction — must not leak the full key value.
+      expect(factor!.reason).not.toContain('a'.repeat(50))
+    })
+
+    it('safe_list_docs only fires when a positive factor would otherwise raise the score', () => {
+      const benign = scorer.assess({
+        sourceAgent: 'hermes',
+        targetTool: 'read_file',
+        args: { path: 'README.md' },
+      })
+      expect(benign.factors).toHaveLength(0)
     })
   })
 
@@ -252,7 +254,7 @@ describe('RiskScorer', () => {
   })
 
   describe('composite assessment', () => {
-    it('.env read from a fresh agent-to-agent pair scores 70 → high bucket → ask', () => {
+    it('.env read from a fresh agent-to-agent pair scores 80 → high bucket → ask', () => {
       const assessment = scorer.assess({
         sourceAgent: 'hermes',
         targetAgent: 'claude-code',
@@ -260,9 +262,10 @@ describe('RiskScorer', () => {
         args: { path: '.env' },
       })
       expect(ruleNames(assessment.factors)).toEqual(
-        expect.arrayContaining(['secret_file_pattern', 'first_agent_to_agent']),
+        expect.arrayContaining(['secret_path', 'first_agent_to_agent']),
       )
-      expect(assessment.totalScore).toBe(70)
+      // 60 (.env path) + 20 (first agent-to-agent) = 80 → high bucket → ask
+      expect(assessment.totalScore).toBe(80)
       expect(assessment.bucket).toBe('high')
       expect(assessment.recommendation).toBe('ask')
     })
