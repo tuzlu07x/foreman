@@ -112,4 +112,33 @@ describe('migrations', () => {
 
     db.close()
   })
+
+  it('indexes source_agent, target_tool, decision so log search can find them (#217)', () => {
+    const db = new Database(':memory:')
+    applyAllMigrations(db)
+    db.prepare(
+      `INSERT INTO requests
+         (id, source_agent, target_agent, target_tool, args, risk_score, decision, risk_reasons, created_at)
+       VALUES
+         ('rA', 'claude-code', 'foreman', 'secrets/get', '{}', 60, 'denied', 'secret_file outbound', ?)`,
+    ).run(Date.now())
+
+    const search = (term: string): string[] =>
+      (
+        db
+          .prepare(`SELECT request_id FROM requests_fts WHERE requests_fts MATCH ?`)
+          .all(term) as { request_id: string }[]
+      ).map((h) => h.request_id)
+
+    // The user types things they saw in `log tail` — agent ids, tool names,
+    // the decision keyword. All three must match (porter tokenizer splits on
+    // '-' and '/' so 'claude' and 'code' / 'secrets' and 'get' are tokens).
+    expect(search('claude')).toContain('rA')
+    expect(search('code')).toContain('rA')
+    expect(search('secrets')).toContain('rA')
+    expect(search('denied')).toContain('rA')
+    expect(search('outbound')).toContain('rA')
+
+    db.close()
+  })
 })
