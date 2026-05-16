@@ -152,6 +152,56 @@ export const pendingApprovals = sqliteTable(
   }),
 );
 
+// Out-of-band notifications (#235 / C11). One row per attempted delivery on
+// one channel. `notification_messages` tracks the per-channel message id so
+// we can update / cancel later.
+export const notifications = sqliteTable(
+  "notifications",
+  {
+    id: text("id").primaryKey(),
+    requestId: text("request_id"),
+    level: text("level", {
+      enum: ["critical", "warning", "info", "summary", "budget_alert"],
+    }).notNull(),
+    channel: text("channel").notNull(),
+    body: text("body").notNull(),
+    status: text("status", {
+      enum: ["sent", "delivered", "failed", "cancelled"],
+    })
+      .notNull()
+      .default("sent"),
+    sentAt: integer("sent_at").notNull(),
+    deliveredAt: integer("delivered_at"),
+    decision: text("decision", {
+      enum: ["allow", "deny", "timeout_default"],
+    }),
+    decidedAt: integer("decided_at"),
+    decidedBy: text("decided_by"),
+    error: text("error"),
+  },
+  (t) => ({
+    requestIdx: index("notifications_request_idx").on(t.requestId),
+    statusIdx: index("notifications_status_idx").on(t.status, t.sentAt),
+  }),
+);
+
+export const notificationMessages = sqliteTable(
+  "notification_messages",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    notificationId: text("notification_id").notNull(),
+    channel: text("channel").notNull(),
+    channelMessageId: text("channel_message_id").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => ({
+    channelIdx: index("notification_messages_channel_idx").on(
+      t.channel,
+      t.channelMessageId,
+    ),
+  }),
+);
+
 export type Agent = typeof agents.$inferSelect;
 export type NewAgent = typeof agents.$inferInsert;
 export type Policy = typeof policies.$inferSelect;
@@ -166,6 +216,10 @@ export type Secret = typeof secrets.$inferSelect;
 export type NewSecret = typeof secrets.$inferInsert;
 export type PendingApproval = typeof pendingApprovals.$inferSelect;
 export type NewPendingApproval = typeof pendingApprovals.$inferInsert;
+export type Notification = typeof notifications.$inferSelect;
+export type NewNotification = typeof notifications.$inferInsert;
+export type NotificationMessage = typeof notificationMessages.$inferSelect;
+export type NewNotificationMessage = typeof notificationMessages.$inferInsert;
 
 // FTS5 virtual table and triggers live in a hand-written migration
 // (drizzle-kit cannot emit virtual tables). See:
