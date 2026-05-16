@@ -43,6 +43,13 @@
       "when": 1779200000000,
       "tag": "0005_agent_disabled",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1779400000000,
+      "tag": "0006_fts_richer_content",
+      "breakpoints": true
     }
   ]
 }
