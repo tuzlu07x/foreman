@@ -145,6 +145,54 @@ export class NotificationService {
     this.onDecision = null
   }
 
+  /** Look up a notification row by id — used by the bridge to map a channel
+   *  decision back to the original request. Returns null if the notification
+   *  has been pruned or the id is unknown. */
+  getNotification(
+    id: string,
+  ): (typeof notifications.$inferSelect) | null {
+    return (
+      this.deps.db
+        .select()
+        .from(notifications)
+        .where(eq(notifications.id, id))
+        .get() ?? null
+    )
+  }
+
+  /** Find all notification rows for a given request — used by the bridge to
+   *  update each channel's message when the decision arrives elsewhere. */
+  findByRequest(requestId: string): (typeof notifications.$inferSelect)[] {
+    return this.deps.db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.requestId, requestId))
+      .all()
+  }
+
+  /** Look up the channel-side message id for a given notification so the
+   *  bridge can call `channel.updateMessage` when a decision lands. */
+  getMessageRef(
+    notificationId: string,
+  ): { channel: string; channelMessageId: string } | null {
+    return (
+      this.deps.db
+        .select({
+          channel: notificationMessages.channel,
+          channelMessageId: notificationMessages.channelMessageId,
+        })
+        .from(notificationMessages)
+        .where(eq(notificationMessages.notificationId, notificationId))
+        .get() ?? null
+    )
+  }
+
+  /** Expose the registered channel instances so the bridge can call
+   *  `updateMessage` without re-implementing channel lookup. */
+  channelById(id: ChannelId): NotificationChannel | undefined {
+    return this.deps.channels.get(id)
+  }
+
   /** Fetch the most recent N notifications for `foreman notify status`. */
   recent(limit = 5): (typeof notifications.$inferSelect)[] {
     return this.deps.db
