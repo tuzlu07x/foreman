@@ -20,6 +20,9 @@ function makeServices(
     decidedBy,
     riskScore: 10,
     riskReasons: [],
+    riskFactors: [],
+    riskBucket: "low",
+    llmVerification: null,
     durationMs: 5,
   };
   return {

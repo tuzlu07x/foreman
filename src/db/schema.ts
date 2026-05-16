@@ -58,6 +58,14 @@ export const requests = sqliteTable(
     args: text("args").notNull(),
     riskScore: integer("risk_score").notNull(),
     riskReasons: text("risk_reasons"),
+    // JSON array of RiskFactor (#224 C1). Nullable for rows written before
+    // migration 0007; readers fall back to risk_reasons for those.
+    riskFactors: text("risk_factors"),
+    riskBucket: text("risk_bucket", {
+      enum: ["low", "medium", "high", "critical"],
+    }),
+    // JSON-encoded LlmVerification populated by the C8 layer; NULL until then.
+    llmVerification: text("llm_verification"),
     decision: text("decision", {
       enum: ["allowed", "denied", "pending"],
     }).notNull(),
@@ -122,6 +130,11 @@ export const pendingApprovals = sqliteTable(
     args: text("args").notNull(),
     riskScore: integer("risk_score").notNull(),
     riskReasons: text("risk_reasons").notNull(),
+    // Carries the rich C1 payload across the cross-process IPC bridge.
+    riskFactors: text("risk_factors"),
+    riskBucket: text("risk_bucket", {
+      enum: ["low", "medium", "high", "critical"],
+    }),
     status: text("status", { enum: ["pending", "resolved"] })
       .notNull()
       .default("pending"),

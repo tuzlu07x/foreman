@@ -1,4 +1,4 @@
-import type { RiskRule } from './types.js'
+import type { RiskFactor, RiskRule } from './types.js'
 
 const SHELL_TOOLS = new Set([
   'shell_exec',
@@ -13,11 +13,19 @@ const SHELL_TOOLS = new Set([
 
 export const shellExec: RiskRule = {
   name: 'shell_exec',
-  evaluate(req) {
-    if (!req.targetTool) return null
-    if (SHELL_TOOLS.has(req.targetTool.toLowerCase())) {
-      return { points: 40, reason: `shell execution: ${req.targetTool}` }
-    }
-    return null
+  category: 'shell',
+  evaluate(req): RiskFactor[] {
+    if (!req.targetTool) return []
+    const lower = req.targetTool.toLowerCase()
+    if (!SHELL_TOOLS.has(lower)) return []
+    return [
+      {
+        rule: 'shell_exec',
+        category: 'shell',
+        points: 40,
+        reason: `shell execution: ${req.targetTool}`,
+        evidence: req.targetTool,
+      },
+    ]
   },
 }
