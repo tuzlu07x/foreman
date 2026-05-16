@@ -60,7 +60,7 @@ describe('RiskScorer', () => {
   it('ships the documented five default rules in order', () => {
     expect(DEFAULT_RISK_RULES.map((r) => r.name)).toEqual([
       'secret_pattern',
-      'outbound_network',
+      'network_outbound',
       'shell_command',
       'first_agent_to_agent',
       'previously_denied_pattern',
@@ -116,29 +116,43 @@ describe('RiskScorer', () => {
     })
   })
 
-  describe('outbound_network (+30, network)', () => {
-    it.each(['fetch', 'http_get', 'https_post', 'wget', 'curl', 'request', 'send_email'])(
-      'fires on tool=%s',
-      (tool) => {
-        const assessment = scorer.assess({
-          sourceAgent: 'hermes',
-          targetTool: tool,
-        })
-        const factor = assessment.factors.find(
-          (f) => f.rule === 'outbound_network',
-        )
-        expect(factor).toBeDefined()
-        expect(factor!.category).toBe('network')
-        expect(assessment.totalScore).toBeGreaterThanOrEqual(30)
-      },
-    )
+  describe('network_outbound rule emits category-specific factors', () => {
+    // Per-category coverage lives in tests/core/risk-rules/network-patterns.test.ts (#227).
+    // Here we just confirm the default rule is wired and emits factors keyed by
+    // the network_* rule ids.
+    it('emits network_exfil_destination on webhook.site URL in args', () => {
+      const assessment = scorer.assess({
+        sourceAgent: 'hermes',
+        targetTool: 'fetch',
+        args: { url: 'https://webhook.site/abc-123' },
+      })
+      const factor = assessment.factors.find(
+        (f) => f.rule === 'network_exfil_destination',
+      )
+      expect(factor).toBeDefined()
+      expect(factor!.category).toBe('network')
+    })
 
-    it('does not fire on benign tools', () => {
+    it('emits no network factor when no URL appears in args', () => {
       const { factors } = scorer.assess({
         sourceAgent: 'hermes',
-        targetTool: 'read_file',
+        targetTool: 'fetch',
+        args: { count: 5 },
       })
-      expect(ruleNames(factors)).not.toContain('outbound_network')
+      expect(
+        ruleNames(factors).filter((r) => r.startsWith('network_')),
+      ).toEqual([])
+    })
+
+    it('safe host (api.anthropic.com) alone produces no factors', () => {
+      const { factors } = scorer.assess({
+        sourceAgent: 'hermes',
+        targetTool: 'fetch',
+        args: { url: 'https://api.anthropic.com/v1/messages' },
+      })
+      expect(
+        factors.filter((f) => f.category === 'network'),
+      ).toEqual([])
     })
   })
 
