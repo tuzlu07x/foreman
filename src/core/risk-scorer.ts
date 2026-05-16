@@ -1,7 +1,7 @@
 import type { ForemanDb } from '../db/client.js'
 import {
   firstAgentToAgent,
-  outboundNetwork,
+  networkPatternRule,
   previouslyDeniedPattern,
   secretPatternRule,
   shellPatternRule,
@@ -40,7 +40,7 @@ export type BucketOverrides = Partial<Record<RiskBucket, RiskRecommendation>>
 
 export const DEFAULT_RISK_RULES: readonly RiskRule[] = [
   secretPatternRule,
-  outboundNetwork,
+  networkPatternRule,
   shellPatternRule,
   firstAgentToAgent,
   previouslyDeniedPattern,

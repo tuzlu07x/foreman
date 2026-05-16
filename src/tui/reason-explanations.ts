@@ -87,6 +87,18 @@ export const REASON_EXPLANATIONS: Record<string, string> = {
   // Legacy alias for pre-#226 audit rows
   shell_exec: 'tool runs arbitrary shell commands',
 
+  // Network patterns (#227 / C4)
+  network_exfil_destination: 'known exfil endpoint (webhook.site / requestbin / ngrok / …)',
+  network_paste_share: 'paste or file-share site (data lands somewhere public)',
+  network_url_shortener: 'URL shortener hides the real destination',
+  network_ip_literal: 'URL uses a bare IP (no DNS) — common in exfil + lateral movement',
+  network_punycode: 'hostname uses Punycode (xn--) — possible homoglyph attack',
+  network_mixed_script: 'hostname mixes Latin + Cyrillic letters (homoglyph)',
+  network_suspicious_tld: 'TLD is commonly abused (.tk / .xyz / .top / .zip / .mov / …)',
+  network_mining_pool: 'cryptocurrency mining pool (cryptojacking signal)',
+  network_dark_web: 'dark-web hostname (.onion / .i2p)',
+  network_safe_host: 'known-good API / CDN host',
+  // Legacy alias for pre-#227 audit rows
   outbound_network: 'tool sends data out over the network',
   first_agent_to_agent: 'first cross-agent call in the last hour for this pair',
   previously_denied_pattern:

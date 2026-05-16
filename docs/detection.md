@@ -146,7 +146,48 @@ Safe-list factors only emit when at least one positive shell factor would have f
 
 ---
 
-## 5. Per-bucket overrides in `policy.yaml`
+## 5. Network exfil library (C4, #227)
+
+The `network_outbound` rule scans the stringified args (plus the tool name) for `http(s)://` URLs, then classifies each unique host into one of 8 risk categories. IP literals and Punycode are extra factors on top of (not instead of) the category match.
+
+### Categories
+
+| Category | Rule id | Points | Examples |
+|---|---|---|---|
+| Known exfil | `network_exfil_destination` | 60 | webhook.site, requestbin.{com,net}, beeceptor.com, hookbin.com, mockbin.org, pipedream.{com,net}, ngrok.{io,app,-free.app}, serveo.net, localhost.run, tunnel.run |
+| Paste / file-share | `network_paste_share` | 45 | pastebin.com, ghostbin.{com,co}, hastebin.com, ix.io, 0bin.net, controlc.com, transfer.sh, file.io, tmpfiles.org, catbox.moe, paste.ee, dpaste.org |
+| URL shortener | `network_url_shortener` | 35 | bit.ly, t.co, tinyurl.com, ow.ly, is.gd, goo.gl, cutt.ly, rb.gy, s.id, lnkd.in, tiny.cc, shrtco.de |
+| IP literal | `network_ip_literal` | **60** private / **50** public | `https://10.0.0.1/x` (RFC1918 / loopback / link-local boost), `https://[2001:db8::1]/x` |
+| Punycode | `network_punycode` | 50 | any host label starting with `xn--` |
+| Mixed-script | `network_mixed_script` | 50 | host mixes Latin + Cyrillic (`githubа.com` — that `а` is Cyrillic) |
+| Suspicious TLD | `network_suspicious_tld` | 25 | `.tk`, `.ml`, `.ga`, `.cf`, `.gq`, `.xyz`, `.top`, `.icu`, `.cyou`, `.zip`, `.mov` |
+| Mining pool | `network_mining_pool` | 50 | minexmr.com, supportxmr.com, nicehash.com, f2pool.com, monerohash.com, nanopool.org, 2miners.com, ethermine.org |
+| Dark web | `network_dark_web` | 40 | `.onion`, `.i2p` |
+
+### Safe-list (-15 each)
+
+37 known-good hosts across GitHub, Anthropic, OpenAI, Gemini, npm/PyPI/Crates/RubyGems, Discord/Slack/Telegram, Docker, jsDelivr, googleapis, amazonaws, azure. Subdomain matches count (`hooks.slack.com` matches `slack.com`). Fires per-host **only when at least one positive network factor is also present** — so a call only to `api.anthropic.com` produces no factors at all, but `[api.anthropic.com, webhook.site]` produces +60 exfil and -15 safe = +45 net.
+
+### URL extraction
+
+Regex on `JSON.stringify(args) + ' ' + targetTool`. Hosts are deduped per request (multiple URLs to `webhook.site/a` and `webhook.site/b` produce one factor, not two). Port is stripped before matching. IPv6 hosts are recognised by the bracketed form (`[2001:db8::1]`).
+
+### Known gaps (documented for v0.2)
+
+- Non-http(s) schemes — `stratum+tcp://pool.miner.com` (mining), `ftp://exfil/upload` are NOT scanned. C5 / C6 may pick these up via context.
+- DNS exfil — `dig` queries to attacker-controlled subdomains (e.g. `<base64-stolen-data>.attacker.com`) aren't caught by URL scanning. Future work.
+- Newly-registered domains — no domain-age check. URLhaus / phishing feeds could feed a daily-refreshed blocklist.
+
+### Sources
+
+- [CISA — Cybersecurity Best Practices](https://www.cisa.gov/topics/cybersecurity-best-practices)
+- [URLhaus](https://urlhaus.abuse.ch/) — abused URL feed
+- [Mozilla Public Suffix List](https://publicsuffix.org/)
+- [Phishing.Database TLDs](https://github.com/Phishing-Database/Phishing.Database)
+
+---
+
+## 6. Per-bucket overrides in `policy.yaml`
 
 A top-level `buckets:` block lets the user pin recommendations differently from the defaults — useful once a deployment has measured its own false-positive rate:
 
@@ -175,7 +216,7 @@ foreman policy show          # → human view, prints a "bucket overrides:" foot
 
 ---
 
-## 6. LLM verification slot (C8 — deferred to #231)
+## 7. LLM verification slot (C8 — deferred to #231)
 
 `RiskAssessment.llmVerification` is reserved for the C8 LLM layer:
 
@@ -195,7 +236,7 @@ Until C8 lands, the field is always `null`.
 
 ---
 
-## 7. Extending detection
+## 8. Extending detection
 
 To add a new rule:
 
