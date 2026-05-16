@@ -7,6 +7,10 @@ export type ConfigFormat = "yaml" | "json" | "toml";
 
 export interface InjectionPlan {
   alreadyHasForeman: boolean;
+  /** True when the existing `foreman` entry differed from the canonical
+   * snippet and was rewritten in `after`. UI uses this to log
+   * "replaced stale entry" instead of "wrote new entry". */
+  replacedStale: boolean;
   before: string;
   after: string;
   format: ConfigFormat;
@@ -40,22 +44,43 @@ export function planInjection(
     ? readFileSync(configPath, "utf-8")
     : "";
   const existing = before.length === 0 ? {} : parseDoc(before, format);
-  const alreadyHasForeman = hasForemanServer(existing);
-  if (alreadyHasForeman) {
-    return { alreadyHasForeman: true, before, after: before, format };
+  const existingForeman = findForemanServer(existing);
+  const canonicalForeman = findForemanServer(snippet);
+  if (existingForeman && canonicalForeman) {
+    if (deepEqual(existingForeman, canonicalForeman)) {
+      return {
+        alreadyHasForeman: true,
+        replacedStale: false,
+        before,
+        after: before,
+        format,
+      };
+    }
+    // Existing entry is stale (different command/args). Replace it in place
+    // and rewrite the file so the user's MCP wiring actually works.
+    const rewritten = replaceForemanServer(existing, canonicalForeman);
+    const after = serialize(rewritten, format);
+    return {
+      alreadyHasForeman: false,
+      replacedStale: true,
+      before,
+      after,
+      format,
+    };
   }
   const merged = mergeSnippet(existing, snippet);
-  const after =
-    format === "yaml"
-      ? stringifyYaml(merged)
-      : format === "toml"
-        ? stringifyToml(merged) + "\n"
-        : `${JSON.stringify(merged, null, 2)}\n`;
-  return { alreadyHasForeman, before, after, format };
+  const after = serialize(merged, format);
+  return { alreadyHasForeman: false, replacedStale: false, before, after, format };
+}
+
+function serialize(doc: Record<string, unknown>, format: ConfigFormat): string {
+  if (format === "yaml") return stringifyYaml(doc);
+  if (format === "toml") return stringifyToml(doc) + "\n";
+  return `${JSON.stringify(doc, null, 2)}\n`;
 }
 
 export function applyInjection(configPath: string, plan: InjectionPlan): void {
-  if (plan.alreadyHasForeman) return;
+  if (plan.alreadyHasForeman && !plan.replacedStale) return;
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, plan.after, "utf-8");
 }
@@ -73,8 +98,11 @@ function parseDoc(text: string, format: ConfigFormat): Record<string, unknown> {
   return raw as Record<string, unknown>;
 }
 
-function hasForemanServer(doc: Record<string, unknown>): boolean {
-  // Three conventions cover every agent in the registry:
+// Find the `foreman` MCP-server entry in any of the three documented
+// conventions. Returns the entry value (typically { command, args }) or null
+// when no entry is present. Used both for canonical-vs-stale comparison and
+// for in-place replacement.
+function findForemanServer(doc: Record<string, unknown>): unknown | null {
   //   mcpServers.foreman    (Claude Code / Hermes / OpenClaw style)
   //   mcp_servers.foreman   (Codex / TOML style)
   //   mcp.servers.foreman   (older nested pattern)
@@ -86,7 +114,7 @@ function hasForemanServer(doc: Record<string, unknown>): boolean {
       !Array.isArray(node) &&
       "foreman" in (node as Record<string, unknown>)
     ) {
-      return true;
+      return (node as Record<string, unknown>).foreman;
     }
   }
   const mcp = doc.mcp;
@@ -98,10 +126,68 @@ function hasForemanServer(doc: Record<string, unknown>): boolean {
       !Array.isArray(servers) &&
       "foreman" in (servers as Record<string, unknown>)
     ) {
-      return true;
+      return (servers as Record<string, unknown>).foreman;
     }
   }
-  return false;
+  return null;
+}
+
+// Replace the existing `foreman` entry under whichever convention it lives,
+// leaving every other key untouched. Returns a shallow copy.
+function replaceForemanServer(
+  doc: Record<string, unknown>,
+  canonical: unknown,
+): Record<string, unknown> {
+  const out = { ...doc };
+  for (const key of ["mcpServers", "mcp_servers"]) {
+    const node = out[key];
+    if (
+      node &&
+      typeof node === "object" &&
+      !Array.isArray(node) &&
+      "foreman" in (node as Record<string, unknown>)
+    ) {
+      out[key] = { ...(node as Record<string, unknown>), foreman: canonical };
+      return out;
+    }
+  }
+  const mcp = out.mcp;
+  if (mcp && typeof mcp === "object" && !Array.isArray(mcp)) {
+    const servers = (mcp as Record<string, unknown>).servers;
+    if (
+      servers &&
+      typeof servers === "object" &&
+      !Array.isArray(servers) &&
+      "foreman" in (servers as Record<string, unknown>)
+    ) {
+      out.mcp = {
+        ...(mcp as Record<string, unknown>),
+        servers: {
+          ...(servers as Record<string, unknown>),
+          foreman: canonical,
+        },
+      };
+      return out;
+    }
+  }
+  return out;
+}
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  if (typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    return a.every((item, i) => deepEqual(item, b[i]));
+  }
+  const ao = a as Record<string, unknown>;
+  const bo = b as Record<string, unknown>;
+  const ak = Object.keys(ao);
+  const bk = Object.keys(bo);
+  if (ak.length !== bk.length) return false;
+  return ak.every((k) => deepEqual(ao[k], bo[k]));
 }
 
 function mergeSnippet(
