@@ -32,6 +32,9 @@ export function renderRequestJson(row: Request): unknown {
     args: safeParse(row.args),
     riskScore: row.riskScore,
     riskReasons: row.riskReasons ? safeParse(row.riskReasons) : [],
+    riskFactors: row.riskFactors ? safeParse(row.riskFactors) : [],
+    riskBucket: row.riskBucket,
+    llmVerification: row.llmVerification ? safeParse(row.llmVerification) : null,
     decision: row.decision,
     decidedBy: row.decidedBy,
     durationMs: row.durationMs,
@@ -50,10 +53,12 @@ export function renderRequestDetail(row: Request): string {
     row.targetAgent ? `${orange("target")}        ${row.targetAgent}` : null,
     row.targetTool ? `${orange("tool")}          ${row.targetTool}` : null,
     `${orange("decision")}      ${row.decision}${row.decidedBy ? ` (${row.decidedBy})` : ""}`,
-    `${orange("risk")}          ${row.riskScore}/100`,
-    row.riskReasons
-      ? `${orange("reasons")}       ${formatList(row.riskReasons)}`
-      : null,
+    `${orange("risk")}          ${row.riskScore}/100${row.riskBucket ? ` · ${row.riskBucket}` : ""}`,
+    row.riskFactors
+      ? `${orange("factors")}       ${formatFactors(row.riskFactors)}`
+      : row.riskReasons
+        ? `${orange("reasons")}       ${formatList(row.riskReasons)}`
+        : null,
     "",
     orange("args"),
     indent(prettyJson(row.args)),
@@ -138,4 +143,19 @@ function formatList(json: string): string {
   const parsed = safeParse(json);
   if (Array.isArray(parsed)) return parsed.join(", ");
   return json;
+}
+
+function formatFactors(json: string): string {
+  const parsed = safeParse(json);
+  if (!Array.isArray(parsed)) return json;
+  return parsed
+    .map((f) => {
+      const obj = f as { rule?: unknown; points?: unknown; reason?: unknown };
+      const rule = typeof obj.rule === "string" ? obj.rule : "?";
+      const points = typeof obj.points === "number" ? obj.points : 0;
+      const sign = points >= 0 ? "+" : "";
+      const reason = typeof obj.reason === "string" ? ` — ${obj.reason}` : "";
+      return `${sign}${points} ${rule}${reason}`;
+    })
+    .join("\n               ");
 }

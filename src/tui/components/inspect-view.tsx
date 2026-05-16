@@ -1,6 +1,7 @@
 import { Box, Text } from 'ink'
 import { useEffect, useState } from 'react'
 import type { ApprovalRequest } from '../../core/approval.js'
+import type { RiskBucket } from '../../core/risk-rules/types.js'
 import { useDashboardState } from '../use-dashboard-state.js'
 import {
   buildInspectLines,
@@ -9,6 +10,21 @@ import {
   type LineColor,
 } from '../inspect-content.js'
 import { doubleBorder, theme } from '../theme.js'
+
+function bucketColor(bucket: RiskBucket | undefined): string {
+  switch (bucket) {
+    case 'critical':
+      return theme.accent.danger
+    case 'high':
+      return theme.accent.primary
+    case 'medium':
+      return theme.accent.warning
+    case 'low':
+      return theme.accent.success
+    default:
+      return theme.accent.warning
+  }
+}
 
 const VISIBLE_LINES = 22
 
@@ -38,16 +54,17 @@ export function InspectView({
   const atTop = clamped === 0
   const atBottom = clamped + VISIBLE_LINES >= total
 
+  const color = bucketColor(request.riskBucket)
   return (
     <Box
       flexDirection="column"
       borderStyle={doubleBorder()}
-      borderColor={theme.accent.warning}
+      borderColor={color}
       paddingX={2}
     >
       <Box justifyContent="space-between">
-        <Text bold color={theme.accent.warning}>
-          {theme.symbols.warn} Inspecting
+        <Text bold color={color}>
+          {theme.symbols.warn} Inspecting{request.riskBucket ? ` · ${request.riskBucket}` : ''}
         </Text>
         <Text color={theme.fg.muted}>
           {clamped + 1}–{Math.min(clamped + VISIBLE_LINES, total)} / {total}

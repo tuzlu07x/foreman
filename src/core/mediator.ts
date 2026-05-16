@@ -8,7 +8,13 @@ import {
   type ForemanEventMap,
 } from "./event-bus.js";
 import type { PolicyEngine } from "./policy-engine.js";
-import { RISK_THRESHOLD, type RiskScorer } from "./risk-scorer.js";
+import { type RiskScorer } from "./risk-scorer.js";
+import type {
+  LlmVerification,
+  RiskAssessment,
+  RiskBucket,
+  RiskFactor,
+} from "./risk-rules/types.js";
 import type { RegistryService } from "./registry.js";
 import { eq } from "drizzle-orm";
 import type { ForemanDb } from "../db/client.js";
@@ -34,6 +40,9 @@ export interface MediatorOutput {
   decidedBy: string;
   riskScore: number;
   riskReasons: string[];
+  riskFactors: RiskFactor[];
+  riskBucket: RiskBucket;
+  llmVerification: LlmVerification | null;
   result?: unknown;
   durationMs: number;
 }
@@ -100,6 +109,7 @@ export class MediatorService {
   async handleRequest(input: MediatorInput): Promise<MediatorOutput> {
     const requestId = input.requestId ?? ulid();
     const createdAt = Date.now();
+    const emptyAssessment = makeEmptyAssessment();
 
     if (!this.authenticate(input)) {
       return this.finalize({
@@ -107,8 +117,7 @@ export class MediatorService {
         input,
         decision: "denied",
         decidedBy: "auth-failure",
-        riskScore: 0,
-        riskReasons: [],
+        assessment: emptyAssessment,
         createdAt,
       });
     }
@@ -122,8 +131,7 @@ export class MediatorService {
         input,
         decision: "denied",
         decidedBy: "session:halted",
-        riskScore: 0,
-        riskReasons: [],
+        assessment: emptyAssessment,
         createdAt,
       });
     }
@@ -141,13 +149,12 @@ export class MediatorService {
         input,
         decision: "denied",
         decidedBy: `policy:${policyResult.matchedRuleId ?? "unknown"}`,
-        riskScore: 0,
-        riskReasons: [],
+        assessment: emptyAssessment,
         createdAt,
       });
     }
 
-    const risk = this.deps.risk.score({
+    const assessment = this.deps.risk.assess({
       sourceAgent: input.sourceAgent,
       targetAgent: input.targetAgent,
       targetTool: input.targetTool,
@@ -157,8 +164,22 @@ export class MediatorService {
     let decision: "allowed" | "denied";
     let decidedBy: string;
 
+    // Heuristic recommendation drives the gate; an explicit policy `ask`
+    // always escalates even when the score lands in the auto-allow bucket.
+    if (assessment.recommendation === "deny") {
+      return this.finalize({
+        requestId,
+        input,
+        decision: "denied",
+        decidedBy: `risk:${assessment.bucket}`,
+        assessment,
+        createdAt,
+      });
+    }
+
+    const riskReasons = assessment.factors.map((f) => f.rule);
     const needsApproval =
-      policyResult.decision === "ask" || risk.score >= RISK_THRESHOLD;
+      policyResult.decision === "ask" || assessment.recommendation === "ask";
 
     if (needsApproval) {
       this.bus.emit("approval:requested", {
@@ -167,8 +188,11 @@ export class MediatorService {
         targetAgent: input.targetAgent,
         targetTool: input.targetTool,
         args: this.argsFromMessage(input.message),
-        riskScore: risk.score,
-        riskReasons: risk.reasons,
+        riskScore: assessment.totalScore,
+        riskReasons,
+        riskFactors: assessment.factors,
+        riskBucket: assessment.bucket,
+        llmVerification: assessment.llmVerification,
       });
       const approval = await this.deps.approval.request({
         requestId,
@@ -176,8 +200,11 @@ export class MediatorService {
         targetAgent: input.targetAgent,
         targetTool: input.targetTool,
         args: this.argsFromMessage(input.message),
-        riskScore: risk.score,
-        riskReasons: risk.reasons,
+        riskScore: assessment.totalScore,
+        riskReasons,
+        riskFactors: assessment.factors,
+        riskBucket: assessment.bucket,
+        llmVerification: assessment.llmVerification,
       });
       decision = approval.decision;
       decidedBy = "user";
@@ -225,8 +252,7 @@ export class MediatorService {
       input,
       decision,
       decidedBy,
-      riskScore: risk.score,
-      riskReasons: risk.reasons,
+      assessment,
       createdAt,
       result,
     });
@@ -402,6 +428,9 @@ export class MediatorService {
       decidedBy: args.decidedBy,
       riskScore: 0,
       riskReasons: [],
+      riskFactors: [],
+      riskBucket: "low",
+      llmVerification: null,
       result: args.result,
       durationMs: decidedAt - args.createdAt,
       createdAt: args.createdAt,
@@ -414,13 +443,13 @@ export class MediatorService {
     input: MediatorInput;
     decision: "allowed" | "denied";
     decidedBy: string;
-    riskScore: number;
-    riskReasons: string[];
+    assessment: RiskAssessment;
     createdAt: number;
     result?: unknown;
   }): MediatorOutput {
     const decidedAt = Date.now();
     const durationMs = decidedAt - args.createdAt;
+    const riskReasons = args.assessment.factors.map((f) => f.rule);
     this.bus.emit("request:decided", {
       requestId: args.requestId,
       sourceAgent: args.input.sourceAgent,
@@ -429,8 +458,11 @@ export class MediatorService {
       args: this.argsFromMessage(args.input.message),
       decision: args.decision,
       decidedBy: args.decidedBy,
-      riskScore: args.riskScore,
-      riskReasons: args.riskReasons,
+      riskScore: args.assessment.totalScore,
+      riskReasons,
+      riskFactors: args.assessment.factors,
+      riskBucket: args.assessment.bucket,
+      llmVerification: args.assessment.llmVerification,
       result: args.result,
       durationMs,
       createdAt: args.createdAt,
@@ -440,12 +472,25 @@ export class MediatorService {
       requestId: args.requestId,
       decision: args.decision,
       decidedBy: args.decidedBy,
-      riskScore: args.riskScore,
-      riskReasons: args.riskReasons,
+      riskScore: args.assessment.totalScore,
+      riskReasons,
+      riskFactors: args.assessment.factors,
+      riskBucket: args.assessment.bucket,
+      llmVerification: args.assessment.llmVerification,
       result: args.result,
       durationMs,
     };
   }
+}
+
+function makeEmptyAssessment(): RiskAssessment {
+  return {
+    factors: [],
+    totalScore: 0,
+    bucket: "low",
+    recommendation: "allow",
+    llmVerification: null,
+  };
 }
 
 function safeJsonParse(text: string): unknown {

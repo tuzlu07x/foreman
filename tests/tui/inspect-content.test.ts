@@ -17,6 +17,23 @@ function makeRequest(
     args: { path: '.env' },
     riskScore: 80,
     riskReasons: ['secret_file_pattern', 'first_agent_to_agent'],
+    riskFactors: [
+      {
+        rule: 'secret_file_pattern',
+        category: 'secret',
+        points: 50,
+        reason: 'path looks like a credential: .env',
+        evidence: '.env',
+      },
+      {
+        rule: 'first_agent_to_agent',
+        category: 'structural',
+        points: 20,
+        reason: 'first hermes → claude-code call in the last hour',
+      },
+    ],
+    riskBucket: 'high',
+    llmVerification: null,
     ...overrides,
   }
 }
@@ -30,6 +47,9 @@ function makeRow(overrides: Partial<Request> = {}): Request {
     args: '{}',
     riskScore: 0,
     riskReasons: null,
+    riskFactors: null,
+    riskBucket: null,
+    llmVerification: null,
     decision: 'allowed',
     decidedBy: 'policy:1',
     result: null,
@@ -41,19 +61,22 @@ function makeRow(overrides: Partial<Request> = {}): Request {
 }
 
 describe('buildInspectLines', () => {
-  it('emits header / chain / signals / payload sections', () => {
+  it('emits header / chain / signals / payload sections with bucket + grouped factors', () => {
     const lines = buildInspectLines({
       request: makeRequest(),
       recentRequests: [makeRow()],
     })
     const text = lines.map((l) => l.text).join('\n')
     expect(text).toContain('Request inspector')
-    expect(text).toContain('id   req-1')
-    expect(text).toContain('risk 80/100')
+    expect(text).toContain('id     req-1')
+    expect(text).toContain('risk   80/100 · high')
     expect(text).toContain('Request chain')
     expect(text).toContain('hermes → claude-code')
     expect(text).toContain('Suspicious signals')
-    expect(text).toContain('⚠ secret_file_pattern')
+    expect(text).toContain('Secret-related (+50 pts)')
+    expect(text).toContain('+50  path looks like a credential: .env')
+    expect(text).toContain('↳ .env')
+    expect(text).toContain('Structural (+20 pts)')
     expect(text).toContain('Full request payload')
     expect(text).toContain('"requestId"')
     expect(text).toContain('"path": ".env"')
@@ -102,9 +125,9 @@ describe('buildInspectLines', () => {
     expect(text).not.toContain('Context\n')
   })
 
-  it('reasons without an explanation render without prose', () => {
+  it('legacy rows (factors empty, only reasons) fall back to flat ⚠ list', () => {
     const lines = buildInspectLines({
-      request: makeRequest({ riskReasons: ['unknown_rule'] }),
+      request: makeRequest({ riskFactors: [], riskReasons: ['unknown_rule'] }),
       recentRequests: [],
     })
     const signalText = lines
@@ -112,6 +135,18 @@ describe('buildInspectLines', () => {
       .join('\n')
       .split('Suspicious signals')[1]!
     expect(signalText).toContain('⚠ unknown_rule')
+  })
+
+  it('shows "(no flagged reasons)" when factors and reasons are both empty', () => {
+    const lines = buildInspectLines({
+      request: makeRequest({ riskFactors: [], riskReasons: [] }),
+      recentRequests: [],
+    })
+    const signalText = lines
+      .map((l) => l.text)
+      .join('\n')
+      .split('Suspicious signals')[1]!
+    expect(signalText).toContain('(no flagged reasons)')
   })
 })
 

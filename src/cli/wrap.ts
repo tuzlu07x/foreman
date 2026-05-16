@@ -77,7 +77,9 @@ export const wrapCommand = new Command("wrap")
     const policy = new PolicyEngine(db, bus);
     const policyPath = options.policy ?? paths.policyPath;
     if (existsSync(policyPath)) policy.loadFromYaml(policyPath);
-    const risk = new RiskScorer(db);
+    const risk = new RiskScorer(db, undefined, {
+      bucketOverrides: () => policy.getBucketOverrides(),
+    });
     const sessionManager = new SessionManager(db, { bus });
     const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
     const mediator = new MediatorService({

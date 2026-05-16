@@ -1,11 +1,12 @@
 import { and, eq, sql } from 'drizzle-orm'
 import { requests } from '../../db/schema.js'
-import type { RiskRule } from './types.js'
+import type { RiskFactor, RiskRule } from './types.js'
 
 export const previouslyDeniedPattern: RiskRule = {
   name: 'previously_denied_pattern',
-  evaluate(req, ctx) {
-    if (!req.targetTool) return null
+  category: 'structural',
+  evaluate(req, ctx): RiskFactor[] {
+    if (!req.targetTool) return []
     const row = ctx.db
       .select({ count: sql<number>`count(*)` })
       .from(requests)
@@ -17,12 +18,14 @@ export const previouslyDeniedPattern: RiskRule = {
         ),
       )
       .get()
-    if ((row?.count ?? 0) > 0) {
-      return {
+    if ((row?.count ?? 0) === 0) return []
+    return [
+      {
+        rule: 'previously_denied_pattern',
+        category: 'structural',
         points: 30,
         reason: `previously denied: ${req.sourceAgent} → ${req.targetTool}`,
-      }
-    }
-    return null
+      },
+    ]
   },
 }

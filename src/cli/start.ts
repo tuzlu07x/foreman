@@ -85,7 +85,9 @@ export function startForeman(
     : new ReadlineApprovalService({ bus });
   const policy = new PolicyEngine(db, bus);
   if (existsSync(paths.policyPath)) policy.loadFromYaml(paths.policyPath);
-  const risk = new RiskScorer(db);
+  const risk = new RiskScorer(db, undefined, {
+    bucketOverrides: () => policy.getBucketOverrides(),
+  });
   const sessionManager = new SessionManager(db, { bus });
   const mediator = new MediatorService({
     registry,

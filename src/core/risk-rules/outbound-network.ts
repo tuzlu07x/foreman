@@ -1,4 +1,4 @@
-import type { RiskRule } from './types.js'
+import type { RiskFactor, RiskRule } from './types.js'
 
 const OUTBOUND_TOOLS: RegExp[] = [
   /^fetch$/i,
@@ -12,14 +12,18 @@ const OUTBOUND_TOOLS: RegExp[] = [
 
 export const outboundNetwork: RiskRule = {
   name: 'outbound_network',
-  evaluate(req) {
-    if (!req.targetTool) return null
-    if (OUTBOUND_TOOLS.some((p) => p.test(req.targetTool!))) {
-      return {
+  category: 'network',
+  evaluate(req): RiskFactor[] {
+    if (!req.targetTool) return []
+    if (!OUTBOUND_TOOLS.some((p) => p.test(req.targetTool!))) return []
+    return [
+      {
+        rule: 'outbound_network',
+        category: 'network',
         points: 30,
         reason: `outbound network tool: ${req.targetTool}`,
-      }
-    }
-    return null
+        evidence: req.targetTool,
+      },
+    ]
   },
 }

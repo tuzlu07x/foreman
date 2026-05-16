@@ -137,7 +137,18 @@ agents:
       claude-code: [read_file]
 `)
     const highRisk = new RiskScorer(db, [
-      { name: 'fake', evaluate: () => ({ points: 60, reason: 'test' }) },
+      {
+        name: 'fake',
+        category: 'structural',
+        evaluate: () => [
+          {
+            rule: 'fake',
+            category: 'structural',
+            points: 60,
+            reason: 'test',
+          },
+        ],
+      },
     ])
     approval.request = vi.fn(
       async (): Promise<ApprovalDecision> => ({ decision: 'denied' }),

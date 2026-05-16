@@ -129,6 +129,12 @@ export class AuditLogger {
           args: JSON.stringify(e.args),
           riskScore: e.riskScore,
           riskReasons: JSON.stringify(e.riskReasons),
+          riskFactors:
+            e.riskFactors.length > 0 ? JSON.stringify(e.riskFactors) : null,
+          riskBucket: e.riskBucket,
+          llmVerification: e.llmVerification
+            ? JSON.stringify(e.llmVerification)
+            : null,
           decision: e.decision,
           decidedBy: e.decidedBy,
           result: e.result === undefined ? null : JSON.stringify(e.result),
