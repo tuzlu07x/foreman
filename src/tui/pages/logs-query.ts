@@ -122,6 +122,9 @@ interface RawRow {
   args: string;
   risk_score: number;
   risk_reasons: string | null;
+  risk_factors: string | null;
+  risk_bucket: "low" | "medium" | "high" | "critical" | null;
+  llm_verification: string | null;
   decision: "allowed" | "denied" | "pending";
   decided_by: string | null;
   result: string | null;
@@ -139,6 +142,9 @@ function rowToRequest(row: RawRow): Request {
     args: row.args,
     riskScore: row.risk_score,
     riskReasons: row.risk_reasons,
+    riskFactors: row.risk_factors ?? null,
+    riskBucket: row.risk_bucket ?? null,
+    llmVerification: row.llm_verification ?? null,
     decision: row.decision,
     decidedBy: row.decided_by,
     result: row.result,

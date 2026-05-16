@@ -1,6 +1,17 @@
 import type Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DEFAULT_RISK_RULES, RISK_THRESHOLD, RiskScorer } from '../../src/core/risk-scorer.js'
+import {
+  bucketFor,
+  composeAssessment,
+  DEFAULT_RISK_RULES,
+  recommendationFor,
+  RISK_THRESHOLD,
+  RiskScorer,
+} from '../../src/core/risk-scorer.js'
+import type {
+  RiskFactor,
+  RiskRule,
+} from '../../src/core/risk-rules/types.js'
 import { createInMemoryDb, type ForemanDb } from '../../src/db/client.js'
 import { requests } from '../../src/db/schema.js'
 
@@ -22,6 +33,10 @@ function seedRequest(
     .run()
 }
 
+function ruleNames(factors: RiskFactor[]): string[] {
+  return factors.map((f) => f.rule)
+}
+
 describe('RiskScorer', () => {
   let db: ForemanDb
   let sqlite: Database.Database
@@ -38,8 +53,8 @@ describe('RiskScorer', () => {
     sqlite.close()
   })
 
-  it('exposes the documented threshold (50)', () => {
-    expect(RISK_THRESHOLD).toBe(50)
+  it('exposes the documented threshold (30 — medium bucket floor)', () => {
+    expect(RISK_THRESHOLD).toBe(30)
   })
 
   it('ships the documented five default rules in order', () => {
@@ -52,7 +67,13 @@ describe('RiskScorer', () => {
     ])
   })
 
-  describe('secret_file_pattern (+50)', () => {
+  it('every default rule declares a category', () => {
+    for (const rule of DEFAULT_RISK_RULES) {
+      expect(rule.category).toBeTruthy()
+    }
+  })
+
+  describe('secret_file_pattern (+50, secret)', () => {
     it.each([
       ['.env', true],
       ['./.env.local', true],
@@ -63,83 +84,100 @@ describe('RiskScorer', () => {
       ['src/auth.ts', false],
       ['README.md', false],
     ])('path=%s → matches=%s', (path, matches) => {
-      const { score, reasons } = scorer.score({
+      const assessment = scorer.assess({
         sourceAgent: 'hermes',
         targetTool: 'read_file',
         args: { path },
       })
       if (matches) {
-        expect(reasons).toContain('secret_file_pattern')
-        expect(score).toBeGreaterThanOrEqual(50)
+        const factor = assessment.factors.find(
+          (f) => f.rule === 'secret_file_pattern',
+        )
+        expect(factor).toBeDefined()
+        expect(factor!.category).toBe('secret')
+        expect(factor!.evidence).toBe(path)
+        expect(assessment.totalScore).toBeGreaterThanOrEqual(50)
       } else {
-        expect(reasons).not.toContain('secret_file_pattern')
+        expect(ruleNames(assessment.factors)).not.toContain(
+          'secret_file_pattern',
+        )
       }
     })
 
     it('does not fire when args has no path field', () => {
-      const { reasons } = scorer.score({
+      const { factors } = scorer.assess({
         sourceAgent: 'hermes',
         targetTool: 'list_files',
         args: { directory: '.env' },
       })
-      expect(reasons).not.toContain('secret_file_pattern')
+      expect(ruleNames(factors)).not.toContain('secret_file_pattern')
     })
   })
 
-  describe('outbound_network (+30)', () => {
+  describe('outbound_network (+30, network)', () => {
     it.each(['fetch', 'http_get', 'https_post', 'wget', 'curl', 'request', 'send_email'])(
       'fires on tool=%s',
       (tool) => {
-        const { reasons, score } = scorer.score({
+        const assessment = scorer.assess({
           sourceAgent: 'hermes',
           targetTool: tool,
         })
-        expect(reasons).toContain('outbound_network')
-        expect(score).toBeGreaterThanOrEqual(30)
+        const factor = assessment.factors.find(
+          (f) => f.rule === 'outbound_network',
+        )
+        expect(factor).toBeDefined()
+        expect(factor!.category).toBe('network')
+        expect(assessment.totalScore).toBeGreaterThanOrEqual(30)
       },
     )
 
     it('does not fire on benign tools', () => {
-      const { reasons } = scorer.score({
+      const { factors } = scorer.assess({
         sourceAgent: 'hermes',
         targetTool: 'read_file',
       })
-      expect(reasons).not.toContain('outbound_network')
+      expect(ruleNames(factors)).not.toContain('outbound_network')
     })
   })
 
-  describe('shell_exec (+40)', () => {
+  describe('shell_exec (+40, shell)', () => {
     it.each(['shell_exec', 'run_command', 'run_shell', 'bash', 'EXEC'])(
       'fires on tool=%s',
       (tool) => {
-        const { reasons, score } = scorer.score({
+        const assessment = scorer.assess({
           sourceAgent: 'hermes',
           targetTool: tool,
         })
-        expect(reasons).toContain('shell_exec')
-        expect(score).toBeGreaterThanOrEqual(40)
+        const factor = assessment.factors.find((f) => f.rule === 'shell_exec')
+        expect(factor).toBeDefined()
+        expect(factor!.category).toBe('shell')
+        expect(assessment.totalScore).toBeGreaterThanOrEqual(40)
       },
     )
 
     it('does not fire on read_file', () => {
-      const { reasons } = scorer.score({
+      const { factors } = scorer.assess({
         sourceAgent: 'hermes',
         targetTool: 'read_file',
       })
-      expect(reasons).not.toContain('shell_exec')
+      expect(ruleNames(factors)).not.toContain('shell_exec')
     })
   })
 
-  describe('first_agent_to_agent (+20)', () => {
+  describe('first_agent_to_agent (+20, structural)', () => {
     it('fires when no prior call to the target agent exists', () => {
-      const { reasons, score } = scorer.score({
+      const assessment = scorer.assess({
         sourceAgent: 'hermes',
         targetAgent: 'claude-code',
         targetTool: 'read_file',
         args: { path: 'src/auth.ts' },
       })
-      expect(reasons).toContain('first_agent_to_agent')
-      expect(score).toBeGreaterThanOrEqual(20)
+      const factor = assessment.factors.find(
+        (f) => f.rule === 'first_agent_to_agent',
+      )
+      expect(factor).toBeDefined()
+      expect(factor!.category).toBe('structural')
+      expect(assessment.totalScore).toBeGreaterThanOrEqual(20)
     })
 
     it('does not fire after a recent call to the same target agent', () => {
@@ -149,12 +187,12 @@ describe('RiskScorer', () => {
         targetTool: 'read_file',
         createdAt: Date.now() - 30_000,
       })
-      const { reasons } = scorer.score({
+      const { factors } = scorer.assess({
         sourceAgent: 'hermes',
         targetAgent: 'claude-code',
         targetTool: 'read_file',
       })
-      expect(reasons).not.toContain('first_agent_to_agent')
+      expect(ruleNames(factors)).not.toContain('first_agent_to_agent')
     })
 
     it('fires again if the prior call was more than an hour ago', () => {
@@ -163,36 +201,40 @@ describe('RiskScorer', () => {
         targetAgent: 'claude-code',
         createdAt: Date.now() - 2 * 60 * 60 * 1000,
       })
-      const { reasons } = scorer.score({
+      const { factors } = scorer.assess({
         sourceAgent: 'hermes',
         targetAgent: 'claude-code',
         targetTool: 'read_file',
       })
-      expect(reasons).toContain('first_agent_to_agent')
+      expect(ruleNames(factors)).toContain('first_agent_to_agent')
     })
 
     it('does not fire when there is no targetAgent', () => {
-      const { reasons } = scorer.score({
+      const { factors } = scorer.assess({
         sourceAgent: 'hermes',
         targetTool: 'read_file',
       })
-      expect(reasons).not.toContain('first_agent_to_agent')
+      expect(ruleNames(factors)).not.toContain('first_agent_to_agent')
     })
   })
 
-  describe('previously_denied_pattern (+30)', () => {
+  describe('previously_denied_pattern (+30, structural)', () => {
     it('fires when the same source/tool was denied before', () => {
       seedRequest(db, {
         sourceAgent: 'hermes',
         targetTool: 'read_file',
         decision: 'denied',
       })
-      const { reasons, score } = scorer.score({
+      const assessment = scorer.assess({
         sourceAgent: 'hermes',
         targetTool: 'read_file',
       })
-      expect(reasons).toContain('previously_denied_pattern')
-      expect(score).toBeGreaterThanOrEqual(30)
+      const factor = assessment.factors.find(
+        (f) => f.rule === 'previously_denied_pattern',
+      )
+      expect(factor).toBeDefined()
+      expect(factor!.category).toBe('structural')
+      expect(assessment.totalScore).toBeGreaterThanOrEqual(30)
     })
 
     it('does not fire when prior calls were allowed', () => {
@@ -201,58 +243,174 @@ describe('RiskScorer', () => {
         targetTool: 'read_file',
         decision: 'allowed',
       })
-      const { reasons } = scorer.score({
+      const { factors } = scorer.assess({
         sourceAgent: 'hermes',
         targetTool: 'read_file',
       })
-      expect(reasons).not.toContain('previously_denied_pattern')
+      expect(ruleNames(factors)).not.toContain('previously_denied_pattern')
     })
   })
 
-  describe('composite scoring', () => {
-    it('a .env read from a fresh agent-to-agent caller scores ≥ 50 (done-when)', () => {
-      const { score, reasons } = scorer.score({
+  describe('composite assessment', () => {
+    it('.env read from a fresh agent-to-agent pair scores 70 → high bucket → ask', () => {
+      const assessment = scorer.assess({
         sourceAgent: 'hermes',
         targetAgent: 'claude-code',
         targetTool: 'read_file',
         args: { path: '.env' },
       })
-      expect(reasons).toEqual(
+      expect(ruleNames(assessment.factors)).toEqual(
         expect.arrayContaining(['secret_file_pattern', 'first_agent_to_agent']),
       )
-      expect(score).toBeGreaterThanOrEqual(RISK_THRESHOLD)
-      expect(score).toBe(70)
+      expect(assessment.totalScore).toBe(70)
+      expect(assessment.bucket).toBe('high')
+      expect(assessment.recommendation).toBe('ask')
     })
 
-    it('benign read of a regular file scores 0 (after a prior allow primes the agent pair)', () => {
+    it('benign read after a prior allow primes the agent pair → low / allow', () => {
       seedRequest(db, {
         sourceAgent: 'claude-code',
         targetAgent: 'fs',
         createdAt: Date.now() - 10_000,
       })
-      const { score, reasons } = scorer.score({
+      const assessment = scorer.assess({
         sourceAgent: 'claude-code',
         targetAgent: 'fs',
         targetTool: 'read_file',
         args: { path: 'src/auth.ts' },
       })
-      expect(score).toBe(0)
-      expect(reasons).toEqual([])
+      expect(assessment.totalScore).toBe(0)
+      expect(assessment.factors).toEqual([])
+      expect(assessment.bucket).toBe('low')
+      expect(assessment.recommendation).toBe('allow')
     })
 
-    it('accepts a custom rule set', () => {
-      const custom = new RiskScorer(db, [
-        {
-          name: 'always_high',
-          evaluate: () => ({ points: 99, reason: 'test rule' }),
-        },
+    it('accepts a custom rule set returning multi-factor arrays', () => {
+      const customRule: RiskRule = {
+        name: 'always_high',
+        category: 'structural',
+        evaluate: () => [
+          {
+            rule: 'always_high_a',
+            category: 'structural',
+            points: 60,
+            reason: 'test a',
+          },
+          {
+            rule: 'always_high_b',
+            category: 'structural',
+            points: 30,
+            reason: 'test b',
+          },
+        ],
+      }
+      const custom = new RiskScorer(db, [customRule])
+      const assessment = custom.assess({ sourceAgent: 'x', targetTool: 'y' })
+      expect(assessment.totalScore).toBe(90)
+      expect(assessment.bucket).toBe('critical')
+      expect(ruleNames(assessment.factors)).toEqual([
+        'always_high_a',
+        'always_high_b',
       ])
-      const { score, reasons } = custom.score({
-        sourceAgent: 'x',
-        targetTool: 'y',
-      })
-      expect(score).toBe(99)
-      expect(reasons).toEqual(['always_high'])
     })
+
+    it('a rule emitting zero factors does not contribute', () => {
+      const noop: RiskRule = {
+        name: 'noop',
+        category: 'structural',
+        evaluate: () => [],
+      }
+      const custom = new RiskScorer(db, [noop])
+      const assessment = custom.assess({ sourceAgent: 'x', targetTool: 'y' })
+      expect(assessment.factors).toEqual([])
+      expect(assessment.totalScore).toBe(0)
+    })
+
+    it('llmVerification defaults to null (C8 has not run)', () => {
+      const assessment = scorer.assess({ sourceAgent: 'hermes' })
+      expect(assessment.llmVerification).toBeNull()
+    })
+  })
+})
+
+describe('bucketFor / recommendationFor / composeAssessment', () => {
+  it.each([
+    [0, 'low'],
+    [15, 'low'],
+    [29, 'low'],
+    [30, 'medium'],
+    [50, 'medium'],
+    [59, 'medium'],
+    [60, 'high'],
+    [84, 'high'],
+    [85, 'critical'],
+    [100, 'critical'],
+  ])('score=%i → bucket=%s', (score, bucket) => {
+    expect(bucketFor(score)).toBe(bucket)
+  })
+
+  it('clamps negative scores to low', () => {
+    const assessment = composeAssessment([
+      {
+        rule: 'safe',
+        category: 'structural',
+        points: -50,
+        reason: 'known-good caller',
+      },
+    ])
+    expect(assessment.totalScore).toBe(0)
+    expect(assessment.bucket).toBe('low')
+  })
+
+  it('clamps scores above 100', () => {
+    const assessment = composeAssessment([
+      {
+        rule: 'huge',
+        category: 'secret',
+        points: 250,
+        reason: 'test',
+      },
+    ])
+    expect(assessment.totalScore).toBe(100)
+    expect(assessment.bucket).toBe('critical')
+  })
+
+  it('safe-list negative points can pull a high score back into medium', () => {
+    const assessment = composeAssessment([
+      { rule: 'a', category: 'secret', points: 70, reason: 'secret-y' },
+      { rule: 'safe', category: 'structural', points: -25, reason: 'known good' },
+    ])
+    expect(assessment.totalScore).toBe(45)
+    expect(assessment.bucket).toBe('medium')
+  })
+
+  it('default recommendations follow the spec table', () => {
+    expect(recommendationFor('low')).toBe('allow')
+    expect(recommendationFor('medium')).toBe('ask')
+    expect(recommendationFor('high')).toBe('ask')
+    expect(recommendationFor('critical')).toBe('ask')
+  })
+
+  it('bucket overrides win over defaults', () => {
+    expect(recommendationFor('critical', { critical: 'deny' })).toBe('deny')
+    expect(recommendationFor('medium', { medium: 'allow' })).toBe('allow')
+    expect(recommendationFor('high', { critical: 'deny' })).toBe('ask')
+  })
+
+  it('composeAssessment threads overrides through to the recommendation', () => {
+    const assessment = composeAssessment(
+      [{ rule: 'r', category: 'shell', points: 90, reason: 'critical' }],
+      { critical: 'deny' },
+    )
+    expect(assessment.bucket).toBe('critical')
+    expect(assessment.recommendation).toBe('deny')
+  })
+
+  it('empty factor list → low / allow', () => {
+    const assessment = composeAssessment([])
+    expect(assessment.totalScore).toBe(0)
+    expect(assessment.bucket).toBe('low')
+    expect(assessment.recommendation).toBe('allow')
+    expect(assessment.llmVerification).toBeNull()
   })
 })

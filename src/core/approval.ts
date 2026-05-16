@@ -6,6 +6,11 @@ import {
   type EventBus,
   type ForemanEventMap,
 } from "./event-bus.js";
+import type {
+  LlmVerification,
+  RiskBucket,
+  RiskFactor,
+} from "./risk-rules/types.js";
 
 export interface ApprovalRequest {
   requestId: string;
@@ -15,6 +20,9 @@ export interface ApprovalRequest {
   args: unknown;
   riskScore: number;
   riskReasons: string[];
+  riskFactors: RiskFactor[];
+  riskBucket: RiskBucket;
+  llmVerification: LlmVerification | null;
   context?: string;
 }
 
@@ -194,6 +202,8 @@ export class DbApprovalService implements ApprovalService {
         args: JSON.stringify(req.args ?? null),
         riskScore: req.riskScore,
         riskReasons: JSON.stringify(req.riskReasons),
+        riskFactors: JSON.stringify(req.riskFactors),
+        riskBucket: req.riskBucket,
         status: "pending",
         requestedAt,
       })
@@ -350,6 +360,9 @@ export class ApprovalBridge {
         args: safeParse(row.args),
         riskScore: row.riskScore,
         riskReasons: safeParseArray(row.riskReasons),
+        riskFactors: safeParseFactors(row.riskFactors),
+        riskBucket: row.riskBucket ?? "medium",
+        llmVerification: null,
       });
     }
     // Forget seen ids that have left the table (resolved + cleared later).
@@ -375,6 +388,16 @@ function safeParseArray(s: string): string[] {
   try {
     const parsed = JSON.parse(s);
     return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+function safeParseFactors(s: string | null): RiskFactor[] {
+  if (!s) return [];
+  try {
+    const parsed = JSON.parse(s);
+    return Array.isArray(parsed) ? (parsed as RiskFactor[]) : [];
   } catch {
     return [];
   }

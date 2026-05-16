@@ -16,6 +16,9 @@ function makeRequest(
     args: { path: ".env" },
     riskScore: 80,
     riskReasons: ["secret_file_pattern"],
+    riskFactors: [],
+    riskBucket: "high",
+    llmVerification: null,
     ...overrides,
   };
 }

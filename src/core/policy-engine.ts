@@ -80,12 +80,27 @@ const AgentEntrySchema = z
   })
   .strict();
 
+// Optional per-bucket recommendation override for the C1 factor model.
+// Lets a user pin "deny critical" or relax "ask medium" → "allow" once
+// they've reviewed the false-positive rate in their environment.
+const BucketOverridesSchema = z
+  .object({
+    low: z.enum(["allow", "ask", "deny"]).optional(),
+    medium: z.enum(["allow", "ask", "deny"]).optional(),
+    high: z.enum(["allow", "ask", "deny"]).optional(),
+    critical: z.enum(["allow", "ask", "deny"]).optional(),
+  })
+  .strict();
+
 const PolicyDocSchema = z
   .object({
     agents: z.record(z.string(), AgentEntrySchema).optional(),
     rules: z.array(RulesArrayItemSchema).optional(),
+    buckets: BucketOverridesSchema.optional(),
   })
   .strict();
+
+export type BucketOverrides = z.infer<typeof BucketOverridesSchema>;
 
 const EFFECT_ORDER: Record<Effect, number> = { deny: 0, allow: 1, ask: 2 };
 
@@ -97,6 +112,11 @@ export class PolicyRuleNotFoundError extends Error {
 }
 
 export class PolicyEngine {
+  // Held in memory only — re-populated on every loadYamlText. The mediator
+  // reads via getBucketOverrides() each call so a YAML reload takes effect
+  // without a restart.
+  private bucketOverrides: BucketOverrides = {};
+
   constructor(
     private readonly db: ForemanDb,
     private readonly bus: EventBus<ForemanEventMap> = defaultBus,
@@ -113,6 +133,7 @@ export class PolicyEngine {
     const parsed = parseYaml(text);
     const doc = parsed === null ? {} : PolicyDocSchema.parse(parsed);
     const now = Date.now();
+    this.bucketOverrides = doc.buckets ?? {};
 
     const rows: (typeof policies.$inferInsert)[] = [];
     for (const [agentId, entry] of Object.entries(doc.agents ?? {})) {
@@ -282,6 +303,10 @@ export class PolicyEngine {
 
   list(): (typeof policies.$inferSelect)[] {
     return this.db.select().from(policies).all();
+  }
+
+  getBucketOverrides(): BucketOverrides {
+    return { ...this.bucketOverrides };
   }
 
   setEnabled(ruleId: number, enabled: boolean): void {
