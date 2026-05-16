@@ -3,7 +3,7 @@ import {
   firstAgentToAgent,
   outboundNetwork,
   previouslyDeniedPattern,
-  secretFilePattern,
+  secretPatternRule,
   shellExec,
 } from './risk-rules/index.js'
 import type {
@@ -39,7 +39,7 @@ const DEFAULT_RECOMMENDATIONS: Record<RiskBucket, RiskRecommendation> = {
 export type BucketOverrides = Partial<Record<RiskBucket, RiskRecommendation>>
 
 export const DEFAULT_RISK_RULES: readonly RiskRule[] = [
-  secretFilePattern,
+  secretPatternRule,
   outboundNetwork,
   shellExec,
   firstAgentToAgent,
