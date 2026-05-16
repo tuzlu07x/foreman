@@ -4,7 +4,7 @@ import {
   outboundNetwork,
   previouslyDeniedPattern,
   secretPatternRule,
-  shellExec,
+  shellPatternRule,
 } from './risk-rules/index.js'
 import type {
   LlmVerification,
@@ -41,7 +41,7 @@ export type BucketOverrides = Partial<Record<RiskBucket, RiskRecommendation>>
 export const DEFAULT_RISK_RULES: readonly RiskRule[] = [
   secretPatternRule,
   outboundNetwork,
-  shellExec,
+  shellPatternRule,
   firstAgentToAgent,
   previouslyDeniedPattern,
 ]
