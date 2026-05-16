@@ -113,6 +113,35 @@ describe('migrations', () => {
     db.close()
   })
 
+  it('migration 0008 adds notifications + notification_messages tables (#235)', () => {
+    const db = new Database(':memory:')
+    applyAllMigrations(db)
+    const tables = db
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`,
+      )
+      .all() as { name: string }[]
+    const names = tables.map((t) => t.name)
+    expect(names).toContain('notifications')
+    expect(names).toContain('notification_messages')
+
+    // Insert a row + correlated message — verify the schema is usable.
+    db.prepare(
+      `INSERT INTO notifications (id, request_id, level, channel, body, status, sent_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('n1', 'req-1', 'critical', 'telegram', 'body', 'sent', Date.now())
+    db.prepare(
+      `INSERT INTO notification_messages (notification_id, channel, channel_message_id, created_at)
+       VALUES (?, ?, ?, ?)`,
+    ).run('n1', 'telegram', '42', Date.now())
+
+    const row = db.prepare(`SELECT * FROM notifications WHERE id = ?`).get('n1') as {
+      level: string
+    }
+    expect(row.level).toBe('critical')
+    db.close()
+  })
+
   it('migration 0007 adds risk_factors / risk_bucket / llm_verification columns', () => {
     const db = new Database(':memory:')
     applyAllMigrations(db)
