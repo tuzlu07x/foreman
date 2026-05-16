@@ -281,6 +281,58 @@ export function checkPolicyYaml(): CheckResult {
   }
 }
 
+// Notification config — best-effort lint. Doesn't require a working bot.
+export function checkNotifyConfig(): CheckResult {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.notifyConfigPath)) {
+    return {
+      name: "notify_config",
+      status: "ok",
+      message: "notify.yaml absent — OOB notifications disabled (the default)",
+    };
+  }
+  try {
+    const text = readFileSync(paths.notifyConfigPath, "utf-8");
+    const parsed = parseYaml(text);
+    if (
+      parsed !== null &&
+      (typeof parsed !== "object" || Array.isArray(parsed))
+    ) {
+      return {
+        name: "notify_config",
+        status: "fail",
+        message: "notify.yaml top-level must be an object (or empty)",
+        remediation: `Edit ${paths.notifyConfigPath} — see docs/notifications.md.`,
+      };
+    }
+    const channels =
+      (parsed as { channels?: Record<string, { enabled?: boolean }> })?.channels ?? {};
+    const enabled = Object.entries(channels)
+      .filter(([, v]) => v?.enabled === true)
+      .map(([k]) => k);
+    if (enabled.length === 0) {
+      return {
+        name: "notify_config",
+        status: "warn",
+        message: "notify.yaml present but no channels enabled",
+        remediation: "Run `foreman notify enable telegram` (or another channel).",
+      };
+    }
+    return {
+      name: "notify_config",
+      status: "ok",
+      message: `enabled channels: ${enabled.join(", ")}`,
+    };
+  } catch (err) {
+    return {
+      name: "notify_config",
+      status: "fail",
+      message: `notify.yaml failed to parse: ${err instanceof Error ? err.message : String(err)}`,
+      remediation: `Open ${paths.notifyConfigPath} and fix the YAML syntax.`,
+    };
+  }
+}
+
 export function checkAgentsRegistered(): CheckResult {
   const paths = getForemanPaths();
   if (!existsSync(paths.dbPath)) {
@@ -476,6 +528,7 @@ const CHECKS: (() => CheckResult)[] = [
   checkMigrations,
   checkFts5,
   checkPolicyYaml,
+  checkNotifyConfig,
   checkAgentsRegistered,
   checkMcpGateway,
   checkLegacyHome,
