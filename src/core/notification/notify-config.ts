@@ -14,8 +14,13 @@ const ChannelToggleSchema = z
     bot_token_ref: z.string().optional(),
     /** Telegram chat_id (string to preserve large numeric ids). */
     chat_id: z.string().optional(),
-    /** Discord webhook url ref (secret store key). */
+    /** Webhook destination URL — stored as a secret ref so the URL itself is
+     *  encrypted at rest (URLs often embed auth tokens). */
     webhook_url_ref: z.string().optional(),
+    /** Optional HMAC-SHA256 signing secret (secret ref). When set, every
+     *  webhook POST carries a `X-Foreman-Signature` header receivers can
+     *  verify. */
+    signing_secret_ref: z.string().optional(),
     /** Slack channel name + bot token ref. */
     channel: z.string().optional(),
   })
