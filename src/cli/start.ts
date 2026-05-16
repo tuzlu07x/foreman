@@ -30,8 +30,20 @@ import {
   saveSetupState,
 } from "../tui/setup-state.js";
 import { SetupWizard } from "../tui/setup-wizard.js";
-import { SecretStore } from "../core/secret-store.js";
+import { SecretStore, SecretNotFoundError } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
+import { TelegramChannel } from "../core/notification/channels/telegram.js";
+import { NotificationBridge } from "../core/notification/notification-bridge.js";
+import { NotificationService } from "../core/notification/notification-service.js";
+import {
+  channelConfig,
+  isChannelEnabled,
+  loadNotifyConfig,
+} from "../core/notification/notify-config.js";
+import type {
+  ChannelId,
+  NotificationChannel,
+} from "../core/notification/types.js";
 import { launchEditor } from "../tui/launch-editor.js";
 import { getForemanPaths } from "../utils/config.js";
 import { runInit } from "./init.js";
@@ -104,6 +116,15 @@ export function startForeman(
   // fires for cross-process requests too (#117).
   const approvalBridge = new ApprovalBridge(db, { bus });
   approvalBridge.start();
+
+  // OOB notification bridge (#235 / C11a-2). Best-effort: any failure here
+  // (notify.yaml malformed, secret missing, etc.) is logged but does NOT
+  // block start — the TUI modal still works on its own.
+  const notificationBridge = setupNotificationBridge({
+    db,
+    secretStore,
+    notifyConfigPath: paths.notifyConfigPath,
+  });
 
   const bootInfo: BootInfo = {
     publicKey,
@@ -203,6 +224,11 @@ export function startForeman(
       r();
     }
     approvalBridge.stop();
+    if (notificationBridge) {
+      await notificationBridge.stop().catch(() => {
+        /* best-effort cleanup */
+      });
+    }
     audit.dispose();
     closeDb();
   };
@@ -228,6 +254,51 @@ export function startForeman(
     waitForExit,
     shutdown,
   };
+}
+
+// Best-effort OOB bridge setup. Returns the bridge if the config is sane and
+// at least one channel could be built; null if there's nothing to do. Each
+// failure mode (no notify.yaml, channel disabled, secret missing) is silent
+// so the TUI keeps working on its own.
+function setupNotificationBridge(args: {
+  db: ReturnType<typeof getDb>;
+  secretStore: SecretStore;
+  notifyConfigPath: string;
+}): NotificationBridge | null {
+  let config;
+  try {
+    config = loadNotifyConfig(args.notifyConfigPath);
+  } catch {
+    return null;
+  }
+
+  const channels = new Map<ChannelId, NotificationChannel>();
+
+  if (isChannelEnabled(config, "telegram")) {
+    const tg = channelConfig(config, "telegram");
+    if (tg?.bot_token_ref && tg.chat_id) {
+      try {
+        const token = args.secretStore.get(tg.bot_token_ref);
+        channels.set(
+          "telegram",
+          new TelegramChannel({ botToken: token, chatId: tg.chat_id }),
+        );
+      } catch (err) {
+        if (!(err instanceof SecretNotFoundError)) throw err;
+        // Token wasn't in the store — skip Telegram quietly. User will see
+        // the misconfiguration via `foreman doctor` / `foreman notify test`.
+      }
+    }
+  }
+
+  if (channels.size === 0) return null;
+
+  const service = new NotificationService({ db: args.db, config, channels });
+  const bridge = new NotificationBridge(service, { bus });
+  void bridge.start().catch(() => {
+    /* best-effort */
+  });
+  return bridge;
 }
 
 // Returns true when the user appears to be a first-time user: no foreman home
