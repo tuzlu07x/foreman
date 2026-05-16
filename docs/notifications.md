@@ -124,34 +124,40 @@ foreman notify mute hermes             # don't alert about this agent
 ## 6. How it's wired
 
 ```
-mediator
-   │ risk.assess()
-   ▼
-NotificationService.send(level, payload)
+mediator.handleRequest()
+   │ risk.assess() + needsApproval
    │
-   ├─ routeFor(level) → which channels?
-   ├─ for each enabled channel: channel.send(notification)
-   ├─ persist `notifications` row + `notification_messages` row
-   │
-   ▼
-[user taps Allow / Deny on Telegram]
-   │
-   ▼
-TelegramChannel poll loop → onDecision(d)
-   │
-   ├─ verify d.notificationId is outstanding
-   ├─ verify chat_id matches configured user
+   ├─► bus.emit('approval:requested', …)
+   │      │
+   │      ▼
+   │   NotificationBridge.bus.on('approval:requested')
+   │      │
+   │      ▼
+   │   NotificationService.send(level, payload)
+   │      │
+   │      ├─ routeFor(level) → which channels?
+   │      ├─ each enabled channel: channel.send(notification)
+   │      ├─ persist `notifications` row + `notification_messages` row
    │
    ▼
-NotificationService.recordDecision()
+await approval.request(...)   ← mediator blocks here
    │
-   ├─ first decision wins (TUI vs OOB race)
-   ├─ persist decision + decided_by + decided_at
+   │  [user taps Allow/Deny on Telegram OR in the TUI]
+   │
+   │  TUI path: KeyboardHandler → bus.emit('approval:resolved')
+   │  OOB path: TelegramChannel poll → onDecision(d)
+   │              → NotificationBridge.onAnyDecision(d)
+   │                  → bus.emit('approval:resolved')
+   │
+   │  First decision wins. Bridge ALSO listens for 'approval:resolved'
+   │  → channel.updateMessage(ref, "… resolved elsewhere") so the
+   │     loser's channel reflects the final state.
+   │
    ▼
-onAnyDecision(d) → (C11a-2: mediator unblocks the agent)
+mediator finalize + return to agent
 ```
 
-C11a-1 ships **everything down to `onAnyDecision`**. The `(C11a-2: …)` arrow — actually unblocking the agent's pending call when the user taps Allow/Deny outside the TUI — is the next slice.
+C11a-2 ships the **`NotificationBridge`** — the missing wire from `onAnyDecision` back to `bus.emit('approval:resolved')`. Cross-process flow (mcp-stdio / wrap) works via the existing `DbApprovalService` + `ApprovalBridge` (#117): pending_approvals row → start.ts's bus → notification → tap → bus.emit('approval:resolved') → DbApprovalService poll picks up.
 
 ---
 
@@ -159,8 +165,8 @@ C11a-1 ships **everything down to `onAnyDecision`**. The `(C11a-2: …)` arrow �
 
 | PR | Scope | Status |
 |---|---|---|
-| **C11a-1** (this) | Foundation: notify.yaml + NotificationService + TelegramChannel + CLI + migration + doctor | shipped |
-| C11a-2 | Mediator wire: agent-blocking flow (OOB tap unblocks pending call, first decision wins between TUI + Telegram) | next |
+| C11a-1 | Foundation: notify.yaml + NotificationService + TelegramChannel + CLI + migration + doctor | shipped |
+| **C11a-2** (this) | Mediator wire: NotificationBridge bridges bus ↔ channels; OOB tap unblocks the agent; "resolved elsewhere" update on race | shipped |
 | C11b | Discord / Slack / Webhook / System channels | follow-up |
 | C11c | Daily digest scheduler + silence / mute commands | follow-up |
 
