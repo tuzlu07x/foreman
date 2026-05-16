@@ -5,13 +5,18 @@ import {
 } from "../../src/tui/reason-explanations.js";
 
 describe("reason explanations", () => {
-  it("covers every default factor rule id (secret_pattern emits 3 sub-rules)", () => {
+  it("covers every default factor rule id (secret_pattern + shell_command emit sub-rules)", () => {
     for (const name of [
       "secret_path",
       "secret_shape",
       "safe_list_docs",
       "outbound_network",
-      "shell_exec",
+      "shell_rm_rf_catastrophic",
+      "shell_sudo",
+      "shell_persist_crontab",
+      "shell_revsh_curl_pipe_bash",
+      "shell_evasion_history_clear",
+      "shell_recon_etc_shadow",
       "first_agent_to_agent",
       "previously_denied_pattern",
     ]) {
@@ -20,8 +25,9 @@ describe("reason explanations", () => {
     }
   });
 
-  it("keeps the legacy secret_file_pattern key so pre-#225 audit rows still render prose", () => {
+  it("keeps the legacy keys so pre-#225/#226 audit rows still render prose", () => {
     expect(REASON_EXPLANATIONS).toHaveProperty("secret_file_pattern");
+    expect(REASON_EXPLANATIONS).toHaveProperty("shell_exec");
   });
 
   it("returns undefined for unknown reasons", () => {
