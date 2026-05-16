@@ -100,6 +100,13 @@ export const REASON_EXPLANATIONS: Record<string, string> = {
   network_safe_host: 'known-good API / CDN host',
   // Legacy alias for pre-#227 audit rows
   outbound_network: 'tool sends data out over the network',
+
+  // Prompt injection (#228 / C5)
+  injection_system_override: 'phrase tries to replace the agent\'s system prompt',
+  injection_smuggling: 'chat-template marker ([INST], <|system|>, ###System:, …) detected',
+  injection_data_exfil: 'phrase asks the agent to send / share / paste secrets',
+  injection_authority: 'phrase impersonates admin / developer / Anthropic / Foreman',
+  injection_encoded: 'long encoded block (base64 / hex / unicode-escape) in args',
   first_agent_to_agent: 'first cross-agent call in the last hour for this pair',
   previously_denied_pattern:
     'a similar request from this source was denied before',
