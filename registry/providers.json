@@ -5,7 +5,8 @@
       "id": "anthropic",
       "name": "Anthropic",
       "description": "Claude models — Sonnet, Haiku, Opus",
-      "secret_name": "anthropic-api-key",
+      "secret_name": "anthropic-key",
+      "key_prefix": "sk-ant-",
       "where_to_get": "https://console.anthropic.com/settings/keys",
       "format_hint": "starts with sk-ant-",
       "instructions": [
@@ -21,9 +22,10 @@
       "id": "openai",
       "name": "OpenAI",
       "description": "GPT-4, GPT-4o, o1, Codex models",
-      "secret_name": "openai-api-key",
+      "secret_name": "openai-key",
+      "key_prefix": "sk-",
       "where_to_get": "https://platform.openai.com/api-keys",
-      "format_hint": "starts with sk-",
+      "format_hint": "starts with sk- or sk-proj-",
       "instructions": [
         "platform.openai.com/api-keys",
         "Create new secret key",
@@ -36,9 +38,10 @@
       "id": "gemini",
       "name": "Google Gemini",
       "description": "Gemini Pro, Flash, Ultra",
-      "secret_name": "gemini-api-key",
+      "secret_name": "gemini-key",
+      "key_prefix": "AIza",
       "where_to_get": "https://aistudio.google.com/app/apikey",
-      "format_hint": "starts with AI...",
+      "format_hint": "starts with AIza",
       "instructions": [
         "aistudio.google.com/app/apikey",
         "Create API key in new project",
@@ -52,6 +55,7 @@
       "name": "Local (Ollama)",
       "description": "Local models — no key, just an endpoint",
       "secret_name": null,
+      "key_prefix": null,
       "where_to_get": "https://ollama.com",
       "format_hint": "http://host:port",
       "instructions": [
@@ -66,7 +70,8 @@
       "id": "openai-compatible",
       "name": "Custom OpenAI-compatible",
       "description": "Groq, Together, OpenRouter, custom inference endpoints",
-      "secret_name": "openai-compatible-api-key",
+      "secret_name": "openai-compatible-key",
+      "key_prefix": null,
       "where_to_get": null,
       "format_hint": "varies — provider-specific",
       "instructions": [

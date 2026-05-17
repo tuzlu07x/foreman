@@ -52,6 +52,7 @@ import {
 import { applyForemanSoul } from "../core/foreman-soul.js";
 import { buildLlmConfigFromWizard } from "./setup-wizard-llm-persist.js";
 import { buildNotifyConfigFromWizard } from "./setup-wizard-notify-persist.js";
+import { validateKeyPaste } from "./setup-wizard-key-validation.js";
 import { useLayout } from "./hooks.js";
 import { osc8 } from "./osc8.js";
 import { RegistryService } from "../core/registry.js";
@@ -425,12 +426,19 @@ function handleProviderValueSubmit(
   } else {
     setSkipped((prev) => [...prev, storageName]);
   }
-  setWarning(result.warning);
+  // Paste-time prefix validation (#291) — soft-warn after save when the
+  // pasted key looks like it belongs to a different provider. We always
+  // save (so the wizard never blocks progress on a possibly-private key)
+  // but surface the warning so a cross-provider paste is caught in the
+  // right context.
+  let validationWarning: string | null = null;
+  if (result.shouldSave && prompt.kind === "key") {
+    const check = validateKeyPaste({ provider, value });
+    if (!check.ok) validationWarning = check.warning;
+  }
+  setWarning(validationWarning ?? result.warning);
   setIdx(result.nextIdx);
   setPhase(result.nextPhase);
-  // provider is unused in this body but kept on the signature for the
-  // benefit of future per-provider hooks (event emission, telemetry).
-  void provider;
 }
 
 // Side-effecting glue: load llm.yaml (or seed defaults), merge in the
