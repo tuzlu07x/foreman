@@ -1,4 +1,4 @@
-import { Box, useApp, useInput, useStdin } from "ink";
+import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApprovalRequest } from "../core/approval.js";
 import type { BootInfo } from "./boot-info.js";
@@ -11,6 +11,7 @@ import { ActivityFeed } from "./components/activity-feed.js";
 import { AgentList } from "./components/agent-list.js";
 import { BootBanner } from "./components/boot-banner.js";
 import { HelpOverlay } from "./components/help-overlay.js";
+import { theme } from "./theme.js";
 import { InspectView } from "./components/inspect-view.js";
 import { StatsPanel } from "./components/stats-panel.js";
 import { StatusBar } from "./components/status-bar.js";
@@ -103,6 +104,13 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
       supportedRange: string;
     }>
   >([]);
+  const [budgetAlertNotice, setBudgetAlertNotice] = useState<{
+    kind: "threshold" | "exhausted";
+    spentUsd: number;
+    capUsd: number;
+    spentPct: number;
+    daysUntilReset: number;
+  } | null>(null);
 
   useEffect(() => {
     const offUpdate = bus.on("update:available", (e) => {
@@ -114,10 +122,20 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     const offAgentOvershoot = bus.on("agent-update:overshoot", (e) => {
       setAgentOvershoots(e.warnings);
     });
+    const offBudgetAlert = bus.on("llm:budget-alert", (e) => {
+      setBudgetAlertNotice({
+        kind: e.kind,
+        spentUsd: e.spentUsd,
+        capUsd: e.capUsd,
+        spentPct: e.spentPct,
+        daysUntilReset: e.daysUntilReset,
+      });
+    });
     return () => {
       offUpdate();
       offAgentUpdate();
       offAgentOvershoot();
+      offBudgetAlert();
     };
   }, [bus]);
 
@@ -802,6 +820,26 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
         agentUpdates={agentUpdates}
         agentOvershoots={agentOvershoots}
       />
+      {budgetAlertNotice ? (
+        <Box paddingX={1}>
+          <Text
+            color={
+              budgetAlertNotice.kind === "exhausted"
+                ? theme.accent.danger
+                : theme.accent.warning
+            }
+          >
+            {budgetAlertNotice.kind === "exhausted" ? "✗" : "⚠"} LLM budget{" "}
+            {budgetAlertNotice.kind === "exhausted"
+              ? "EXHAUSTED"
+              : `${budgetAlertNotice.spentPct.toFixed(0)}% spent`}
+            {" — "}${budgetAlertNotice.spentUsd.toFixed(2)} of $
+            {budgetAlertNotice.capUsd.toFixed(2)}, resets in{" "}
+            {budgetAlertNotice.daysUntilReset} day
+            {budgetAlertNotice.daysUntilReset === 1 ? "" : "s"}
+          </Text>
+        </Box>
+      ) : null}
       {helpOpen ? (
         <HelpOverlay />
       ) : pendingApproval ? (

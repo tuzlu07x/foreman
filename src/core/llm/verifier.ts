@@ -1,7 +1,12 @@
 import type { ForemanDb } from '../../db/client.js'
+import {
+  bus as defaultBus,
+  type EventBus,
+  type ForemanEventMap,
+} from '../event-bus.js'
 import { bucketFor } from '../risk-scorer.js'
 import type { LlmVerification, RiskAssessment } from '../risk-rules/types.js'
-import { assertBudget, recordUsage } from './budget.js'
+import { assertBudget, recordUsageAndCheckBudget } from './budget.js'
 import { LlmBudgetExceededError, LlmProviderError, type LlmClient } from './client.js'
 import { LruCache } from './cache.js'
 import { isFeatureEnabled, type LlmConfig } from './config.js'
@@ -31,6 +36,8 @@ export interface LlmVerifierOptions {
   cache?: LruCache<VerificationCacheValue>
   /** Injectable clock so tests can advance time without sleep. */
   now?: () => number
+  /** Optional bus override; defaults to the global one. */
+  bus?: EventBus<ForemanEventMap>
 }
 
 interface VerificationCacheValue {
@@ -52,6 +59,7 @@ export class LlmVerifier {
   private readonly threshold: number
   private readonly cache: LruCache<VerificationCacheValue>
   private readonly now: () => number
+  private readonly bus: EventBus<ForemanEventMap>
 
   constructor(opts: LlmVerifierOptions) {
     this.db = opts.db
@@ -60,6 +68,7 @@ export class LlmVerifier {
     this.threshold = opts.verificationThreshold ?? DEFAULT_THRESHOLD
     this.cache = opts.cache ?? new LruCache<VerificationCacheValue>()
     this.now = opts.now ?? (() => Date.now())
+    this.bus = opts.bus ?? defaultBus
   }
 
   /** Verify the heuristic assessment. Always returns an LlmVerification —
@@ -110,16 +119,22 @@ export class LlmVerifier {
       const latencyMs = this.now() - t0
       const core = parseVerification(resp.text)
 
-      recordUsage(this.db, {
-        provider: this.client.providerId,
-        model: this.client.model,
-        feature: 'verification',
-        inputTokens: resp.inputTokens,
-        outputTokens: resp.outputTokens,
-        costUsd: resp.costUsd,
-        requestId,
-        durationMs: resp.durationMs,
-      })
+      recordUsageAndCheckBudget(
+        this.db,
+        this.config,
+        {
+          provider: this.client.providerId,
+          model: this.client.model,
+          feature: 'verification',
+          inputTokens: resp.inputTokens,
+          outputTokens: resp.outputTokens,
+          costUsd: resp.costUsd,
+          requestId,
+          durationMs: resp.durationMs,
+        },
+        this.bus,
+        this.now(),
+      )
 
       const value: VerificationCacheValue = {
         core,
