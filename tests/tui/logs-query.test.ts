@@ -172,8 +172,109 @@ describe('toJsonl', () => {
         durationMs: null,
         createdAt: 0,
         decidedAt: null,
+        parentRequestId: null,
+        sessionId: null,
       },
     ])
     expect(out).toMatch(/^\{[^\n]+\}\n$/)
+  })
+})
+
+// #301 — sessionId filter narrows rows to a single agent-to-agent chain.
+describe('queryLogs — sessionId filter', () => {
+  it('returns only rows whose session_id matches', () => {
+    const { sqlite, db } = createInMemoryDb()
+    try {
+      const now = Date.now()
+      db.insert(requests)
+        .values({
+          id: 'r-A1',
+          sourceAgent: 'openclaw',
+          args: '{}',
+          riskScore: 0,
+          decision: 'allowed',
+          decidedBy: 'auto',
+          createdAt: now,
+          sessionId: 'session-A',
+        })
+        .run()
+      db.insert(requests)
+        .values({
+          id: 'r-A2',
+          sourceAgent: 'hermes',
+          args: '{}',
+          riskScore: 0,
+          decision: 'allowed',
+          decidedBy: 'auto',
+          createdAt: now + 1,
+          sessionId: 'session-A',
+          parentRequestId: 'r-A1',
+        })
+        .run()
+      db.insert(requests)
+        .values({
+          id: 'r-B1',
+          sourceAgent: 'openclaw',
+          args: '{}',
+          riskScore: 0,
+          decision: 'allowed',
+          decidedBy: 'auto',
+          createdAt: now + 2,
+          sessionId: 'session-B',
+        })
+        .run()
+      const a = queryLogs(sqlite, { sessionId: 'session-A' })
+      expect(a.rows.map((r) => r.id).sort()).toEqual(['r-A1', 'r-A2'])
+      const b = queryLogs(sqlite, { sessionId: 'session-B' })
+      expect(b.rows.map((r) => r.id)).toEqual(['r-B1'])
+    } finally {
+      sqlite.close()
+    }
+  })
+
+  it('returns rows with parentRequestId + sessionId populated on read', () => {
+    const { sqlite, db } = createInMemoryDb()
+    try {
+      const now = Date.now()
+      db.insert(requests)
+        .values({
+          id: 'r-1',
+          sourceAgent: 'hermes',
+          args: '{}',
+          riskScore: 0,
+          decision: 'allowed',
+          decidedBy: 'auto',
+          createdAt: now,
+          sessionId: 'session-X',
+          parentRequestId: 'parent-Y',
+        })
+        .run()
+      const result = queryLogs(sqlite)
+      expect(result.rows[0]!.sessionId).toBe('session-X')
+      expect(result.rows[0]!.parentRequestId).toBe('parent-Y')
+    } finally {
+      sqlite.close()
+    }
+  })
+
+  it('omitting sessionId returns all rows (no implicit filter)', () => {
+    const { sqlite, db } = createInMemoryDb()
+    try {
+      db.insert(requests)
+        .values({
+          id: 'r-1',
+          sourceAgent: 'hermes',
+          args: '{}',
+          riskScore: 0,
+          decision: 'allowed',
+          decidedBy: 'auto',
+          createdAt: Date.now(),
+        })
+        .run()
+      const result = queryLogs(sqlite, {})
+      expect(result.rows).toHaveLength(1)
+    } finally {
+      sqlite.close()
+    }
   })
 })

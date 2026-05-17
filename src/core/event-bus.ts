@@ -39,6 +39,11 @@ export interface ForemanEventMap {
     durationMs: number;
     createdAt: number;
     decidedAt: number;
+    /** Agent-to-agent flow tracking (#301). parentRequestId/sessionId are
+     *  set when the caller chained from a previous request; the audit
+     *  listener persists them so the log can render trees. */
+    parentRequestId?: string;
+    sessionId?: string;
   };
   "agent:registered": {
     agentId: string;

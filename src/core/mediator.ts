@@ -35,6 +35,12 @@ export interface MediatorInput {
   signature?: Buffer;
   sessionId?: string;
   tokenCount?: number;
+  /** Request that triggered this one (#301). When an agent's tool call is
+   *  forwarded to a downstream agent (e.g. OpenClaw → Hermes delegation),
+   *  the downstream's MediatorInput sets this to the original requestId so
+   *  the audit log can render the chain as a tree. Null/absent for
+   *  first-in-chain calls. */
+  parentRequestId?: string;
 }
 
 export interface MediatorOutput {
@@ -527,6 +533,11 @@ export class MediatorService {
       durationMs,
       createdAt: args.createdAt,
       decidedAt,
+      // #301 — agent-to-agent flow tracking. Whatever the caller passed in
+      // gets emitted so the audit listener can persist the parent/session
+      // links.
+      parentRequestId: args.input.parentRequestId,
+      sessionId: args.input.sessionId,
     });
     return {
       requestId: args.requestId,
