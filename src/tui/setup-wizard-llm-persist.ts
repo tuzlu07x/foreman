@@ -45,6 +45,39 @@ const CATALOG_ID_TO_PROVIDER: Record<string, ProviderId> = {
   custom: "openai_compatible",
 };
 
+// Per-provider default model — used when the wizard flips `provider` and the
+// existing `model` belongs to a different provider (#340). Picked to be cheap
+// + production-suitable; user can override in llm.yaml afterwards.
+const PROVIDER_DEFAULT_MODEL: Record<ProviderId, string> = {
+  anthropic: "claude-haiku-4-5-20251001",
+  openai: "gpt-4o-mini",
+  gemini: "gemini-2.0-flash",
+  ollama: "llama3",
+  openai_compatible: "gpt-4o-mini",
+};
+
+// Catalog of every model name we recognise as a default for SOME provider.
+// `belongsToProvider(model)` returns which provider that model is native to,
+// so the wizard can detect "Anthropic default sitting in openai's slot".
+const KNOWN_MODEL_PREFIXES: { prefix: string; provider: ProviderId }[] = [
+  { prefix: "claude", provider: "anthropic" },
+  { prefix: "gpt", provider: "openai" },
+  { prefix: "o1", provider: "openai" },
+  { prefix: "o3", provider: "openai" },
+  { prefix: "gemini", provider: "gemini" },
+  { prefix: "llama", provider: "ollama" },
+  { prefix: "mistral", provider: "ollama" },
+  { prefix: "qwen", provider: "ollama" },
+];
+
+function belongsToProvider(model: string): ProviderId | null {
+  const lower = model.toLowerCase();
+  for (const { prefix, provider } of KNOWN_MODEL_PREFIXES) {
+    if (lower.startsWith(prefix)) return provider;
+  }
+  return null;
+}
+
 /**
  * Walk the saved-names list, map each back to a catalog entry, and produce a
  * fresh llm.yaml content that:
@@ -92,11 +125,22 @@ export function buildLlmConfigFromWizard(
     return { next: input.existing, wiredProviders: [] };
   }
 
+  const nextProvider = wired[0]!;
+  // #340 — when the wizard flips `provider`, also update `model` if the
+  // existing model belongs to a different provider. Preserves user
+  // overrides (a model native to the new provider is kept as-is).
+  const existingModelOwner = belongsToProvider(input.existing.model);
+  const nextModel =
+    existingModelOwner !== null && existingModelOwner !== nextProvider
+      ? PROVIDER_DEFAULT_MODEL[nextProvider]
+      : input.existing.model;
+
   return {
     next: {
       ...input.existing,
       enabled: true,
-      provider: wired[0]!,
+      provider: nextProvider,
+      model: nextModel,
       features: {
         ...input.existing.features,
         verification: true,
@@ -124,9 +168,7 @@ function resolveCatalogEntry(
   const bySecret = catalog.find((p) => p.secret_name === storageName);
   if (bySecret) return { entry: bySecret, kind: "secret" };
   // Endpoint-only providers: wizard stored as `${entry.id}-endpoint`
-  const byEndpoint = catalog.find(
-    (p) => `${p.id}-endpoint` === storageName,
-  );
+  const byEndpoint = catalog.find((p) => `${p.id}-endpoint` === storageName);
   if (byEndpoint) return { entry: byEndpoint, kind: "endpoint" };
   return null;
 }
