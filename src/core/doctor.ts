@@ -15,6 +15,7 @@ import { loadLlmConfig } from "./llm/config.js";
 import { loadActiveProviders } from "./registry-catalog.js";
 import { detectProviderByPrefix } from "./key-prefix-detect.js";
 import { loadVoiceConfig } from "./notification/voice-config.js";
+import { findDuplicateSlots } from "./secret-slot-migration.js";
 import { SecretStore } from "./secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { RegistryService } from "./registry.js";
@@ -496,6 +497,46 @@ function lookupExpectedPrefix(providerId: string): string | null {
   }
 }
 
+// #342 — surfaces leftover <provider>-api-key slots from pre-#291 wizard
+// runs. Doesn't break anything; just nudges the user to run dedupe so the
+// list is clean + future paste-validation hints aren't ambiguous.
+export function checkSecretSlotDuplicates(): CheckResult {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.dbPath)) {
+    return {
+      name: "secret_slots",
+      status: "ok",
+      message: "database not yet initialised",
+    };
+  }
+  try {
+    const db = getDb();
+    const store = new SecretStore(db, loadOrCreateSecretsMasterKey());
+    const names = store.list().map((r) => r.name);
+    const duplicates = findDuplicateSlots(names);
+    if (duplicates.length === 0) {
+      return {
+        name: "secret_slots",
+        status: "ok",
+        message: "no legacy duplicate slots",
+      };
+    }
+    const labels = duplicates.map((d) => d.legacy).join(", ");
+    return {
+      name: "secret_slots",
+      status: "warn",
+      message: `${duplicates.length} legacy provider slot${duplicates.length === 1 ? "" : "s"} alongside canonical (#342): ${labels}`,
+      remediation: `Run \`foreman secrets dedupe-providers --dry-run\` to preview, then \`--yes\` to remove.`,
+    };
+  } catch (err) {
+    return {
+      name: "secret_slots",
+      status: "warn",
+      message: `slot scan failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 // LLM budget — warns at alert_threshold_pct, fails when the cap is exhausted
 // (LLM features will refuse new calls until the next reset). Silent when LLM
 // is globally disabled — no point alarming users who never opted in.
@@ -802,6 +843,7 @@ const CHECKS: (() => CheckResult)[] = [
   checkLlmConfig,
   checkLlmCredentials,
   checkLlmBudget,
+  checkSecretSlotDuplicates,
   checkVoiceConfig,
   checkAgentsRegistered,
   checkMcpGateway,
