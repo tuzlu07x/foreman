@@ -21,6 +21,7 @@ import {
   UnsupportedConfigFormatError,
 } from "../core/agent-config-injector.js";
 import { projectSecretsForAgent } from "../core/agent-secrets-projector.js";
+import { WizardProgress } from "./components/wizard-progress.js";
 import {
   detectInstall,
   preferredUninstallCommand,
@@ -739,7 +740,7 @@ export function SetupWizard({
     }));
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <Text bold>Step 1 / 4 — LLM Providers (selection)</Text>
+        <WizardProgress current={1} total={4} label="LLM Providers" phase="pick which to configure" />
         <Text color={theme.fg.muted}>
           ↑↓ move · <Text bold>Space toggle</Text> · Enter confirm. Pick the
           LLM providers you already have access to. Each one stores its key
@@ -784,10 +785,12 @@ export function SetupWizard({
       : `${provider.name} API key`;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <Text bold>
-          Step 1 / 4 — LLM Providers (value {providerIdx + 1} of{" "}
-          {providerPrompts.length})
-        </Text>
+        <WizardProgress
+          current={1}
+          total={4}
+          label="LLM Providers"
+          phase={`value ${providerIdx + 1} of ${providerPrompts.length} ${theme.symbols.bullet} ${provider.name}`}
+        />
         <Text>
           {theme.symbols.bullet} Value for{" "}
           <Text bold color={theme.accent.primary}>
@@ -883,7 +886,7 @@ export function SetupWizard({
     const skippedCount = providersSkipped.length;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <Text bold>Step 1 / 4 — LLM Providers (summary)</Text>
+        <WizardProgress current={1} total={4} label="LLM Providers" phase="summary" />
         {savedCount > 0 ? (
           <Box flexDirection="column">
             <Text color={theme.accent.success}>
@@ -938,7 +941,7 @@ export function SetupWizard({
       initialRegistered.length > 0 ? initialRegistered : DEFAULT_AGENTS;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <Text bold>Step 2 / 4 — Agents (selection)</Text>
+        <WizardProgress current={2} total={4} label="Agents" phase="pick which to install" />
         <Text color={theme.fg.muted}>
           ↑↓ move · <Text bold>Space toggle</Text> · Enter confirm. Defaults
           are pre-checked — toggle off any you don't want, toggle on any you
@@ -1016,9 +1019,12 @@ export function SetupWizard({
         }) ?? compat[0];
       return (
         <Box flexDirection="column" gap={1} paddingY={1}>
-          <Text bold>
-            Step 2 / 4 — {agent.name} {progress}
-          </Text>
+          <WizardProgress
+            current={2}
+            total={4}
+            label="Agents"
+            phase={`${agent.name} ${progress}`}
+          />
           <Text color={theme.fg.muted}>
             Pick the LLM provider this agent should use. Greyed entries are
             missing a key — configure one in Step 1 first if you want it.
@@ -1036,9 +1042,12 @@ export function SetupWizard({
     }
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <Text bold>
-          Step 2 / 4 — {agent.name} (responsibility note) {progress}
-        </Text>
+        <WizardProgress
+          current={2}
+          total={4}
+          label="Agents"
+          phase={`${agent.name} — responsibility note ${progress}`}
+        />
         <Text color={theme.fg.muted}>
           Short description of what this agent is for. Surfaces in the audit
           log, approval modal, and dashboard. Optional — Enter on empty input
@@ -1092,7 +1101,7 @@ export function SetupWizard({
     const nothingSelected = agentsSelected.length === 0;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <Text bold>Step 2 / 4 — Agents (confirm)</Text>
+        <WizardProgress current={2} total={4} label="Agents" phase="confirm" />
         <Text color={theme.fg.muted}>
           Selected:{" "}
           {agentsSelected.length > 0 ? agentsSelected.join(", ") : "(none)"}
@@ -1149,7 +1158,7 @@ export function SetupWizard({
     });
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <Text bold>Step 3 / 4 — Services (selection)</Text>
+        <WizardProgress current={3} total={4} label="Services" phase="pick which to configure" />
         <Text color={theme.fg.muted}>
           ↑↓ move · <Text bold>Space toggle</Text> · Enter confirm. 3rd-party
           tokens (Telegram, Discord, Slack, GitHub, …). Each one stores its
@@ -1197,10 +1206,12 @@ export function SetupWizard({
         : service.name;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <Text bold>
-          Step 3 / 4 — Services (prompt {serviceIdx + 1} of{" "}
-          {servicePrompts.length})
-        </Text>
+        <WizardProgress
+          current={3}
+          total={4}
+          label="Services"
+          phase={`prompt ${serviceIdx + 1} of ${servicePrompts.length} ${theme.symbols.bullet} ${headerLabel}`}
+        />
         <Text>
           {theme.symbols.bullet} Setting up{" "}
           <Text bold color={theme.accent.primary}>
@@ -1284,7 +1295,7 @@ export function SetupWizard({
     const skippedCount = servicesSkipped.length;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <Text bold>Step 3 / 4 — Services (summary)</Text>
+        <WizardProgress current={3} total={4} label="Services" phase="summary" />
         {savedCount > 0 ? (
           <Box flexDirection="column">
             <Text color={theme.accent.success}>
@@ -1373,7 +1384,12 @@ export function SetupWizard({
     }
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <Text bold>Step 4 / 4 — Install + configure</Text>
+        <WizardProgress
+          current={4}
+          total={4}
+          label="Install + configure"
+          phase={installRunning ? "running" : "ready"}
+        />
         {installLog.map((line, i) => {
           const isError = line.trimStart().startsWith("✗");
           const isWarning = line.trimStart().startsWith("⚠");
