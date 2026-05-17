@@ -92,11 +92,36 @@ const BucketOverridesSchema = z
   })
   .strict();
 
+// Responsibility-based policy (#299) — orthogonal to the existing
+// agent-level rules. Lets users say "agents with responsibility X cannot
+// access these paths / call agents with responsibility Y / use these
+// services". The risk rule that consumes this lives in #300.
+const ResponsibilityPolicySchema = z
+  .object({
+    /** Human-readable role this rule applies to. Compared case-insensitively
+     *  against the agent's `responsibilityNote`. */
+    responsibility: z.string().min(1),
+    /** Glob/regex strings — paths the agent must not read or write. */
+    cannot_access: z.array(z.string()).optional(),
+    /** Other-agent responsibilities this agent IS allowed to delegate to. */
+    can_call_agents_with_responsibility: z.array(z.string()).optional(),
+    /** Other-agent responsibilities this agent must NOT delegate to. */
+    cannot_call_agents_with_responsibility: z.array(z.string()).optional(),
+    /** Service ids (telegram, github, jira, etc.) the agent IS allowed to
+     *  use. When set, services NOT in this list are denied. When omitted,
+     *  no service restriction. */
+    can_use_services: z.array(z.string()).optional(),
+  })
+  .strict();
+
+export type ResponsibilityPolicy = z.infer<typeof ResponsibilityPolicySchema>;
+
 const PolicyDocSchema = z
   .object({
     agents: z.record(z.string(), AgentEntrySchema).optional(),
     rules: z.array(RulesArrayItemSchema).optional(),
     buckets: BucketOverridesSchema.optional(),
+    responsibility_policies: z.array(ResponsibilityPolicySchema).optional(),
   })
   .strict();
 
@@ -116,6 +141,11 @@ export class PolicyEngine {
   // reads via getBucketOverrides() each call so a YAML reload takes effect
   // without a restart.
   private bucketOverrides: BucketOverrides = {};
+  // Responsibility-based policy (#299). Consumed by the responsibility
+  // violation risk rule (#300, separate PR). The mediator reads via
+  // getResponsibilityPolicies() per call so a YAML reload takes effect
+  // without a restart.
+  private responsibilityPolicies: ResponsibilityPolicy[] = [];
 
   constructor(
     private readonly db: ForemanDb,
@@ -134,6 +164,7 @@ export class PolicyEngine {
     const doc = parsed === null ? {} : PolicyDocSchema.parse(parsed);
     const now = Date.now();
     this.bucketOverrides = doc.buckets ?? {};
+    this.responsibilityPolicies = doc.responsibility_policies ?? [];
 
     const rows: (typeof policies.$inferInsert)[] = [];
     for (const [agentId, entry] of Object.entries(doc.agents ?? {})) {
@@ -307,6 +338,14 @@ export class PolicyEngine {
 
   getBucketOverrides(): BucketOverrides {
     return { ...this.bucketOverrides };
+  }
+
+  // Snapshot of the responsibility-policy block from the most recent YAML
+  // load (#299). The #300 risk rule reads this every call so a YAML reload
+  // takes effect without a process restart. Returns a shallow copy so the
+  // caller can't mutate engine state.
+  getResponsibilityPolicies(): ResponsibilityPolicy[] {
+    return this.responsibilityPolicies.map((p) => ({ ...p }));
   }
 
   setEnabled(ruleId: number, enabled: boolean): void {

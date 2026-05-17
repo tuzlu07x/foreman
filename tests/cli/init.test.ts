@@ -45,8 +45,9 @@ describe("foreman init", () => {
     expect(policyText).toContain("rules:");
     expect(policyText).toContain("tool:read_file");
     expect(policyText.length).toBeGreaterThan(50);
-    // Acceptance: under 80 lines so it reads as a single screen.
-    expect(policyText.split("\n").length).toBeLessThanOrEqual(80);
+    // Acceptance: stays compact. Bumped 80 → 150 in #299 to make room for
+    // the responsibility_policies starter block.
+    expect(policyText.split("\n").length).toBeLessThanOrEqual(150);
   });
 
   it("--reset-policy overwrites an existing policy.yaml", () => {
