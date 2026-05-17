@@ -1,6 +1,5 @@
 import { existsSync } from 'node:fs'
 import { Command } from 'commander'
-import { LlmProviderError } from '../core/llm/client.js'
 import {
   defaultLlmConfig,
   isFeatureEnabled,
@@ -9,7 +8,11 @@ import {
   type LlmConfig,
   type LlmFeature,
 } from '../core/llm/config.js'
-import { AnthropicLlmClient } from '../core/llm/providers/anthropic.js'
+import {
+  buildLlmClient,
+  LlmCredentialMissingError,
+  LlmProviderUnavailableError,
+} from '../core/llm/factory.js'
 import {
   featureSplit,
   getBudgetStatus,
@@ -17,7 +20,7 @@ import {
   queryUsage,
   recordUsage,
 } from '../core/llm/budget.js'
-import { SecretNotFoundError, SecretStore } from '../core/secret-store.js'
+import { SecretStore } from '../core/secret-store.js'
 import { closeDb, getDb } from '../db/client.js'
 import { loadOrCreateSecretsMasterKey } from '../identity/master-key.js'
 import { getForemanPaths } from '../utils/config.js'
@@ -166,23 +169,28 @@ llmCommand
     requireInitialised()
     const paths = getForemanPaths()
     const config = safeLoadConfig(paths.llmConfigPath, loadLlmConfig, { label: 'llm.yaml' })
-    if (config.provider !== 'anthropic') {
-      console.error(
-        red('error: ') +
-          `${config.provider} provider ships in C7-2 (#230) — only anthropic is implemented in this PR`,
-      )
-      process.exit(2)
-    }
     const db = getDb()
-    const client = await buildAnthropicClient(config)
-    if (!client) {
-      closeDb()
-      process.exit(1)
+    let client
+    try {
+      const store = new SecretStore(db, loadOrCreateSecretsMasterKey())
+      client = buildLlmClient(config, store)
+    } catch (err) {
+      if (err instanceof LlmProviderUnavailableError) {
+        console.error(red('error: ') + err.message)
+        closeDb()
+        process.exit(2)
+      }
+      if (err instanceof LlmCredentialMissingError) {
+        console.error(red('error: ') + err.message)
+        closeDb()
+        process.exit(1)
+      }
+      throw err
     }
     try {
       const res = await client.ping()
       recordUsage(db, {
-        provider: 'anthropic',
+        provider: config.provider,
         model: client.model,
         feature: 'test',
         inputTokens: res.inputTokens,
@@ -406,39 +414,3 @@ function renderBar(pct: number, width = 30): string {
   return colour(bar)
 }
 
-async function buildAnthropicClient(
-  config: LlmConfig,
-): Promise<AnthropicLlmClient | null> {
-  const cred = config.credentials.anthropic
-  if (!cred?.secret_name) {
-    console.error(
-      red('error: ') +
-        'anthropic credential.secret_name is unset in llm.yaml',
-    )
-    return null
-  }
-  const db = getDb()
-  const store = new SecretStore(db, loadOrCreateSecretsMasterKey())
-  let apiKey: string
-  try {
-    apiKey = store.get(cred.secret_name)
-  } catch (err) {
-    if (err instanceof SecretNotFoundError) {
-      console.error(
-        red('error: ') +
-          `secret '${cred.secret_name}' not found — \`foreman secrets add ${cred.secret_name}\``,
-      )
-      return null
-    }
-    throw err
-  }
-  try {
-    return new AnthropicLlmClient({ apiKey, model: config.model })
-  } catch (err) {
-    if (err instanceof LlmProviderError) {
-      console.error(red('error: ') + err.message)
-      return null
-    }
-    throw err
-  }
-}
