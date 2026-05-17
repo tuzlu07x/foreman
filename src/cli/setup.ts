@@ -86,6 +86,7 @@ export const setupCommand = new Command("setup")
           secretStore,
           registry,
           policyPath: paths.policyPath,
+          llmConfigPath: paths.llmConfigPath,
           launchEditor,
         },
       }),

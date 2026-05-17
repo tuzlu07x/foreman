@@ -39,7 +39,13 @@ import {
   type ServiceEntry,
 } from "../core/registry-catalog.js";
 import { runDoctor, type DoctorReport } from "../core/doctor.js";
+import {
+  defaultLlmConfig,
+  loadLlmConfig,
+  saveLlmConfig,
+} from "../core/llm/config.js";
 import { applyForemanSoul } from "../core/foreman-soul.js";
+import { buildLlmConfigFromWizard } from "./setup-wizard-llm-persist.js";
 import { useLayout } from "./hooks.js";
 import { osc8 } from "./osc8.js";
 import { RegistryService } from "../core/registry.js";
@@ -100,6 +106,8 @@ export interface WizardServices {
   secretStore: SecretStore;
   registry: RegistryService;
   policyPath: string;
+  /** Path to llm.yaml — wizard writes here after providers step (#289). */
+  llmConfigPath: string;
   launchEditor: (path: string) => Promise<unknown>;
 }
 
@@ -415,6 +423,48 @@ function handleProviderValueSubmit(
   // provider is unused in this body but kept on the signature for the
   // benefit of future per-provider hooks (event emission, telemetry).
   void provider;
+}
+
+// Side-effecting glue: load llm.yaml (or seed defaults), merge in the
+// providers the wizard wired up, write back. Idempotent — replaying the
+// providers step doesn't double-write. Failures are surfaced as a console
+// warning + the install-log block (#289 follow-up) but never crash the
+// wizard, because then the user is stuck mid-setup with no way out.
+function persistLlmConfigFromWizardState(
+  services: WizardServices,
+  providerCatalog: ProviderEntry[],
+  savedStorageNames: string[],
+): void {
+  if (savedStorageNames.length === 0) return;
+  try {
+    // loadLlmConfig falls back to defaults when the file doesn't exist, so
+    // we always get a typed LlmConfig to merge into.
+    const existing = loadLlmConfig(services.llmConfigPath);
+    const { next, wiredProviders } = buildLlmConfigFromWizard({
+      savedStorageNames,
+      providerCatalog,
+      existing,
+    });
+    if (wiredProviders.length === 0) return;
+    saveLlmConfig(services.llmConfigPath, next);
+  } catch (err) {
+    // Best-effort: if the merge fails (corrupt llm.yaml, disk error), fall
+    // back to writing a fresh defaults-based config so the user isn't left
+    // with NO config at all.
+    try {
+      const { next } = buildLlmConfigFromWizard({
+        savedStorageNames,
+        providerCatalog,
+        existing: defaultLlmConfig(),
+      });
+      saveLlmConfig(services.llmConfigPath, next);
+    } catch (writeErr) {
+      console.error(
+        `⚠ failed to persist llm.yaml: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`,
+        `(original error: ${err instanceof Error ? err.message : String(err)})`,
+      );
+    }
+  }
 }
 
 export function applyProviderValueSubmit(
@@ -919,8 +969,14 @@ export function SetupWizard({
         )}
         <Text>Continue to agents? (y/n)</Text>
         <ConfirmInput
-          onConfirm={() => advance("providers")}
-          onCancel={() => advance("providers")}
+          onConfirm={() => {
+            persistLlmConfigFromWizardState(services, providerCatalog, providersSaved);
+            advance("providers");
+          }}
+          onCancel={() => {
+            persistLlmConfigFromWizardState(services, providerCatalog, providersSaved);
+            advance("providers");
+          }}
         />
         <Text color={theme.fg.muted}>
           [y/n] continue · [Esc] back to selection

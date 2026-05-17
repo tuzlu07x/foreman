@@ -42,6 +42,7 @@ describe("setup-wizard.runInstallStep diff logic", () => {
     secretStore: SecretStore;
     registry: RegistryService;
     policyPath: string;
+    llmConfigPath: string;
     launchEditor: () => Promise<unknown>;
   } {
     return {
@@ -49,6 +50,7 @@ describe("setup-wizard.runInstallStep diff logic", () => {
       secretStore,
       registry,
       policyPath: "/tmp/policy.yaml",
+      llmConfigPath: "/tmp/llm.yaml",
       launchEditor: vi.fn().mockResolvedValue(undefined) as () => Promise<unknown>,
     };
   }
