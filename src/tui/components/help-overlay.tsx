@@ -44,12 +44,13 @@ const NAV_SECTIONS: HelpSection[] = [
     ],
   },
   {
-    title: "Approval modal",
+    // Title explicit so users don't expect [t] to fire outside the modal.
+    title: "Approval modal (when open)",
     rows: [
       { key: "a / d", label: "allow once / deny" },
       { key: "A / D", label: "always allow / deny" },
       { key: "i", label: "inspect details" },
-      { key: "t", label: "toggle technical detail" },
+      { key: "t", label: "toggle technical" },
       { key: "k", label: "halt session" },
     ],
   },

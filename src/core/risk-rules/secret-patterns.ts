@@ -524,6 +524,14 @@ export function shortFingerprint(s: string): string {
   return `${s.slice(0, 8)}…${s.slice(-4)}`
 }
 
+// Strip the leading / trailing JSON-string quote that a regex match against
+// JSON.stringify(args) leaves behind. Without this, the modal's "↳ <evidence>"
+// row renders as `↳ ".env` (#284). The internal slash-escapes can stay; only
+// the surrounding quote is the artefact we want to drop.
+export function cleanEvidence(s: string): string {
+  return s.replace(/^['"]+|['"]+$/g, '')
+}
+
 // =============================================================================
 // Rule
 // =============================================================================
@@ -555,7 +563,7 @@ export const secretPatternRule: RiskRule = {
           category: 'secret',
           points,
           reason,
-          evidence: match[0],
+          evidence: cleanEvidence(match[0]),
         })
         break
       }
