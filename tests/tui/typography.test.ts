@@ -78,6 +78,38 @@ describe('Subheader / Caption / Divider', () => {
     const out = frame(React.createElement(Divider, { width: 12 }))
     expect(out).toContain('─'.repeat(12))
   })
+
+  // Regression for #282 — String.prototype.repeat throws on negative
+  // counts. Boot banner passes `Math.min(60, termCols - 2)` which goes
+  // negative when termCols is undefined / 0 / 1 (pty default, very narrow
+  // terminal). Divider must clamp instead of throwing.
+  it('Divider clamps negative width to 1 instead of crashing', () => {
+    expect(() =>
+      frame(React.createElement(Divider, { width: -10 })),
+    ).not.toThrow()
+    const out = frame(React.createElement(Divider, { width: -10 }))
+    expect(out).toContain('─')
+  })
+
+  it('Divider clamps zero to 1', () => {
+    const out = frame(React.createElement(Divider, { width: 0 }))
+    expect(out).toContain('─')
+  })
+
+  it('Divider clamps NaN / Infinity to a sane width', () => {
+    expect(() =>
+      frame(React.createElement(Divider, { width: NaN })),
+    ).not.toThrow()
+    expect(() =>
+      frame(React.createElement(Divider, { width: Infinity })),
+    ).not.toThrow()
+  })
+
+  it('Divider caps absurdly large widths so render time stays bounded', () => {
+    const out = frame(React.createElement(Divider, { width: 10_000 }))
+    // 200 is the clamp ceiling.
+    expect(out.replace(/[^─]/g, '').length).toBeLessThanOrEqual(200)
+  })
 })
 
 describe('KeyValueRow', () => {
