@@ -3,6 +3,7 @@ import {
   blob,
   index,
   integer,
+  real,
   sqliteTable,
   text,
 } from "drizzle-orm/sqlite-core";
@@ -185,6 +186,30 @@ export const notifications = sqliteTable(
   }),
 );
 
+// LLM call usage log (#230 / C7). One row per provider call so the budget
+// tracker can SUM cost_usd over the current billing window. cache_hit lets
+// C8/C9 mark cached responses (cost_usd=0) without losing the audit row.
+export const llmUsage = sqliteTable(
+  "llm_usage",
+  {
+    id: text("id").primaryKey(),
+    ts: integer("ts").notNull(),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    feature: text("feature").notNull(),
+    inputTokens: integer("input_tokens").notNull(),
+    outputTokens: integer("output_tokens").notNull(),
+    costUsd: real("cost_usd").notNull(),
+    requestId: text("request_id"),
+    durationMs: integer("duration_ms").notNull(),
+    cacheHit: integer("cache_hit").notNull().default(0),
+  },
+  (t) => ({
+    tsIdx: index("llm_usage_ts_idx").on(t.ts),
+    featureIdx: index("llm_usage_feature_idx").on(t.feature, t.ts),
+  }),
+);
+
 export const notificationMessages = sqliteTable(
   "notification_messages",
   {
@@ -220,6 +245,8 @@ export type Notification = typeof notifications.$inferSelect;
 export type NewNotification = typeof notifications.$inferInsert;
 export type NotificationMessage = typeof notificationMessages.$inferSelect;
 export type NewNotificationMessage = typeof notificationMessages.$inferInsert;
+export type LlmUsage = typeof llmUsage.$inferSelect;
+export type NewLlmUsage = typeof llmUsage.$inferInsert;
 
 // FTS5 virtual table and triggers live in a hand-written migration
 // (drizzle-kit cannot emit virtual tables). See:

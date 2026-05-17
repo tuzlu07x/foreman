@@ -113,6 +113,29 @@ describe('migrations', () => {
     db.close()
   })
 
+  it('migration 0009 adds llm_usage table (#230)', () => {
+    const db = new Database(':memory:')
+    applyAllMigrations(db)
+    const tables = db
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='llm_usage'`,
+      )
+      .all() as { name: string }[]
+    expect(tables).toHaveLength(1)
+
+    // Verify the schema is usable end-to-end.
+    db.prepare(
+      `INSERT INTO llm_usage (id, ts, provider, model, feature, input_tokens, output_tokens, cost_usd, duration_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run('u1', Date.now(), 'anthropic', 'claude-haiku-4-5', 'verification', 100, 50, 0.001, 250)
+    const row = db
+      .prepare(`SELECT cost_usd, feature FROM llm_usage WHERE id = 'u1'`)
+      .get() as { cost_usd: number; feature: string }
+    expect(row.cost_usd).toBe(0.001)
+    expect(row.feature).toBe('verification')
+    db.close()
+  })
+
   it('migration 0008 adds notifications + notification_messages tables (#235)', () => {
     const db = new Database(':memory:')
     applyAllMigrations(db)
