@@ -1,4 +1,8 @@
 import type { ProviderEntry } from "../core/registry-catalog.js";
+import {
+  detectProviderByPrefix,
+  KNOWN_PREFIXES,
+} from "../core/key-prefix-detect.js";
 
 // =============================================================================
 // Paste-time key prefix validation (#291)
@@ -23,16 +27,10 @@ import type { ProviderEntry } from "../core/registry-catalog.js";
 //      *another* known provider's prefix, the warning calls out which
 //      provider it actually looks like — that's the high-value message,
 //      not just "wrong format".
-
-/** Known prefixes for cross-provider detection. Wider than the catalog's
- *  one-per-entry field so we can say "looks like OpenAI" when the user
- *  pastes into Anthropic. */
-const KNOWN_PREFIXES: { prefix: string; provider: string }[] = [
-  { prefix: "sk-ant-", provider: "Anthropic" },
-  { prefix: "sk-proj-", provider: "OpenAI" },
-  { prefix: "sk-", provider: "OpenAI" },
-  { prefix: "AIza", provider: "Google Gemini" },
-];
+//
+// The prefix table + most-specific-wins detection live in
+// src/core/key-prefix-detect.ts (#307) — also used by `foreman doctor`'s
+// llm.credentials check.
 
 export interface ValidateKeyPasteInput {
   provider: ProviderEntry;
@@ -69,11 +67,7 @@ export function validateKeyPaste(
   if (!expected) return { ok: true, warning: null };
   if (input.value.length === 0) return { ok: true, warning: null };
 
-  // Most-specific-prefix-wins: sort by length descending so "sk-ant-" beats
-  // "sk-" when the value starts with sk-ant-foo.
-  const detected = [...KNOWN_PREFIXES]
-    .sort((a, b) => b.prefix.length - a.prefix.length)
-    .find((p) => input.value.startsWith(p.prefix));
+  const detected = detectProviderByPrefix(input.value);
 
   // What's the human-readable provider name our `expected` prefix belongs
   // to? (Used to decide "is the detected provider the same as the
