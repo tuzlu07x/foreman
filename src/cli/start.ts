@@ -46,6 +46,10 @@ import { BudgetAlertBridge } from "../core/llm/budget-alert-bridge.js";
 import { NotificationBridge } from "../core/notification/notification-bridge.js";
 import { NotificationService } from "../core/notification/notification-service.js";
 import { ForemanVoice } from "../core/notification/foreman-voice.js";
+import {
+  loadVoiceConfig,
+  type VoiceConfig,
+} from "../core/notification/voice-config.js";
 import { PatternDetectionService } from "../core/pattern-detection-service.js";
 import {
   channelConfig,
@@ -160,18 +164,51 @@ export function startForeman(
   const notificationBridge = notificationSetup?.bridge ?? null;
   const dailyScheduler = notificationSetup?.scheduler ?? null;
 
-  // #303 / #304 — ForemanVoice + pattern detection. Only started when the
-  // notify channel is configured (no proactive messages to send otherwise).
-  // ForemanVoice handles throttle + quiet-hours; PatternDetectionService
-  // ticks every 10 min looking for repeated-denial / burst / off-role
-  // clusters. Both shut down with the rest of the start lifecycle.
+  // #303 / #304 / #305 — ForemanVoice + pattern detection. Only started
+  // when notify is configured (no proactive messages to send otherwise).
+  // voice.yaml seeds quiet-hours + per-type throttle when present; absent
+  // file = built-in defaults.
   let voice: ForemanVoice | null = null;
   let patternDetector: PatternDetectionService | null = null;
   if (notificationSetup) {
-    voice = new ForemanVoice({ service: notificationSetup.service, bus });
+    let voiceConfig: VoiceConfig;
+    try {
+      voiceConfig = loadVoiceConfig(paths.voiceConfigPath);
+    } catch {
+      // Parse error — fall back to defaults so a malformed voice.yaml
+      // doesn't block start. Doctor surfaces the parse failure separately.
+      voiceConfig = loadVoiceConfig("/dev/null/nonexistent");
+    }
+    voice = new ForemanVoice({
+      service: notificationSetup.service,
+      bus,
+      quietHours: voiceConfig.quiet_hours,
+      throttleMs: {
+        pattern_detection:
+          voiceConfig.proactive_notifications.pattern_detection.cooldown_minutes *
+          60_000,
+      },
+    });
     voice.start();
-    patternDetector = new PatternDetectionService({ db, voice });
-    patternDetector.start();
+    if (voiceConfig.proactive_notifications.pattern_detection.enabled) {
+      patternDetector = new PatternDetectionService({
+        db,
+        voice,
+        thresholds: {
+          repeatedDenialMin:
+            voiceConfig.proactive_notifications.pattern_detection
+              .min_pattern_frequency,
+          repeatedAllowMin: 5,
+          burstMin: 10,
+          burstWindowMs: 60_000,
+          repeatedWindowMs: 60 * 60 * 1000,
+          offResponsibilityMin:
+            voiceConfig.proactive_notifications.pattern_detection
+              .min_pattern_frequency,
+        },
+      });
+      patternDetector.start();
+    }
   }
 
   const bootInfo: BootInfo = {
@@ -513,6 +550,7 @@ async function runOnboardingWizard(): Promise<void> {
         policyPath: paths.policyPath,
         llmConfigPath: paths.llmConfigPath,
         notifyConfigPath: paths.notifyConfigPath,
+        voiceConfigPath: paths.voiceConfigPath,
         launchEditor,
       },
     }),

@@ -55,6 +55,7 @@ import { buildLlmConfigFromWizard } from "./setup-wizard-llm-persist.js";
 import { buildNotifyConfigFromWizard } from "./setup-wizard-notify-persist.js";
 import { validateKeyPaste } from "./setup-wizard-key-validation.js";
 import { computeAgentLlmStatuses } from "./setup-wizard-agent-llm-gating.js";
+import { persistVoiceConfig } from "./setup-wizard-voice-persist.js";
 import { useLayout } from "./hooks.js";
 import { osc8 } from "./osc8.js";
 import { RegistryService } from "../core/registry.js";
@@ -119,6 +120,9 @@ export interface WizardServices {
   llmConfigPath: string;
   /** Path to notify.yaml — wizard writes here after services step (#290). */
   notifyConfigPath: string;
+  /** Path to voice.yaml — wizard seeds here after services step (#305).
+   *  ForemanVoice + PatternDetectionService read from this on startup. */
+  voiceConfigPath: string;
   launchEditor: (path: string) => Promise<unknown>;
 }
 
@@ -1499,10 +1503,14 @@ export function SetupWizard({
         <ConfirmInput
           onConfirm={() => {
             persistNotifyConfigFromWizardState(services, serviceCatalog, servicesSaved);
+            // #305 — seed voice.yaml alongside notify.yaml so ForemanVoice
+            // + pattern detection have a config to read on first boot.
+            persistVoiceConfig(services.voiceConfigPath, servicesSaved);
             advance("services");
           }}
           onCancel={() => {
             persistNotifyConfigFromWizardState(services, serviceCatalog, servicesSaved);
+            persistVoiceConfig(services.voiceConfigPath, servicesSaved);
             advance("services");
           }}
         />

@@ -14,6 +14,7 @@ import { getBudgetStatus } from "./llm/budget.js";
 import { loadLlmConfig } from "./llm/config.js";
 import { loadActiveProviders } from "./registry-catalog.js";
 import { detectProviderByPrefix } from "./key-prefix-detect.js";
+import { loadVoiceConfig } from "./notification/voice-config.js";
 import { SecretStore } from "./secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { RegistryService } from "./registry.js";
@@ -559,6 +560,49 @@ export function checkLlmBudget(): CheckResult {
   }
 }
 
+// Voice config (#305) — surfaces parse failures + tells the user the file
+// is either present + readable or absent (using built-in defaults). Doesn't
+// alarm when absent because defaults are designed to be sensible without
+// any config.
+export function checkVoiceConfig(): CheckResult {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.voiceConfigPath)) {
+    return {
+      name: "voice_config",
+      status: "ok",
+      message:
+        "voice.yaml absent — using built-in defaults (quiet hours 23:00→08:00, summaries at 20:00, pattern detection on)",
+    };
+  }
+  try {
+    const cfg = loadVoiceConfig(paths.voiceConfigPath);
+    const enabled = [
+      cfg.proactive_notifications.daily_summary.enabled && "daily_summary",
+      cfg.proactive_notifications.weekly_summary.enabled && "weekly_summary",
+      cfg.proactive_notifications.pattern_detection.enabled && "pattern_detection",
+      cfg.proactive_notifications.agent_health_alerts.enabled && "agent_health_alerts",
+      cfg.proactive_notifications.budget_alerts.enabled && "budget_alerts",
+    ].filter(Boolean) as string[];
+    const summary =
+      enabled.length === 0
+        ? "all proactive types disabled"
+        : `enabled: ${enabled.join(", ")}`;
+    return {
+      name: "voice_config",
+      status: "ok",
+      message: `parses (${summary}; quiet hours ${cfg.quiet_hours.enabled ? `${cfg.quiet_hours.from}→${cfg.quiet_hours.to}` : "disabled"})`,
+    };
+  } catch (err) {
+    return {
+      name: "voice_config",
+      status: "warn",
+      message: `voice.yaml unreadable: ${err instanceof Error ? err.message : String(err)}`,
+      remediation:
+        "Delete voice.yaml to fall back to defaults, or fix the YAML (see docs/voice.md schema).",
+    };
+  }
+}
+
 export function checkAgentsRegistered(): CheckResult {
   const paths = getForemanPaths();
   if (!existsSync(paths.dbPath)) {
@@ -758,6 +802,7 @@ const CHECKS: (() => CheckResult)[] = [
   checkLlmConfig,
   checkLlmCredentials,
   checkLlmBudget,
+  checkVoiceConfig,
   checkAgentsRegistered,
   checkMcpGateway,
   checkLegacyHome,
