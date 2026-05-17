@@ -13,6 +13,20 @@ export type NotificationLevel =
 
 export type ChannelId = 'telegram' | 'discord' | 'slack' | 'webhook' | 'system'
 
+/** Runtime-checkable list of every valid channel id. Exported so the notify
+ *  CLI can reject typos before they end up in the user's notify.yaml (#264). */
+export const KNOWN_CHANNELS: readonly ChannelId[] = [
+  'telegram',
+  'discord',
+  'slack',
+  'webhook',
+  'system',
+] as const
+
+export function isKnownChannel(id: string): id is ChannelId {
+  return (KNOWN_CHANNELS as readonly string[]).includes(id)
+}
+
 export interface NotificationAction {
   /** Stable id for callback verification — e.g. "allow", "deny", "allow_always". */
   id: 'allow' | 'deny' | 'allow_always' | 'deny_always' | 'inspect'

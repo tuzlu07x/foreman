@@ -15,8 +15,12 @@ import { loadNotifyConfig } from '../../src/core/notification/notify-config.js'
 // =============================================================================
 
 let tmp: string
-let exitSpy: ReturnType<typeof vi.spyOn>
-let errSpy: ReturnType<typeof vi.spyOn>
+// `any` because vi.spyOn's typing varies across overloads; we only need the
+// .mockRestore handle.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let exitSpy: any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let errSpy: any
 let exits: number[]
 let errs: string[]
 
