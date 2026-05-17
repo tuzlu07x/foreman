@@ -9,6 +9,7 @@ import type { RegisteredAgent } from "../../core/registry.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { formatTime } from "../format.js";
 import { singleBorder, theme } from "../theme.js";
+import { PageHeader } from "../components/typography.js";
 
 export interface AgentsPageProps {
   selectedIdx: number;
@@ -61,17 +62,15 @@ export function AgentsPage({
       paddingX={1}
       flexGrow={1}
     >
-      <Box justifyContent="space-between">
-        <Text color={theme.accent.primary} bold>
-          Agents
-        </Text>
-        <Text color={theme.fg.muted}>
-          {rows.length} registered ·{" "}
-          {rows.filter((r) => r.status === "active").length} active ·{" "}
-          {rows.filter((r) => r.status === "disabled").length} disabled ·{" "}
-          {rows.filter((r) => r.status === "blocked").length} blocked
-        </Text>
-      </Box>
+      <PageHeader
+        title="Agents"
+        right={
+          `${rows.length} registered · ` +
+          `${rows.filter((r) => r.status === "active").length} active · ` +
+          `${rows.filter((r) => r.status === "disabled").length} disabled · ` +
+          `${rows.filter((r) => r.status === "blocked").length} blocked`
+        }
+      />
 
       <Box flexDirection="column" marginTop={1}>
         {rows.length === 0 ? (

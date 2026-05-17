@@ -11,6 +11,7 @@ import type { StoredSecretMeta } from "../../core/secret-store.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { formatTime } from "../format.js";
 import { singleBorder, theme } from "../theme.js";
+import { PageHeader } from "../components/typography.js";
 
 export type AddSecretMode =
   | { phase: "name" }
@@ -110,12 +111,10 @@ export function SecretsPage({
       paddingX={1}
       flexGrow={1}
     >
-      <Box justifyContent="space-between">
-        <Text color={theme.accent.primary} bold>
-          Secrets (advanced)
-        </Text>
-        <Text color={theme.fg.muted}>{rows.length} stored · AES-256-GCM</Text>
-      </Box>
+      <PageHeader
+        title="Secrets (advanced)"
+        right={`${rows.length} stored · AES-256-GCM`}
+      />
       <Text color={theme.fg.muted}>
         Low-level view of every encrypted entry. Use [v] Providers or [V]
         Services for the higher-level surfaces that own most rows here.

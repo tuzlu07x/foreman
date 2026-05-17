@@ -13,6 +13,7 @@ import {
 import type { SecretStore } from "../../core/secret-store.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { singleBorder, theme } from "../theme.js";
+import { PageHeader } from "../components/typography.js";
 
 const REVEAL_AUTO_HIDE_MS = 10_000;
 
@@ -170,15 +171,13 @@ export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
       paddingX={1}
       flexGrow={1}
     >
-      <Box justifyContent="space-between">
-        <Text color={theme.accent.primary} bold>
-          LLM Providers
-        </Text>
-        <Text color={theme.fg.muted}>
-          {rows.filter((r) => r.configured).length} configured ·{" "}
-          {rows.filter((r) => !r.configured).length} available
-        </Text>
-      </Box>
+      <PageHeader
+        title="LLM Providers"
+        right={
+          `${rows.filter((r) => r.configured).length} configured · ` +
+          `${rows.filter((r) => !r.configured).length} available`
+        }
+      />
 
       <Box flexDirection="column" marginTop={1}>
         {rows.length === 0 ? (

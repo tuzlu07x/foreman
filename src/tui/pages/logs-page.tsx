@@ -12,6 +12,7 @@ import {
   targetLabel,
 } from "../format.js";
 import { singleBorder, theme } from "../theme.js";
+import { PageHeader } from "../components/typography.js";
 import {
   DEFAULT_FILTERS,
   queryLogs,
@@ -74,14 +75,10 @@ export function LogsPage(props: LogsPageProps): JSX.Element {
       paddingX={1}
       flexGrow={1}
     >
-      <Box justifyContent="space-between">
-        <Text color={theme.accent.primary} bold>
-          Logs
-        </Text>
-        <Text color={theme.fg.muted}>
-          {results.length} match{results.length === 1 ? "" : "es"}
-        </Text>
-      </Box>
+      <PageHeader
+        title="Logs"
+        right={`${results.length} match${results.length === 1 ? "" : "es"}`}
+      />
 
       <SearchBar query={search} active={searchMode} />
       <FilterBar filters={filters} />
