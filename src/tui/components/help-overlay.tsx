@@ -39,7 +39,7 @@ const NAV_SECTIONS: HelpSection[] = [
       { key: "l", label: "Logs" },
       { key: "p", label: "Policy" },
       { key: "s", label: "Sessions" },
-      { key: "c", label: "Chat" },
+      { key: "c", label: "Mediator test" },
       { key: "g", label: "Settings" },
     ],
   },
@@ -108,7 +108,7 @@ const EXTRA_SECTIONS: HelpSection[] = [
     ],
   },
   {
-    title: "Chat / test console",
+    title: "Mediator test console",
     rows: [
       { key: "← →", label: "switch source agent" },
       { key: "i", label: "input mode" },
