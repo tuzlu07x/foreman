@@ -87,6 +87,7 @@ export const setupCommand = new Command("setup")
           registry,
           policyPath: paths.policyPath,
           llmConfigPath: paths.llmConfigPath,
+          notifyConfigPath: paths.notifyConfigPath,
           launchEditor,
         },
       }),
