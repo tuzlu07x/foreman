@@ -11,6 +11,7 @@ import { getDb } from "../../db/client.js";
 import { getForemanPaths } from "../../utils/config.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { singleBorder, theme } from "../theme.js";
+import { PageHeader } from "../components/typography.js";
 
 export interface SettingsPageProps {
   selectedIdx: number;
@@ -78,12 +79,7 @@ export function SettingsPage({
       paddingX={1}
       flexGrow={1}
     >
-      <Box justifyContent="space-between">
-        <Text color={theme.accent.primary} bold>
-          Settings
-        </Text>
-        <Text color={theme.fg.muted}>{items.length} items</Text>
-      </Box>
+      <PageHeader title="Settings" right={`${items.length} items`} />
 
       <Box flexDirection="column" marginTop={1}>
         {items.map((item, i) => (

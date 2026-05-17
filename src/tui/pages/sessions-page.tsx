@@ -12,6 +12,7 @@ import {
   targetLabel,
 } from "../format.js";
 import { singleBorder, theme } from "../theme.js";
+import { PageHeader } from "../components/typography.js";
 
 export interface SessionsPageProps {
   selectedIdx: number;
@@ -77,14 +78,10 @@ export function SessionsPage({
       paddingX={1}
       flexGrow={1}
     >
-      <Box justifyContent="space-between">
-        <Text color={theme.accent.primary} bold>
-          Sessions
-        </Text>
-        <Text color={theme.fg.muted}>
-          {active.length} active · {other.length} other
-        </Text>
-      </Box>
+      <PageHeader
+        title="Sessions"
+        right={`${active.length} active · ${other.length} other`}
+      />
 
       {ordered.length === 0 ? (
         <Box marginTop={1}>

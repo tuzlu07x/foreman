@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { buildBootLines, type BootInfo } from "../boot-info.js";
 import { theme } from "../theme.js";
 import { BootMascot } from "./boot-mascot.js";
+import { Divider } from "./typography.js";
 import { Wordmark } from "./wordmark.js";
 
 const CHECK_STAGGER_MS = 80;
@@ -95,12 +96,7 @@ export function BootBanner({
 
       <Box flexDirection="column" marginTop={1}>
         {lines.slice(0, visibleChecks).map((line, i) => (
-          <Text key={i}>
-            <Text color={theme.accent.primary}>{theme.symbols.bullet}</Text>{" "}
-            {line.label}
-            {" ".repeat(Math.max(1, 18 - line.label.length))}
-            <Text color={theme.fg.muted}>{line.detail}</Text>
-          </Text>
+          <BootStatusLine key={i} label={line.label} detail={line.detail} />
         ))}
         {updateNotice && visibleChecks >= lines.length ? (
           <Text>
@@ -149,12 +145,37 @@ export function BootBanner({
       </Box>
 
       <Box marginTop={1}>
-        <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>
+        <Divider width={Math.min(60, termCols - 2)} />
       </Box>
       <Box>
         <Text color={theme.fg.muted}>Press ? for help · q to quit</Text>
       </Box>
     </Box>
+  );
+}
+
+// One-line status row used in the boot banner (#234 UX-8). Visually:
+//   ▸ Identity loaded . . . . . . . . . . . . . . . . .   ed25519:798f904a
+// Label sits left, value right-aligns with dotted leader so the eye can
+// follow the row across a wide terminal without losing the value column.
+function BootStatusLine({
+  label,
+  detail,
+}: {
+  label: string;
+  detail: string;
+}): JSX.Element {
+  // Dotted leader between label + value. Min 3 dots; capped at 36 dots so
+  // narrow terminals don't get an unreadable line full of dots.
+  const dotCount = Math.max(3, Math.min(36, 40 - label.length - detail.length));
+  const dots = ". ".repeat(Math.floor(dotCount / 2)).trim();
+  return (
+    <Text>
+      <Text color={theme.accent.primary}>{theme.symbols.bullet}</Text>{" "}
+      <Text color={theme.fg.default}>{label}</Text>{" "}
+      <Text color={theme.fg.muted}>{dots}</Text>{" "}
+      <Text color={theme.fg.muted}>{detail}</Text>
+    </Text>
   );
 }
 
