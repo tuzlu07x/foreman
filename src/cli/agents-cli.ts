@@ -31,6 +31,7 @@ import {
 import { MissingRequiredSecretsError } from "../core/agent-add-flow.js";
 import { bold, dim, green, orange, red } from "./colors.js";
 import { renderAgentJson, renderAgentLine } from "./render.js";
+import { requireConfirm } from "./require-confirm.js";
 
 function getRegistry(): RegistryService {
   const paths = getForemanPaths();
@@ -153,21 +154,14 @@ agentsCommand
       try {
         const agent = registry.get(name);
         if (!agent) throw new AgentNotFoundError(name);
-        if (!options.yes) {
-          // Same shape as the #260 / #268 fixes — non-TTY without --yes
-          // auto-cancels silently, which is indistinguishable from a user
-          // typing "n". Refuse loudly instead (#272).
-          if (!process.stdin.isTTY) {
-            console.error(
-              red("error: ") +
-                `refusing to remove "${name}" in a non-interactive context. Pass --yes to confirm.`,
-            );
-            process.exit(1);
-          }
-          if (!(await confirmYes(`Remove agent "${name}"? [y/N]`))) {
-            console.log("(cancelled)");
-            return;
-          }
+        const ok = await requireConfirm({
+          yes: options.yes,
+          question: `Remove agent "${name}"?`,
+          noun: `remove "${name}"`,
+        });
+        if (!ok) {
+          console.log("(cancelled)");
+          return;
         }
         const { doc } = loadActiveRegistry();
         const registryId =
@@ -221,21 +215,14 @@ agentsCommand
       if (!agent) throw new AgentNotFoundError(name);
       // Rotating invalidates the old key immediately — every running session
       // authenticating with it starts failing. Require confirmation (#272).
-      if (!options.yes) {
-        if (!process.stdin.isTTY) {
-          console.error(
-            red("error: ") +
-              `refusing to regenerate-key for "${name}" in a non-interactive context. Pass --yes to confirm.`,
-          );
-          process.exit(1);
-        }
-        const ok = await confirmYes(
-          `Rotate ${name}'s keypair? Old key is invalidated immediately. [y/N]`,
-        );
-        if (!ok) {
-          console.log("(cancelled)");
-          return;
-        }
+      const ok = await requireConfirm({
+        yes: options.yes,
+        question: `Rotate ${name}'s keypair? Old key is invalidated immediately.`,
+        noun: `regenerate-key for "${name}"`,
+      });
+      if (!ok) {
+        console.log("(cancelled)");
+        return;
       }
       const { privateKey } = registry.regenerateKey(name);
       if (options.out) {
@@ -401,21 +388,6 @@ function safeFindAgent(
     if (err instanceof AgentNotInRegistryError) return null;
     throw err;
   }
-}
-
-async function confirmYes(prompt: string): Promise<boolean> {
-  if (!process.stdin.isTTY) return false;
-  const { createInterface } = await import("node:readline");
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stderr,
-  });
-  return new Promise((res) => {
-    rl.question(`${prompt} `, (answer) => {
-      rl.close();
-      res(/^y(es)?$/i.test(answer.trim()));
-    });
-  });
 }
 
 async function runAgentUpdateOne(

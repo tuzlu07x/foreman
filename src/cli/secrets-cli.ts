@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs";
-import { createInterface } from "node:readline";
 import { Command } from "commander";
 import {
   projectSecretsForAgent,
@@ -17,6 +16,7 @@ import { closeDb, getDb, type ForemanDb } from "../db/client.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { getForemanPaths } from "../utils/config.js";
 import { dim, green, orange, red } from "./colors.js";
+import { requireConfirm } from "./require-confirm.js";
 
 interface AddOptions {
   value?: string;
@@ -112,16 +112,6 @@ function readAllStdin(): Promise<string> {
   });
 }
 
-async function promptYesNo(question: string): Promise<boolean> {
-  if (!process.stdin.isTTY) return false;
-  const rl = createInterface({ input: process.stdin, output: process.stderr });
-  return new Promise((resolve) => {
-    rl.question(`${question} `, (answer) => {
-      rl.close();
-      resolve(/^y(es)?$/i.test(answer.trim()));
-    });
-  });
-}
 
 export const secretsCommand = new Command("secrets").description(
   "Encrypted secret store (add / list / show / remove / rotate)",
@@ -223,22 +213,14 @@ secretsCommand
       if (!store.exists(name)) {
         throw new SecretNotFoundError(name);
       }
-      if (!options.yes) {
-        // In non-TTY (CI, piped) contexts `promptYesNo` returns false without
-        // ever showing a prompt — silently cancelling. Better to fail loudly
-        // and tell the user to pass --yes (#260).
-        if (!process.stdin.isTTY) {
-          console.error(
-            red("error: ") +
-              `refusing to remove "${name}" in a non-interactive context. Pass --yes to confirm.`,
-          );
-          process.exit(1);
-        }
-        const ok = await promptYesNo(`Remove secret "${name}"? [y/N]`);
-        if (!ok) {
-          console.log("(cancelled)");
-          return;
-        }
+      const ok = await requireConfirm({
+        yes: options.yes,
+        question: `Remove secret "${name}"?`,
+        noun: `remove "${name}"`,
+      });
+      if (!ok) {
+        console.log("(cancelled)");
+        return;
       }
       store.remove(name);
       console.log(green("✓") + ` removed secret "${name}"`);
