@@ -90,6 +90,67 @@ foreman identity push
 
 The push is best-effort — some runtimes (notably Hermes' core LLM prompt) weight their built-in system prompt above any user-supplied SOUL.md. The push still gets you the strongest available identity hook for that runtime; whether the upstream LLM respects it is upstream's call. See [`docs/qa-report-v0.1.0.md`](qa-report-v0.1.0.md) for the original Hermes identity finding.
 
+## Secret projection (#222 / #223)
+
+After MCP injection finishes, `foreman setup` and `foreman agent add` **also** write the agent's required API keys / channel tokens into the agent's own env/config files. The promise: a fresh user finishes the wizard and can launch the agent without any `hermes model` / `codex login` / manual `.env` editing.
+
+### Why we write to disk
+
+Foreman's MCP transport handles policy + audit at runtime, but every tier-1 agent reads its inference key at *startup* — before MCP is reachable. Without projection, the wizard's "set it up once" promise breaks. We accept the tradeoff: the secret lives in **two** places now (Foreman's encrypted store + the agent's own config), but with a single rotation point.
+
+### Where each agent's secrets land
+
+| Agent | File | Writer strategy |
+| --- | --- | --- |
+| Hermes | `~/.hermes/.env` | dotenv (mode 0600, merges with user's own keys) |
+| Claude Code | `~/.claude/settings.json` → `env` block | deep-merged JSON |
+| OpenClaw | `~/.openclaw/openclaw.json` → `env` + `channels.*` | deep-merged JSON |
+| Codex | `~/.codex/config.toml` (`preferred_auth_method`) + `~/.codex/auth.json` (`OPENAI_API_KEY`) | line-level TOML + flat JSON |
+| ZeroClaw | `~/.zeroclaw/config.toml` (`default_provider` + `api_key`) | line-level TOML |
+| generic-mcp | (no auto-write) | — |
+
+All writers are **atomic** (tmpfile + rename), **chmod 0600**, and **preserve sibling keys** the user added by hand.
+
+### Filtering — `if_provider` and `if_service`
+
+Each projection mapping in the registry can be gated:
+
+```json
+{
+  "ANTHROPIC_API_KEY": { "from_secret": "anthropic-key", "if_provider": "anthropic" },
+  "TELEGRAM_BOT_TOKEN": { "from_secret": "telegram-bot-token", "if_service": "telegram" }
+}
+```
+
+A user who picked OpenAI (not Anthropic) won't get an `ANTHROPIC_API_KEY` written, and a user who didn't pick Telegram won't get the bot token.
+
+### Rotation fanout
+
+`foreman secrets rotate <name>` re-projects the new value into every agent whose registry block references it:
+
+```
+$ foreman secrets rotate anthropic-key
+✓ rotated secret "anthropic-key"
+  ↳ re-projected to hermes (~/.hermes/.env)
+  ↳ re-projected to claude-code (~/.claude/settings.json — replaced stale)
+  ↳ re-projected to openclaw (~/.openclaw/openclaw.json)
+  ↳ re-projected to zeroclaw (~/.zeroclaw/config.toml)
+```
+
+So the user only ever updates the key in **one** place; Foreman handles the propagation.
+
+### Opting out
+
+```bash
+foreman agent add my-agent --type hermes --skip-projection
+```
+
+For power users who want Foreman to stay strictly out of the agent's startup config.
+
+### Launch commands on the Done screen
+
+The setup wizard's Done screen lists per-agent launch commands sourced from each entry's `secret_projection.launch` field (single string OR array for agents with multiple modes — Hermes `chat` vs `gateway`, OpenClaw `chat` vs `gateway`).
+
 ## See also
 
 - [`docs/llm-providers.md`](llm-providers.md) — which provider an agent ends up bound to

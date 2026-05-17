@@ -82,6 +82,10 @@ agentsCommand
     "do not inject the MCP snippet into the agent config",
   )
   .option(
+    "--skip-projection",
+    "do not write Foreman-stored secrets into the agent's env/config files (#222 / #223)",
+  )
+  .option(
     "--auto-install",
     "run the install command when the binary is missing",
   )
@@ -93,6 +97,7 @@ agentsCommand
         type?: string;
         configPath?: string;
         skipConfig?: boolean;
+        skipProjection?: boolean;
         autoInstall?: boolean;
         keyOut?: string;
       },
@@ -108,6 +113,7 @@ agentsCommand
             type: options.type,
             configPath: options.configPath,
             skipConfig: options.skipConfig,
+            skipProjection: options.skipProjection,
             autoInstall: options.autoInstall,
             keyOut: options.keyOut,
           };
