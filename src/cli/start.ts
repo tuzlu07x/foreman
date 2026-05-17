@@ -483,6 +483,7 @@ async function runOnboardingWizard(): Promise<void> {
         secretStore,
         registry,
         policyPath: paths.policyPath,
+        llmConfigPath: paths.llmConfigPath,
         launchEditor,
       },
     }),
