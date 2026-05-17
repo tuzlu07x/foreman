@@ -59,7 +59,7 @@ import {
 } from "../core/notification/notify-config.js";
 import { loadNotifyState } from "../core/notification/notify-state.js";
 import { DailyScheduler, parseSchedule } from "../core/notification/scheduler.js";
-import { generateSummary } from "../core/notification/summary-generator.js";
+import { generateSmartSummaryPayload } from "../core/notification/summary-generator.js";
 import type {
   ChannelId,
   NotificationChannel,
@@ -160,6 +160,7 @@ export function startForeman(
     secretStore,
     notifyConfigPath: paths.notifyConfigPath,
     notifyStatePath: paths.notifyStatePath,
+    llmConfigPath: paths.llmConfigPath,
   });
   const notificationBridge = notificationSetup?.bridge ?? null;
   const dailyScheduler = notificationSetup?.scheduler ?? null;
@@ -352,6 +353,34 @@ export function startForeman(
 // the configured provider's credentials resolve. Returns null otherwise —
 // the mediator keeps working with heuristic-only behavior. Every failure
 // mode is silent so a bad LLM config can't crash boot.
+function setupSummaryLlmClient(args: {
+  secretStore: SecretStore;
+  llmConfigPath: string;
+}): import("../core/llm/client.js").LlmClient | null {
+  // Smart summary (#306) reuses the configured provider; gated on the
+  // `smart_report` feature flag so verification + summary can be toggled
+  // independently. Failures are silent — the digest falls back to the
+  // template body.
+  let config;
+  try {
+    config = loadLlmConfig(args.llmConfigPath);
+  } catch {
+    return null;
+  }
+  if (!isFeatureEnabled(config, "smart_report")) return null;
+  try {
+    return buildLlmClient(config, args.secretStore);
+  } catch (err) {
+    if (
+      err instanceof LlmProviderUnavailableError ||
+      err instanceof LlmCredentialMissingError
+    ) {
+      return null;
+    }
+    throw err;
+  }
+}
+
 function setupLlmVerifier(args: {
   db: ReturnType<typeof getDb>;
   secretStore: SecretStore;
@@ -388,6 +417,7 @@ function setupNotificationBridge(args: {
   secretStore: SecretStore;
   notifyConfigPath: string;
   notifyStatePath: string;
+  llmConfigPath: string;
 }): {
   bridge: NotificationBridge;
   scheduler: DailyScheduler | null;
@@ -468,8 +498,18 @@ function setupNotificationBridge(args: {
   if (summaryRoute.schedule && summaryRoute.channels.length > 0) {
     const parsed = parseSchedule(summaryRoute.schedule);
     if (parsed) {
+      // #306 — smart summary. When LLM smart_report is enabled the digest
+      // becomes a contextual narrative; otherwise the existing template
+      // body is sent. The fallback path is automatic — see
+      // generateSmartSummaryPayload.
+      const summaryClient = setupSummaryLlmClient({
+        secretStore: args.secretStore,
+        llmConfigPath: args.llmConfigPath,
+      });
       scheduler = new DailyScheduler(parsed, async () => {
-        const payload = generateSummary(args.db);
+        const payload = await generateSmartSummaryPayload(args.db, {
+          llmClient: summaryClient,
+        });
         try {
           await service.send("summary", payload);
         } catch {
