@@ -54,6 +54,100 @@ export const AgentEntrySchema = z
     mcp_compatible: z.boolean(),
     supported_versions: z.string().min(1),
     min_foreman_version: z.string().min(1),
+    /** Where to project Foreman secrets so this agent picks them up at startup
+     *  (#222 / #223). When set, after MCP injection the install flow:
+     *    1. iterates `env_vars` and `channels`,
+     *    2. filters by `if_provider` / `if_service` against the user's picks,
+     *    3. fetches each secret from Foreman's secret store,
+     *    4. dispatches to the appropriate writer (dotenv, json-env, toml-field,
+     *       json-channels) so the agent can simply read its usual env var or
+     *       config file.
+     *  Omit the block entirely for agents that don't need projection
+     *  (generic-mcp). */
+    secret_projection: z
+      .object({
+        /** Dotenv file path (Hermes uses `~/.hermes/.env`). Null when the
+         *  agent doesn't have a dotenv. */
+        env_file: z.string().nullable().optional(),
+        /** Map of env-var name → secret descriptor. The writer chosen depends
+         *  on whether `env_file` is set (dotenv) or `json_env_path` is set
+         *  (Claude Code's settings.json) etc. */
+        env_vars: z
+          .record(
+            z.object({
+              from_secret: z.string().min(1),
+              /** Only project when this provider is in the user's selection. */
+              if_provider: z.string().optional(),
+              /** Only project when this service is in the user's selection. */
+              if_service: z.string().optional(),
+            }),
+          )
+          .optional(),
+        /** JSON file + key path for an `env` block (Claude Code's
+         *  `~/.claude/settings.json` → `env`, OpenClaw's
+         *  `~/.openclaw/openclaw.json` → `env`). */
+        json_env: z
+          .object({
+            path: z.string().min(1),
+            /** Dot-path to the env object inside the file (e.g. "env"). */
+            section: z.string().min(1),
+          })
+          .optional(),
+        /** TOML file + simple top-level key=value writes (Codex's
+         *  `preferred_auth_method = "apikey"`, ZeroClaw's `api_key = "…"`). */
+        toml_writes: z
+          .array(
+            z.object({
+              path: z.string().min(1),
+              key: z.string().min(1),
+              /** Literal value, OR a secret reference like
+               *  `{ from_secret: "openai-key" }`. */
+              value: z.union([
+                z.string(),
+                z.object({ from_secret: z.string().min(1) }),
+              ]),
+            }),
+          )
+          .optional(),
+        /** JSON file + nested-channel writes (OpenClaw channels.*). */
+        json_channels: z
+          .object({
+            path: z.string().min(1),
+            channels: z.record(
+              z.object({
+                /** Dot-path inside the JSON for this channel's token. */
+                path: z.string().min(1),
+                from_secret: z.string().min(1),
+                if_service: z.string().optional(),
+              }),
+            ),
+          })
+          .optional(),
+        /** Auth-file written as plain JSON (Codex's `~/.codex/auth.json`). */
+        auth_json: z
+          .object({
+            path: z.string().min(1),
+            key: z.string().min(1),
+            from_secret: z.string().min(1),
+            if_provider: z.string().optional(),
+          })
+          .optional(),
+        /** Shown on the wizard's Done screen — what command to run to start
+         *  this agent. Single string OR an array of `{command, label}` for
+         *  agents with multiple modes (e.g. Hermes chat vs gateway). */
+        launch: z
+          .union([
+            z.string().min(1),
+            z.array(
+              z.object({
+                command: z.string().min(1),
+                label: z.string().min(1),
+              }),
+            ),
+          ])
+          .optional(),
+      })
+      .optional(),
   })
   .strict();
 
