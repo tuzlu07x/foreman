@@ -1,6 +1,12 @@
 import { and, eq, gte, sql } from 'drizzle-orm'
 import type { ForemanDb } from '../../db/client.js'
 import { notifications, requests } from '../../db/schema.js'
+import type { LlmClient } from '../llm/client.js'
+import {
+  detectLocaleFromEnv,
+  narrateSummary,
+  type SummaryLocale,
+} from '../llm/summary-narrator.js'
 import type { Notification } from './types.js'
 
 // =============================================================================
@@ -148,4 +154,86 @@ function humanWindow(ms: number): string {
   if (hours >= 1) return `${Math.round(hours)} hours`
   const minutes = Math.round(ms / 60_000)
   return `${minutes} minutes`
+}
+
+// =============================================================================
+// Smart variant — LLM-powered narrative when available (#306)
+// =============================================================================
+//
+// Wraps generateSummary, runs the configured LLM client over the same
+// stats, and replaces the body with the narrative on success. Every failure
+// mode (LLM disabled / no client / empty stats / API error) falls back to
+// the template body so the digest always lands.
+
+export interface SmartSummaryOptions extends SummaryOptions {
+  /** When null, smart narration is skipped and the template body is used.
+   *  Caller usually passes the same client built for verification. */
+  llmClient?: LlmClient | null
+  locale?: SummaryLocale
+  /** Override env detection for locale. */
+  env?: NodeJS.ProcessEnv
+  /** Per-agent responsibility note map for richer "Hermes (code writing)"
+   *  framing in the narrative. */
+  responsibilities?: Record<string, string | null>
+  budget?: {
+    spentUsd: number
+    capUsd: number
+    alertTripped?: boolean
+  }
+}
+
+export async function generateSmartSummaryPayload(
+  db: ForemanDb,
+  opts: SmartSummaryOptions = {},
+): Promise<Omit<Notification, 'id'>> {
+  const payload = generateSummary(db, opts)
+  if (!opts.llmClient) return payload
+  const stats = computeStats(
+    db,
+    (opts.now ?? Date.now()) - (opts.windowMs ?? 12 * 60 * 60 * 1000),
+    opts.now ?? Date.now(),
+  )
+  const factorCounts = computeFactorCounts(
+    db,
+    (opts.now ?? Date.now()) - (opts.windowMs ?? 12 * 60 * 60 * 1000),
+  )
+  const locale = opts.locale ?? detectLocaleFromEnv(opts.env)
+  const outcome = await narrateSummary({
+    client: opts.llmClient,
+    stats,
+    windowLabel: humanWindow(opts.windowMs ?? 12 * 60 * 60 * 1000),
+    responsibilities: opts.responsibilities,
+    budget: opts.budget,
+    factorCounts,
+    locale,
+  })
+  if (outcome.status !== 'ok') return payload
+  return { ...payload, body: outcome.text }
+}
+
+function computeFactorCounts(
+  db: ForemanDb,
+  cutoff: number,
+): Record<string, number> {
+  const rows = db
+    .select({ riskFactors: requests.riskFactors })
+    .from(requests)
+    .where(gte(requests.createdAt, cutoff))
+    .all()
+  const counts: Record<string, number> = {}
+  for (const r of rows) {
+    if (!r.riskFactors) continue
+    try {
+      const parsed = JSON.parse(r.riskFactors) as Array<{ rule?: string }>
+      if (!Array.isArray(parsed)) continue
+      for (const f of parsed) {
+        if (typeof f.rule !== 'string') continue
+        counts[f.rule] = (counts[f.rule] ?? 0) + 1
+      }
+    } catch {
+      // Skip malformed rows — happens for legacy data; the template body
+      // already handles those.
+    }
+  }
+  return counts
 }
