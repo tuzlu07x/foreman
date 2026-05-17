@@ -153,12 +153,21 @@ agentsCommand
       try {
         const agent = registry.get(name);
         if (!agent) throw new AgentNotFoundError(name);
-        if (
-          !options.yes &&
-          !(await confirmYes(`Remove agent "${name}"? [y/N]`))
-        ) {
-          console.log("(cancelled)");
-          return;
+        if (!options.yes) {
+          // Same shape as the #260 / #268 fixes — non-TTY without --yes
+          // auto-cancels silently, which is indistinguishable from a user
+          // typing "n". Refuse loudly instead (#272).
+          if (!process.stdin.isTTY) {
+            console.error(
+              red("error: ") +
+                `refusing to remove "${name}" in a non-interactive context. Pass --yes to confirm.`,
+            );
+            process.exit(1);
+          }
+          if (!(await confirmYes(`Remove agent "${name}"? [y/N]`))) {
+            console.log("(cancelled)");
+            return;
+          }
         }
         const { doc } = loadActiveRegistry();
         const registryId =
@@ -204,9 +213,30 @@ agentsCommand
   .command("regenerate-key <name>")
   .description("Rotate the agent's Ed25519 keypair")
   .option("--out <path>", "write the new private key to this path (0600)")
-  .action((name: string, options: { out?: string }) => {
+  .option("--yes", "skip confirmation prompt")
+  .action(async (name: string, options: { out?: string; yes?: boolean }) => {
     const registry = getRegistry();
     try {
+      const agent = registry.get(name);
+      if (!agent) throw new AgentNotFoundError(name);
+      // Rotating invalidates the old key immediately — every running session
+      // authenticating with it starts failing. Require confirmation (#272).
+      if (!options.yes) {
+        if (!process.stdin.isTTY) {
+          console.error(
+            red("error: ") +
+              `refusing to regenerate-key for "${name}" in a non-interactive context. Pass --yes to confirm.`,
+          );
+          process.exit(1);
+        }
+        const ok = await confirmYes(
+          `Rotate ${name}'s keypair? Old key is invalidated immediately. [y/N]`,
+        );
+        if (!ok) {
+          console.log("(cancelled)");
+          return;
+        }
+      }
       const { privateKey } = registry.regenerateKey(name);
       if (options.out) {
         writeFileSync(options.out, privateKey, { mode: 0o600 });
