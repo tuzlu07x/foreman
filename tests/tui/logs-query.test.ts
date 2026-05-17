@@ -165,6 +165,7 @@ describe('toJsonl', () => {
         riskFactors: null,
         riskBucket: null,
         llmVerification: null,
+        securityReport: null,
         decision: 'allowed',
         decidedBy: 'auto',
         result: null,

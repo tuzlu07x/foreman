@@ -162,6 +162,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const [approvalDeadline, setApprovalDeadline] = useState<number | null>(null);
   const [inspectOpen, setInspectOpen] = useState(false);
   const [inspectOffset, setInspectOffset] = useState(0);
+  const [technicalExpanded, setTechnicalExpanded] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
   const [logSearch, setLogSearch] = useState("");
@@ -181,6 +182,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
       setApprovalDeadline(Date.now() + APPROVAL_TIMEOUT_MS);
       setInspectOpen(false);
       setInspectOffset(0);
+      setTechnicalExpanded(false);
     });
   }, [bus]);
 
@@ -204,6 +206,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
       setApprovalDeadline(null);
       setInspectOpen(false);
       setInspectOffset(0);
+      setTechnicalExpanded(false);
     },
     [bus],
   );
@@ -724,6 +727,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           setInspectOpen={setInspectOpen}
           inspectOffset={inspectOffset}
           setInspectOffset={setInspectOffset}
+          technicalExpanded={technicalExpanded}
+          setTechnicalExpanded={setTechnicalExpanded}
           onResolveApproval={resolveApproval}
           onHaltSessionFromApproval={onHaltSessionFromApproval}
           logSearch={logSearch}
@@ -811,6 +816,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           <ApprovalModal
             request={pendingApproval}
             remainingSeconds={remainingSeconds}
+            technicalExpanded={technicalExpanded}
           />
         )
       ) : page === "logs" ? (
@@ -897,6 +903,8 @@ interface KeyboardHandlerProps {
   setInspectOpen: (v: boolean) => void;
   inspectOffset: number;
   setInspectOffset: (next: number) => void;
+  technicalExpanded: boolean;
+  setTechnicalExpanded: (v: boolean) => void;
   onResolveApproval: (r: ApprovalResolution, by: ResolvedBy) => void;
   onHaltSessionFromApproval: () => void;
   logSearch: string;
@@ -980,6 +988,8 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     setInspectOpen,
     inspectOffset,
     setInspectOffset,
+    technicalExpanded,
+    setTechnicalExpanded,
     onResolveApproval,
     onHaltSessionFromApproval,
     logSearch,
@@ -1083,6 +1093,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "D")
         onResolveApproval({ decision: "denied", remember: "deny" }, "user");
       else if (input === "i") setInspectOpen(true);
+      else if (input === "t") setTechnicalExpanded(!technicalExpanded);
       else if (input === "k") onHaltSessionFromApproval();
       return;
     }
