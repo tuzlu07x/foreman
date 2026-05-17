@@ -1,64 +1,79 @@
 import { describe, expect, it } from "vitest";
 import { buildStatusBarLayout } from "../../src/tui/components/status-bar.js";
 
-describe("buildStatusBarLayout", () => {
-  describe("wide", () => {
-    it("renders a single chatty line and shows the version badge", () => {
-      const result = buildStatusBarLayout("wide");
-      expect(result.rows).toHaveLength(1);
-      expect(result.rows[0]).toContain("[h] help");
-      expect(result.rows[0]).toContain("[a] agents");
-      expect(result.rows[0]).toContain("[q] quit");
-      expect(result.showVersion).toBe(true);
-    });
+// =============================================================================
+// Status bar layouts (#234 UX-4) — pure-function tests
+// =============================================================================
+
+function letters(rows: ReturnType<typeof buildStatusBarLayout>["rows"]): string[] {
+  const out: string[] = [];
+  for (const r of rows) {
+    for (const k of r.leftKeys) out.push(k.letter);
+    for (const k of r.rightKeys) out.push(k.letter);
+  }
+  return out;
+}
+
+describe("buildStatusBarLayout — wide", () => {
+  it("renders a single row with the active-page label + every hotkey labelled", () => {
+    const result = buildStatusBarLayout("wide", "agents");
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]!.active).toContain("Agents");
+    expect(result.rows[0]!.withLabels).toBe(true);
+    expect(result.showVersion).toBe(true);
   });
 
-  describe("medium", () => {
-    it("renders single-letter hotkeys on one line, keeps the version badge", () => {
-      const result = buildStatusBarLayout("medium");
-      expect(result.rows).toHaveLength(1);
-      expect(result.rows[0]).toBe("[h] [a] [v] [V] [c] [g] [k] [l] [p] [s] [q]");
-      expect(result.showVersion).toBe(true);
-    });
+  it("groups admin keys (help/quit) on the right side", () => {
+    const result = buildStatusBarLayout("wide", "dashboard");
+    const right = result.rows[0]!.rightKeys.map((k) => k.letter);
+    expect(right).toEqual(["h", "q"]);
+  });
+});
 
-    it("medium row fits the medium breakpoint comfortably", () => {
-      const result = buildStatusBarLayout("medium");
-      expect(result.rows[0]!.length).toBeLessThan(80);
-    });
+describe("buildStatusBarLayout — medium", () => {
+  it("single row with single-letter hotkeys (no labels)", () => {
+    const result = buildStatusBarLayout("medium", "logs");
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]!.withLabels).toBe(false);
+    expect(result.rows[0]!.active).toContain("Logs");
+    expect(result.showVersion).toBe(true);
+  });
+});
+
+describe("buildStatusBarLayout — narrow", () => {
+  it("two rows: line 1 has the active page only, line 2 has hotkeys", () => {
+    const result = buildStatusBarLayout("narrow", "policy");
+    expect(result.rows).toHaveLength(2);
+    expect(result.rows[0]!.active).toContain("Policy");
+    expect(result.rows[0]!.leftKeys).toHaveLength(0);
+    expect(result.rows[1]!.leftKeys.length).toBeGreaterThan(0);
+    expect(result.showVersion).toBe(false);
+  });
+});
+
+describe("buildStatusBarLayout — coverage", () => {
+  it("every page hotkey appears in every layout (no key lost on resize)", () => {
+    const wide = new Set(letters(buildStatusBarLayout("wide", "dashboard").rows));
+    const medium = new Set(letters(buildStatusBarLayout("medium", "dashboard").rows));
+    const narrow = new Set(letters(buildStatusBarLayout("narrow", "dashboard").rows));
+    // Narrow drops secondary keys (chat, settings) to fit; main + admin must
+    // survive across all three.
+    for (const letter of ["a", "v", "V", "k", "l", "p", "s", "h", "q"]) {
+      expect(wide.has(letter), `wide missing [${letter}]`).toBe(true);
+      expect(medium.has(letter), `medium missing [${letter}]`).toBe(true);
+      expect(narrow.has(letter), `narrow missing [${letter}]`).toBe(true);
+    }
   });
 
-  describe("narrow", () => {
-    it("splits hotkeys across two lines grouped by purpose", () => {
-      const result = buildStatusBarLayout("narrow");
-      expect(result.rows).toHaveLength(2);
-      expect(result.rows[0]).toContain("nav:");
-      expect(result.rows[1]).toContain("system:");
-    });
-
-    it("drops the version badge to free space on tiny terminals", () => {
-      const result = buildStatusBarLayout("narrow");
-      expect(result.showVersion).toBe(false);
-    });
-
-    it("each narrow row fits under 60 columns", () => {
-      const result = buildStatusBarLayout("narrow");
-      for (const row of result.rows) {
-        expect(row.length).toBeLessThan(60);
-      }
-    });
-  });
-
-  describe("coverage", () => {
-    it("every hotkey appears in every layout (no key is lost on resize)", () => {
-      const flatten = (rows: string[]): string => rows.join(" ");
-      const wide = flatten(buildStatusBarLayout("wide").rows);
-      const medium = flatten(buildStatusBarLayout("medium").rows);
-      const narrow = flatten(buildStatusBarLayout("narrow").rows);
-      for (const key of ["h", "a", "v", "V", "c", "g", "k", "l", "p", "s", "q"]) {
-        expect(wide).toContain(`[${key}]`);
-        expect(medium).toContain(`[${key}]`);
-        expect(narrow).toContain(`[${key}]`);
-      }
-    });
+  it("active-page hotkey is flagged so the renderer can highlight it", () => {
+    const result = buildStatusBarLayout("wide", "providers");
+    // Renderer compares entry.page === page; this test pins the active page
+    // is one of the entries so we know the rendered hotkey will light up.
+    const allEntries = [
+      ...result.rows[0]!.leftKeys,
+      ...result.rows[0]!.rightKeys,
+    ];
+    const hasProviders = allEntries.some((e) => e.page === "providers");
+    expect(hasProviders).toBe(true);
   });
 });

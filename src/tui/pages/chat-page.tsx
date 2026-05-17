@@ -5,6 +5,7 @@ import type { RegisteredAgent } from "../../core/registry.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { formatTime } from "../format.js";
 import { singleBorder, theme } from "../theme.js";
+import { EmptyState } from "../components/empty-state.js";
 
 export interface ChatPageProps {
   selectedAgentIdx: number;
@@ -69,9 +70,15 @@ export function ChatPage({
 
       <Box marginTop={1}>
         {agents.length === 0 ? (
-          <Text color={theme.fg.muted}>
-            (no agents registered — go to Agents page to add one)
-          </Text>
+          <EmptyState
+            title="No agents registered yet"
+            body="The chat / test console drives a call through the mediator as if one of your agents made it. Add an agent first; you can pick which one drives each exchange."
+            commands={[
+              "foreman setup",
+              "foreman agent add my-claude --type claude-code",
+            ]}
+            hotkeys={["[Esc] back to dashboard"]}
+          />
         ) : (
           <Text>
             Agent: <Text color={theme.fg.muted}>◀</Text>{" "}
@@ -84,11 +91,16 @@ export function ChatPage({
       </Box>
 
       <Box flexDirection="column" marginTop={1} flexGrow={1}>
-        {visible.length === 0 ? (
-          <Text color={theme.fg.muted}>
-            (no exchanges yet — type a tool name + optional JSON args,
-            press Enter to send through Foreman mediator)
-          </Text>
+        {visible.length === 0 && agents.length > 0 ? (
+          <EmptyState
+            title="No exchanges yet"
+            body="Type a tool name + optional JSON args, press Enter to send through Foreman's mediator. Every call is audited; risky ones open the approval modal."
+            commands={[
+              'read_file {"path": ".env"}',
+              'shell_exec {"cmd": "ls"}',
+            ]}
+            hotkeys={["[i] input mode · [← →] switch agent · [Esc] back"]}
+          />
         ) : (
           visible.map((entry) => <ScrollbackRow key={entry.id} entry={entry} />)
         )}
