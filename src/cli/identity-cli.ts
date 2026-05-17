@@ -44,6 +44,17 @@ identityCommand
       );
       process.exit(1);
     }
+    // Launching an editor against a non-TTY pipes escape codes into the
+    // consumer stream and claims success anyway. Refuse upfront and tell the
+    // user the file path (#274, same as the policy edit fix in #268).
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.error(
+        red("error: ") +
+          "'identity edit' requires an interactive terminal — open the file directly:",
+      );
+      console.error(`       ${paths.soulPath}`);
+      process.exit(1);
+    }
     if (!existsSync(paths.soulPath)) {
       writeFileSync(paths.soulPath, DEFAULT_FOREMAN_SOUL);
     }
@@ -58,6 +69,15 @@ identityCommand
   .action(async (options: { yes?: boolean }) => {
     const paths = getForemanPaths();
     if (!options.yes) {
+      // In non-TTY contexts the prompt auto-cancels — refuse loudly instead
+      // of silently doing nothing (#274, same pattern as #260 / #268 / #272).
+      if (!process.stdin.isTTY) {
+        console.error(
+          red("error: ") +
+            "refusing to reset SOUL.md in a non-interactive context. Pass --yes to confirm.",
+        );
+        process.exit(1);
+      }
       const ok = await confirmYes(
         `Overwrite ${paths.soulPath} with the default Foreman identity? [y/N]`,
       );
