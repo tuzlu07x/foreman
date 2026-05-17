@@ -33,6 +33,7 @@ import { closeDb, getDb } from '../db/client.js'
 import { loadOrCreateSecretsMasterKey } from '../identity/master-key.js'
 import { getForemanPaths } from '../utils/config.js'
 import { dim, green, orange, red } from './colors.js'
+import { safeLoadConfig } from './safe-load.js'
 
 export const notifyCommand = new Command('notify').description(
   'Out-of-band notification channels (Telegram primary)',
@@ -44,7 +45,7 @@ notifyCommand
   .action(() => {
     requireInitialised()
     const paths = getForemanPaths()
-    const config = loadNotifyConfig(paths.notifyConfigPath)
+    const config = safeLoadConfig(paths.notifyConfigPath, loadNotifyConfig, { label: 'notify.yaml' })
 
     console.log(orange('channels'))
     const channels = Object.entries(config.channels)
@@ -112,7 +113,7 @@ notifyCommand
     requireInitialised()
     const paths = getForemanPaths()
     const config = existsSync(paths.notifyConfigPath)
-      ? loadNotifyConfig(paths.notifyConfigPath)
+      ? safeLoadConfig(paths.notifyConfigPath, loadNotifyConfig, { label: 'notify.yaml' })
       : defaultNotifyConfig()
     const existing = channelConfig(config, channel)
     const next: ChannelToggle = { ...(existing ?? {}), enabled: true }
@@ -138,7 +139,7 @@ notifyCommand
       console.error(red('error: ') + 'no notify.yaml — nothing to disable')
       process.exit(1)
     }
-    const config = loadNotifyConfig(paths.notifyConfigPath)
+    const config = safeLoadConfig(paths.notifyConfigPath, loadNotifyConfig, { label: 'notify.yaml' })
     const existing = channelConfig(config, channel)
     if (!existing) {
       console.error(red('error: ') + `unknown channel: ${channel}`)
@@ -243,7 +244,7 @@ notifyCommand
       return
     }
 
-    const config = loadNotifyConfig(paths.notifyConfigPath)
+    const config = safeLoadConfig(paths.notifyConfigPath, loadNotifyConfig, { label: 'notify.yaml' })
     const channelIds = config.routing.summary?.channels ?? []
     if (channelIds.length === 0) {
       console.error(
@@ -289,7 +290,7 @@ notifyCommand
   .action(async (channel: string) => {
     requireInitialised()
     const paths = getForemanPaths()
-    const config = loadNotifyConfig(paths.notifyConfigPath)
+    const config = safeLoadConfig(paths.notifyConfigPath, loadNotifyConfig, { label: 'notify.yaml' })
     if (!isChannelEnabled(config, channel)) {
       console.error(
         red('error: ') +
