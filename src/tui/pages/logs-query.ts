@@ -19,6 +19,11 @@ export interface QueryOptions {
   search?: string;
   filters?: LogFilters;
   limit?: number;
+  /** Filter rows by session_id (#301). When set, returns rows whose
+   *  session_id column equals this value — used by the
+   *  `foreman log tail --session <id>` flag and (later) the TUI sessions
+   *  tree view. */
+  sessionId?: string;
 }
 
 const ERROR_DECIDED_BY = ["auth-failure", "route-error"];
@@ -32,12 +37,17 @@ export function queryLogs(
   sqlite: Database.Database,
   options: QueryOptions = {},
 ): LogQueryResult {
-  const { search, filters = DEFAULT_FILTERS, limit = 200 } = options;
+  const { search, filters = DEFAULT_FILTERS, limit = 200, sessionId } = options;
   const where: string[] = [];
   const params: (string | number)[] = [];
 
   const filterSql = buildFilterClause(filters, params);
   if (filterSql) where.push(filterSql);
+
+  if (sessionId && sessionId.length > 0) {
+    where.push("requests.session_id = ?");
+    params.push(sessionId);
+  }
 
   let joinSql = "";
   if (search && search.trim().length > 0) {
@@ -132,6 +142,8 @@ interface RawRow {
   duration_ms: number | null;
   created_at: number;
   decided_at: number | null;
+  parent_request_id: string | null;
+  session_id: string | null;
 }
 
 function rowToRequest(row: RawRow): Request {
@@ -153,5 +165,7 @@ function rowToRequest(row: RawRow): Request {
     durationMs: row.duration_ms,
     createdAt: row.created_at,
     decidedAt: row.decided_at,
+    parentRequestId: row.parent_request_id,
+    sessionId: row.session_id,
   };
 }

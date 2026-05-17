@@ -78,6 +78,13 @@ export const requests = sqliteTable(
     durationMs: integer("duration_ms"),
     createdAt: integer("created_at").notNull(),
     decidedAt: integer("decided_at"),
+    // #301 — agent-to-agent flow tracking. parent_request_id points at the
+    // request that triggered this one (e.g. OpenClaw → Hermes delegation);
+    // session_id groups every request that descends from a single
+    // user-initiated chain so the log can render trees. Both nullable for
+    // legacy rows + first-in-chain requests.
+    parentRequestId: text("parent_request_id"),
+    sessionId: text("session_id"),
   },
   (t) => ({
     sourceCreatedIdx: index("requests_source_created_idx").on(
@@ -88,6 +95,8 @@ export const requests = sqliteTable(
       t.decision,
       t.createdAt,
     ),
+    sessionIdx: index("requests_session_idx").on(t.sessionId, t.createdAt),
+    parentIdx: index("requests_parent_idx").on(t.parentRequestId),
   }),
 );
 
