@@ -33,7 +33,11 @@ import { SetupWizard } from "../tui/setup-wizard.js";
 import { SecretStore, SecretNotFoundError } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { isFeatureEnabled, loadLlmConfig } from "../core/llm/config.js";
-import { AnthropicLlmClient } from "../core/llm/providers/anthropic.js";
+import {
+  buildLlmClient,
+  LlmCredentialMissingError,
+  LlmProviderUnavailableError,
+} from "../core/llm/factory.js";
 import { LlmVerifier } from "../core/llm/verifier.js";
 import { TelegramChannel } from "../core/notification/channels/telegram.js";
 import { SystemNotifyChannel } from "../core/notification/channels/system.js";
@@ -300,18 +304,20 @@ function setupLlmVerifier(args: {
   }
   if (!isFeatureEnabled(config, "verification")) return null;
 
-  // Anthropic is the only provider built in C7-1; OpenAI / Gemini / Ollama
-  // land in C7-2. Bail out cleanly for unsupported providers.
-  if (config.provider !== "anthropic") return null;
-  const cred = config.credentials.anthropic;
-  if (!cred?.secret_name) return null;
-
+  // Factory dispatches across all implemented providers (#296). Unimplemented
+  // providers (ollama, openai_compatible — v0.2 #312) and missing credentials
+  // both surface as typed errors; either way the mediator keeps working with
+  // heuristic-only behavior, so we swallow them silently here.
   try {
-    const apiKey = args.secretStore.get(cred.secret_name);
-    const client = new AnthropicLlmClient({ apiKey, model: config.model });
+    const client = buildLlmClient(config, args.secretStore);
     return new LlmVerifier({ db: args.db, config, client });
   } catch (err) {
-    if (err instanceof SecretNotFoundError) return null;
+    if (
+      err instanceof LlmProviderUnavailableError ||
+      err instanceof LlmCredentialMissingError
+    ) {
+      return null;
+    }
     throw err;
   }
 }
