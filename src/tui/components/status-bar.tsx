@@ -44,7 +44,10 @@ const MAIN_KEYS: KeyEntry[] = [
 ];
 
 const SECONDARY_KEYS: KeyEntry[] = [
-  { page: "chat", letter: "c", label: "chat" },
+  // "chat" renamed to "test" (#293) — the page is a tool-call tester, not
+  // an LLM chat. The page key stays "chat" for state-machine compat; only
+  // the user-facing label changes.
+  { page: "chat", letter: "c", label: "test" },
   { page: "settings", letter: "g", label: "settings" },
 ];
 
@@ -63,7 +66,9 @@ const PAGE_LABELS: Record<Page, string> = {
   services: "Services",
   secrets: "Secrets",
   settings: "Settings",
-  chat: "Chat",
+  // Tab header for the page reached via [c] — renamed from "Chat" so users
+  // don't expect an LLM conversation (#293).
+  chat: "Test console",
 };
 
 // -----------------------------------------------------------------------------
