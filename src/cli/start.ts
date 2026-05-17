@@ -450,6 +450,22 @@ async function runOnboardingWizard(): Promise<void> {
       `${orange(bold("Foreman"))} ${dim("— no agents yet, starting setup wizard…")}\n`,
     );
   }
+  // Same pre-flight as `foreman setup` (#276) — refuse before mounting Ink
+  // if the registry can't be parsed, so the user sees a friendly error
+  // instead of a React stacktrace.
+  try {
+    loadActiveRegistry();
+  } catch (err) {
+    const detail =
+      err instanceof Error ? err.message : String(err);
+    console.error(red("error: ") + detail);
+    console.error("  → Run `foreman registry validate` to inspect.");
+    console.error(
+      "  → Run `foreman registry update --force` if the cached copy is stale.",
+    );
+    console.error("  → Or reinstall: npm install -g foreman-agent@latest");
+    process.exit(1);
+  }
   const db = getDb();
   const registry = new RegistryService(db, bus);
   const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
