@@ -770,7 +770,11 @@ export function SetupWizard({
           <Text color={theme.accent.warning}>⚠ {providersWarning}</Text>
         )}
         {isEndpoint ? (
+          // key= forces a fresh mount per prompt so the field never keeps the
+          // previous provider's value (#219). Stable id includes the kind so
+          // an endpoint+key combo for the same provider also gets two clean mounts.
           <TextInput
+            key={`prov:${prompt.providerId}:${prompt.kind}`}
             defaultValue={provider.endpoint_default ?? ""}
             placeholder={provider.endpoint_default ?? "endpoint URL"}
             onSubmit={(value) => {
@@ -792,6 +796,7 @@ export function SetupWizard({
           />
         ) : (
           <PasswordInput
+            key={`prov:${prompt.providerId}:${prompt.kind}`}
             placeholder="…"
             onSubmit={(value) => {
               handleProviderValueSubmit(
@@ -990,6 +995,8 @@ export function SetupWizard({
           "Refactor suggestions"
         </Text>
         <TextInput
+          // Remount per agent prompt so the previous agent's note doesn't bleed in (#219).
+          key={`agent-note:${prompt.agentId}`}
           placeholder=""
           onSubmit={(value) => {
             setAgentConfigs((prev) => {
@@ -1166,6 +1173,8 @@ export function SetupWizard({
           <Text color={theme.accent.warning}>⚠ {servicesWarning}</Text>
         )}
         <PasswordInput
+          // Remount per service so the previous token doesn't bleed into the next prompt (#219).
+          key={`service:${serviceId}`}
           placeholder="…"
           onSubmit={(value) => {
             const result = applyServiceValueSubmit({
