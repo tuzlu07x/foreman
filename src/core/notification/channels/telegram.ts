@@ -195,11 +195,12 @@ export class TelegramChannel implements NotificationChannel {
       if (this.decisionHandler) await this.decisionHandler(decision)
 
       // 4. Best-effort answer the callback so Telegram clears the loading
-      //    spinner on the user's button. Failure is non-fatal.
+      //    spinner on the user's button + surfaces a richer confirmation
+      //    toast (#302). Failure is non-fatal.
       try {
         await this.call('answerCallbackQuery', {
           callback_query_id: cb.id,
-          text: `✓ ${action}`,
+          text: confirmationText(action),
         })
       } catch {
         // ignore
@@ -261,6 +262,26 @@ function actionEmoji(a: NotificationAction): string {
   if (a.id === 'deny' || a.id === 'deny_always') return '✗'
   if (a.id === 'inspect') return '👁'
   return '•'
+}
+
+// Map action id → user-facing toast that pops on Telegram when the button
+// is pressed (#302). Keeps the confirmation specific to what the user did
+// — beats the prior bare `✓ allow`.
+function confirmationText(action: string): string {
+  switch (action) {
+    case 'allow':
+      return '✓ Approved — Foreman has resumed the agent.'
+    case 'allow_always':
+      return '✓ Approved + remembered — Foreman will auto-allow this in future.'
+    case 'deny':
+      return '✗ Denied — Foreman blocked the request.'
+    case 'deny_always':
+      return '✗ Denied + remembered — Foreman will auto-deny this in future.'
+    case 'inspect':
+      return '👁 Inspect — open Foreman TUI for details.'
+    default:
+      return `✓ ${action}`
+  }
 }
 
 // Telegram MarkdownV2 reserves these chars and rejects messages with unescaped
