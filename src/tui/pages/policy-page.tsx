@@ -4,6 +4,7 @@ import type { policies } from "../../db/schema.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { formatTime } from "../format.js";
 import { singleBorder, theme } from "../theme.js";
+import { PageHeader } from "../components/typography.js";
 
 export type PolicyRow = typeof policies.$inferSelect;
 
@@ -63,14 +64,10 @@ export function PolicyPage({
       paddingX={1}
       flexGrow={1}
     >
-      <Box justifyContent="space-between">
-        <Text color={theme.accent.primary} bold>
-          Policy
-        </Text>
-        <Text color={theme.fg.muted}>
-          {rows.length} rule{rows.length === 1 ? "" : "s"}
-        </Text>
-      </Box>
+      <PageHeader
+        title="Policy"
+        right={`${rows.length} rule${rows.length === 1 ? "" : "s"}`}
+      />
 
       <Box flexDirection="column" marginTop={1}>
         {rows.length === 0 ? (
