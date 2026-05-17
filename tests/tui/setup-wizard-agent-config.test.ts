@@ -82,6 +82,62 @@ describe("buildAgentConfigPromptList", () => {
       { agentId: "claude-code", kind: "responsibility-note" },
     ]);
   });
+
+  // #297 — when configuredProviderIds is passed, gating narrows the picker.
+  describe("with configuredProviderIds gating", () => {
+    it("skips llm-choice when only one compatible LLM is configured", () => {
+      // Hermes compat = [anthropic, openai], user has only anthropic
+      const prompts = buildAgentConfigPromptList(
+        catalog,
+        ["hermes"],
+        ["anthropic"],
+      );
+      expect(prompts).toEqual([
+        { agentId: "hermes", kind: "responsibility-note" },
+      ]);
+    });
+
+    it("keeps llm-choice when 2+ compatible LLMs are configured", () => {
+      const prompts = buildAgentConfigPromptList(
+        catalog,
+        ["hermes"],
+        ["anthropic", "openai"],
+      );
+      expect(prompts).toEqual([
+        { agentId: "hermes", kind: "llm-choice" },
+        { agentId: "hermes", kind: "responsibility-note" },
+      ]);
+    });
+
+    it("skips llm-choice when zero compatible LLMs are configured", () => {
+      // needs-llm state — picker still allows selection but no choice to make
+      const prompts = buildAgentConfigPromptList(catalog, ["hermes"], ["gemini"]);
+      expect(prompts).toEqual([
+        { agentId: "hermes", kind: "responsibility-note" },
+      ]);
+    });
+
+    it("ignores configured providers that are NOT in agent compat", () => {
+      // Codex (compat=[openai]) — user has anthropic+openai, but only
+      // openai counts for codex. Compat length is 1 → no llm-choice anyway.
+      const prompts = buildAgentConfigPromptList(
+        catalog,
+        ["codex"],
+        ["anthropic", "openai"],
+      );
+      expect(prompts).toEqual([
+        { agentId: "codex", kind: "responsibility-note" },
+      ]);
+    });
+
+    it("falls back to original behaviour when configuredProviderIds omitted", () => {
+      const prompts = buildAgentConfigPromptList(catalog, ["hermes"]);
+      expect(prompts).toEqual([
+        { agentId: "hermes", kind: "llm-choice" },
+        { agentId: "hermes", kind: "responsibility-note" },
+      ]);
+    });
+  });
 });
 
 describe("applyAgentConfigSubmit", () => {
