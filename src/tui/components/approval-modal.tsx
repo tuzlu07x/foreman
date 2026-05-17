@@ -10,7 +10,7 @@ import type {
   SecurityReport,
 } from "../../core/security-report.js";
 import { explain } from "../reason-explanations.js";
-import { doubleBorder, riskColor, theme } from "../theme.js";
+import { borderForRisk, riskColor, theme } from "../theme.js";
 
 export type ResolvedBy = "user" | "timeout";
 
@@ -133,10 +133,14 @@ function ReportModal({
   technicalExpanded: boolean;
 }): JSX.Element {
   const color = severityColor(report);
+  // Border style now tracks severity (#234 UX-6): bold frame for critical
+  // calls, double for high, single for medium/low. Reinforces the colour
+  // signal so the user reads severity even when colours are dim/disabled.
+  const border = borderForRisk(report.technical.bucket);
   return (
     <Box
       flexDirection="column"
-      borderStyle={doubleBorder()}
+      borderStyle={border}
       borderColor={color}
       paddingX={2}
       paddingY={0}
@@ -322,13 +326,14 @@ function LegacyModal({
 }): JSX.Element {
   const bucket: RiskBucket = request.riskBucket ?? "medium";
   const borderColor = bucketColor(bucket);
+  const border = borderForRisk(bucket);
   const grouped = groupFactors(request.riskFactors ?? []);
   const hasFactors = grouped.length > 0;
 
   return (
     <Box
       flexDirection="column"
-      borderStyle={doubleBorder()}
+      borderStyle={border}
       borderColor={borderColor}
       paddingX={2}
       paddingY={0}

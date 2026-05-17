@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import type { Request } from "../../db/schema.js";
 import {
   formatDuration,
-  formatTime,
+  relativeTime,
   statusIconFor,
   summariseTool,
   targetLabel,
@@ -84,7 +84,8 @@ function ActivityRow({ request }: { request: Request }): JSX.Element {
   return (
     <Box flexDirection="column" marginBottom={0}>
       <Text color={headerColor}>
-        <Text color={theme.fg.muted}>[{formatTime(request.createdAt)}]</Text>{" "}
+        <Text color={theme.fg.muted}>{relativeTime(request.createdAt)}</Text>
+        <Text color={theme.fg.muted}> · </Text>
         <Text color={faded ? theme.accent.primary : theme.fg.muted}>
           {targetLabel(request.sourceAgent, request.targetAgent)}
         </Text>{" "}
