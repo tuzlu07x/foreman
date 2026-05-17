@@ -24,6 +24,8 @@ export interface ForemanPaths {
   policyPath: string;
   /** OOB notifications config (`<configDir>/notify.yaml`) — #235 / C11a. */
   notifyConfigPath: string;
+  /** OOB notification runtime state (silence + per-agent mute) — #235 / C11c. */
+  notifyStatePath: string;
   identityPath: string;
   /**
    * Canonical Foreman persona file (`<configDir>/SOUL.md`). Foreman writes its
@@ -113,6 +115,7 @@ export function getForemanPaths(): ForemanPaths {
     legacyHome: legacyDetected ? legacy : null,
     policyPath: resolve(dirs.configDir, "policy.yaml"),
     notifyConfigPath: resolve(dirs.configDir, "notify.yaml"),
+    notifyStatePath: resolve(dirs.stateDir, "notify-state.json"),
     identityPath: resolve(dirs.configDir, "identity.key"),
     soulPath: resolve(dirs.configDir, "SOUL.md"),
     secretsKeyPath: resolve(dirs.configDir, "secrets.key"),

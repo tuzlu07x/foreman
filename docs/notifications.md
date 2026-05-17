@@ -172,20 +172,67 @@ Windows support is deferred to v0.2 (PowerShell BurntToast).
 
 ---
 
+## 3c. Silence, mute, daily digest (C11c)
+
+### Silence — temporary "stop pinging me" window
+
+```bash
+foreman notify silence 4h          # mute non-critical for 4 hours
+foreman notify silence 30m         # short window during a meeting
+foreman notify unsilence           # clear early
+```
+
+**Critical alerts still fire.** Silence drops `warning` / `info` / `summary` / `budget_alert` only — phishing / loop / catastrophic shell calls still wake you up. The window persists in `~/.foreman/notify-state.json`; the bridge re-reads on every dispatch so the silence takes effect without restart.
+
+### Mute — never alert about a specific agent
+
+```bash
+foreman notify mute hermes         # don't alert about hermes' calls
+foreman notify unmute hermes
+```
+
+Useful when an agent does benign-but-noisy background work (calendar sync, log scraping). The mute applies to alerts only — `foreman log show` still records every call.
+
+### Daily digest
+
+When `routing.summary.schedule` is set (default `"daily 20:00"`) and the route has at least one channel, Foreman fires a digest every day at that wall-clock time. Currently uses a **honest-fallback template** that counts:
+
+- Total tool calls / agents active
+- Allowed vs denied
+- High-risk calls flagged
+- Notifications delivered (excluding prior digests)
+
+Footer: *"Smart analysis is off. Enable with `foreman llm enable` for contextual reports."* When C8 (LLM verification) + C9 (smart report) ship, the prose narrative comes from the model — for v0.1, you get counts + a hint.
+
+```bash
+foreman notify summary             # print the digest body to stdout (preview)
+foreman notify summary --now       # send it now on every channel routed for summary
+foreman notify summary --hours 24  # widen the window from the default 12h
+```
+
+The scheduler runs **only when `foreman start` is running** (it lives next to the approval bridge). Restart-after-target catches up — if you boot Foreman at 21:00 and the schedule is `daily 20:00`, you get today's digest on the next tick.
+
+---
+
 ## 4. CLI
 
 ```bash
-foreman notify status                  # enabled channels + last 5 notifications
-foreman notify enable <channel>        # toggle channel on (telegram only for now)
+foreman notify status                  # enabled channels + last 5 notifications + active silence/mute
+foreman notify enable <channel>        # toggle channel on (telegram / webhook / system)
 foreman notify disable <channel>       # toggle channel off (keeps credentials)
-foreman notify test telegram           # send a test alert
+foreman notify test <channel>          # send a test alert (bypasses routing)
 
-# Coming in C11a-2 / C11b / C11c
+foreman notify silence 4h              # mute non-critical for 4 hours
+foreman notify unsilence               # clear active silence window
+foreman notify mute <agent>            # don't alert about a specific source agent
+foreman notify unmute <agent>          # re-enable alerts for the agent
+foreman notify summary                 # print today's digest to stdout
+foreman notify summary --now           # send today's digest now on every routed channel
+foreman notify summary --hours <n>     # widen the digest window (default 12)
+
+# Coming in C11b-2
 foreman notify route critical --channels=telegram,slack
 foreman notify timeout critical --seconds=120
-foreman notify silence 4h              # mute non-critical for 4 hours
-foreman notify summary --now           # force-send today's digest
-foreman notify mute hermes             # don't alert about this agent
 ```
 
 ---
@@ -247,9 +294,9 @@ C11a-2 ships the **`NotificationBridge`** — the missing wire from `onAnyDecisi
 |---|---|---|
 | C11a-1 | Foundation: notify.yaml + NotificationService + TelegramChannel + CLI + migration + doctor | shipped |
 | C11a-2 | Mediator wire: NotificationBridge bridges bus ↔ channels; OOB tap unblocks the agent; "resolved elsewhere" update on race | shipped |
-| **C11b-1** (this) | Webhook (HMAC-signed outbound) + System (macOS osascript / Linux notify-send) channels | shipped |
-| C11b-2 | Discord (interactive components) + Slack (Block Kit, socket mode) — bidirectional channels | follow-up |
-| C11c | Daily digest scheduler + silence / mute commands | follow-up |
+| C11b-1 | Webhook (HMAC-signed outbound) + System (macOS osascript / Linux notify-send) channels | shipped |
+| **C11c** (this) | Daily digest scheduler + silence / mute commands + state persistence | shipped |
+| C11b-2 | Discord (interactive components) + Slack (Block Kit, socket mode) — bidirectional channels | last slice |
 
 ---
 
