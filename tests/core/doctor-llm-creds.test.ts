@@ -106,4 +106,75 @@ credentials:
     expect(r.status).toBe('ok')
     expect(r.message).toContain('credentials present')
   })
+
+  // #307 — prefix sanity check catches the round 2 footgun (OpenAI key
+  // pasted into Anthropic slot). Provider catalog supplies the expected
+  // prefix; mismatch surfaces as warn with a "rotate" hint.
+  describe('prefix sanity check', () => {
+    function writeLlmYaml(provider: 'anthropic' | 'openai' | 'gemini') {
+      const secretName = `${provider}-key`
+      writeFileSync(
+        join(tmp, 'llm.yaml'),
+        `enabled: true
+provider: ${provider}
+model: m
+credentials:
+  ${provider}:
+    secret_name: ${secretName}
+`,
+        'utf-8',
+      )
+      return secretName
+    }
+
+    it('warns when an OpenAI sk-proj- key sits in the Anthropic slot', () => {
+      runInit()
+      const secretName = writeLlmYaml('anthropic')
+      const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
+      store.add(secretName, 'sk-proj-actually-an-openai-key')
+      const r = checkLlmCredentials()
+      expect(r.status).toBe('warn')
+      expect(r.message).toMatch(/doesn't match anthropic key format/)
+      expect(r.message).toContain('sk-ant-')
+      expect(r.remediation).toContain('foreman secrets rotate anthropic-key')
+    })
+
+    it('warns when an Anthropic sk-ant- key sits in the OpenAI slot', () => {
+      runInit()
+      const secretName = writeLlmYaml('openai')
+      const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
+      store.add(secretName, 'sk-ant-actually-an-anthropic-key')
+      const r = checkLlmCredentials()
+      expect(r.status).toBe('warn')
+      expect(r.message).toMatch(/doesn't match openai key format/)
+    })
+
+    it('ok when an OpenAI sk-proj- key sits in the OpenAI slot (prefix sk-)', () => {
+      runInit()
+      const secretName = writeLlmYaml('openai')
+      const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
+      store.add(secretName, 'sk-proj-real-openai-key')
+      const r = checkLlmCredentials()
+      expect(r.status).toBe('ok')
+    })
+
+    it('ok when a Gemini AIza key sits in the Gemini slot', () => {
+      runInit()
+      const secretName = writeLlmYaml('gemini')
+      const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
+      store.add(secretName, 'AIzaSyDfoobar')
+      const r = checkLlmCredentials()
+      expect(r.status).toBe('ok')
+    })
+
+    it('warns when a random string sits in any slot (catches unset / placeholder values)', () => {
+      runInit()
+      const secretName = writeLlmYaml('anthropic')
+      const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
+      store.add(secretName, 'placeholder-paste-the-real-key-here')
+      const r = checkLlmCredentials()
+      expect(r.status).toBe('warn')
+      expect(r.message).toMatch(/doesn't match anthropic key format/)
+    })
+  })
 })

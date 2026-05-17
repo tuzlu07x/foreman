@@ -12,6 +12,8 @@ import { legacyHasInterestingFiles } from "../utils/migrate-config.js";
 import { EventBus, type ForemanEventMap } from "./event-bus.js";
 import { getBudgetStatus } from "./llm/budget.js";
 import { loadLlmConfig } from "./llm/config.js";
+import { loadActiveProviders } from "./registry-catalog.js";
+import { detectProviderByPrefix } from "./key-prefix-detect.js";
 import { SecretStore } from "./secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { RegistryService } from "./registry.js";
@@ -445,6 +447,29 @@ export function checkLlmCredentials(): CheckResult {
         remediation: `Run \`foreman secrets add ${secretName}\` — verification + smart-report will silently fall back to heuristic-only until this is set.`,
       };
     }
+    // Prefix sanity check (#307) — catches the round 2 footgun where a user
+    // pasted an OpenAI sk-proj- key into the Anthropic slot. We resolve the
+    // expected prefix via the provider catalog (the source of truth set in
+    // #291), then use the shared most-specific-wins detector so that
+    // "sk-ant-..." resolves to Anthropic, not OpenAI's sub-prefix "sk-".
+    // Skipped silently when the catalog opts out (key_prefix: null /
+    // missing — Ollama, custom).
+    const expectedPrefix = lookupExpectedPrefix(config.provider);
+    if (expectedPrefix) {
+      const value = store.get(secretName);
+      const detected = detectProviderByPrefix(value);
+      if (!detected || detected.providerId !== config.provider) {
+        const matchedNote = detected
+          ? ` (value looks like a ${detected.provider} key)`
+          : "";
+        return {
+          name: "llm_credentials",
+          status: "warn",
+          message: `secret "${secretName}" doesn't match ${config.provider} key format (expected prefix "${expectedPrefix}")${matchedNote}`,
+          remediation: `Run \`foreman secrets rotate ${secretName}\` and paste a ${config.provider} key. If this is a private fork/proxy with non-standard keys, ignore this warning.`,
+        };
+      }
+    }
     return {
       name: "llm_credentials",
       status: "ok",
@@ -456,6 +481,17 @@ export function checkLlmCredentials(): CheckResult {
       status: "warn",
       message: `couldn't check secret store: ${err instanceof Error ? err.message : String(err)}`,
     };
+  }
+}
+
+function lookupExpectedPrefix(providerId: string): string | null {
+  try {
+    const { doc } = loadActiveProviders();
+    const entry = doc.providers.find((p) => p.id === providerId);
+    return entry?.key_prefix ?? null;
+  } catch {
+    // Catalog unreadable — skip prefix check rather than fail the doctor.
+    return null;
   }
 }
 
