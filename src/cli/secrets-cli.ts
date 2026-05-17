@@ -214,7 +214,26 @@ secretsCommand
   .action(async (name: string, options: RemoveOptions) => {
     const store = getStore();
     try {
+      // Validate existence BEFORE the confirmation prompt. Two reasons (#260):
+      // 1. A "doesn't exist" error path that only fires AFTER a user confirms
+      //    a phantom removal is bad UX.
+      // 2. In non-TTY contexts the prompt auto-cancels (see below), so
+      //    `remove never-existed` would print "(cancelled)" instead of the
+      //    real "no secret named" error and exit 0, masking the failure.
+      if (!store.exists(name)) {
+        throw new SecretNotFoundError(name);
+      }
       if (!options.yes) {
+        // In non-TTY (CI, piped) contexts `promptYesNo` returns false without
+        // ever showing a prompt — silently cancelling. Better to fail loudly
+        // and tell the user to pass --yes (#260).
+        if (!process.stdin.isTTY) {
+          console.error(
+            red("error: ") +
+              `refusing to remove "${name}" in a non-interactive context. Pass --yes to confirm.`,
+          );
+          process.exit(1);
+        }
         const ok = await promptYesNo(`Remove secret "${name}"? [y/N]`);
         if (!ok) {
           console.log("(cancelled)");
