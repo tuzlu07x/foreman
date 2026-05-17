@@ -17,7 +17,22 @@
         "Copy the token BotFather sends"
       ],
       "used_by_agents": ["hermes", "openclaw"],
-      "open_url_hotkey": true
+      "open_url_hotkey": true,
+      "extra_secrets": [
+        {
+          "name": "telegram-chat-id",
+          "description": "Where the bot should send messages (your DM or a group chat).",
+          "format_hint": "-1001234567890 (group) or 123456789 (DM)",
+          "where_to_get": null,
+          "setup_steps": [
+            "Open Telegram and send any message to your bot",
+            "In a browser open: https://api.telegram.org/bot<TOKEN>/getUpdates",
+            "Find the `chat.id` field in the JSON response",
+            "Paste the id here (negative numbers are groups, positive are DMs)"
+          ],
+          "optional": true
+        }
+      ]
     },
     {
       "id": "discord",

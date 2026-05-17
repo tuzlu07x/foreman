@@ -23,6 +23,7 @@ function freshService(): Record<string, unknown> {
     setup_steps: ["Step one", "Step two"],
     used_by_agents: ["hermes"],
     open_url_hotkey: true,
+    extra_secrets: [],
   };
 }
 
@@ -151,6 +152,7 @@ describe("validateServicesAgainstAgents", () => {
         setup_steps: ["one"],
         used_by_agents: agents,
         open_url_hotkey: false,
+        extra_secrets: [],
       })),
     };
   }

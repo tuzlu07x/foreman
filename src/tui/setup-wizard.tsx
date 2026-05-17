@@ -270,6 +270,59 @@ export function applyServicesPickerSubmit(
   return { nextPhase: "values", selected: values };
 }
 
+// One value-entry prompt during Step 3. Each selected service expands into
+// one prompt for its primary secret plus one per `extra_secrets` entry, so
+// a service like Telegram (bot token + chat id) emits two prompts (#220).
+export interface ServicePrompt {
+  serviceId: string;
+  secretName: string;
+  kind: "primary" | "extra";
+  /** Display label shown in the header / summary lists. */
+  label: string;
+  whereToGet: string | null;
+  formatHint: string;
+  setupSteps: string[];
+  /** Skippable? Primary defaults to required (kept as today); extras default
+   *  to optional so a fresh user can configure later from the Secrets page. */
+  optional: boolean;
+}
+
+export function buildServicePromptList(
+  serviceIds: string[],
+  catalog: ServiceEntry[],
+): ServicePrompt[] {
+  const out: ServicePrompt[] = [];
+  for (const id of serviceIds) {
+    const svc = catalog.find((s) => s.id === id);
+    if (!svc) continue;
+    out.push({
+      serviceId: svc.id,
+      secretName: svc.secret_name,
+      kind: "primary",
+      label: svc.name,
+      whereToGet: svc.where_to_get,
+      formatHint: svc.format_hint,
+      setupSteps: svc.setup_steps,
+      // Primary is still skippable today (user can Enter on empty to bypass)
+      // so we keep optional=true to match the existing UX message.
+      optional: true,
+    });
+    for (const extra of svc.extra_secrets ?? []) {
+      out.push({
+        serviceId: svc.id,
+        secretName: extra.name,
+        kind: "extra",
+        label: extra.description ?? `${svc.name} — ${extra.name}`,
+        whereToGet: extra.where_to_get ?? null,
+        formatHint: extra.format_hint,
+        setupSteps: extra.setup_steps,
+        optional: extra.optional,
+      });
+    }
+  }
+  return out;
+}
+
 export interface ServiceValueSubmitInput {
   serviceId: string;
   value: string;
@@ -1120,45 +1173,57 @@ export function SetupWizard({
 
   // ---------------- Services — value prompts ----------------
   if (currentStep === "services" && servicesPhase === "values") {
-    const serviceId = servicesSelected[serviceIdx];
-    if (!serviceId) {
+    // Flatten selected services → one prompt per (primary + each extra
+    // secret). Telegram emits two prompts: bot token, then chat id (#220).
+    const servicePrompts = buildServicePromptList(
+      servicesSelected,
+      serviceCatalog,
+    );
+    const prompt = servicePrompts[serviceIdx];
+    if (!prompt) {
       setServicesPhase("summary");
       return <Text>…</Text>;
     }
-    const service = serviceCatalog.find((s) => s.id === serviceId);
+    const service = serviceCatalog.find((s) => s.id === prompt.serviceId);
     if (!service) {
       setServicesPhase("summary");
       return <Text>…</Text>;
     }
-    const progress = `(${serviceIdx + 1}/${servicesSelected.length})`;
+    const progress = `(${serviceIdx + 1}/${servicePrompts.length})`;
+    const headerLabel =
+      prompt.kind === "extra"
+        ? `${service.name} — ${prompt.secretName}`
+        : service.name;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <Text bold>
-          Step 3 / 4 — Services (token {serviceIdx + 1} of{" "}
-          {servicesSelected.length})
+          Step 3 / 4 — Services (prompt {serviceIdx + 1} of{" "}
+          {servicePrompts.length})
         </Text>
         <Text>
           {theme.symbols.bullet} Setting up{" "}
           <Text bold color={theme.accent.primary}>
-            {service.name}
+            {headerLabel}
           </Text>{" "}
           <Text color={theme.fg.muted}>{progress}</Text>
         </Text>
-        <Text color={theme.fg.muted}>
-          Get yours at:{" "}
-          <Text color={theme.accent.primary}>
-            {service.open_url_hotkey
-              ? osc8(service.where_to_get)
-              : service.where_to_get}
+        {prompt.whereToGet ? (
+          <Text color={theme.fg.muted}>
+            Get yours at:{" "}
+            <Text color={theme.accent.primary}>
+              {service.open_url_hotkey
+                ? osc8(prompt.whereToGet)
+                : prompt.whereToGet}
+            </Text>
           </Text>
-        </Text>
+        ) : null}
         <Text color={theme.fg.muted}>
           Expected format:{" "}
-          <Text color={theme.accent.primary}>{service.format_hint}</Text>
+          <Text color={theme.accent.primary}>{prompt.formatHint}</Text>
         </Text>
-        {service.setup_steps.length > 0 && (
+        {prompt.setupSteps.length > 0 && (
           <Box flexDirection="column">
-            {service.setup_steps.map((line, i) => (
+            {prompt.setupSteps.map((line, i) => (
               <Text key={i} color={theme.fg.muted}>
                 {"  "}
                 {i + 1}. {line}
@@ -1173,32 +1238,32 @@ export function SetupWizard({
           <Text color={theme.accent.warning}>⚠ {servicesWarning}</Text>
         )}
         <PasswordInput
-          // Remount per service so the previous token doesn't bleed into the next prompt (#219).
-          key={`service:${serviceId}`}
+          // Remount per secret so the previous token doesn't bleed into the next prompt (#219).
+          key={`service:${prompt.secretName}`}
           placeholder="…"
           onSubmit={(value) => {
             const result = applyServiceValueSubmit({
-              serviceId,
+              serviceId: prompt.secretName,
               value,
               currentIdx: serviceIdx,
-              totalSelected: servicesSelected.length,
+              totalSelected: servicePrompts.length,
             });
             if (result.shouldSave) {
               try {
-                if (!services.secretStore.exists(service.secret_name)) {
-                  services.secretStore.add(service.secret_name, value);
+                if (!services.secretStore.exists(prompt.secretName)) {
+                  services.secretStore.add(prompt.secretName, value);
                 } else {
-                  services.secretStore.rotate(service.secret_name, value);
+                  services.secretStore.rotate(prompt.secretName, value);
                 }
-                setServicesSaved((prev) => [...prev, service.secret_name]);
+                setServicesSaved((prev) => [...prev, prompt.secretName]);
               } catch (err) {
                 setServicesWarning(
-                  `failed to store ${service.secret_name}: ${err instanceof Error ? err.message : String(err)}`,
+                  `failed to store ${prompt.secretName}: ${err instanceof Error ? err.message : String(err)}`,
                 );
                 return;
               }
             } else {
-              setServicesSkipped((prev) => [...prev, service.secret_name]);
+              setServicesSkipped((prev) => [...prev, prompt.secretName]);
             }
             setServicesWarning(result.warning);
             setServiceIdx(result.nextIdx);

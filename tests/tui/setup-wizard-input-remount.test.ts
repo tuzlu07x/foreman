@@ -41,9 +41,11 @@ describe('setup wizard input remount keys (#219)', () => {
     )
   })
 
-  it('service value PasswordInput is keyed by serviceId', () => {
+  it('service value PasswordInput is keyed by per-prompt secret name', () => {
+    // #220 expanded the per-service prompt into a list (primary + extras),
+    // so the key must vary per secret, not per service id.
     expect(source).toMatch(
-      /<PasswordInput\s+[^>]*?key=\{\`service:\$\{serviceId\}\`\}/,
+      /<PasswordInput\s+[^>]*?key=\{\`service:\$\{prompt\.secretName\}\`\}/,
     )
   })
 
