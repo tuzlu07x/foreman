@@ -13,6 +13,16 @@ import {
 import { SystemNotifyChannel } from '../core/notification/channels/system.js'
 import { TelegramChannel } from '../core/notification/channels/telegram.js'
 import { WebhookChannel } from '../core/notification/channels/webhook.js'
+import {
+  defaultNotifyState,
+  isAgentMuted,
+  isSilenced,
+  loadNotifyState,
+  parseDuration,
+  saveNotifyState,
+  type NotifyState,
+} from '../core/notification/notify-state.js'
+import { generateSummary } from '../core/notification/summary-generator.js'
 import type {
   ChannelId,
   Notification,
@@ -60,6 +70,19 @@ notifyCommand
           ? dim(` · timeout ${route.timeout_seconds}s → ${route.default_action ?? 'deny'}`)
           : ''
       console.log(`  ${level.padEnd(13)} → ${channelList}${tag}`)
+    }
+
+    const state = loadNotifyState(paths.notifyStatePath)
+    if (isSilenced(state) || state.mutedAgents.length > 0) {
+      console.log('')
+      console.log(orange('runtime state'))
+      if (isSilenced(state)) {
+        const until = new Date(state.silencedUntil!).toISOString().slice(0, 19)
+        console.log(`  ${orange('silenced')} until ${until} UTC ${dim('(critical alerts still fire)')}`)
+      }
+      if (state.mutedAgents.length > 0) {
+        console.log(`  ${orange('muted agents')}: ${state.mutedAgents.join(', ')}`)
+      }
     }
 
     const db = getDb()
@@ -127,6 +150,140 @@ notifyCommand
   })
 
 notifyCommand
+  .command('silence <duration>')
+  .description(
+    'Mute non-critical notifications for a window (e.g. 30m, 4h, 1d). Critical alerts still fire.',
+  )
+  .action((duration: string) => {
+    requireInitialised()
+    const paths = getForemanPaths()
+    const ms = parseDuration(duration)
+    if (ms === null) {
+      console.error(
+        red('error: ') +
+          `unparseable duration: "${duration}" — try 30m, 4h, 1d`,
+      )
+      process.exit(1)
+    }
+    const state = loadNotifyState(paths.notifyStatePath)
+    state.silencedUntil = Date.now() + ms
+    saveNotifyState(paths.notifyStatePath, state)
+    const until = new Date(state.silencedUntil).toISOString().slice(0, 19)
+    console.log(
+      `${green('✓')} non-critical notifications silenced until ${until} UTC`,
+    )
+  })
+
+notifyCommand
+  .command('unsilence')
+  .description('Clear the active silence window')
+  .action(() => {
+    requireInitialised()
+    const paths = getForemanPaths()
+    const state = loadNotifyState(paths.notifyStatePath)
+    if (state.silencedUntil === null || state.silencedUntil <= Date.now()) {
+      console.log(dim('(no active silence window)'))
+      return
+    }
+    state.silencedUntil = null
+    saveNotifyState(paths.notifyStatePath, state)
+    console.log(`${green('✓')} silence cleared — non-critical alerts back on`)
+  })
+
+notifyCommand
+  .command('mute <agent>')
+  .description("Don't alert about any tool call from this source agent")
+  .action((agent: string) => {
+    requireInitialised()
+    const paths = getForemanPaths()
+    const state = loadNotifyState(paths.notifyStatePath)
+    if (state.mutedAgents.includes(agent)) {
+      console.log(dim(`(${agent} is already muted)`))
+      return
+    }
+    state.mutedAgents.push(agent)
+    saveNotifyState(paths.notifyStatePath, state)
+    console.log(`${green('✓')} ${agent} muted — won't trigger OOB alerts`)
+  })
+
+notifyCommand
+  .command('unmute <agent>')
+  .description('Re-enable alerts for a previously muted source agent')
+  .action((agent: string) => {
+    requireInitialised()
+    const paths = getForemanPaths()
+    const state = loadNotifyState(paths.notifyStatePath)
+    if (!state.mutedAgents.includes(agent)) {
+      console.log(dim(`(${agent} was not muted)`))
+      return
+    }
+    state.mutedAgents = state.mutedAgents.filter((a) => a !== agent)
+    saveNotifyState(paths.notifyStatePath, state)
+    console.log(`${green('✓')} ${agent} unmuted — alerts back on`)
+  })
+
+notifyCommand
+  .command('summary')
+  .description('Build a digest of recent activity and (optionally) send it now')
+  .option('--now', 'Send the digest immediately on every enabled channel', false)
+  .option('--hours <n>', 'Window in hours (default 12)', (v) => parseInt(v, 10), 12)
+  .action(async (options: { now?: boolean; hours: number }) => {
+    requireInitialised()
+    const paths = getForemanPaths()
+    const db = getDb()
+    const payload = generateSummary(db, {
+      windowMs: options.hours * 3_600_000,
+    })
+
+    if (!options.now) {
+      console.log(payload.title)
+      console.log('')
+      console.log(payload.body)
+      closeDb()
+      return
+    }
+
+    const config = loadNotifyConfig(paths.notifyConfigPath)
+    const channelIds = config.routing.summary?.channels ?? []
+    if (channelIds.length === 0) {
+      console.error(
+        red('error: ') +
+          'routing.summary has no channels — edit notify.yaml first',
+      )
+      closeDb()
+      process.exit(1)
+    }
+
+    let sent = 0
+    for (const channelId of channelIds) {
+      const ch = await buildChannelForCli(channelId, config)
+      if (!ch) continue
+      try {
+        await ch.send({ id: `summary-${Date.now()}`, ...payload })
+        console.log(`${green('✓')} summary sent via ${channelId}`)
+        sent += 1
+      } catch (err) {
+        console.error(
+          red('error: ') +
+            `${channelId} failed: ${err instanceof Error ? err.message : String(err)}`,
+        )
+      } finally {
+        try {
+          await ch.shutdown()
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    if (sent === 0) {
+      console.error(red('error: ') + 'no channels delivered the summary')
+      closeDb()
+      process.exit(1)
+    }
+    closeDb()
+  })
+
+notifyCommand
   .command('test <channel>')
   .description('Send a test notification to verify channel credentials')
   .action(async (channel: string) => {
@@ -140,20 +297,7 @@ notifyCommand
       )
       process.exit(1)
     }
-    let ch: NotificationChannel | null = null
-    if (channel === 'telegram') {
-      ch = await buildTelegramChannel(config)
-    } else if (channel === 'webhook') {
-      ch = await buildWebhookChannel(config)
-    } else if (channel === 'system') {
-      ch = new SystemNotifyChannel()
-    } else {
-      console.error(
-        red('error: ') +
-          `${channel} channel ships in C11b-2 (#235) — only telegram / webhook / system are implemented`,
-      )
-      process.exit(2)
-    }
+    const ch = await buildChannelForCli(channel, config)
     if (!ch) process.exit(1)
 
     const test: Notification = {
@@ -228,6 +372,20 @@ function setChannel(
 
 function formatTime(ms: number): string {
   return new Date(ms).toISOString().replace('T', ' ').slice(0, 19)
+}
+
+async function buildChannelForCli(
+  channelId: string,
+  config: Awaited<ReturnType<typeof loadNotifyConfig>>,
+): Promise<NotificationChannel | null> {
+  if (channelId === 'telegram') return buildTelegramChannel(config)
+  if (channelId === 'webhook') return buildWebhookChannel(config)
+  if (channelId === 'system') return new SystemNotifyChannel()
+  console.error(
+    red('error: ') +
+      `${channelId} channel ships in C11b-2 (#235) — only telegram / webhook / system are implemented`,
+  )
+  return null
 }
 
 async function buildWebhookChannel(

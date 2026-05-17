@@ -1,5 +1,10 @@
 import { bus as defaultBus, type EventBus, type ForemanEventMap } from '../event-bus.js'
 import { NotificationService } from './notification-service.js'
+import {
+  isAgentMuted,
+  isSilenced,
+  type NotifyState,
+} from './notify-state.js'
 import { renderApprovalNotification, renderResolvedFooter } from './render.js'
 import type { ChannelId, UserDecision } from './types.js'
 
@@ -19,10 +24,15 @@ import type { ChannelId, UserDecision } from './types.js'
 
 export interface NotificationBridgeOptions {
   bus?: EventBus<ForemanEventMap>
+  /** Callback that returns the current notify-state (silence + mutes). The
+   *  bridge re-reads on every dispatch so `foreman notify silence 4h`
+   *  takes effect without a process restart. */
+  getState?: () => NotifyState
 }
 
 export class NotificationBridge {
   private readonly bus: EventBus<ForemanEventMap>
+  private readonly getState: () => NotifyState
   private offRequested: (() => void) | null = null
   private offResolved: (() => void) | null = null
   /** Maps requestId → notificationIds we've sent, so the resolved handler
@@ -34,6 +44,8 @@ export class NotificationBridge {
     opts: NotificationBridgeOptions = {},
   ) {
     this.bus = opts.bus ?? defaultBus
+    this.getState =
+      opts.getState ?? (() => ({ silencedUntil: null, mutedAgents: [] }))
   }
 
   async start(): Promise<void> {
@@ -84,6 +96,13 @@ export class NotificationBridge {
     req: ForemanEventMap['approval:requested'],
   ): Promise<void> {
     const payload = renderApprovalNotification(req)
+    const state = this.getState()
+    // Skip muted source agents entirely — they never trigger OOB alerts.
+    if (isAgentMuted(state, req.sourceAgent)) return
+    // Silence window: drop everything except critical (the whole point of
+    // silencing is to stop being woken up for medium/low risks).
+    if (isSilenced(state) && payload.level !== 'critical') return
+
     const result = await this.service.send(payload.level, payload)
 
     // Track every notification id we created for this request so a later
