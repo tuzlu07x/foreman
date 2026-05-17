@@ -87,10 +87,17 @@ export interface DividerProps {
 
 /** Horizontal rule in `fg.muted` — used under page headers and between
  *  sections. Defaults to 60 characters which fits comfortably in both the
- *  dashboard panels and full-page layouts. */
+ *  dashboard panels and full-page layouts.
+ *
+ *  Width is clamped to [1, 200] so callers can pass derived values
+ *  (e.g. `Math.min(60, termCols - 2)`) without worrying about negatives
+ *  or NaN crashing the render — `String.repeat` throws on those (#282). */
 export function Divider({ width = 60 }: DividerProps): JSX.Element {
+  const safeWidth = Number.isFinite(width)
+    ? Math.max(1, Math.min(200, Math.floor(width)))
+    : 60;
   const ch = "─";
-  return <Text color={theme.fg.muted}>{ch.repeat(width)}</Text>;
+  return <Text color={theme.fg.muted}>{ch.repeat(safeWidth)}</Text>;
 }
 
 export interface SectionGapProps {
