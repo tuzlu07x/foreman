@@ -9,7 +9,8 @@ import {
   type InspectLine,
   type LineColor,
 } from '../inspect-content.js'
-import { doubleBorder, riskColor, theme } from '../theme.js'
+import { borderForRisk, riskColor, theme } from '../theme.js'
+import { Divider } from './typography.js'
 
 function bucketColor(bucket: RiskBucket | undefined): string {
   // Default to medium (warning) when the bucket is missing — pre-#232 rows
@@ -46,20 +47,43 @@ export function InspectView({
   const atBottom = clamped + VISIBLE_LINES >= total
 
   const color = bucketColor(request.riskBucket)
+  // Border style tracks severity (#234 UX-6 / UX-11): bold for critical,
+  // double for high, single for medium / low. Same visual language as the
+  // approval modal so the user reads severity consistently.
+  const border = borderForRisk(request.riskBucket ?? 'medium')
+  // One-line header summarising the call: source → target · tool · score.
+  const target = request.targetAgent
+    ? `${request.sourceAgent} → ${request.targetAgent}`
+    : request.sourceAgent
+  const tool = request.targetTool ?? '(no tool)'
   return (
     <Box
       flexDirection="column"
-      borderStyle={doubleBorder()}
+      borderStyle={border}
       borderColor={color}
       paddingX={2}
     >
       <Box justifyContent="space-between">
         <Text bold color={color}>
-          {theme.symbols.warn} Inspecting{request.riskBucket ? ` · ${request.riskBucket}` : ''}
+          {theme.symbols.warn} Inspecting
+          {request.riskBucket ? ` · ${request.riskBucket}` : ''}
         </Text>
         <Text color={theme.fg.muted}>
           {clamped + 1}–{Math.min(clamped + VISIBLE_LINES, total)} / {total}
         </Text>
+      </Box>
+      <Box>
+        <Text color={theme.fg.muted}>
+          <Text color={theme.accent.primary}>{target}</Text>
+          {' · '}
+          <Text color={theme.fg.emphasis}>{tool}</Text>
+          {' · score '}
+          <Text bold color={color}>{request.riskScore}</Text>
+          /100
+        </Text>
+      </Box>
+      <Box marginTop={1}>
+        <Divider width={Math.min(60, 80)} />
       </Box>
 
       <Box flexDirection="column" marginTop={1}>
@@ -69,7 +93,7 @@ export function InspectView({
       </Box>
 
       <Box marginTop={1}>
-        <Text color={theme.fg.muted}>{'─'.repeat(60)}</Text>
+        <Divider />
       </Box>
       <Box justifyContent="space-between">
         <Text color={theme.fg.muted}>

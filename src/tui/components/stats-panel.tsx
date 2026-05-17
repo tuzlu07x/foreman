@@ -2,6 +2,15 @@ import { Box, Text } from "ink";
 import { percentBar, percentLabel } from "../format.js";
 import { singleBorder, theme } from "../theme.js";
 import { useDashboardState } from "../use-dashboard-state.js";
+import { PageHeader } from "./typography.js";
+
+// =============================================================================
+// Dashboard stats tile (#234 UX-10)
+// =============================================================================
+//
+// Two-section card: today's request stats up top (big colored numbers + per-
+// outcome bars), session count below. The big numbers + per-status colour
+// give the user "is anything broken?" at a glance without reading labels.
 
 export interface StatsPanelProps {
   width?: string;
@@ -17,10 +26,28 @@ export function StatsPanel({ width }: StatsPanelProps): JSX.Element {
       borderDimColor
       paddingX={1}
     >
-      <Text color={theme.accent.primary}>Today</Text>
-      <Text>
-        Requests <Text bold>{todayStats.total}</Text>
-      </Text>
+      <PageHeader title="Today" right={`${todayStats.total} requests`} noDivider />
+
+      <Box flexDirection="row" marginTop={1}>
+        <BigStat
+          label="allowed"
+          value={todayStats.allowed}
+          color={theme.accent.success}
+        />
+        <Box width={2} />
+        <BigStat
+          label="denied"
+          value={todayStats.denied}
+          color={theme.accent.danger}
+        />
+        <Box width={2} />
+        <BigStat
+          label="ask"
+          value={todayStats.pending}
+          color={theme.accent.warning}
+        />
+      </Box>
+
       <Box flexDirection="column" marginTop={1}>
         <Bar
           label="Allowed"
@@ -44,10 +71,29 @@ export function StatsPanel({ width }: StatsPanelProps): JSX.Element {
       <Box flexDirection="column" marginTop={1}>
         <Text color={theme.accent.primary}>Sessions</Text>
         <Text>
-          <Text bold>{activeSessions}</Text>{" "}
+          <Text bold color={theme.fg.emphasis}>
+            {activeSessions}
+          </Text>{" "}
           <Text color={theme.fg.muted}>active</Text>
         </Text>
       </Box>
+    </Box>
+  );
+}
+
+interface BigStatProps {
+  label: string;
+  value: number;
+  color: string;
+}
+
+function BigStat({ label, value, color }: BigStatProps): JSX.Element {
+  return (
+    <Box flexDirection="column">
+      <Text bold color={color}>
+        {value.toString()}
+      </Text>
+      <Text color={theme.fg.muted}>{label}</Text>
     </Box>
   );
 }
