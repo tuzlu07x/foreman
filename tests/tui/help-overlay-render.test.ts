@@ -37,10 +37,10 @@ describe('HelpOverlay — new 3-column grid layout', () => {
     expect(out).toContain('Providers / Services')
   })
 
-  it('renders extra groups on the third row (Secrets / Settings / Chat)', () => {
+  it('renders extra groups on the third row (Secrets / Settings / Mediator test)', () => {
     expect(out).toContain('Secrets page')
     expect(out).toContain('Settings page')
-    expect(out).toContain('Chat / test console')
+    expect(out).toContain('Mediator test console')
   })
 
   it('lists the modal hotkeys including the new [t]echnical toggle (#232)', () => {
