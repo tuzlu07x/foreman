@@ -34,6 +34,7 @@ function makeRequest(
     ],
     riskBucket: 'high',
     llmVerification: null,
+    securityReport: null,
     ...overrides,
   }
 }
