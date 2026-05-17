@@ -3,6 +3,11 @@ import { Command } from "commander";
 import { render } from "ink";
 import React from "react";
 import { bus } from "../core/event-bus.js";
+import {
+  loadActiveRegistry,
+  RegistryNotFoundError,
+  RegistryValidationError,
+} from "../core/registry-catalog.js";
 import { RegistryService } from "../core/registry.js";
 import { SecretStore } from "../core/secret-store.js";
 import { closeDb, getDb } from "../db/client.js";
@@ -52,6 +57,22 @@ export const setupCommand = new Command("setup")
     if (options.reset) {
       resetSetupState();
     }
+    // Pre-flight: the wizard's useMemo(loadActiveRegistry) call throws
+    // synchronously during React render if the registry file fails to parse
+    // — and Ink surfaces that as a bare React stacktrace, which is awful UX
+    // for the user's first contact with Foreman (#276). Catch the error
+    // here and print a friendly message + remediation hints instead.
+    try {
+      loadActiveRegistry();
+    } catch (err) {
+      console.error(red("error: ") + describeRegistryError(err));
+      console.error("  → Run `foreman registry validate` to inspect.");
+      console.error(
+        "  → Run `foreman registry update --force` if the cached copy is stale.",
+      );
+      console.error("  → Or reinstall: npm install -g foreman-agent@latest");
+      process.exit(1);
+    }
     const initialState = options.resume ? loadSetupState() : freshState();
     const db = getDb();
     const registry = new RegistryService(db, bus);
@@ -80,3 +101,25 @@ export const setupCommand = new Command("setup")
     await instance.waitUntilExit();
     closeDb();
   });
+
+// Render a registry-load failure in plain prose, with per-issue lines when
+// it's a schema validation error. Used by `foreman setup`'s pre-flight (#276).
+function describeRegistryError(err: unknown): string {
+  if (err instanceof RegistryValidationError) {
+    const head = `${err.message}`;
+    if (err.issues.length === 0) return head;
+    const lines = err.issues
+      .slice(0, 6)
+      .map((i) => `\n  - ${i.path || "<root>"}: ${i.message}`)
+      .join("");
+    const more =
+      err.issues.length > 6
+        ? `\n  (+ ${err.issues.length - 6} more issues)`
+        : "";
+    return `${head}${lines}${more}`;
+  }
+  if (err instanceof RegistryNotFoundError) {
+    return err.message;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
