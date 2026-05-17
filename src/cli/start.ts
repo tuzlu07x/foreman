@@ -45,6 +45,8 @@ import { WebhookChannel } from "../core/notification/channels/webhook.js";
 import { BudgetAlertBridge } from "../core/llm/budget-alert-bridge.js";
 import { NotificationBridge } from "../core/notification/notification-bridge.js";
 import { NotificationService } from "../core/notification/notification-service.js";
+import { ForemanVoice } from "../core/notification/foreman-voice.js";
+import { PatternDetectionService } from "../core/pattern-detection-service.js";
 import {
   channelConfig,
   isChannelEnabled,
@@ -158,6 +160,20 @@ export function startForeman(
   const notificationBridge = notificationSetup?.bridge ?? null;
   const dailyScheduler = notificationSetup?.scheduler ?? null;
 
+  // #303 / #304 — ForemanVoice + pattern detection. Only started when the
+  // notify channel is configured (no proactive messages to send otherwise).
+  // ForemanVoice handles throttle + quiet-hours; PatternDetectionService
+  // ticks every 10 min looking for repeated-denial / burst / off-role
+  // clusters. Both shut down with the rest of the start lifecycle.
+  let voice: ForemanVoice | null = null;
+  let patternDetector: PatternDetectionService | null = null;
+  if (notificationSetup) {
+    voice = new ForemanVoice({ service: notificationSetup.service, bus });
+    voice.start();
+    patternDetector = new PatternDetectionService({ db, voice });
+    patternDetector.start();
+  }
+
   const bootInfo: BootInfo = {
     publicKey,
     policyRules: policy.list().length,
@@ -257,6 +273,8 @@ export function startForeman(
     }
     approvalBridge.stop();
     if (dailyScheduler) dailyScheduler.stop();
+    if (patternDetector) patternDetector.stop();
+    if (voice) voice.dispose();
     if (notificationBridge) {
       await notificationBridge.stop().catch(() => {
         /* best-effort cleanup */
@@ -333,7 +351,11 @@ function setupNotificationBridge(args: {
   secretStore: SecretStore;
   notifyConfigPath: string;
   notifyStatePath: string;
-}): { bridge: NotificationBridge; scheduler: DailyScheduler | null } | null {
+}): {
+  bridge: NotificationBridge;
+  scheduler: DailyScheduler | null;
+  service: NotificationService;
+} | null {
   let config;
   try {
     config = loadNotifyConfig(args.notifyConfigPath);
@@ -421,7 +443,7 @@ function setupNotificationBridge(args: {
     }
   }
 
-  return { bridge, scheduler };
+  return { bridge, scheduler, service };
 }
 
 // Returns true when the user appears to be a first-time user: no foreman home
