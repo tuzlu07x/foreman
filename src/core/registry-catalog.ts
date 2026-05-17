@@ -90,6 +90,22 @@ export const ProviderCatalogSchema = z.object({
 export type ProviderEntry = z.infer<typeof ProviderEntrySchema>;
 export type ProviderCatalog = z.infer<typeof ProviderCatalogSchema>;
 
+// Extra (non-primary) secrets a service may need — e.g. Telegram needs both
+// the bot token AND a chat id, Webhook needs URL + signing secret. The primary
+// secret is the service's auth credential (`secret_name`); extras are usually
+// destination / scope hints. Each extra is rendered as its own wizard prompt
+// after the primary, with its own setup steps. Default `optional: true` so a
+// fresh user can skip and configure later from the Secrets page (#220).
+export const ExtraServiceSecretSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().min(1).optional(),
+  format_hint: z.string().min(1),
+  where_to_get: z.string().url().nullable().optional(),
+  setup_steps: z.array(z.string().min(1)).min(1),
+  optional: z.boolean().default(true),
+});
+export type ExtraServiceSecret = z.infer<typeof ExtraServiceSecretSchema>;
+
 // Service entries are also non-strict so v0.2+ can add fields like
 // rate_limit_hints or oauth_redirect_uri without forcing a parser release.
 export const ServiceEntrySchema = z.object({
@@ -102,6 +118,10 @@ export const ServiceEntrySchema = z.object({
   setup_steps: z.array(z.string().min(1)).min(1),
   used_by_agents: z.array(z.string()),
   open_url_hotkey: z.boolean(),
+  /** Additional secrets prompted for after the primary one — e.g. Telegram
+   *  chat id, webhook signing secret. Optional; missing/empty array means the
+   *  primary secret is the only thing to ask for. */
+  extra_secrets: z.array(ExtraServiceSecretSchema).default([]),
 });
 
 export const ServiceCatalogSchema = z.object({

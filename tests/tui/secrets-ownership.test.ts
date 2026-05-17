@@ -31,6 +31,7 @@ function service(o: Partial<ServiceEntry>): ServiceEntry {
     setup_steps: ["one"],
     used_by_agents: [],
     open_url_hotkey: false,
+    extra_secrets: [],
     ...o,
   };
 }
