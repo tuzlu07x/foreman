@@ -53,6 +53,7 @@ import { applyForemanSoul } from "../core/foreman-soul.js";
 import { buildLlmConfigFromWizard } from "./setup-wizard-llm-persist.js";
 import { buildNotifyConfigFromWizard } from "./setup-wizard-notify-persist.js";
 import { validateKeyPaste } from "./setup-wizard-key-validation.js";
+import { computeAgentLlmStatuses } from "./setup-wizard-agent-llm-gating.js";
 import { useLayout } from "./hooks.js";
 import { osc8 } from "./osc8.js";
 import { RegistryService } from "../core/registry.js";
@@ -213,16 +214,31 @@ export interface AgentConfigPrompt {
 // Flattens per-agent config requirements into a linear list. Single-provider
 // agents (Claude Code, Codex) contribute only a note prompt; multi-provider
 // agents (Hermes, OpenClaw) contribute an LLM choice followed by a note.
+//
+// The `configuredProviderIds` arg (added in #297) gates the llm-choice
+// prompt — if the user has only one of the agent's compatible LLMs
+// configured, there's nothing to pick and we skip the prompt. When omitted,
+// the original "compat > 1 → ask" behaviour holds (used by callers / tests
+// that don't have wizard state).
 export function buildAgentConfigPromptList(
   agents: AgentEntry[],
   selectedIds: string[],
+  configuredProviderIds?: string[],
 ): AgentConfigPrompt[] {
   const prompts: AgentConfigPrompt[] = [];
+  const configured = configuredProviderIds
+    ? new Set(configuredProviderIds)
+    : null;
   for (const id of selectedIds) {
     const a = agents.find((x) => x.id === id);
     if (!a) continue;
     const compat = a.llm_compat ?? [];
-    if (compat.length > 1) prompts.push({ agentId: id, kind: "llm-choice" });
+    const choosable = configured
+      ? compat.filter((p) => configured.has(p))
+      : compat;
+    if (choosable.length > 1) {
+      prompts.push({ agentId: id, kind: "llm-choice" });
+    }
     prompts.push({ agentId: id, kind: "responsibility-note" });
   }
   return prompts;
@@ -1042,14 +1058,48 @@ export function SetupWizard({
 
   // ---------------- Agents — picker ----------------
   if (currentStep === "agents" && agentsPhase === "picker") {
-    const options = agentCatalog.map((a) => ({
-      value: a.id,
-      label: initialRegistered.includes(a.id)
-        ? `${a.name}  (installed) — ${a.tagline}`
-        : `${a.name} — ${a.tagline}`,
-    }));
-    const defaults =
-      initialRegistered.length > 0 ? initialRegistered : DEFAULT_AGENTS;
+    // Compute LLM gating state per agent so labels can surface "needs X key"
+    // hints and the post-submit handler can warn on picks that don't have
+    // their required LLM configured (#297). configuredProviderIds reflects
+    // what's in the vault right now — including keys added earlier in this
+    // wizard run via the providers step.
+    const pickerStoredNames = new Set(
+      services.secretStore.list().map((s) => s.name),
+    );
+    const pickerConfiguredProviders = configuredProviderIds(
+      providerCatalog,
+      pickerStoredNames,
+    );
+    const gatingStatuses = computeAgentLlmStatuses(
+      agentCatalog,
+      providerCatalog,
+      pickerConfiguredProviders,
+    );
+    const options = agentCatalog.map((a) => {
+      const status = gatingStatuses.get(a.id);
+      const installedSuffix = initialRegistered.includes(a.id)
+        ? "  (installed)"
+        : "";
+      const gateSuffix =
+        status?.state === "needs-llm" ? `  ⚠ ${status.hint}` : "";
+      return {
+        value: a.id,
+        label: `${a.name}${installedSuffix}${gateSuffix} — ${a.tagline}`,
+      };
+    });
+    // Don't pre-check agents whose required LLM isn't configured — keep the
+    // wizard from silently selecting broken installs. User can still toggle
+    // them on if they plan to add the key later.
+    const compatibleDefaults = (
+      initialRegistered.length > 0 ? initialRegistered : DEFAULT_AGENTS
+    ).filter((id) => {
+      const status = gatingStatuses.get(id);
+      return status?.state !== "needs-llm";
+    });
+    const defaults = compatibleDefaults;
+    const hasNeedsLlm = agentCatalog.some(
+      (a) => gatingStatuses.get(a.id)?.state === "needs-llm",
+    );
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <WizardProgress current={2} total={4} label="Agents" phase="pick which to install" />
@@ -1059,6 +1109,13 @@ export function SetupWizard({
           do. Newly-checked agents are installed; previously-installed agents
           you uncheck are uninstalled.
         </Text>
+        {hasNeedsLlm && (
+          <Text color={theme.accent.warning}>
+            ⚠ Some agents need an LLM key you haven't configured yet — they're
+            shown but won't run until you add the missing key (back out with
+            Esc to Step 1).
+          </Text>
+        )}
         <Text color={theme.accent.primary}>
           Pre-checked: {defaults.length > 0 ? defaults.join(", ") : "(none)"}
         </Text>
@@ -1071,6 +1128,7 @@ export function SetupWizard({
             const prompts = buildAgentConfigPromptList(
               agentCatalog,
               result.selected,
+              pickerConfiguredProviders,
             );
             setAgentConfigPrompts(prompts);
             setAgentConfigIdx(0);
@@ -1106,28 +1164,28 @@ export function SetupWizard({
     }
     const progress = `(${agentConfigIdx + 1}/${agentConfigPrompts.length})`;
     if (prompt.kind === "llm-choice") {
+      // Filter compat to providers the user has actually configured (#297).
+      // buildAgentConfigPromptList already filters out agents with
+      // compat.length <= 1, so we only reach this branch when there's a
+      // genuine choice between configured providers.
       const compat = agent.llm_compat ?? [];
-      const options = compat.map((id) => {
+      const llmChoiceStoredNames = new Set(
+        services.secretStore.list().map((s) => s.name),
+      );
+      const llmChoiceConfigured = new Set(
+        configuredProviderIds(providerCatalog, llmChoiceStoredNames),
+      );
+      const availableCompat = compat.filter((id) =>
+        llmChoiceConfigured.has(id),
+      );
+      const options = availableCompat.map((id) => {
         const provider = providerCatalog.find((p) => p.id === id);
-        const configured = provider?.secret_name
-          ? services.secretStore.exists(provider.secret_name)
-          : provider
-            ? services.secretStore.exists(`${provider.id}-endpoint`)
-            : false;
-        const label = provider
-          ? `${provider.name} ${configured ? "✓" : "✗ missing"}`
-          : `${id} ✗ unknown`;
-        return { value: id, label };
+        return {
+          value: id,
+          label: provider ? `${provider.name} ✓` : `${id} ✓`,
+        };
       });
-      const defaultChoice =
-        compat.find((id) => {
-          const provider = providerCatalog.find((p) => p.id === id);
-          if (!provider) return false;
-          if (provider.secret_name) {
-            return services.secretStore.exists(provider.secret_name);
-          }
-          return services.secretStore.exists(`${provider.id}-endpoint`);
-        }) ?? compat[0];
+      const defaultChoice = availableCompat[0] ?? compat[0];
       return (
         <Box flexDirection="column" gap={1} paddingY={1}>
           <WizardProgress
@@ -1137,8 +1195,8 @@ export function SetupWizard({
             phase={`${agent.name} ${progress}`}
           />
           <Text color={theme.fg.muted}>
-            Pick the LLM provider this agent should use. Greyed entries are
-            missing a key — configure one in Step 1 first if you want it.
+            Pick the LLM provider this agent should use. Only providers you
+            configured in Step 1 are shown.
           </Text>
           <Select
             options={options}
