@@ -326,20 +326,26 @@ export function getUpstreamRegistryUrl(): string {
   return process.env.FOREMAN_REGISTRY_URL ?? DEFAULT_UPSTREAM_URL;
 }
 
-export function parseRegistryText(text: string): RegistryDoc {
+export function parseRegistryText(
+  text: string,
+  /** Optional source path — used only to make error messages reference the
+   *  actual file the caller is parsing (#270). Defaults to the historical
+   *  literal so old callers stay backwards-compatible. */
+  source: string = "registry/agents.json",
+): RegistryDoc {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
   } catch (err) {
     throw new RegistryValidationError(
-      `registry/agents.json is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+      `${source} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
       [],
     );
   }
   const parsed = RegistryDocSchema.safeParse(raw);
   if (!parsed.success) {
     throw new RegistryValidationError(
-      "registry/agents.json failed schema validation",
+      `${source} failed schema validation`,
       parsed.error.issues.map((i) => ({
         path: i.path.join("."),
         message: i.message,
@@ -352,7 +358,7 @@ export function parseRegistryText(text: string): RegistryDoc {
 export function loadBundledRegistry(): RegistryDoc {
   const path = resolveBundledRegistryPath();
   if (!path) throw new RegistryNotFoundError();
-  return parseRegistryText(readFileSync(path, "utf-8"));
+  return parseRegistryText(readFileSync(path, "utf-8"), path);
 }
 
 // Picks the cached copy if present and within TTL, otherwise the bundled one.

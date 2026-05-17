@@ -144,7 +144,25 @@ registryCommand
     try {
       let doc: RegistryDoc;
       if (path) {
-        doc = parseRegistryText(readFileSync(path, "utf-8"));
+        // Read first so ENOENT surfaces with a friendly message, separate
+        // from schema/JSON errors (#270).
+        let text: string;
+        try {
+          text = readFileSync(path, "utf-8");
+        } catch (err) {
+          if (
+            err !== null &&
+            typeof err === "object" &&
+            (err as { code?: string }).code === "ENOENT"
+          ) {
+            console.error(red("error: ") + `file not found: ${path}`);
+            process.exit(1);
+          }
+          throw err;
+        }
+        // Pass the actual path so error messages reference it instead of
+        // the hardcoded "registry/agents.json" literal (#270).
+        doc = parseRegistryText(text, path);
       } else {
         doc = loadBundledRegistry();
       }
