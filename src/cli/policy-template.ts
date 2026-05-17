@@ -70,4 +70,53 @@ rules:
 #     rate_limits:
 #       messages_per_minute: 30
 #       tokens_per_hour: 100000
+
+# Responsibility-based policies — orthogonal to the agent rules above.
+# Foreman checks every tool call against the source agent's responsibility
+# note (set in 'foreman setup' or 'foreman agent edit'). If the action is
+# outside the declared role, the risk score is bumped and the approval
+# modal calls out the role mismatch.
+#
+# Starter set covers four common roles. Add / edit / delete to match
+# your own agent inventory.
+responsibility_policies:
+  - responsibility: "code writing"
+    cannot_access:
+      - "/\\\\.ssh/"
+      - "/\\\\.aws/"
+      - "^/etc/passwd$"
+      - "^/etc/shadow$"
+    can_call_agents_with_responsibility:
+      - "code review"
+      - "testing"
+    cannot_call_agents_with_responsibility:
+      - "email management"
+      - "payment processing"
+
+  - responsibility: "project management"
+    cannot_access:
+      - "(^|/)\\\\.env(\\\\..*)?$"
+    can_call_agents_with_responsibility:
+      - "code writing"
+      - "code review"
+      - "testing"
+    can_use_services:
+      - github
+      - jira
+      - telegram
+
+  - responsibility: "code review"
+    cannot_access:
+      - "/\\\\.ssh/"
+      - "/\\\\.aws/"
+    can_call_agents_with_responsibility:
+      - "testing"
+
+  - responsibility: "document analysis"
+    cannot_access:
+      - "(^|/)\\\\.env(\\\\..*)?$"
+      - "/\\\\.ssh/"
+    can_use_services:
+      - notion
+      - telegram
 `;
