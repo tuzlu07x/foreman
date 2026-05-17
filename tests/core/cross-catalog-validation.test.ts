@@ -48,6 +48,7 @@ function makeServices(specs: { id: string; usedBy: string[] }[]): ServiceCatalog
       setup_steps: ["x"],
       used_by_agents: s.usedBy,
       open_url_hotkey: false,
+      extra_secrets: [],
     })),
   };
 }

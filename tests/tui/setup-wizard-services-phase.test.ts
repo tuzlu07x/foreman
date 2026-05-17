@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyServiceValueSubmit,
   applyServicesPickerSubmit,
+  buildServicePromptList,
   consumingAgentsFor,
 } from "../../src/tui/setup-wizard.js";
 import type { ServiceEntry } from "../../src/core/registry-catalog.js";
@@ -17,6 +18,7 @@ function service(overrides: Partial<ServiceEntry>): ServiceEntry {
     setup_steps: ["Open Telegram", "Talk to BotFather"],
     used_by_agents: ["hermes", "openclaw"],
     open_url_hotkey: true,
+    extra_secrets: [],
     ...overrides,
   };
 }
@@ -101,6 +103,92 @@ describe("applyServiceValueSubmit", () => {
     expect(result.shouldSave).toBe(true);
     expect(result.nextPhase).toBe("summary");
     expect(result.nextIdx).toBe(1);
+  });
+});
+
+describe("buildServicePromptList (#220)", () => {
+  it("emits one prompt per service when there are no extras", () => {
+    const list = buildServicePromptList(
+      ["telegram"],
+      [service({ extra_secrets: [] })],
+    );
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({
+      serviceId: "telegram",
+      secretName: "telegram-bot-token",
+      kind: "primary",
+    });
+  });
+
+  it("emits primary + one prompt per extra_secret in declaration order", () => {
+    const telegram = service({
+      extra_secrets: [
+        {
+          name: "telegram-chat-id",
+          format_hint: "-1001234567890",
+          setup_steps: ["s1"],
+          optional: true,
+        },
+      ],
+    });
+    const list = buildServicePromptList(["telegram"], [telegram]);
+    expect(list.map((p) => `${p.serviceId}:${p.secretName}:${p.kind}`)).toEqual([
+      "telegram:telegram-bot-token:primary",
+      "telegram:telegram-chat-id:extra",
+    ]);
+  });
+
+  it("handles a mix of services with and without extras", () => {
+    const telegram = service({
+      extra_secrets: [
+        {
+          name: "telegram-chat-id",
+          format_hint: "x",
+          setup_steps: ["s"],
+          optional: true,
+        },
+      ],
+    });
+    const github = service({
+      id: "github",
+      name: "GitHub",
+      secret_name: "github-pat",
+      extra_secrets: [],
+    });
+    const list = buildServicePromptList(["github", "telegram"], [github, telegram]);
+    expect(list.map((p) => p.secretName)).toEqual([
+      "github-pat",
+      "telegram-bot-token",
+      "telegram-chat-id",
+    ]);
+  });
+
+  it("silently drops service ids that aren't in the catalog (defensive)", () => {
+    const list = buildServicePromptList(
+      ["nope", "telegram"],
+      [service({ extra_secrets: [] })],
+    );
+    expect(list).toHaveLength(1);
+    expect(list[0]!.serviceId).toBe("telegram");
+  });
+
+  it("extra prompts carry the extra's where_to_get + setup_steps + optional", () => {
+    const telegram = service({
+      extra_secrets: [
+        {
+          name: "telegram-chat-id",
+          format_hint: "-1001234567890",
+          where_to_get: null,
+          setup_steps: ["Open Telegram", "Get chat.id"],
+          optional: true,
+        },
+      ],
+    });
+    const list = buildServicePromptList(["telegram"], [telegram]);
+    const extra = list[1]!;
+    expect(extra.whereToGet).toBeNull();
+    expect(extra.setupSteps).toEqual(["Open Telegram", "Get chat.id"]);
+    expect(extra.optional).toBe(true);
   });
 });
 
