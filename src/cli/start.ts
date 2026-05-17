@@ -484,6 +484,7 @@ async function runOnboardingWizard(): Promise<void> {
         registry,
         policyPath: paths.policyPath,
         llmConfigPath: paths.llmConfigPath,
+        notifyConfigPath: paths.notifyConfigPath,
         launchEditor,
       },
     }),

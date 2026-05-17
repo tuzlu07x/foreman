@@ -44,8 +44,14 @@ import {
   loadLlmConfig,
   saveLlmConfig,
 } from "../core/llm/config.js";
+import {
+  defaultNotifyConfig,
+  loadNotifyConfig,
+  saveNotifyConfig,
+} from "../core/notification/notify-config.js";
 import { applyForemanSoul } from "../core/foreman-soul.js";
 import { buildLlmConfigFromWizard } from "./setup-wizard-llm-persist.js";
+import { buildNotifyConfigFromWizard } from "./setup-wizard-notify-persist.js";
 import { useLayout } from "./hooks.js";
 import { osc8 } from "./osc8.js";
 import { RegistryService } from "../core/registry.js";
@@ -108,6 +114,8 @@ export interface WizardServices {
   policyPath: string;
   /** Path to llm.yaml — wizard writes here after providers step (#289). */
   llmConfigPath: string;
+  /** Path to notify.yaml — wizard writes here after services step (#290). */
+  notifyConfigPath: string;
   launchEditor: (path: string) => Promise<unknown>;
 }
 
@@ -461,6 +469,45 @@ function persistLlmConfigFromWizardState(
     } catch (writeErr) {
       console.error(
         `⚠ failed to persist llm.yaml: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`,
+        `(original error: ${err instanceof Error ? err.message : String(err)})`,
+      );
+    }
+  }
+}
+
+// Sibling of persistLlmConfigFromWizardState (#289) — writes notify.yaml
+// after the services step so the wizard's "✓ wired N services" claim
+// actually translates to enabled channels. Same best-effort semantics:
+// merge into existing config, fall back to defaults on parse error, log
+// but don't crash on write failure.
+function persistNotifyConfigFromWizardState(
+  services: WizardServices,
+  serviceCatalog: ServiceEntry[],
+  savedStorageNames: string[],
+): void {
+  if (savedStorageNames.length === 0) return;
+  try {
+    const existing = loadNotifyConfig(services.notifyConfigPath);
+    const { next, wiredChannels } = buildNotifyConfigFromWizard({
+      savedStorageNames,
+      serviceCatalog,
+      secretStore: services.secretStore,
+      existing,
+    });
+    if (wiredChannels.length === 0) return;
+    saveNotifyConfig(services.notifyConfigPath, next);
+  } catch (err) {
+    try {
+      const { next } = buildNotifyConfigFromWizard({
+        savedStorageNames,
+        serviceCatalog,
+        secretStore: services.secretStore,
+        existing: defaultNotifyConfig(),
+      });
+      saveNotifyConfig(services.notifyConfigPath, next);
+    } catch (writeErr) {
+      console.error(
+        `⚠ failed to persist notify.yaml: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`,
         `(original error: ${err instanceof Error ? err.message : String(err)})`,
       );
     }
@@ -1383,8 +1430,14 @@ export function SetupWizard({
         )}
         <Text>Continue to install? (y/n)</Text>
         <ConfirmInput
-          onConfirm={() => advance("services")}
-          onCancel={() => advance("services")}
+          onConfirm={() => {
+            persistNotifyConfigFromWizardState(services, serviceCatalog, servicesSaved);
+            advance("services");
+          }}
+          onCancel={() => {
+            persistNotifyConfigFromWizardState(services, serviceCatalog, servicesSaved);
+            advance("services");
+          }}
         />
         <Text color={theme.fg.muted}>
           [y/n] continue · [Esc] back to selection
