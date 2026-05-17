@@ -41,6 +41,8 @@ export function ServicesPage({ onLeave }: ServicesPageProps): JSX.Element {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [op, setOp] = useState<Op>({ kind: "list" });
+  // Whether the selected row is expanded to show extra detail (#280).
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     if (!secretStore) return;
@@ -88,10 +90,17 @@ export function ServicesPage({ onLeave }: ServicesPageProps): JSX.Element {
     }
     if (key.upArrow) {
       setSelectedIdx(Math.max(0, safeSelected - 1));
+      setExpanded(false);
       return;
     }
     if (key.downArrow) {
       setSelectedIdx(Math.min(rows.length - 1, safeSelected + 1));
+      setExpanded(false);
+      return;
+    }
+    if (key.return) {
+      // Enter toggles row expansion to match every other list page (#280).
+      setExpanded((prev) => !prev);
       return;
     }
     if (!selectedRow) return;
@@ -173,6 +182,7 @@ export function ServicesPage({ onLeave }: ServicesPageProps): JSX.Element {
               key={row.service.id}
               row={row}
               selected={i === safeSelected}
+              expanded={expanded && i === safeSelected}
               registry={registry}
             />
           ))
@@ -260,10 +270,12 @@ function buildRows(
 function ServiceRow({
   row,
   selected,
+  expanded,
   registry,
 }: {
   row: Row;
   selected: boolean;
+  expanded: boolean;
   registry: ReturnType<typeof useDashboardServices>["registry"];
 }): JSX.Element {
   const cursor = selected ? "▸ " : "  ";
@@ -276,18 +288,52 @@ function ServiceRow({
     ? row.service.used_by_agents.filter((id) => installed.includes(id))
     : [];
   return (
-    <Text>
-      <Text color={selected ? theme.accent.primary : theme.fg.muted}>
-        {cursor}
+    <Box flexDirection="column">
+      <Text>
+        <Text color={selected ? theme.accent.primary : theme.fg.muted}>
+          {cursor}
+        </Text>
+        <Text color={dotColor}>{dot}</Text>{" "}
+        <Text color={theme.accent.primary}>{row.service.name}</Text>{" "}
+        <Text color={theme.fg.muted}>
+          {row.configured
+            ? `(${row.service.secret_name}) · used by ${consumers.length} installed agent${consumers.length === 1 ? "" : "s"}${consumers.length > 0 ? ` (${consumers.join(", ")})` : ""}`
+            : `(available — press [n] to configure)`}
+        </Text>
       </Text>
-      <Text color={dotColor}>{dot}</Text>{" "}
-      <Text color={theme.accent.primary}>{row.service.name}</Text>{" "}
-      <Text color={theme.fg.muted}>
-        {row.configured
-          ? `(${row.service.secret_name}) · used by ${consumers.length} installed agent${consumers.length === 1 ? "" : "s"}${consumers.length > 0 ? ` (${consumers.join(", ")})` : ""}`
-          : `(available — press [n] to configure)`}
-      </Text>
-    </Text>
+      {expanded ? (
+        <Box flexDirection="column" marginLeft={4} marginTop={1} marginBottom={1}>
+          <Text color={theme.fg.muted}>
+            id:           <Text color={theme.fg.default}>{row.service.id}</Text>
+          </Text>
+          <Text color={theme.fg.muted}>
+            description:  <Text color={theme.fg.default}>{row.service.description}</Text>
+          </Text>
+          <Text color={theme.fg.muted}>
+            secret_name:  <Text color={theme.fg.default}>{row.service.secret_name}</Text>
+          </Text>
+          {row.service.extra_secrets && row.service.extra_secrets.length > 0 ? (
+            <Text color={theme.fg.muted}>
+              extra secrets:{" "}
+              <Text color={theme.fg.default}>
+                {row.service.extra_secrets.map((s) => s.name).join(", ")}
+              </Text>
+            </Text>
+          ) : null}
+          <Text color={theme.fg.muted}>
+            homepage:     <Text color={theme.accent.primary}>{row.service.where_to_get}</Text>
+          </Text>
+          <Text color={theme.fg.muted}>
+            used by:      <Text color={theme.fg.default}>{row.service.used_by_agents.length === 0 ? "(none in catalog)" : row.service.used_by_agents.join(", ")}</Text>
+          </Text>
+          <Text color={theme.fg.muted}>
+            actions:      {row.configured
+              ? "[s] show · [r] rotate · [d] remove · [w] walkthrough"
+              : "[n] configure · [w] walkthrough"}
+          </Text>
+        </Box>
+      ) : null}
+    </Box>
   );
 }
 

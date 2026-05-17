@@ -45,6 +45,9 @@ export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [op, setOp] = useState<Op>({ kind: "list" });
+  // Whether the selected row is expanded to show extra detail. Matches the
+  // pattern used by every other list page (#280) so Enter is consistent.
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     if (!secretStore) return;
@@ -97,10 +100,18 @@ export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
     }
     if (key.upArrow) {
       setSelectedIdx(Math.max(0, safeSelected - 1));
+      setExpanded(false);
       return;
     }
     if (key.downArrow) {
       setSelectedIdx(Math.min(rows.length - 1, safeSelected + 1));
+      setExpanded(false);
+      return;
+    }
+    if (key.return) {
+      // Enter toggles expansion of the selected row — matches every other
+      // list page (#280) so the muscle memory is consistent.
+      setExpanded((prev) => !prev);
       return;
     }
     if (!selectedRow) return;
@@ -190,6 +201,7 @@ export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
               key={row.provider.id}
               row={row}
               selected={i === safeSelected}
+              expanded={expanded && i === safeSelected}
               registry={registry}
             />
           ))
@@ -266,10 +278,12 @@ function buildRows(
 function ProviderRow({
   row,
   selected,
+  expanded,
   registry,
 }: {
   row: Row;
   selected: boolean;
+  expanded: boolean;
   registry: ReturnType<typeof useDashboardServices>["registry"];
 }): JSX.Element {
   const cursor = selected ? "▸ " : "  ";
@@ -284,18 +298,48 @@ function ProviderRow({
         .map((a) => a.id)
     : [];
   return (
-    <Text>
-      <Text color={selected ? theme.accent.primary : theme.fg.muted}>
-        {cursor}
+    <Box flexDirection="column">
+      <Text>
+        <Text color={selected ? theme.accent.primary : theme.fg.muted}>
+          {cursor}
+        </Text>
+        <Text color={dotColor}>{dot}</Text>{" "}
+        <Text color={theme.accent.primary}>{row.provider.name}</Text>{" "}
+        <Text color={theme.fg.muted}>
+          {row.configured
+            ? `(${row.provider.secret_name ?? `${row.provider.id}-endpoint`}) · used by ${consumers.length} agent${consumers.length === 1 ? "" : "s"}${consumers.length > 0 ? ` (${consumers.join(", ")})` : ""}`
+            : `(available — press [n] to configure)`}
+        </Text>
       </Text>
-      <Text color={dotColor}>{dot}</Text>{" "}
-      <Text color={theme.accent.primary}>{row.provider.name}</Text>{" "}
-      <Text color={theme.fg.muted}>
-        {row.configured
-          ? `(${row.provider.secret_name ?? `${row.provider.id}-endpoint`}) · used by ${consumers.length} agent${consumers.length === 1 ? "" : "s"}${consumers.length > 0 ? ` (${consumers.join(", ")})` : ""}`
-          : `(available — press [n] to configure)`}
-      </Text>
-    </Text>
+      {expanded ? (
+        <Box flexDirection="column" marginLeft={4} marginTop={1} marginBottom={1}>
+          <Text color={theme.fg.muted}>
+            id:           <Text color={theme.fg.default}>{row.provider.id}</Text>
+          </Text>
+          <Text color={theme.fg.muted}>
+            secret_name:  <Text color={theme.fg.default}>{row.provider.secret_name ?? "—"}</Text>
+          </Text>
+          {row.provider.endpoint_required ? (
+            <Text color={theme.fg.muted}>
+              endpoint:     <Text color={theme.fg.default}>required</Text>
+            </Text>
+          ) : null}
+          <Text color={theme.fg.muted}>
+            homepage:     <Text color={theme.accent.primary}>{row.provider.where_to_get}</Text>
+          </Text>
+          {row.configured ? (
+            <Text color={theme.fg.muted}>
+              consumers:    <Text color={theme.fg.default}>{consumers.length === 0 ? "(none)" : consumers.join(", ")}</Text>
+            </Text>
+          ) : null}
+          <Text color={theme.fg.muted}>
+            actions:      {row.configured
+              ? "[s] show · [r] rotate · [d] remove"
+              : "[n] configure"}
+          </Text>
+        </Box>
+      ) : null}
+    </Box>
   );
 }
 
