@@ -39,15 +39,51 @@ export interface RiskFactor {
   category: RiskCategory
 }
 
-// Populated by the C8 LLM verification layer; null when not run. Shape will
-// be tightened when #231 lands — kept loose here so the migration column has
-// a target type and downstream readers can be wired up incrementally.
+// Threat categorisation from the C8 LLM verifier. Used to colour the modal
+// and group similar threats in `foreman log search`.
+export type ThreatType =
+  | 'prompt_injection'
+  | 'data_exfil'
+  | 'privilege_escalation'
+  | 'credential_theft'
+  | 'loop_attack'
+  | 'social_engineering'
+  | 'false_positive'
+  | 'user_initiated_legitimate'
+
+// Populated by the C8 LLM verification layer (#231). When the verifier
+// short-circuits (feature off, below threshold, budget exhausted, cache hit
+// during regression, LLM error) `skipped` carries the reason and the rich
+// fields are filled with conservative defaults so downstream consumers can
+// still render something. When skipped is undefined, the model produced
+// real output.
 export interface LlmVerification {
-  verdict: 'confirms' | 'overrides' | 'inconclusive'
-  reason: string
+  is_real_threat: boolean
+  threat_type: ThreatType
+  /** 0.0–1.0. Combine logic only overrides the heuristic when ≥ 0.7. */
+  confidence: number
+  /** ≤ 90 chars — the modal one-liner. */
+  explanation_short: string
+  /** 2-3 sentences for the inspect view + Telegram body. */
+  explanation_long: string
+  recommended_action: 'allow' | 'ask' | 'deny'
+  /** -30..+30 added to the heuristic score before bucket recompute. */
+  additional_risk_score: number
+  user_should_check: string[]
+
+  // Audit metadata — written to llm_usage too, but kept on the verification
+  // row so log queries don't need a JOIN.
   provider: string
   model: string
-  durationMs: number
+  costUsd: number
+  latencyMs: number
+  fromCache: boolean
+  /** Present only when the verifier short-circuited. */
+  skipped?:
+    | 'budget_exhausted'
+    | 'llm_error'
+    | 'feature_disabled'
+    | 'below_threshold'
 }
 
 export interface RiskAssessment {

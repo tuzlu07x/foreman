@@ -188,7 +188,97 @@ The **SmartReport** from C9 will become the `body` of `critical` and `warning` n
 
 ---
 
-## 10. Sources
+## 10. Verification flow (C8 — this PR)
+
+When `features.verification: true` AND credentials resolve, the mediator runs every flagged call through the LLM **before** opening the approval modal.
+
+### Gating order
+
+```
+1. feature_disabled?   → return {skipped: 'feature_disabled', ...heuristic}
+2. score < threshold?  → return {skipped: 'below_threshold', ...heuristic}
+3. budget exhausted?   → return {skipped: 'budget_exhausted', ...heuristic}
+4. cache hit?          → return cached verdict (cost = 0)
+5. call LLM            → parse + cache + record_usage + return
+```
+
+Default threshold = **30** (medium-bucket floor). Anything below is low-confidence heuristic noise — no point asking the LLM about a 10-point call.
+
+### Prompt template
+
+The verifier sends a structured prompt with:
+- Source agent + responsibility note
+- Target agent + tool + JSON args
+- Heuristic factors with signs + points + reasons
+- Recent session activity (last 3 calls, relative time)
+- Optional external trigger (C9 will populate when content is available)
+
+…and asks for **strict JSON output**:
+
+```json
+{
+  "is_real_threat": true,
+  "threat_type": "credential_theft",
+  "confidence": 0.92,
+  "explanation_short": "Phishing email + .env read = textbook theft",
+  "explanation_long": "Hermes received an email asking for API credentials and is now requesting .env from Claude Code. The agent has no business reading credentials for the user's pattern of work.",
+  "recommended_action": "deny",
+  "additional_risk_score": 15,
+  "user_should_check": [
+    "Sender of the triggering email",
+    "Recent emails from same domain"
+  ]
+}
+```
+
+8 threat types: `prompt_injection`, `data_exfil`, `privilege_escalation`, `credential_theft`, `loop_attack`, `social_engineering`, `false_positive`, `user_initiated_legitimate`.
+
+### Combining heuristic + LLM
+
+```ts
+function combineAssessment(heuristic, llm) {
+  if (!llm || llm.skipped) return heuristic
+  const adjustedScore = clamp(heuristic.totalScore + llm.additional_risk_score, 0, 100)
+  const recommendation =
+    llm.confidence >= 0.7 ? llm.recommended_action : heuristic.recommendation
+  return { ...heuristic, totalScore: adjustedScore, bucket: bucketFor(adjustedScore), recommendation, llmVerification: llm }
+}
+```
+
+**Confidence ≥ 0.7** is the threshold for letting the LLM's recommendation override the heuristic's. Below that, the LLM verdict is informational (shows in the modal) but doesn't change the gate.
+
+`additional_risk_score` (−30..+30) always adjusts the bucket — small nudge, never enough to flip without correlation with confidence.
+
+### Cache
+
+Identical patterns within 5 minutes reuse the prior verdict — no extra LLM calls. Cache key: SHA-256 of `source.target.tool + canonical(args) + sorted(factor_ids)`. LRU-bound at 256 entries. Eviction is least-recently-used.
+
+`canonical(args)` sorts every nested object's keys so `{a:1, b:2}` and `{b:2, a:1}` hash identically. The same logical request always lands on the same key regardless of how the agent serialised it.
+
+### Graceful degradation
+
+Every failure mode returns a `skipped` shell rather than throwing — the mediator continues with the heuristic-only assessment:
+
+| Reason | When |
+|---|---|
+| `feature_disabled` | global off OR `features.verification: false` |
+| `below_threshold` | heuristic score < verification threshold (default 30) |
+| `budget_exhausted` | monthly cap reached — `assertBudget()` would throw |
+| `llm_error` | provider HTTP error OR malformed JSON response |
+
+Heuristic-only behavior is **identical** to running without verification — the modal still opens, factors render, user decides.
+
+### Persistence
+
+Every LLM call writes a `llm_usage` row (provider, model, tokens, cost, requestId, feature, latency, cache_hit). The verification verdict (including `skipped` reason) is persisted on the `requests.llm_verification` column as JSON. `foreman log show <id>` includes it in `--json` output.
+
+### Performance
+
+Latency target: **< 1s p95 for Haiku** on a typical 500-input/100-output verification. Cache hits return synchronously (~1µs). When the LLM is up, the round-trip dominates; when it's down, you'd notice via `skipped: llm_error` rows in `foreman llm usage`.
+
+---
+
+## 11. Sources
 
 - [Anthropic Messages API docs](https://docs.anthropic.com/en/api/messages)
 - [Anthropic pricing](https://www.anthropic.com/pricing) — refresh per release
