@@ -5,6 +5,10 @@ import {
   type WrittenFile,
 } from "../core/agent-secrets-projector.js";
 import { EventBus, type ForemanEventMap } from "../core/event-bus.js";
+import {
+  findDuplicateSlots,
+  legacySlotsToRemove,
+} from "../core/secret-slot-migration.js";
 import { loadActiveRegistry } from "../core/registry-catalog.js";
 import { RegistryService } from "../core/registry.js";
 import {
@@ -224,6 +228,75 @@ secretsCommand
       }
       store.remove(name);
       console.log(green("✓") + ` removed secret "${name}"`);
+    } catch (err) {
+      handleStoreError(err);
+    } finally {
+      closeDb();
+    }
+  });
+
+// #342 — legacy <provider>-api-key slots from pre-#291 wizard runs sit
+// alongside the canonical <provider>-key slots. This command removes the
+// legacy side after a safety check (canonical exists + legacy is not the
+// more-recently-used slot).
+secretsCommand
+  .command("dedupe-providers")
+  .description(
+    "Clean up legacy <provider>-api-key slots left over from pre-2026 wizard runs (keeps <provider>-key)",
+  )
+  .option("--yes", "skip the confirmation prompt")
+  .option("--dry-run", "show what would be removed without removing", false)
+  .action(async (options: { yes?: boolean; dryRun?: boolean }) => {
+    const store = getStore();
+    try {
+      const rows = store.list();
+      const names = rows.map((r) => r.name);
+      const duplicates = findDuplicateSlots(names);
+      if (duplicates.length === 0) {
+        console.log(green("✓") + " no duplicate provider slots found");
+        return;
+      }
+      const lastAccessed = new Map(
+        rows.map((r) => [r.name, r.lastAccessedAt ?? 0]),
+      );
+      const toRemove = legacySlotsToRemove(duplicates, (n) =>
+        lastAccessed.get(n) ?? null,
+      );
+      const skipped = duplicates.filter((d) => !toRemove.includes(d.legacy));
+
+      console.log(
+        `Found ${duplicates.length} duplicate provider slot${duplicates.length === 1 ? "" : "s"}:`,
+      );
+      for (const d of duplicates) {
+        const willRemove = toRemove.includes(d.legacy);
+        const tag = willRemove ? orange("→ remove ") : dim("→ keep    ");
+        console.log(`  ${tag}${d.legacy}  ${dim(`(canonical: ${d.canonical})`)}`);
+      }
+      if (skipped.length > 0) {
+        console.log(
+          dim(
+            `\n${skipped.length} legacy slot${skipped.length === 1 ? "" : "s"} kept — the legacy version was used more recently than the canonical one. Inspect manually with 'foreman secrets show <name> --reveal'.`,
+          ),
+        );
+      }
+      if (toRemove.length === 0) return;
+      if (options.dryRun) {
+        console.log(dim("\n(dry-run — nothing removed)"));
+        return;
+      }
+      const ok = await requireConfirm({
+        yes: options.yes,
+        question: `Remove ${toRemove.length} legacy slot${toRemove.length === 1 ? "" : "s"}?`,
+        noun: "dedupe legacy provider slots",
+      });
+      if (!ok) {
+        console.log("(cancelled)");
+        return;
+      }
+      for (const name of toRemove) {
+        store.remove(name);
+        console.log(green("✓") + ` removed ${name}`);
+      }
     } catch (err) {
       handleStoreError(err);
     } finally {
