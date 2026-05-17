@@ -140,7 +140,10 @@ describe('NotificationBridge end-to-end (#235 C11a-2 acceptance)', () => {
 
     const result = await pending
     expect(result.decision).toBe('denied')
-    expect(result.decidedBy).toBe('user')
+    // #302 — decisions resolved via Telegram now surface the channel in
+    // decidedBy ("user:telegram") rather than bare "user". TUI-resolved
+    // decisions stay "user".
+    expect(result.decidedBy).toBe('user:telegram')
 
     // Audit row is persisted with the denial.
     audit.flush()

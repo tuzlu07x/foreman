@@ -312,6 +312,49 @@ describe('TelegramChannel — listen + callback validation', () => {
     await channel.shutdown()
     expect(decisions).toEqual([])
   })
+
+  // #302 — friendlier toast text for each action so the user gets context
+  // when they tap a button from the lock screen.
+  it('answerCallbackQuery sends a friendly confirmation per action', async () => {
+    const f = makeFetch([
+      { body: { ok: true, result: { message_id: 42, chat: { id: 12345 } } } },
+      {
+        body: {
+          ok: true,
+          result: [
+            {
+              update_id: 1,
+              callback_query: {
+                id: 'cb-allow',
+                from: { id: 777 },
+                data: 'notif-1:allow',
+                message: { message_id: 42, chat: { id: 12345 } },
+              },
+            },
+          ],
+        },
+      },
+      { body: { ok: true } }, // answerCallbackQuery response
+    ])
+    const channel = new TelegramChannel({
+      botToken: 'X',
+      chatId: '12345',
+      fetchImpl: f.fetchImpl,
+      maxPolls: 1,
+    })
+    await channel.send(makeNotification())
+    await channel.listen(async () => {})
+    await new Promise((r) => setTimeout(r, 30))
+    await channel.shutdown()
+
+    // Find the answerCallbackQuery call
+    const answerCall = f.calls.find((c) =>
+      c.url.endsWith('/answerCallbackQuery'),
+    )
+    expect(answerCall).toBeDefined()
+    const body = answerCall!.body as { text: string }
+    expect(body.text).toMatch(/Approved.*Foreman has resumed/)
+  })
 })
 
 describe('TelegramChannel — isReady + updateMessage + shutdown', () => {

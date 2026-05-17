@@ -91,6 +91,10 @@ export interface ForemanEventMap {
     decision: "allowed" | "denied";
     remember?: "allow" | "deny";
     resolvedBy: "user" | "timeout";
+    /** Channel surface that resolved this approval (#302). "tui" for the
+     *  Ink modal, "telegram"/"discord"/"slack"/"webhook" for OOB channels.
+     *  Used by the mediator to build `decidedBy: user:<via>`. */
+    via?: "tui" | "telegram" | "discord" | "slack" | "webhook";
   };
   "agent:message": {
     agentId: string;
