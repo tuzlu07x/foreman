@@ -1,5 +1,4 @@
 import { existsSync, writeFileSync } from "node:fs";
-import { createInterface } from "node:readline";
 import { Command } from "commander";
 import { bus } from "../core/event-bus.js";
 import { PolicyEngine } from "../core/policy-engine.js";
@@ -9,6 +8,7 @@ import { dim, green, red } from "./colors.js";
 import { DEFAULT_POLICY_YAML } from "./policy-template.js";
 import { launchEditor } from "../tui/launch-editor.js";
 import { renderPolicyJson, renderPolicyLine } from "./render.js";
+import { requireConfirm, requireTty } from "./require-confirm.js";
 
 export const policyCommand = new Command("policy").description(
   "Policy commands (show / edit / reset)",
@@ -81,23 +81,14 @@ policyCommand
       );
       process.exit(1);
     }
-    if (!options.yes) {
-      // In non-TTY contexts (CI, piped) the prompt auto-cancels — refuse
-      // loudly instead of silently doing nothing (#268, same as #260).
-      if (!process.stdin.isTTY) {
-        console.error(
-          red("error: ") +
-            "refusing to reset policy.yaml in a non-interactive context. Pass --yes to confirm.",
-        );
-        process.exit(1);
-      }
-      const ok = await promptYesNo(
-        `Overwrite ${paths.policyPath} with the default template? [y/N]`,
-      );
-      if (!ok) {
-        console.log("(cancelled)");
-        return;
-      }
+    const ok = await requireConfirm({
+      yes: options.yes,
+      question: `Overwrite ${paths.policyPath} with the default template?`,
+      noun: "reset policy.yaml",
+    });
+    if (!ok) {
+      console.log("(cancelled)");
+      return;
     }
     writeFileSync(paths.policyPath, DEFAULT_POLICY_YAML);
     console.log(
@@ -117,18 +108,7 @@ policyCommand
       );
       process.exit(1);
     }
-    // Launching an editor against a non-TTY pipes vim's TUI escape codes
-    // into the consumer (CI logs, capturing pipe), corrupts the output, and
-    // claims success anyway. Refuse upfront and tell the user where the
-    // file is so they can edit it by hand (#268).
-    if (!process.stdin.isTTY || !process.stdout.isTTY) {
-      console.error(
-        red("error: ") +
-          "'policy edit' requires an interactive terminal — open the file directly:",
-      );
-      console.error(`       ${paths.policyPath}`);
-      process.exit(1);
-    }
+    requireTty({ command: "policy edit", fallbackPath: paths.policyPath });
     await launchEditor(paths.policyPath);
     const db = getDb();
     const engine = new PolicyEngine(db, bus);
@@ -176,16 +156,3 @@ function printPolicyLoadError(path: string, err: unknown): void {
   );
 }
 
-async function promptYesNo(prompt: string): Promise<boolean> {
-  if (!process.stdin.isTTY) return false;
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stderr,
-  });
-  return new Promise((res) => {
-    rl.question(`${prompt} `, (answer) => {
-      rl.close();
-      res(/^y(es)?$/i.test(answer.trim()));
-    });
-  });
-}
