@@ -44,6 +44,7 @@ describe("setup-wizard.runInstallStep diff logic", () => {
     policyPath: string;
     llmConfigPath: string;
     notifyConfigPath: string;
+    voiceConfigPath: string;
     launchEditor: () => Promise<unknown>;
   } {
     return {
@@ -53,6 +54,7 @@ describe("setup-wizard.runInstallStep diff logic", () => {
       policyPath: "/tmp/policy.yaml",
       llmConfigPath: "/tmp/llm.yaml",
       notifyConfigPath: "/tmp/notify.yaml",
+      voiceConfigPath: "/tmp/voice.yaml",
       launchEditor: vi.fn().mockResolvedValue(undefined) as () => Promise<unknown>,
     };
   }

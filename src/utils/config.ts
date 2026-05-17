@@ -28,6 +28,10 @@ export interface ForemanPaths {
   notifyStatePath: string;
   /** LLM provider config (`<configDir>/llm.yaml`) — #230 / C7. */
   llmConfigPath: string;
+  /** Proactive notification config (`<configDir>/voice.yaml`) — #305 /
+   *  drives ForemanVoice (#303) + PatternDetectionService (#304). Absent
+   *  file = built-in defaults. */
+  voiceConfigPath: string;
   identityPath: string;
   /**
    * Canonical Foreman persona file (`<configDir>/SOUL.md`). Foreman writes its
@@ -119,6 +123,7 @@ export function getForemanPaths(): ForemanPaths {
     notifyConfigPath: resolve(dirs.configDir, "notify.yaml"),
     notifyStatePath: resolve(dirs.stateDir, "notify-state.json"),
     llmConfigPath: resolve(dirs.configDir, "llm.yaml"),
+    voiceConfigPath: resolve(dirs.configDir, "voice.yaml"),
     identityPath: resolve(dirs.configDir, "identity.key"),
     soulPath: resolve(dirs.configDir, "SOUL.md"),
     secretsKeyPath: resolve(dirs.configDir, "secrets.key"),

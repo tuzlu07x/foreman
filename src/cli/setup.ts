@@ -88,6 +88,7 @@ export const setupCommand = new Command("setup")
           policyPath: paths.policyPath,
           llmConfigPath: paths.llmConfigPath,
           notifyConfigPath: paths.notifyConfigPath,
+          voiceConfigPath: paths.voiceConfigPath,
           launchEditor,
         },
       }),
