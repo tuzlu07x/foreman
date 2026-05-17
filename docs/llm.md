@@ -278,7 +278,80 @@ Latency target: **< 1s p95 for Haiku** on a typical 500-input/100-output verific
 
 ---
 
-## 11. Sources
+## 11. Budget tracking + alerts (#233 — C10)
+
+C7 set up the budget config; C8/C9 spend it; **C10 makes the spending visible and bounded**.
+
+### What you'll see
+
+```
+$ foreman llm budget
+
+Budget — May 2026
+
+  cap            $5.00
+  spent          $0.3200  (6%)
+  remaining      $4.6800
+  resets         in 18 days  (Jun 1)
+  alert at       $4.00 (80%)
+  feature split  verification $0.20 · smart_report $0.12
+
+  ████░░░░░░░░░░░░░░░░░░░░░░░░░░
+```
+
+The bar turns **orange at ≥ 80 %** and **red at 100 %**.
+
+### Itemised usage
+
+```bash
+foreman llm usage                       # last 30 calls
+foreman llm usage --since=24h           # accepts Nd / Nh / Nm
+foreman llm usage --feature=verification
+foreman llm usage --json                # pipe-able
+```
+
+Each table row ends with a row total: `24h total: $0.04 across 12 calls (2 cached)`.
+
+### Alert flow
+
+When a non-cached usage write tips total over `alert_threshold_pct` (default 80 %):
+
+1. `recordUsageAndCheckBudget()` emits **`llm:budget-alert` bus event** (`kind: 'threshold'`).
+2. An **`llm_budget_alert` audit row** is written so the next process picks up state correctly.
+3. The TUI shows a one-time banner; `foreman doctor` returns **warn** for `llm_budget`.
+4. **OOB notification** dispatches via the `budget_alert` route (default: telegram, configurable in `notify.yaml`).
+
+When spending hits **100 %**:
+
+- The verifier returns `{ skipped: 'budget_exhausted' }` — heuristic-only fallback kicks in.
+- The smart report's footer says "Smart analysis paused — monthly LLM budget exhausted".
+- A second `llm:budget-alert` fires with `kind: 'exhausted'`.
+- `foreman doctor` returns **fail** for `llm_budget`.
+
+Each (kind, billing window) only fires **once** — the bridge dedupes by scanning recent audit events. New billing window = both flags re-armed automatically (lazy: computed from `currentWindow()` rather than a cron).
+
+### Adjusting
+
+```bash
+foreman llm budget --set 10        # raise monthly cap (USD)
+foreman llm budget --alert 90      # change the alert threshold %
+foreman llm budget --reset-day 15  # roll the window over on the 15th
+```
+
+Cached calls (`cache_hit=1`) don't count against the budget — they're free reuse from the LRU.
+
+### Testing the path
+
+```bash
+foreman llm test           # one real call — cheapest provider model
+foreman llm usage --since=10m
+foreman llm budget         # confirm spend ticked up
+foreman doctor             # `llm_budget` check
+```
+
+---
+
+## 12. Sources
 
 - [Anthropic Messages API docs](https://docs.anthropic.com/en/api/messages)
 - [Anthropic pricing](https://www.anthropic.com/pricing) — refresh per release
