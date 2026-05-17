@@ -22,7 +22,12 @@ import {
   saveNotifyState,
   type NotifyState,
 } from '../core/notification/notify-state.js'
-import { generateSummary } from '../core/notification/summary-generator.js'
+import {
+  generateSmartSummaryPayload,
+  generateSummary,
+} from '../core/notification/summary-generator.js'
+import { isFeatureEnabled, loadLlmConfig } from '../core/llm/config.js'
+import { buildLlmClient } from '../core/llm/factory.js'
 import {
   KNOWN_CHANNELS,
   isKnownChannel,
@@ -240,7 +245,12 @@ notifyCommand
   .description('Build a digest of recent activity and (optionally) send it now')
   .option('--now', 'Send the digest immediately on every enabled channel', false)
   .option('--hours <n>', 'Window in hours (1-8760, default 12)', (v) => parseInt(v, 10), 12)
-  .action(async (options: { now?: boolean; hours: number }) => {
+  .option(
+    '--smart',
+    'Run the LLM narrator if enabled (otherwise template body — #306)',
+    false,
+  )
+  .action(async (options: { now?: boolean; hours: number; smart?: boolean }) => {
     requireInitialised()
     // Reject garbage hours BEFORE generating anything (#266). Commander's
     // parseInt happily turns "notanumber" into NaN and lets it through; we
@@ -260,8 +270,24 @@ notifyCommand
     }
     const paths = getForemanPaths()
     const db = getDb()
-    const payload = generateSummary(db, {
+    let llmClient: import('../core/llm/client.js').LlmClient | null = null
+    if (options.smart) {
+      // #306 — build the LLM client only when --smart is asked for so the
+      // CLI stays cheap when the user just wants the template body.
+      try {
+        const cfg = loadLlmConfig(paths.llmConfigPath)
+        if (isFeatureEnabled(cfg, 'smart_report')) {
+          const store = new SecretStore(db, loadOrCreateSecretsMasterKey())
+          llmClient = buildLlmClient(cfg, store)
+        }
+      } catch {
+        // Silently fall back to template — the body will say so via the
+        // generateSummary footer.
+      }
+    }
+    const payload = await generateSmartSummaryPayload(db, {
       windowMs: options.hours * 3_600_000,
+      llmClient,
     })
 
     if (!options.now) {
