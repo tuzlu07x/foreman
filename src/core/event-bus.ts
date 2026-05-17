@@ -133,6 +133,17 @@ export interface ForemanEventMap {
       supportedRange: string;
     }>;
   };
+  /** Fires once when the LLM budget first crosses the alert threshold, and
+   *  once when it crosses 100% (hard stop). Tracked per billing window. */
+  "llm:budget-alert": {
+    kind: "threshold" | "exhausted";
+    spentUsd: number;
+    capUsd: number;
+    spentPct: number;
+    windowStart: number;
+    windowEnd: number;
+    daysUntilReset: number;
+  };
 }
 
 export type ForemanEvent = keyof ForemanEventMap;
