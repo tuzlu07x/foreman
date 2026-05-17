@@ -239,9 +239,25 @@ notifyCommand
   .command('summary')
   .description('Build a digest of recent activity and (optionally) send it now')
   .option('--now', 'Send the digest immediately on every enabled channel', false)
-  .option('--hours <n>', 'Window in hours (default 12)', (v) => parseInt(v, 10), 12)
+  .option('--hours <n>', 'Window in hours (1-8760, default 12)', (v) => parseInt(v, 10), 12)
   .action(async (options: { now?: boolean; hours: number }) => {
     requireInitialised()
+    // Reject garbage hours BEFORE generating anything (#266). Commander's
+    // parseInt happily turns "notanumber" into NaN and lets it through; we
+    // also want to refuse 0 / negative / absurdly large windows so the digest
+    // header doesn't read "last NaN minutes" / "last 4167 days".
+    if (
+      !Number.isFinite(options.hours) ||
+      !Number.isInteger(options.hours) ||
+      options.hours < 1 ||
+      options.hours > 8760
+    ) {
+      console.error(
+        red('error: ') +
+          `--hours must be an integer between 1 and 8760 (got: ${options.hours})`,
+      )
+      process.exit(1)
+    }
     const paths = getForemanPaths()
     const db = getDb()
     const payload = generateSummary(db, {
