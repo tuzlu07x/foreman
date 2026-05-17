@@ -23,10 +23,12 @@ import {
   type NotifyState,
 } from '../core/notification/notify-state.js'
 import { generateSummary } from '../core/notification/summary-generator.js'
-import type {
-  ChannelId,
-  Notification,
-  NotificationChannel,
+import {
+  KNOWN_CHANNELS,
+  isKnownChannel,
+  type ChannelId,
+  type Notification,
+  type NotificationChannel,
 } from '../core/notification/types.js'
 import { SecretNotFoundError, SecretStore } from '../core/secret-store.js'
 import { closeDb, getDb } from '../db/client.js'
@@ -111,6 +113,16 @@ notifyCommand
   .description('Enable a channel — channel must already have credentials configured')
   .action((channel: string) => {
     requireInitialised()
+    // Reject typo'd channel names BEFORE writing anything (#264) — otherwise
+    // the garbage entry ends up in the user's notify.yaml and `status` quietly
+    // ignores it, masking the typo.
+    if (!isKnownChannel(channel)) {
+      console.error(
+        red('error: ') +
+          `unknown channel "${channel}" — try ${KNOWN_CHANNELS.join(' / ')}`,
+      )
+      process.exit(1)
+    }
     const paths = getForemanPaths()
     const config = existsSync(paths.notifyConfigPath)
       ? safeLoadConfig(paths.notifyConfigPath, loadNotifyConfig, { label: 'notify.yaml' })
@@ -289,6 +301,16 @@ notifyCommand
   .description('Send a test notification to verify channel credentials')
   .action(async (channel: string) => {
     requireInitialised()
+    // Reject typo'd channel names BEFORE looking at config so the error
+    // points at the real cause (#264) — old message told users to "enable
+    // bogus first", which is a dead-end loop.
+    if (!isKnownChannel(channel)) {
+      console.error(
+        red('error: ') +
+          `unknown channel "${channel}" — try ${KNOWN_CHANNELS.join(' / ')}`,
+      )
+      process.exit(1)
+    }
     const paths = getForemanPaths()
     const config = safeLoadConfig(paths.notifyConfigPath, loadNotifyConfig, { label: 'notify.yaml' })
     if (!isChannelEnabled(config, channel)) {
