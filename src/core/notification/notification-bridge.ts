@@ -157,6 +157,28 @@ export class NotificationBridge {
       decision,
       remember,
       resolvedBy: 'user',
+      // #302 — tag the channel so the mediator's decidedBy carries
+      // "user:telegram" instead of bare "user".
+      via: channelToVia(row.channel),
     })
+  }
+}
+
+function channelToVia(
+  channel: string,
+):
+  | 'telegram'
+  | 'discord'
+  | 'slack'
+  | 'webhook'
+  | undefined {
+  switch (channel) {
+    case 'telegram':
+    case 'discord':
+    case 'slack':
+    case 'webhook':
+      return channel
+    default:
+      return undefined
   }
 }
