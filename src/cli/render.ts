@@ -106,7 +106,22 @@ export function renderPolicyLine(row: PolicyRow): string {
         ? red("DENY")
         : orange("ASK");
   const enabled = row.enabled === 1 ? "" : dim(" DISABLED");
-  return `${dim(`#${row.id}`)}  ${orange(row.sourceAgent)} ${dim("→")} ${row.target}  ${effect}${enabled}  ${dim(`(${row.createdBy})`)}`;
+  // #284-class polish (Bug G): show that a rule has conditions, so the
+  // user understands why "the same target" can appear multiple times
+  // (e.g. two `read_file` rules — one ASK for .env paths, one ALLOW for
+  // everything else). Use `--json` to inspect the full condition body.
+  const condTag = hasConditions(row.conditions) ? dim(" +cond") : "";
+  return `${dim(`#${row.id}`)}  ${orange(row.sourceAgent)} ${dim("→")} ${row.target}${condTag}  ${effect}${enabled}  ${dim(`(${row.createdBy})`)}`;
+}
+
+function hasConditions(raw: string | null): boolean {
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed !== null && typeof parsed === "object" && Object.keys(parsed).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 export function renderPolicyJson(row: PolicyRow): unknown {

@@ -12,6 +12,8 @@ import { legacyHasInterestingFiles } from "../utils/migrate-config.js";
 import { EventBus, type ForemanEventMap } from "./event-bus.js";
 import { getBudgetStatus } from "./llm/budget.js";
 import { loadLlmConfig } from "./llm/config.js";
+import { SecretStore } from "./secret-store.js";
+import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { RegistryService } from "./registry.js";
 import { getUpdateCachePath, isNewer } from "./update-check.js";
 
@@ -389,6 +391,74 @@ export function checkLlmConfig(): CheckResult {
   }
 }
 
+// LLM credentials — when LLM is globally enabled, confirm the referenced
+// provider's secret exists in the store. Otherwise verification / smart-report
+// silently fall back to heuristic-only forever and the user has no clue why
+// (their setup looks "on" but nothing fires). Skipped when LLM is off.
+export function checkLlmCredentials(): CheckResult {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.llmConfigPath)) {
+    return {
+      name: "llm_credentials",
+      status: "ok",
+      message: "llm.yaml absent — credentials not required",
+    };
+  }
+  let config: ReturnType<typeof loadLlmConfig>;
+  try {
+    config = loadLlmConfig(paths.llmConfigPath);
+  } catch {
+    // Bad YAML is already reported by llm_config — don't double-flag here.
+    return {
+      name: "llm_credentials",
+      status: "ok",
+      message: "skipped (llm.yaml failed to parse — see llm_config above)",
+    };
+  }
+  if (!config.enabled) {
+    return {
+      name: "llm_credentials",
+      status: "ok",
+      message: "LLM global switch is off — credentials not required",
+    };
+  }
+  const providerCred = (config.credentials as Record<string, { secret_name?: string | null } | undefined>)[
+    config.provider
+  ];
+  const secretName = providerCred?.secret_name ?? null;
+  if (!secretName) {
+    return {
+      name: "llm_credentials",
+      status: "warn",
+      message: `LLM enabled but ${config.provider}.secret_name is unset in llm.yaml`,
+      remediation: `Edit ${paths.llmConfigPath} and set credentials.${config.provider}.secret_name (then \`foreman secrets add <name>\`).`,
+    };
+  }
+  try {
+    const db = getDb();
+    const store = new SecretStore(db, loadOrCreateSecretsMasterKey());
+    if (!store.exists(secretName)) {
+      return {
+        name: "llm_credentials",
+        status: "warn",
+        message: `LLM enabled but secret "${secretName}" is missing from the store`,
+        remediation: `Run \`foreman secrets add ${secretName}\` — verification + smart-report will silently fall back to heuristic-only until this is set.`,
+      };
+    }
+    return {
+      name: "llm_credentials",
+      status: "ok",
+      message: `${config.provider} credentials present (${secretName})`,
+    };
+  } catch (err) {
+    return {
+      name: "llm_credentials",
+      status: "warn",
+      message: `couldn't check secret store: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 // LLM budget — warns at alert_threshold_pct, fails when the cap is exhausted
 // (LLM features will refuse new calls until the next reset). Silent when LLM
 // is globally disabled — no point alarming users who never opted in.
@@ -650,6 +720,7 @@ const CHECKS: (() => CheckResult)[] = [
   checkPolicyYaml,
   checkNotifyConfig,
   checkLlmConfig,
+  checkLlmCredentials,
   checkLlmBudget,
   checkAgentsRegistered,
   checkMcpGateway,
