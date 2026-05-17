@@ -1,145 +1,186 @@
 import { Box, Text } from "ink";
-import { theme } from "../theme.js";
+import { doubleBorder, theme } from "../theme.js";
+
+// =============================================================================
+// Help overlay (#234 UX-7)
+// =============================================================================
+//
+// Previous version was a long vertical wall of `Section { rows }` blocks the
+// user had to scroll-read. New version is a 3-column grid grouped by surface
+// (Navigation / Approval / Page-specific), so the user can scan instead of
+// read. Same key/label data — different visual organisation.
+
+interface HelpRow {
+  key: string;
+  label: string;
+}
+
+interface HelpSection {
+  title: string;
+  rows: HelpRow[];
+}
+
+const NAV_SECTIONS: HelpSection[] = [
+  {
+    title: "Navigation",
+    rows: [
+      { key: "h / ?", label: "open / close help" },
+      { key: "Esc", label: "back to dashboard" },
+      { key: "q / Ctrl-C", label: "quit (with confirm)" },
+    ],
+  },
+  {
+    title: "Pages",
+    rows: [
+      { key: "a", label: "Agents" },
+      { key: "v", label: "Providers" },
+      { key: "V", label: "Services" },
+      { key: "k", label: "Secrets / keys" },
+      { key: "l", label: "Logs" },
+      { key: "p", label: "Policy" },
+      { key: "s", label: "Sessions" },
+      { key: "c", label: "Chat" },
+      { key: "g", label: "Settings" },
+    ],
+  },
+  {
+    title: "Approval modal",
+    rows: [
+      { key: "a / d", label: "allow once / deny" },
+      { key: "A / D", label: "always allow / deny" },
+      { key: "i", label: "inspect details" },
+      { key: "t", label: "toggle technical detail" },
+      { key: "k", label: "halt session" },
+    ],
+  },
+];
+
+const PAGE_SECTIONS: HelpSection[] = [
+  {
+    title: "Logs page",
+    rows: [
+      { key: "/", label: "search (FTS5)" },
+      { key: "1-4", label: "filter buckets" },
+      { key: "↑ ↓ / Enter", label: "select / expand" },
+      { key: "r", label: "replay" },
+      { key: "e", label: "export" },
+    ],
+  },
+  {
+    title: "Agents page",
+    rows: [
+      { key: "↑ ↓ / Enter", label: "select / expand" },
+      { key: "N / L", label: "edit note / change LLM" },
+      { key: "d / e", label: "disable / enable" },
+      { key: "b / r", label: "block / remove" },
+      { key: "R", label: "regen key" },
+    ],
+  },
+  {
+    title: "Providers / Services",
+    rows: [
+      { key: "n", label: "configure selected" },
+      { key: "r", label: "rotate value" },
+      { key: "d", label: "remove" },
+      { key: "s", label: "show value (10s)" },
+      { key: "w", label: "open walkthrough" },
+    ],
+  },
+];
+
+const EXTRA_SECTIONS: HelpSection[] = [
+  {
+    title: "Secrets page",
+    rows: [
+      { key: "↑ ↓ / Enter", label: "select / expand" },
+      { key: "n", label: "add custom secret" },
+      { key: "v / r / d", label: "reveal / rotate / remove" },
+    ],
+  },
+  {
+    title: "Settings page",
+    rows: [
+      { key: "e", label: "edit SOUL.md" },
+      { key: "p", label: "edit policy.yaml" },
+      { key: "P", label: "open Policy page" },
+      { key: "w", label: "re-run wizard" },
+    ],
+  },
+  {
+    title: "Chat / test console",
+    rows: [
+      { key: "← →", label: "switch source agent" },
+      { key: "i", label: "input mode" },
+      { key: "Enter", label: "send" },
+    ],
+  },
+];
 
 export function HelpOverlay(): JSX.Element {
   return (
     <Box
       flexDirection="column"
-      borderStyle="double"
+      borderStyle={doubleBorder()}
       borderColor={theme.accent.primary}
       paddingX={2}
       paddingY={1}
     >
-      <Box justifyContent="center">
+      <Box justifyContent="center" marginBottom={1}>
         <Text bold color={theme.accent.primary}>
-          {theme.symbols.bullet} Foreman Help
+          {theme.symbols.activeDot} Foreman Help
         </Text>
       </Box>
-      <Box marginTop={1} flexDirection="column">
-        <Section
-          title="Navigation"
-          rows={[
-            ["h / ?", "open / close this help overlay"],
-            ["c", "chat / test console"],
-            ["g", "settings page (identity, policy, wizard)"],
-            ["k", "keys (secrets) page"],
-            ["a", "agents page"],
-            ["v", "LLM providers page"],
-            ["V", "services page (Telegram / Discord / GitHub / …)"],
-            ["l", "logs page"],
-            ["p", "policy page"],
-            ["s", "sessions page"],
-            ["Esc", "back to dashboard"],
-            ["q / Ctrl-C", "quit (with confirm)"],
-          ]}
-        />
-        <Section
-          title="Chat / test console"
-          rows={[
-            ["← →", "switch source agent"],
-            ["i", "enter input mode"],
-            ["Enter", "send through mediator (records audit log)"],
-            ["Esc", "exit input mode / leave page"],
-          ]}
-        />
-        <Section
-          title="Settings page"
-          rows={[
-            ["e", "edit Foreman SOUL.md (agent identity)"],
-            ["p", "edit policy.yaml"],
-            ["P", "open Policy page (read-only view)"],
-            ["w", "show re-run wizard instructions"],
-          ]}
-        />
-        <Section
-          title="Secrets page (advanced — low-level view)"
-          rows={[
-            ["↑ ↓ / Enter", "select / expand row"],
-            ["n", "add a raw custom secret (free-form name + value)"],
-            ["v", "reveal value (auto-hides after 10s)"],
-            ["r", "rotate value (inline password input)"],
-            ["d", "remove secret"],
-          ]}
-        />
-        <Section
-          title="Agents page"
-          rows={[
-            ["↑ ↓ / Enter", "select / expand row"],
-            ["N", "edit responsibility note (TextInput)"],
-            ["L", "change LLM provider (Select · multi-provider only)"],
-            ["d", "disable (pause — config preserved)"],
-            ["e", "enable (resume from disabled)"],
-            ["b", "block / unblock (malicious flag)"],
-            ["r", "remove (hard delete + uninstall path)"],
-            ["R", "regenerate Ed25519 keypair (shown once)"],
-          ]}
-        />
-        <Section
-          title="LLM Providers page"
-          rows={[
-            ["↑ ↓", "navigate (configured + available rows)"],
-            ["n", "configure the selected available provider"],
-            ["r", "rotate the selected configured provider's value"],
-            ["d", "remove the selected configured provider"],
-            ["s", "show value for 10s (auto-hides)"],
-          ]}
-        />
-        <Section
-          title="Services page"
-          rows={[
-            ["↑ ↓", "navigate (configured + available rows)"],
-            ["n", "configure the selected available service"],
-            ["r", "rotate the selected configured service's token"],
-            ["d", "remove the selected configured service"],
-            ["s", "show value for 10s (auto-hides)"],
-            ["w", "open the setup walkthrough for the selected row"],
-          ]}
-        />
-        <Section
-          title="Approval modal"
-          rows={[
-            ["a / d", "allow once / deny"],
-            ["A / D", "always allow / always deny (remember as rule)"],
-            ["i", "inspect details"],
-          ]}
-        />
-        <Section
-          title="Logs page"
-          rows={[
-            ["/", "search (FTS5)"],
-            ["1-4", "toggle filter: allowed / denied / ask / errored"],
-            ["↑ ↓ / Enter", "select / expand row"],
-            ["r", "replay request"],
-            ["e", "export to file"],
-          ]}
-        />
+
+      <ColumnRow sections={NAV_SECTIONS} />
+      <Box marginTop={1}>
+        <ColumnRow sections={PAGE_SECTIONS} />
       </Box>
+      <Box marginTop={1}>
+        <ColumnRow sections={EXTRA_SECTIONS} />
+      </Box>
+
       <Box marginTop={1} justifyContent="center">
         <Text color={theme.fg.muted}>
-          {`docs: github.com/tuzlu07x/foreman  ·  press h / ? / Esc to close`}
+          docs: github.com/tuzlu07x/foreman {theme.symbols.bullet} press h / ?
+          / Esc to close
         </Text>
       </Box>
     </Box>
   );
 }
 
-interface SectionProps {
-  title: string;
-  rows: ReadonlyArray<readonly [string, string]>;
+function ColumnRow({ sections }: { sections: HelpSection[] }): JSX.Element {
+  // Fixed-width columns so ink's flex layout doesn't collapse cells when the
+  // terminal is narrow (which made labels wrap character-by-character).
+  // 32 cols x 3 = 96 cols + paddings → fits comfortably in 100+ wide terms.
+  return (
+    <Box flexDirection="row">
+      {sections.map((section, i) => (
+        <Box
+          key={section.title}
+          flexDirection="column"
+          width={32}
+          paddingRight={i === sections.length - 1 ? 0 : 2}
+        >
+          <SectionColumn section={section} />
+        </Box>
+      ))}
+    </Box>
+  );
 }
 
-function Section({ title, rows }: SectionProps): JSX.Element {
+function SectionColumn({ section }: { section: HelpSection }): JSX.Element {
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="column">
       <Text bold color={theme.fg.emphasis}>
-        {title}
+        {section.title}
       </Text>
-      {rows.map(([key, label]) => (
-        <Box key={key}>
+      <Text color={theme.fg.muted}>{"─".repeat(section.title.length)}</Text>
+      {section.rows.map((row) => (
+        <Box key={row.key}>
           <Text>
-            {"  "}
-            <Text color={theme.accent.primary}>{padRight(key, 12)}</Text>{" "}
-            <Text color={theme.fg.default}>{label}</Text>
+            <Text color={theme.accent.primary}>{padRight(row.key, 12)}</Text>{" "}
+            <Text color={theme.fg.default}>{row.label}</Text>
           </Text>
         </Box>
       ))}
