@@ -58,11 +58,17 @@
       "where_to_get": "https://api.slack.com/apps",
       "format_hint": "starts with xoxb-",
       "setup_steps": [
-        "Visit api.slack.com/apps and create a new app",
-        "From Scratch → name + workspace",
-        "OAuth & Permissions → add scopes (chat:write, channels:read at minimum)",
-        "Install to Workspace",
-        "Copy the Bot User OAuth Token"
+        "Visit api.slack.com/apps → 'Create New App'",
+        "Choose 'From scratch', name the app, pick your workspace",
+        "OAuth & Permissions → Bot Token Scopes — add at minimum:",
+        "  [x] chat:write     → post messages as the bot",
+        "  [x] channels:read  → list public channels the bot can reach",
+        "Optional bot scopes — only add if your agent actually needs them:",
+        "  [ ] im:history     → read DM history with the bot",
+        "  [ ] files:write    → upload files / images",
+        "  [ ] groups:read    → list private channels the bot is in",
+        "Install to Workspace (top of the OAuth page) → Authorize",
+        "Copy the 'Bot User OAuth Token' (starts with xoxb-)"
       ],
       "used_by_agents": ["openclaw"],
       "open_url_hotkey": true
@@ -76,11 +82,17 @@
       "format_hint": "starts with ghp_",
       "setup_steps": [
         "Visit github.com/settings/tokens/new",
-        "Note: choose a meaningful name (e.g. \"Foreman agent token\")",
-        "Expiration: recommend 90 days",
-        "Scopes: repo (full repo access), read:user",
-        "Generate token",
-        "Copy immediately (won't show again)"
+        "Name: 'Foreman agent token' (or anything memorable)",
+        "Expiration: 90 days recommended",
+        "Required scopes — tick these two:",
+        "  [x] repo       → read + write to your repos (public + private)",
+        "  [x] read:user  → read your profile (display name, email)",
+        "Optional scopes — only tick if your agent actually needs them:",
+        "  [ ] read:org   → list your org memberships",
+        "  [ ] workflow   → trigger GitHub Actions",
+        "  [ ] gist       → read + write your gists",
+        "Click 'Generate token' at the bottom",
+        "Copy immediately (won't show again — starts with ghp_)"
       ],
       "used_by_agents": ["claude-code", "codex"],
       "open_url_hotkey": true
