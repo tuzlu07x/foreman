@@ -22,6 +22,7 @@ import { closeDb, getDb } from '../db/client.js'
 import { loadOrCreateSecretsMasterKey } from '../identity/master-key.js'
 import { getForemanPaths } from '../utils/config.js'
 import { dim, green, orange, red } from './colors.js'
+import { safeLoadConfig } from './safe-load.js'
 
 export const llmCommand = new Command('llm').description(
   'Optional LLM-backed verification + smart-report features (opt-in)',
@@ -37,7 +38,7 @@ llmCommand
   .action(() => {
     requireInitialised()
     const paths = getForemanPaths()
-    const config = loadLlmConfig(paths.llmConfigPath)
+    const config = safeLoadConfig(paths.llmConfigPath, loadLlmConfig, { label: 'llm.yaml' })
     const db = getDb()
     const budget = getBudgetStatus(db, config)
 
@@ -94,7 +95,7 @@ llmCommand
     requireInitialised()
     const paths = getForemanPaths()
     const config = existsSync(paths.llmConfigPath)
-      ? loadLlmConfig(paths.llmConfigPath)
+      ? safeLoadConfig(paths.llmConfigPath, loadLlmConfig, { label: 'llm.yaml' })
       : defaultLlmConfig()
     if (!feature) {
       config.enabled = true
@@ -138,7 +139,7 @@ llmCommand
       console.log(dim('(no llm.yaml — already disabled)'))
       return
     }
-    const config = loadLlmConfig(paths.llmConfigPath)
+    const config = safeLoadConfig(paths.llmConfigPath, loadLlmConfig, { label: 'llm.yaml' })
     if (!feature) {
       config.enabled = false
       saveLlmConfig(paths.llmConfigPath, config)
@@ -164,7 +165,7 @@ llmCommand
   .action(async () => {
     requireInitialised()
     const paths = getForemanPaths()
-    const config = loadLlmConfig(paths.llmConfigPath)
+    const config = safeLoadConfig(paths.llmConfigPath, loadLlmConfig, { label: 'llm.yaml' })
     if (config.provider !== 'anthropic') {
       console.error(
         red('error: ') +
@@ -221,7 +222,7 @@ llmCommand
     requireInitialised()
     const paths = getForemanPaths()
     const config = existsSync(paths.llmConfigPath)
-      ? loadLlmConfig(paths.llmConfigPath)
+      ? safeLoadConfig(paths.llmConfigPath, loadLlmConfig, { label: 'llm.yaml' })
       : defaultLlmConfig()
 
     let changed = false
