@@ -20,6 +20,7 @@ import {
   planInjection,
   UnsupportedConfigFormatError,
 } from "../core/agent-config-injector.js";
+import { projectSecretsForAgent } from "../core/agent-secrets-projector.js";
 import {
   detectInstall,
   preferredUninstallCommand,
@@ -1364,6 +1365,7 @@ export function SetupWizard({
         (line) => setInstallLog((prev) => [...prev, line]),
         agentConfigs,
         onFailure,
+        { providersSelected, servicesSelected },
       ).then((summary) => {
         setInstallSummary(summary);
         advance("install");
@@ -1540,6 +1542,9 @@ export function SetupWizard({
           </Text>
         </Box>
       )}
+      {installSummary && installSummary.registered.length > 0 && (
+        <LaunchCommands agentIds={installSummary.registered} />
+      )}
       <Box flexDirection="column" marginTop={1}>
         <Text bold>What next?</Text>
         <Text color={theme.fg.muted}>
@@ -1637,6 +1642,11 @@ export type OnAgentInstallFailure = (
   failure: AgentInstallFailure,
 ) => Promise<FailureResolution>;
 
+export interface InstallStepProjectionContext {
+  providersSelected: string[];
+  servicesSelected: string[];
+}
+
 export async function runInstallStep(
   toAdd: string[],
   toRemove: string[],
@@ -1644,6 +1654,10 @@ export async function runInstallStep(
   log: (line: string) => void,
   agentConfigs: AgentConfigsMap = {},
   onFailure?: OnAgentInstallFailure,
+  projectionCtx: InstallStepProjectionContext = {
+    providersSelected: [],
+    servicesSelected: [],
+  },
 ): Promise<InstallStepSummary> {
   const summary: InstallStepSummary = {
     registered: [],
@@ -1778,6 +1792,28 @@ export async function runInstallStep(
       }
     }
 
+    // Secret projection (#222 / #223) — write Foreman-stored keys to the
+    // agent's own env/config files so it launches without a separate setup
+    // step. Best-effort: any failure is a warning, not an install abort.
+    try {
+      const projection = projectSecretsForAgent(entry, {
+        providersSelected: projectionCtx.providersSelected,
+        servicesSelected: projectionCtx.servicesSelected,
+        secretStore: services.secretStore,
+      });
+      for (const f of projection.files) {
+        const tag = f.replacedStale ? "⟳ rotated" : f.created ? "✓ wrote" : "✓ updated";
+        log(`  ${tag} ${f.secrets.length} secret${f.secrets.length === 1 ? "" : "s"} → ${f.path}`);
+      }
+      for (const s of projection.skipped) {
+        log(`  ◦ skip projection of ${s.secret}: ${s.reason}`);
+      }
+    } catch (err) {
+      log(
+        `  ⚠ secret projection failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     if (services.registry.get(id)) {
       log(`  ◦ already registered`);
       continue;
@@ -1842,4 +1878,43 @@ function safeFind(
   } catch {
     return null;
   }
+}
+
+// Done-screen tile that lists how to start each newly-installed agent. Driven
+// by `secret_projection.launch` in the registry — single string OR array of
+// {command, label} (Hermes chat vs gateway, OpenClaw chat vs gateway).
+function LaunchCommands({ agentIds }: { agentIds: string[] }): JSX.Element | null {
+  const { doc } = loadActiveRegistry();
+  const rows = agentIds
+    .map((id) => safeFind(doc, id))
+    .filter((e): e is AgentEntry => e !== null)
+    .filter((e) => e.secret_projection?.launch !== undefined);
+  if (rows.length === 0) return null;
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text bold>Launch your agents</Text>
+      {rows.map((entry) => {
+        const launch = entry.secret_projection!.launch!;
+        const commands = typeof launch === "string"
+          ? [{ command: launch, label: "" }]
+          : launch;
+        return (
+          <Box flexDirection="column" key={entry.id} marginLeft={2}>
+            <Text>
+              <Text color={theme.accent.primary}>▸ {entry.name}</Text>
+            </Text>
+            {commands.map((c, i) => (
+              <Text key={`${entry.id}-${i}`}>
+                {"    "}
+                <Text color={theme.accent.primary}>{c.command}</Text>
+                {c.label ? (
+                  <Text color={theme.fg.muted}>{`  (${c.label})`}</Text>
+                ) : null}
+              </Text>
+            ))}
+          </Box>
+        );
+      })}
+    </Box>
+  );
 }
