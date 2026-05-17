@@ -145,7 +145,10 @@ export function BootBanner({
       </Box>
 
       <Box marginTop={1}>
-        <Divider width={Math.min(60, termCols - 2)} />
+        {/* Clamp from below too — narrow pty / undefined termCols → don't
+            ask for a 0-width divider (handled inside Divider as well, #282
+            belt-and-braces). */}
+        <Divider width={Math.max(10, Math.min(60, termCols - 2))} />
       </Box>
       <Box>
         <Text color={theme.fg.muted}>Press ? for help · q to quit</Text>
