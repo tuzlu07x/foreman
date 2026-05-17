@@ -82,6 +82,15 @@ policyCommand
       process.exit(1);
     }
     if (!options.yes) {
+      // In non-TTY contexts (CI, piped) the prompt auto-cancels — refuse
+      // loudly instead of silently doing nothing (#268, same as #260).
+      if (!process.stdin.isTTY) {
+        console.error(
+          red("error: ") +
+            "refusing to reset policy.yaml in a non-interactive context. Pass --yes to confirm.",
+        );
+        process.exit(1);
+      }
       const ok = await promptYesNo(
         `Overwrite ${paths.policyPath} with the default template? [y/N]`,
       );
@@ -106,6 +115,18 @@ policyCommand
         red("error: ") +
           `Foreman is not initialised. Run 'foreman init' first.`,
       );
+      process.exit(1);
+    }
+    // Launching an editor against a non-TTY pipes vim's TUI escape codes
+    // into the consumer (CI logs, capturing pipe), corrupts the output, and
+    // claims success anyway. Refuse upfront and tell the user where the
+    // file is so they can edit it by hand (#268).
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.error(
+        red("error: ") +
+          "'policy edit' requires an interactive terminal — open the file directly:",
+      );
+      console.error(`       ${paths.policyPath}`);
       process.exit(1);
     }
     await launchEditor(paths.policyPath);
