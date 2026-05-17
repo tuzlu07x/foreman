@@ -54,6 +54,19 @@ export const AgentEntrySchema = z
     mcp_compatible: z.boolean(),
     supported_versions: z.string().min(1),
     min_foreman_version: z.string().min(1),
+    /** Some agents (Hermes notably) maintain their own MCP server registry
+     *  CLI-side rather than reading the YAML/JSON config block we inject.
+     *  When set, the wizard's install log surfaces the CLI command the user
+     *  has to run to wire Foreman into the agent's registry (#298). The
+     *  `{agent_id}` token is substituted with the actual registered agent
+     *  id (matches what we record in `--source`). */
+    mcp_register_cli: z
+      .object({
+        command_template: z.string().min(1),
+        verify_template: z.string().min(1).optional(),
+        note: z.string().optional(),
+      })
+      .optional(),
     /** Where to project Foreman secrets so this agent picks them up at startup
      *  (#222 / #223). When set, after MCP injection the install flow:
      *    1. iterates `env_vars` and `channels`,

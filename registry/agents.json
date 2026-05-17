@@ -22,6 +22,11 @@
       "mcp_compatible": true,
       "supported_versions": ">=2.0.0",
       "min_foreman_version": "0.1.2",
+      "mcp_register_cli": {
+        "command_template": "hermes mcp add foreman --command foreman --args \"mcp-stdio --source {agent_id}\"",
+        "verify_template": "hermes mcp list",
+        "note": "Hermes keeps its own MCP registry separately from the YAML config block. Run this once so it routes through Foreman."
+      },
       "secret_projection": {
         "env_file": "~/.hermes/.env",
         "env_vars": {
