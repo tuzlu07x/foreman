@@ -79,6 +79,10 @@ export const wrapCommand = new Command("wrap")
     if (existsSync(policyPath)) policy.loadFromYaml(policyPath);
     const risk = new RiskScorer(db, undefined, {
       bucketOverrides: () => policy.getBucketOverrides(),
+      // Wire the responsibility-violation rule (#300) — same as start.ts.
+      getAgentResponsibility: (agentId) =>
+        registry.get(agentId)?.responsibilityNote ?? null,
+      responsibilityPolicies: () => policy.getResponsibilityPolicies(),
     });
     const sessionManager = new SessionManager(db, { bus });
     const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
