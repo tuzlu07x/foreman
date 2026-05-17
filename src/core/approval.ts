@@ -34,6 +34,11 @@ export interface ApprovalRequest {
 export interface ApprovalDecision {
   decision: "allowed" | "denied";
   remember?: "allow" | "deny";
+  /** Which user-facing surface resolved this approval (#302). Propagates
+   *  into the mediator's `decidedBy` so the audit log distinguishes
+   *  Telegram-resolved approvals from TUI-resolved ones. Undefined for
+   *  programmatic / timeout resolutions. */
+  via?: "tui" | "telegram" | "discord" | "slack" | "webhook";
 }
 
 export interface ApprovalService {
@@ -141,7 +146,7 @@ export class BusApprovalService implements ApprovalService {
       let settled = false;
       const off = this.bus.on("approval:resolved", (e) => {
         if (e.requestId !== req.requestId) return;
-        finish({ decision: e.decision, remember: e.remember });
+        finish({ decision: e.decision, remember: e.remember, via: e.via });
       });
       const timer = setTimeout(() => {
         finish({ decision: "denied" }, true);

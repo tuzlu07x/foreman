@@ -262,7 +262,9 @@ export class MediatorService {
         sessionId: input.sessionId,
       });
       decision = approval.decision;
-      decidedBy = "user";
+      // #302 — surface the channel that resolved the approval so the audit
+      // log distinguishes Telegram-resolved from TUI-resolved decisions.
+      decidedBy = approval.via ? `user:${approval.via}` : "user";
       if (approval.remember && input.targetTool) {
         const target = input.targetAgent
           ? `${input.targetAgent}:${input.targetTool}`
