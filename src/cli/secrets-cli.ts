@@ -5,13 +5,15 @@ import {
   projectSecretsForAgent,
   type WrittenFile,
 } from "../core/agent-secrets-projector.js";
+import { EventBus, type ForemanEventMap } from "../core/event-bus.js";
 import { loadActiveRegistry } from "../core/registry-catalog.js";
+import { RegistryService } from "../core/registry.js";
 import {
   SecretAlreadyExistsError,
   SecretNotFoundError,
   SecretStore,
 } from "../core/secret-store.js";
-import { closeDb, getDb } from "../db/client.js";
+import { closeDb, getDb, type ForemanDb } from "../db/client.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { getForemanPaths } from "../utils/config.js";
 import { dim, green, orange, red } from "./colors.js";
@@ -248,7 +250,7 @@ secretsCommand
       // file that references it (#222 / #223). Best-effort — a missing config
       // path or a write error is logged but doesn't fail the rotate.
       try {
-        const fanout = fanoutRotation(name, store);
+        const fanout = fanoutRotation(name, store, getDb());
         for (const f of fanout) {
           console.log(
             green("  ↳") +
@@ -275,20 +277,36 @@ interface FanoutFile {
 }
 
 /**
- * Re-project a rotated secret into every agent in the registry that
- * references it. Returns one row per file we touched so the CLI can log
- * what changed. Best-effort: any single agent that fails is dropped from
- * the result with no exception (callers don't want a rotate to abort
- * because one config file is malformed).
+ * Re-project a rotated secret into every **installed** agent that references
+ * it. "Installed" = present in the user's registry DB (added via
+ * `foreman agent add` or `foreman setup`), NOT the bundled catalog. Without
+ * this filter we'd happily create `~/.hermes/.env` etc. for agents the user
+ * has never installed (issue #258).
+ *
+ * Returns one row per file we touched so the CLI can log what changed.
+ * Best-effort: any single agent that fails is dropped from the result with
+ * no exception (callers don't want a rotate to abort because one config
+ * file is malformed).
  */
 function fanoutRotation(
   secretName: string,
   store: SecretStore,
+  db: ForemanDb,
 ): FanoutFile[] {
   const { doc } = loadActiveRegistry();
+  const registry = new RegistryService(db, new EventBus<ForemanEventMap>());
+  const installed = registry.listAll();
+  // Map: catalog entry id → true if the user has at least one agent backed
+  // by that catalog entry. metadata.registryId is set by `registerAgent`.
+  const installedCatalogIds = new Set<string>();
+  for (const a of installed) {
+    const ref = a.metadata?.registryId;
+    if (typeof ref === "string") installedCatalogIds.add(ref);
+  }
   const touched: FanoutFile[] = [];
   for (const entry of doc.agents) {
     if (!entry.secret_projection) continue;
+    if (!installedCatalogIds.has(entry.id)) continue;
     if (!referencesSecret(entry.secret_projection, secretName)) continue;
     // We have no provider/service context here, so pass empty filter arrays —
     // every if_provider / if_service condition will fail-closed and only
