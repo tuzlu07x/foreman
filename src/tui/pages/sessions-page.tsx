@@ -12,6 +12,7 @@ import {
   targetLabel,
 } from "../format.js";
 import { singleBorder, theme } from "../theme.js";
+import { EmptyState } from "../components/empty-state.js";
 import { PageHeader } from "../components/typography.js";
 
 export interface SessionsPageProps {
@@ -84,9 +85,15 @@ export function SessionsPage({
       />
 
       {ordered.length === 0 ? (
-        <Box marginTop={1}>
-          <Text color={theme.fg.muted}>(no sessions yet)</Text>
-        </Box>
+        <EmptyState
+          title="No sessions yet"
+          body="A session is a chain of related tool calls — Foreman groups them so you can replay or halt a runaway loop with one keystroke."
+          commands={[
+            "foreman wrap --name <agent> -- <cmd>  # drive a call",
+            "foreman mcp-stdio                    # connect an agent",
+          ]}
+          hotkeys={["[Esc] back to dashboard"]}
+        />
       ) : (
         <>
           {active.length > 0 && <Section title="Active" status="active" />}
