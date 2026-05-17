@@ -343,6 +343,118 @@ describe('NotificationBridge — race handling (resolved elsewhere)', () => {
   })
 })
 
+describe('NotificationBridge — state filtering (silence + mute)', () => {
+  let db: ForemanDb
+  let sqlite: Database.Database
+  let bus: EventBus<ForemanEventMap>
+  let channel: FakeChannel
+
+  beforeEach(() => {
+    const handle = createInMemoryDb()
+    db = handle.db
+    sqlite = handle.sqlite
+    bus = new EventBus<ForemanEventMap>()
+    channel = new FakeChannel('telegram')
+  })
+
+  afterEach(() => {
+    sqlite.close()
+  })
+
+  it('drops non-critical notifications during a silence window', async () => {
+    const service = new NotificationService({
+      db,
+      config: configWithTelegram(),
+      channels: new Map<ChannelId, NotificationChannel>([['telegram', channel]]),
+    })
+    const bridge = new NotificationBridge(service, {
+      bus,
+      getState: () => ({
+        silencedUntil: Date.now() + 60_000,
+        mutedAgents: [],
+      }),
+    })
+    await bridge.start()
+
+    bus.emit('approval:requested', approvalEvent({ riskBucket: 'medium' }))
+    await tick()
+    expect(channel.sendCalls).toEqual([])
+    await bridge.stop()
+  })
+
+  it('still delivers CRITICAL alerts during a silence window', async () => {
+    const service = new NotificationService({
+      db,
+      config: configWithTelegram(),
+      channels: new Map<ChannelId, NotificationChannel>([['telegram', channel]]),
+    })
+    const bridge = new NotificationBridge(service, {
+      bus,
+      getState: () => ({
+        silencedUntil: Date.now() + 60_000,
+        mutedAgents: [],
+      }),
+    })
+    await bridge.start()
+
+    bus.emit('approval:requested', approvalEvent({ riskBucket: 'critical' }))
+    await tick()
+    expect(channel.sendCalls).toHaveLength(1)
+    expect(channel.sendCalls[0]!.level).toBe('critical')
+    await bridge.stop()
+  })
+
+  it('drops notifications from muted source agents (any level)', async () => {
+    const service = new NotificationService({
+      db,
+      config: configWithTelegram(),
+      channels: new Map<ChannelId, NotificationChannel>([['telegram', channel]]),
+    })
+    const bridge = new NotificationBridge(service, {
+      bus,
+      getState: () => ({
+        silencedUntil: null,
+        mutedAgents: ['hermes'],
+      }),
+    })
+    await bridge.start()
+
+    bus.emit('approval:requested', approvalEvent({ sourceAgent: 'hermes' }))
+    await tick()
+    expect(channel.sendCalls).toEqual([])
+
+    // Other agents still alert
+    bus.emit('approval:requested', approvalEvent({ sourceAgent: 'openclaw' }))
+    await tick()
+    expect(channel.sendCalls).toHaveLength(1)
+    await bridge.stop()
+  })
+
+  it('re-reads state on every dispatch (live updates without restart)', async () => {
+    let muted: string[] = []
+    const service = new NotificationService({
+      db,
+      config: configWithTelegram(),
+      channels: new Map<ChannelId, NotificationChannel>([['telegram', channel]]),
+    })
+    const bridge = new NotificationBridge(service, {
+      bus,
+      getState: () => ({ silencedUntil: null, mutedAgents: [...muted] }),
+    })
+    await bridge.start()
+
+    bus.emit('approval:requested', approvalEvent({ sourceAgent: 'hermes' }))
+    await tick()
+    expect(channel.sendCalls).toHaveLength(1)
+
+    muted = ['hermes']
+    bus.emit('approval:requested', approvalEvent({ sourceAgent: 'hermes' }))
+    await tick()
+    expect(channel.sendCalls).toHaveLength(1) // not 2
+    await bridge.stop()
+  })
+})
+
 describe('NotificationBridge — lifecycle', () => {
   it('start is idempotent', async () => {
     const handle = createInMemoryDb()
