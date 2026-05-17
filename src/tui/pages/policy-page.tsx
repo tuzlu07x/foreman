@@ -4,6 +4,7 @@ import type { policies } from "../../db/schema.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { formatTime } from "../format.js";
 import { singleBorder, theme } from "../theme.js";
+import { EmptyState } from "../components/empty-state.js";
 import { PageHeader } from "../components/typography.js";
 
 export type PolicyRow = typeof policies.$inferSelect;
@@ -71,10 +72,20 @@ export function PolicyPage({
 
       <Box flexDirection="column" marginTop={1}>
         {rows.length === 0 ? (
-          <Text color={theme.fg.muted}>
-            (no rules — edit {policyPath ?? "policy.yaml"} then press e to
-            reload)
-          </Text>
+          <EmptyState
+            title="No policy rules loaded"
+            body={
+              "Policy rules turn the ask/allow/deny decision into deterministic gates per (sourceAgent → target) tuple. " +
+              (policyPath
+                ? `Edit ${policyPath} and press [e] to reload.`
+                : "Save a policy.yaml in $FOREMAN_HOME and press [e] to reload.")
+            }
+            commands={[
+              "foreman init                       # writes a starter policy.yaml",
+              "foreman policy show                # see what would match a call",
+            ]}
+            hotkeys={["[e] reload · [Esc] back"]}
+          />
         ) : (
           visible.map((row, i) => {
             const absoluteIdx = offsetStart + i;
