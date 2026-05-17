@@ -66,6 +66,7 @@ describe('RiskScorer', () => {
       'loop_detection',
       'first_agent_to_agent',
       'previously_denied_pattern',
+      'responsibility_violation',
     ])
   })
 
