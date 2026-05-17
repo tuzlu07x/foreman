@@ -6,8 +6,9 @@ import { RegistryService } from "../core/registry.js";
 import { closeDb, getDb } from "../db/client.js";
 import { launchEditor } from "../tui/launch-editor.js";
 import { getForemanPaths } from "../utils/config.js";
-import { bold, dim, green, orange, red } from "./colors.js";
+import { dim, green, orange, red } from "./colors.js";
 import { DEFAULT_FOREMAN_SOUL } from "./identity-template.js";
+import { requireConfirm, requireTty } from "./require-confirm.js";
 
 export const identityCommand = new Command("identity").description(
   "Foreman's user-facing persona (show / edit / reset / push)",
@@ -44,17 +45,7 @@ identityCommand
       );
       process.exit(1);
     }
-    // Launching an editor against a non-TTY pipes escape codes into the
-    // consumer stream and claims success anyway. Refuse upfront and tell the
-    // user the file path (#274, same as the policy edit fix in #268).
-    if (!process.stdin.isTTY || !process.stdout.isTTY) {
-      console.error(
-        red("error: ") +
-          "'identity edit' requires an interactive terminal — open the file directly:",
-      );
-      console.error(`       ${paths.soulPath}`);
-      process.exit(1);
-    }
+    requireTty({ command: "identity edit", fallbackPath: paths.soulPath });
     if (!existsSync(paths.soulPath)) {
       writeFileSync(paths.soulPath, DEFAULT_FOREMAN_SOUL);
     }
@@ -68,23 +59,14 @@ identityCommand
   .option("--yes", "skip the confirmation prompt")
   .action(async (options: { yes?: boolean }) => {
     const paths = getForemanPaths();
-    if (!options.yes) {
-      // In non-TTY contexts the prompt auto-cancels — refuse loudly instead
-      // of silently doing nothing (#274, same pattern as #260 / #268 / #272).
-      if (!process.stdin.isTTY) {
-        console.error(
-          red("error: ") +
-            "refusing to reset SOUL.md in a non-interactive context. Pass --yes to confirm.",
-        );
-        process.exit(1);
-      }
-      const ok = await confirmYes(
-        `Overwrite ${paths.soulPath} with the default Foreman identity? [y/N]`,
-      );
-      if (!ok) {
-        console.log("(cancelled)");
-        return;
-      }
+    const ok = await requireConfirm({
+      yes: options.yes,
+      question: `Overwrite ${paths.soulPath} with the default Foreman identity?`,
+      noun: "reset SOUL.md",
+    });
+    if (!ok) {
+      console.log("(cancelled)");
+      return;
     }
     writeFileSync(paths.soulPath, DEFAULT_FOREMAN_SOUL);
     console.log(`${green("✓")} ${paths.soulPath} ${dim("reset to template")}`);
@@ -151,14 +133,3 @@ function pushToAgents(soulPath: string): void {
   }
 }
 
-async function confirmYes(prompt: string): Promise<boolean> {
-  if (!process.stdin.isTTY) return false;
-  const { createInterface } = await import("node:readline");
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise<boolean>((resolveQuestion) => {
-    rl.question(`${bold(prompt)} `, (answer) => {
-      rl.close();
-      resolveQuestion(answer.trim().toLowerCase() === "y");
-    });
-  });
-}
