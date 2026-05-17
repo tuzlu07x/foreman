@@ -437,7 +437,10 @@ function handleProviderValueSubmit(
       } else {
         services.secretStore.rotate(storageName, value);
       }
-      setSaved((prev) => [...prev, storageName]);
+      // #341 — dedupe at the source so a re-save (user backed out + re-
+      // entered the same prompt) doesn't append the name twice and
+      // collide as a React key in the summary render.
+      setSaved((prev) => (prev.includes(storageName) ? prev : [...prev, storageName]));
     } catch (err) {
       setWarning(
         `failed to store ${storageName}: ${err instanceof Error ? err.message : String(err)}`,
@@ -445,7 +448,7 @@ function handleProviderValueSubmit(
       return;
     }
   } else {
-    setSkipped((prev) => [...prev, storageName]);
+    setSkipped((prev) => (prev.includes(storageName) ? prev : [...prev, storageName]));
   }
   // Paste-time prefix validation (#291) — soft-warn after save when the
   // pasted key looks like it belongs to a different provider. We always
@@ -1019,8 +1022,10 @@ export function SetupWizard({
               ✓ Saved {savedCount} provider value
               {savedCount === 1 ? "" : "s"}:
             </Text>
-            {providersSaved.map((name) => (
-              <Text key={name} color={theme.fg.muted}>
+            {providersSaved.map((name, idx) => (
+              // #341 — compound key so a re-saved name (user backed out + re-
+              // entered the same prompt) doesn't collide with itself.
+              <Text key={`${name}:${idx}`} color={theme.fg.muted}>
                 {"  "}• {name}
               </Text>
             ))}
@@ -1036,8 +1041,8 @@ export function SetupWizard({
             <Text color={theme.accent.warning}>
               ⚠ Skipped {skippedCount} (empty value):
             </Text>
-            {providersSkipped.map((name) => (
-              <Text key={name} color={theme.fg.muted}>
+            {providersSkipped.map((name, idx) => (
+              <Text key={`${name}:${idx}`} color={theme.fg.muted}>
                 {"  "}• {name}
               </Text>
             ))}
@@ -1441,7 +1446,13 @@ export function SetupWizard({
                 } else {
                   services.secretStore.rotate(prompt.secretName, value);
                 }
-                setServicesSaved((prev) => [...prev, prompt.secretName]);
+                // #341 — dedupe so re-save doesn't double the entry +
+                // collide as a React key in the services summary render.
+                setServicesSaved((prev) =>
+                  prev.includes(prompt.secretName)
+                    ? prev
+                    : [...prev, prompt.secretName],
+                );
               } catch (err) {
                 setServicesWarning(
                   `failed to store ${prompt.secretName}: ${err instanceof Error ? err.message : String(err)}`,
@@ -1449,7 +1460,11 @@ export function SetupWizard({
                 return;
               }
             } else {
-              setServicesSkipped((prev) => [...prev, prompt.secretName]);
+              setServicesSkipped((prev) =>
+                prev.includes(prompt.secretName)
+                  ? prev
+                  : [...prev, prompt.secretName],
+              );
             }
             setServicesWarning(result.warning);
             setServiceIdx(result.nextIdx);
@@ -1475,8 +1490,9 @@ export function SetupWizard({
             <Text color={theme.accent.success}>
               ✓ Wired {savedCount} service{savedCount === 1 ? "" : "s"}:
             </Text>
-            {servicesSaved.map((name) => (
-              <Text key={name} color={theme.fg.muted}>
+            {servicesSaved.map((name, idx) => (
+              // #341 — compound key so a re-saved name doesn't collide.
+              <Text key={`${name}:${idx}`} color={theme.fg.muted}>
                 {"  "}• {name}
               </Text>
             ))}
@@ -1492,8 +1508,8 @@ export function SetupWizard({
             <Text color={theme.accent.warning}>
               ⚠ Skipped {skippedCount} (empty value):
             </Text>
-            {servicesSkipped.map((name) => (
-              <Text key={name} color={theme.fg.muted}>
+            {servicesSkipped.map((name, idx) => (
+              <Text key={`${name}:${idx}`} color={theme.fg.muted}>
                 {"  "}• {name}
               </Text>
             ))}
