@@ -244,6 +244,28 @@ describe('renderPolicyLine', () => {
       expect(out.toUpperCase()).toContain(effect.toUpperCase())
     },
   )
+
+  it('appends +cond tag when the rule has conditions (Bug G)', () => {
+    const out = stripAnsi(
+      renderPolicyLine({
+        ...samplePolicy,
+        conditions: JSON.stringify({ pathMatch: ['\\.env$'] }),
+      }),
+    )
+    expect(out).toContain('+cond')
+  })
+
+  it('does NOT append +cond for unconditional rules', () => {
+    const out = stripAnsi(renderPolicyLine({ ...samplePolicy, conditions: null }))
+    expect(out).not.toContain('+cond')
+  })
+
+  it('does NOT append +cond for an empty conditions object', () => {
+    const out = stripAnsi(
+      renderPolicyLine({ ...samplePolicy, conditions: '{}' }),
+    )
+    expect(out).not.toContain('+cond')
+  })
 })
 
 describe('renderPolicyJson', () => {
