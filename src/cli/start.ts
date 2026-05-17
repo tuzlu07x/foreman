@@ -531,6 +531,21 @@ export const startCommand = new Command("start")
   )
   .action(
     async (options: { onboarding?: boolean; skipSetup?: boolean }) => {
+      // The dashboard is an Ink TUI — rendering it against a non-TTY pipe
+      // dumps escape-code soup into stdout and the interactive event loop
+      // never exits (CI hangs forever). Match `foreman setup`'s guard and
+      // refuse upfront with scripted alternatives (#278).
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        console.error(
+          red("error: ") +
+            "foreman start requires an interactive terminal — the TUI cannot render to a pipe.",
+        );
+        console.error("  → Run it directly in a terminal.");
+        console.error(
+          "  → Or use `foreman mcp-stdio` (machine-readable) / `foreman wrap <cmd>` (audited subprocess) for scripted contexts.",
+        );
+        process.exit(1);
+      }
       const flagSkip = options.onboarding === false || options.skipSetup;
       if (!flagSkip && looksLikeFreshInstall()) {
         const previousState = loadSetupState();
