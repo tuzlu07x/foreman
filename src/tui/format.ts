@@ -19,6 +19,28 @@ export function formatDuration(ms: number | null): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+/** Human-friendly relative time (#234 UX-10). Used in the activity feed so a
+ *  row reads "12s ago" / "3m ago" / "2h ago" / "5d ago" instead of an
+ *  absolute HH:MM:SS stamp that needs mental math at a glance. */
+export function relativeTime(
+  epochMs: number,
+  now: number = Date.now(),
+): string {
+  const deltaMs = Math.max(0, now - epochMs);
+  if (deltaMs < 5_000) return "just now";
+  const seconds = Math.floor(deltaMs / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.floor(months / 12)}y ago`;
+}
+
 export function statusIconFor(decision: "allowed" | "denied" | "pending"): {
   icon: string;
   tone: "success" | "danger" | "warning";
