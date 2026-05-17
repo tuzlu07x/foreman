@@ -333,6 +333,60 @@ export function checkNotifyConfig(): CheckResult {
   }
 }
 
+// LLM config — best-effort lint. Doesn't try to talk to the provider; just
+// confirms the YAML parses + when global is on, the referenced credential
+// secret resolves.
+export function checkLlmConfig(): CheckResult {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.llmConfigPath)) {
+    return {
+      name: "llm_config",
+      status: "ok",
+      message: "llm.yaml absent — LLM features disabled (the default)",
+    };
+  }
+  try {
+    const text = readFileSync(paths.llmConfigPath, "utf-8");
+    const parsed = parseYaml(text);
+    if (
+      parsed !== null &&
+      (typeof parsed !== "object" || Array.isArray(parsed))
+    ) {
+      return {
+        name: "llm_config",
+        status: "fail",
+        message: "llm.yaml top-level must be an object (or empty)",
+        remediation: `Edit ${paths.llmConfigPath} — see docs/llm.md.`,
+      };
+    }
+    const obj = (parsed ?? {}) as {
+      enabled?: boolean;
+      provider?: string;
+    };
+    const enabled = obj.enabled === true;
+    const provider = obj.provider ?? "anthropic";
+    if (!enabled) {
+      return {
+        name: "llm_config",
+        status: "ok",
+        message: `parses (global off, default provider ${provider})`,
+      };
+    }
+    return {
+      name: "llm_config",
+      status: "ok",
+      message: `parses (global ON, provider ${provider}) — run \`foreman llm test\` to verify credentials`,
+    };
+  } catch (err) {
+    return {
+      name: "llm_config",
+      status: "fail",
+      message: `llm.yaml failed to parse: ${err instanceof Error ? err.message : String(err)}`,
+      remediation: `Open ${paths.llmConfigPath} and fix the YAML syntax.`,
+    };
+  }
+}
+
 export function checkAgentsRegistered(): CheckResult {
   const paths = getForemanPaths();
   if (!existsSync(paths.dbPath)) {
@@ -529,6 +583,7 @@ const CHECKS: (() => CheckResult)[] = [
   checkFts5,
   checkPolicyYaml,
   checkNotifyConfig,
+  checkLlmConfig,
   checkAgentsRegistered,
   checkMcpGateway,
   checkLegacyHome,
