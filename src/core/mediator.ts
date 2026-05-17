@@ -17,6 +17,7 @@ import type {
 } from "./risk-rules/types.js";
 import { combineAssessment, type LlmVerifier } from "./llm/verifier.js";
 import { contextFromAssessment } from "./llm/prompts.js";
+import { generateReport, type SecurityReport } from "./security-report.js";
 import type { RegistryService } from "./registry.js";
 import { eq } from "drizzle-orm";
 import type { ForemanDb } from "../db/client.js";
@@ -188,6 +189,23 @@ export class MediatorService {
       }
     }
 
+    // Build the SecurityReport from the (possibly LLM-augmented) assessment
+    // so the modal + audit row + future renderers all consume one shape.
+    // Failures here must not block the call — fall back to a null report and
+    // the modal will use its legacy factor rendering.
+    let securityReport: SecurityReport | null = null;
+    try {
+      securityReport = generateReport({
+        sourceAgent: input.sourceAgent,
+        targetAgent: input.targetAgent,
+        targetTool: input.targetTool,
+        args: this.argsFromMessage(input.message),
+        assessment,
+      });
+    } catch {
+      securityReport = null;
+    }
+
     let decision: "allowed" | "denied";
     let decidedBy: string;
 
@@ -220,6 +238,7 @@ export class MediatorService {
         riskFactors: assessment.factors,
         riskBucket: assessment.bucket,
         llmVerification: assessment.llmVerification,
+        securityReport,
         sessionId: input.sessionId,
       });
       const approval = await this.deps.approval.request({
@@ -233,6 +252,7 @@ export class MediatorService {
         riskFactors: assessment.factors,
         riskBucket: assessment.bucket,
         llmVerification: assessment.llmVerification,
+        securityReport,
         sessionId: input.sessionId,
       });
       decision = approval.decision;
@@ -284,6 +304,7 @@ export class MediatorService {
       assessment,
       createdAt,
       result,
+      securityReport,
     });
   }
 
@@ -460,6 +481,7 @@ export class MediatorService {
       riskFactors: [],
       riskBucket: "low",
       llmVerification: null,
+      securityReport: null,
       result: args.result,
       durationMs: decidedAt - args.createdAt,
       createdAt: args.createdAt,
@@ -475,10 +497,18 @@ export class MediatorService {
     assessment: RiskAssessment;
     createdAt: number;
     result?: unknown;
+    securityReport?: SecurityReport | null;
   }): MediatorOutput {
     const decidedAt = Date.now();
     const durationMs = decidedAt - args.createdAt;
     const riskReasons = args.assessment.factors.map((f) => f.rule);
+    // If the caller didn't pre-compute a report, derive one now so the audit
+    // row always carries a payload (early-exit paths like auth-failure or
+    // policy-deny pass null which yields a minimal heuristic-only report).
+    const securityReport: SecurityReport | null =
+      args.securityReport !== undefined
+        ? args.securityReport
+        : safeBuildReport(args.input, args.assessment);
     this.bus.emit("request:decided", {
       requestId: args.requestId,
       sourceAgent: args.input.sourceAgent,
@@ -492,6 +522,7 @@ export class MediatorService {
       riskFactors: args.assessment.factors,
       riskBucket: args.assessment.bucket,
       llmVerification: args.assessment.llmVerification,
+      securityReport,
       result: args.result,
       durationMs,
       createdAt: args.createdAt,
@@ -509,6 +540,27 @@ export class MediatorService {
       result: args.result,
       durationMs,
     };
+  }
+  private argsFromMessageForReport(input: MediatorInput): unknown {
+    return this.argsFromMessage(input.message);
+  }
+}
+
+function safeBuildReport(
+  input: MediatorInput,
+  assessment: RiskAssessment,
+): SecurityReport | null {
+  try {
+    return generateReport({
+      sourceAgent: input.sourceAgent,
+      targetAgent: input.targetAgent,
+      targetTool: input.targetTool,
+      args: (input.message as { params?: { arguments?: unknown } })?.params
+        ?.arguments,
+      assessment,
+    });
+  } catch {
+    return null;
   }
 }
 

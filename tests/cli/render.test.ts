@@ -28,6 +28,7 @@ const sampleRequest: Request = {
   riskFactors: null,
   riskBucket: null,
   llmVerification: null,
+  securityReport: null,
   decision: 'allowed',
   decidedBy: 'policy:7',
   result: JSON.stringify({ size: 1234 }),
@@ -131,6 +132,63 @@ describe('renderRequestDetail', () => {
     expect(out).toContain('reasons       secret_file_pattern')
     expect(out).toContain('"path": "src/auth.ts"')
     expect(out).toContain('"size": 1234')
+  })
+
+  it('renders security report block when present (verdict + recommendation)', () => {
+    const report = {
+      oneLineSummary: 'hermes wants to read .env',
+      verdict: {
+        severity: 'critical',
+        confidence: 0.9,
+        icon: '🔴',
+        label: 'LIKELY THREAT — Credential Theft (confidence 90%)',
+        threatType: 'credential_theft',
+      },
+      narrative: {
+        whatHappening: 'Reads what looks like a credential file.',
+        thingsToCheck: ['Did you initiate this?'],
+        recommendation: 'deny',
+      },
+      technical: {
+        factors: [],
+        heuristicScore: 70,
+        llmAdjustment: 10,
+        finalScore: 80,
+        bucket: 'high',
+      },
+      source: 'llm_verified',
+      reportLatencyMs: 12,
+    }
+    const out = stripAnsi(
+      renderRequestDetail({
+        ...sampleRequest,
+        securityReport: JSON.stringify(report),
+      }),
+    )
+    expect(out).toContain('security report')
+    expect(out).toContain('LIKELY THREAT — Credential Theft')
+    expect(out).toContain('Reads what looks like a credential file.')
+    expect(out).toContain('Did you initiate this?')
+    expect(out).toContain('foreman → deny')
+    expect(out).toContain('source: llm_verified')
+  })
+})
+
+describe('renderRequestJson — securityReport round-trips', () => {
+  it('parses securityReport JSON back into an object', () => {
+    const report = { source: 'heuristic_only', verdict: { severity: 'low' } }
+    const out = renderRequestJson({
+      ...sampleRequest,
+      securityReport: JSON.stringify(report),
+    }) as { securityReport: { source: string } }
+    expect(out.securityReport.source).toBe('heuristic_only')
+  })
+
+  it('returns null when securityReport is missing', () => {
+    const out = renderRequestJson(sampleRequest) as {
+      securityReport: unknown
+    }
+    expect(out.securityReport).toBeNull()
   })
 })
 

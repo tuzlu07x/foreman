@@ -4,6 +4,7 @@ import type {
   RiskBucket,
   RiskFactor,
 } from "./risk-rules/types.js";
+import type { SecurityReport } from "./security-report.js";
 
 /**
  * Payload shapes for every v0.1 event. Adding a new event = add a key
@@ -32,6 +33,8 @@ export interface ForemanEventMap {
     riskFactors: RiskFactor[];
     riskBucket: RiskBucket;
     llmVerification: LlmVerification | null;
+    /** Three-layer modal payload (#232 / C9). Persisted on the audit row. */
+    securityReport: SecurityReport | null;
     result?: unknown;
     durationMs: number;
     createdAt: number;
@@ -74,6 +77,8 @@ export interface ForemanEventMap {
     riskFactors: RiskFactor[];
     riskBucket: RiskBucket;
     llmVerification: LlmVerification | null;
+    /** Three-layer modal payload (#232 / C9). Drives the modal rendering. */
+    securityReport: SecurityReport | null;
     sessionId?: string;
   };
   "approval:resolved": {

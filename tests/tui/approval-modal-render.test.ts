@@ -38,6 +38,7 @@ function makeRequest(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest 
     ],
     riskBucket: 'high',
     llmVerification: null,
+    securityReport: null,
     ...overrides,
   }
 }

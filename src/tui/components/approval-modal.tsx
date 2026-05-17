@@ -5,6 +5,10 @@ import type {
   RiskCategory,
   RiskFactor,
 } from "../../core/risk-rules/types.js";
+import type {
+  ReportSource,
+  SecurityReport,
+} from "../../core/security-report.js";
 import { explain } from "../reason-explanations.js";
 import { doubleBorder, theme } from "../theme.js";
 
@@ -18,6 +22,8 @@ export interface ApprovalResolution {
 export interface ApprovalModalProps {
   request: ApprovalRequest;
   remainingSeconds: number;
+  /** Layer 3 (technical detail) visibility — toggled with [t]. */
+  technicalExpanded?: boolean;
 }
 
 const CATEGORY_ORDER: RiskCategory[] = [
@@ -54,6 +60,18 @@ const BUCKET_LABELS: Record<RiskBucket, string> = {
   critical: "CRITICAL RISK",
 };
 
+const SOURCE_FOOTER: Record<ReportSource, string> = {
+  llm_verified: "Smart analysis: contextual verification ran on this request.",
+  llm_disabled:
+    "Smart analysis is off. Run `foreman llm enable` for contextual reports.",
+  llm_budget_exhausted:
+    "Smart analysis paused — monthly LLM budget exhausted. Resets next cycle.",
+  llm_failed_fallback:
+    "Smart analysis temporarily unavailable (provider error). Heuristic-only.",
+  heuristic_only:
+    "Heuristic-only report. Run `foreman llm enable` for contextual analysis.",
+};
+
 function bucketColor(bucket: RiskBucket): string {
   switch (bucket) {
     case "critical":
@@ -68,10 +86,247 @@ function bucketColor(bucket: RiskBucket): string {
   }
 }
 
+function severityColor(report: SecurityReport): string {
+  switch (report.verdict.severity) {
+    case "critical":
+      return theme.accent.danger;
+    case "high":
+    case "uncertain":
+      return theme.accent.primary;
+    case "medium":
+      return theme.accent.warning;
+    case "likely_legitimate":
+    case "low":
+    default:
+      return theme.accent.success;
+  }
+}
+
 export function ApprovalModal({
   request,
   remainingSeconds,
+  technicalExpanded = false,
 }: ApprovalModalProps): JSX.Element {
+  // Prefer the 3-layer security report when available; fall back to the
+  // legacy factor-grouped view for cross-process / pre-#232 requests.
+  if (request.securityReport) {
+    return (
+      <ReportModal
+        request={request}
+        report={request.securityReport}
+        remainingSeconds={remainingSeconds}
+        technicalExpanded={technicalExpanded}
+      />
+    );
+  }
+  return (
+    <LegacyModal request={request} remainingSeconds={remainingSeconds} />
+  );
+}
+
+// =============================================================================
+// 3-layer (SecurityReport) modal — #232 / C9
+// =============================================================================
+
+function ReportModal({
+  request,
+  report,
+  remainingSeconds,
+  technicalExpanded,
+}: {
+  request: ApprovalRequest;
+  report: SecurityReport;
+  remainingSeconds: number;
+  technicalExpanded: boolean;
+}): JSX.Element {
+  const color = severityColor(report);
+  return (
+    <Box
+      flexDirection="column"
+      borderStyle={doubleBorder()}
+      borderColor={color}
+      paddingX={2}
+      paddingY={0}
+    >
+      {/* Layer 1 — Verdict */}
+      <VerdictHeader report={report} color={color} />
+
+      <Box marginTop={1}>
+        <Text>{report.oneLineSummary}</Text>
+      </Box>
+
+      {/* Layer 2 — Narrative */}
+      <NarrativeBlock report={report} color={color} />
+
+      {/* Layer 3 — Technical (collapsible) */}
+      {technicalExpanded ? (
+        <TechnicalBlock report={report} request={request} />
+      ) : (
+        <Box marginTop={1}>
+          <Text color={theme.fg.muted}>
+            Press [t] for technical detail ({report.technical.factors.length}{" "}
+            factor{report.technical.factors.length === 1 ? "" : "s"}, score{" "}
+            {report.technical.finalScore}/100).
+          </Text>
+        </Box>
+      )}
+
+      <Box marginTop={1}>
+        <Text color={theme.fg.muted}>{SOURCE_FOOTER[report.source]}</Text>
+      </Box>
+
+      <Box marginTop={1}>
+        <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>
+      </Box>
+
+      <HotkeyRow
+        showHalt={
+          Boolean(request.sessionId) &&
+          report.technical.factors.some((f) => f.category === "loop")
+        }
+        showTechnicalToggle
+        technicalExpanded={technicalExpanded}
+      />
+
+      <Box marginTop={1} justifyContent="flex-end">
+        <TimerLabel remainingSeconds={remainingSeconds} />
+      </Box>
+    </Box>
+  );
+}
+
+function VerdictHeader({
+  report,
+  color,
+}: {
+  report: SecurityReport;
+  color: string;
+}): JSX.Element {
+  const recommendation = report.narrative.recommendation;
+  const recColor =
+    recommendation === "deny"
+      ? theme.accent.danger
+      : recommendation === "ask"
+        ? theme.accent.warning
+        : theme.accent.success;
+  return (
+    <Box flexDirection="row" justifyContent="space-between">
+      <Box flexDirection="column">
+        <Text>{"   ___"}</Text>
+        <Text>
+          {"  (o.o)  "}
+          <Text bold color={color}>
+            {report.verdict.icon} {report.verdict.label}
+          </Text>
+        </Text>
+        <Text>{"   \\_/"}</Text>
+      </Box>
+      <Box flexDirection="column" alignItems="flex-end">
+        <Text color={color}>
+          score <Text bold>{report.technical.finalScore}</Text>/100
+        </Text>
+        <Text color={recColor}>foreman → {recommendation}</Text>
+      </Box>
+    </Box>
+  );
+}
+
+function NarrativeBlock({
+  report,
+  color,
+}: {
+  report: SecurityReport;
+  color: string;
+}): JSX.Element {
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text color={theme.fg.muted}>What's happening:</Text>
+      <Box paddingLeft={2}>
+        <Text>{report.narrative.whatHappening}</Text>
+      </Box>
+      <Box marginTop={1}>
+        <Text color={theme.fg.muted}>Things to check:</Text>
+      </Box>
+      {report.narrative.thingsToCheck.map((item, i) => (
+        <Text key={`check-${i}`}>
+          {"    "}
+          <Text color={color}>{theme.symbols.reason}</Text> {item}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
+function TechnicalBlock({
+  report,
+  request,
+}: {
+  report: SecurityReport;
+  request: ApprovalRequest;
+}): JSX.Element {
+  const grouped = groupFactors(report.technical.factors);
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text color={theme.fg.muted}>Technical detail:</Text>
+      <Box paddingLeft={2}>
+        <Text color={theme.fg.muted}>
+          heuristic {report.technical.heuristicScore}
+          {report.technical.llmAdjustment !== null
+            ? ` · LLM ${report.technical.llmAdjustment >= 0 ? "+" : ""}${report.technical.llmAdjustment}`
+            : ""}{" "}
+          → final {report.technical.finalScore}/100 ({report.technical.bucket})
+        </Text>
+      </Box>
+      {grouped.length > 0 ? (
+        grouped.map((group) => (
+          <FactorGroup
+            key={group.category}
+            category={group.category}
+            factors={group.factors}
+            totalPoints={group.totalPoints}
+          />
+        ))
+      ) : request.riskReasons.length > 0 ? (
+        <Box flexDirection="column" marginTop={1} paddingLeft={2}>
+          {request.riskReasons.map((r) => (
+            <Text key={r} color={theme.fg.muted}>
+              · {r}
+              {explain(r) ? <Text>{`  (${explain(r)})`}</Text> : null}
+            </Text>
+          ))}
+        </Box>
+      ) : (
+        <Box paddingLeft={2}>
+          <Text color={theme.fg.muted}>
+            No specific factors fired — policy asked for explicit approval.
+          </Text>
+        </Box>
+      )}
+      {request.context ? (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color={theme.fg.muted}>Context:</Text>
+          <Text italic color={theme.fg.muted}>
+            {'    "'}
+            {request.context}
+            {'"'}
+          </Text>
+        </Box>
+      ) : null}
+    </Box>
+  );
+}
+
+// =============================================================================
+// Legacy fallback modal (no SecurityReport on request)
+// =============================================================================
+
+function LegacyModal({
+  request,
+  remainingSeconds,
+}: {
+  request: ApprovalRequest;
+  remainingSeconds: number;
+}): JSX.Element {
   const bucket: RiskBucket = request.riskBucket ?? "medium";
   const borderColor = bucketColor(bucket);
   const grouped = groupFactors(request.riskFactors ?? []);
@@ -85,7 +340,7 @@ export function ApprovalModal({
       paddingX={2}
       paddingY={0}
     >
-      <ModalHeader
+      <LegacyHeader
         bucket={bucket}
         bucketColor={borderColor}
         riskScore={request.riskScore}
@@ -165,7 +420,7 @@ export function ApprovalModal({
   );
 }
 
-function ModalHeader({
+function LegacyHeader({
   bucket,
   bucketColor,
   riskScore,
@@ -192,6 +447,10 @@ function ModalHeader({
     </Box>
   );
 }
+
+// =============================================================================
+// Shared factor grouping + hotkey row
+// =============================================================================
 
 interface FactorGroupEntry {
   category: RiskCategory;
@@ -264,7 +523,15 @@ function FactorLine({ factor }: { factor: RiskFactor }): JSX.Element {
   );
 }
 
-function HotkeyRow({ showHalt }: { showHalt: boolean }): JSX.Element {
+function HotkeyRow({
+  showHalt,
+  showTechnicalToggle = false,
+  technicalExpanded = false,
+}: {
+  showHalt: boolean;
+  showTechnicalToggle?: boolean;
+  technicalExpanded?: boolean;
+}): JSX.Element {
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text>
@@ -282,6 +549,15 @@ function HotkeyRow({ showHalt }: { showHalt: boolean }): JSX.Element {
           i
         </Text>
         ]nspect
+        {showTechnicalToggle ? (
+          <>
+            {" "}[
+            <Text color={theme.accent.primary} bold>
+              t
+            </Text>
+            ]{technicalExpanded ? "hide" : "echnical"}
+          </>
+        ) : null}
         {showHalt ? (
           <>
             {" "}[

@@ -26,6 +26,7 @@ function makeRequest(
     riskFactors: [],
     riskBucket: "high",
     llmVerification: null,
+    securityReport: null,
     ...overrides,
   };
 }
@@ -74,6 +75,7 @@ describe("DenyAllApprovalService", () => {
       riskFactors: [],
       riskBucket: "low",
       llmVerification: null,
+      securityReport: null,
     });
     expect(decision.decision).toBe("denied");
   });

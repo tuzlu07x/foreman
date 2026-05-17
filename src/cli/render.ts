@@ -35,6 +35,7 @@ export function renderRequestJson(row: Request): unknown {
     riskFactors: row.riskFactors ? safeParse(row.riskFactors) : [],
     riskBucket: row.riskBucket,
     llmVerification: row.llmVerification ? safeParse(row.llmVerification) : null,
+    securityReport: row.securityReport ? safeParse(row.securityReport) : null,
     decision: row.decision,
     decidedBy: row.decidedBy,
     durationMs: row.durationMs,
@@ -63,6 +64,10 @@ export function renderRequestDetail(row: Request): string {
     orange("args"),
     indent(prettyJson(row.args)),
   ];
+  if (row.securityReport) {
+    const summary = formatSecurityReport(row.securityReport);
+    if (summary) lines.push("", orange("security report"), indent(summary));
+  }
   if (row.result) {
     lines.push("", orange("result"), indent(prettyJson(row.result)));
   }
@@ -143,6 +148,44 @@ function formatList(json: string): string {
   const parsed = safeParse(json);
   if (Array.isArray(parsed)) return parsed.join(", ");
   return json;
+}
+
+function formatSecurityReport(json: string): string | null {
+  const parsed = safeParse(json);
+  if (!parsed || typeof parsed !== "object") return null;
+  const r = parsed as {
+    oneLineSummary?: unknown;
+    verdict?: { label?: unknown; icon?: unknown };
+    narrative?: {
+      whatHappening?: unknown;
+      thingsToCheck?: unknown;
+      recommendation?: unknown;
+    };
+    source?: unknown;
+  };
+  const out: string[] = [];
+  if (r.verdict && typeof r.verdict.label === "string") {
+    const icon = typeof r.verdict.icon === "string" ? `${r.verdict.icon} ` : "";
+    out.push(`${icon}${r.verdict.label}`);
+  }
+  if (typeof r.oneLineSummary === "string") out.push(r.oneLineSummary);
+  if (r.narrative && typeof r.narrative.whatHappening === "string") {
+    out.push("", "what's happening:", indent(r.narrative.whatHappening));
+  }
+  if (r.narrative && Array.isArray(r.narrative.thingsToCheck)) {
+    const items = r.narrative.thingsToCheck.filter(
+      (x): x is string => typeof x === "string",
+    );
+    if (items.length > 0) {
+      out.push("", "things to check:");
+      for (const item of items) out.push(`  · ${item}`);
+    }
+  }
+  if (r.narrative && typeof r.narrative.recommendation === "string") {
+    out.push("", `foreman → ${r.narrative.recommendation}`);
+  }
+  if (typeof r.source === "string") out.push(dim(`source: ${r.source}`));
+  return out.length > 0 ? out.join("\n") : null;
 }
 
 function formatFactors(json: string): string {

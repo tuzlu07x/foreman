@@ -131,6 +131,7 @@ logCommand
         | "critical"
         | null,
       llmVerification: (row.llm_verification ?? null) as string | null,
+      securityReport: (row.security_report ?? null) as string | null,
       decision: row.decision as "allowed" | "denied" | "pending",
       decidedBy: row.decided_by as string | null,
       result: row.result as string | null,
