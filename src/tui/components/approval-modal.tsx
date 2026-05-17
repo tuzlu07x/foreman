@@ -10,7 +10,7 @@ import type {
   SecurityReport,
 } from "../../core/security-report.js";
 import { explain } from "../reason-explanations.js";
-import { doubleBorder, theme } from "../theme.js";
+import { doubleBorder, riskColor, theme } from "../theme.js";
 
 export type ResolvedBy = "user" | "timeout";
 
@@ -73,32 +73,25 @@ const SOURCE_FOOTER: Record<ReportSource, string> = {
 };
 
 function bucketColor(bucket: RiskBucket): string {
-  switch (bucket) {
-    case "critical":
-      return theme.accent.danger;
-    case "high":
-      return theme.accent.primary;
-    case "medium":
-      return theme.accent.warning;
-    case "low":
-    default:
-      return theme.accent.success;
-  }
+  return riskColor(bucket);
 }
 
 function severityColor(report: SecurityReport): string {
+  // Map the modal's extra severities (uncertain / likely_legitimate) onto
+  // the canonical RiskBucket palette so risk colors stay consistent across
+  // legacy + report modal paths (#234 UX-1).
   switch (report.verdict.severity) {
     case "critical":
-      return theme.accent.danger;
+      return riskColor("critical");
     case "high":
     case "uncertain":
-      return theme.accent.primary;
+      return riskColor("high");
     case "medium":
-      return theme.accent.warning;
+      return riskColor("medium");
     case "likely_legitimate":
     case "low":
     default:
-      return theme.accent.success;
+      return riskColor("low");
   }
 }
 

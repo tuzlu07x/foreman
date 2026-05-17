@@ -9,21 +9,12 @@ import {
   type InspectLine,
   type LineColor,
 } from '../inspect-content.js'
-import { doubleBorder, theme } from '../theme.js'
+import { doubleBorder, riskColor, theme } from '../theme.js'
 
 function bucketColor(bucket: RiskBucket | undefined): string {
-  switch (bucket) {
-    case 'critical':
-      return theme.accent.danger
-    case 'high':
-      return theme.accent.primary
-    case 'medium':
-      return theme.accent.warning
-    case 'low':
-      return theme.accent.success
-    default:
-      return theme.accent.warning
-  }
+  // Default to medium (warning) when the bucket is missing — pre-#232 rows
+  // don't carry a bucket but the inspect view still wants a colour cue.
+  return riskColor(bucket ?? 'medium')
 }
 
 const VISIBLE_LINES = 22
