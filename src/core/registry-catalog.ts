@@ -169,6 +169,12 @@ export const ProviderEntrySchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
   secret_name: z.string().nullable(),
+  /** Optional expected prefix for paste-time validation in the wizard
+   *  (#291) — warns when the user pastes a key that doesn't start with
+   *  this, surfacing cross-provider mistakes early (e.g. OpenAI sk-proj-
+   *  pasted into the Anthropic slot). Nullable so providers without a
+   *  stable prefix convention (Ollama, custom) opt out. */
+  key_prefix: z.string().nullable().optional(),
   where_to_get: z.string().url().nullable(),
   format_hint: z.string().nullable(),
   instructions: z.array(z.string()),

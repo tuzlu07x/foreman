@@ -89,7 +89,7 @@ export function defaultLlmConfig(): LlmConfig {
       ollama: { endpoint: 'http://localhost:11434', secret_name: null },
       openai_compatible: {
         endpoint_secret: 'openai-compatible-endpoint',
-        key_secret: 'openai-compatible-api-key',
+        key_secret: 'openai-compatible-key',
       },
     },
   })
