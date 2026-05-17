@@ -23,14 +23,18 @@ channels:
     bot_token_ref: telegram-bot-token   # key in Foreman's secret store
     chat_id: "123456789"                # your numeric Telegram chat id
 
-  # Discord / Slack / Webhook / System — placeholders, implemented in C11b
+  webhook:                              # outbound-only — see §3b
+    enabled: false
+    webhook_url_ref: webhook-url        # secret ref for destination URL
+    signing_secret_ref: webhook-secret  # optional — HMAC-SHA256 signing
+
+  system:                               # macOS / Linux native notifications
+    enabled: false
+
+  # Discord / Slack — placeholders, implemented in C11b-2 (next slice)
   discord:
     enabled: false
   slack:
-    enabled: false
-  webhook:
-    enabled: false
-  system:
     enabled: false
 
 routing:
@@ -89,6 +93,82 @@ foreman notify enable telegram
 foreman notify test telegram
 # → check your Telegram chat — you should see a "Foreman test ✓" message
 ```
+
+---
+
+## 3b. Webhook + System channels (C11b-1)
+
+Two **outbound-only** channels for deployments that want delivery without bidirectional callbacks. They send alerts but can't capture user decisions — pair them with Telegram (or the TUI) for the actual deciding.
+
+### Webhook — generic HTTP POST integration
+
+Routes every notification as a JSON POST to your configured URL. Suitable for Discord/Slack-incoming webhooks, n8n / Zapier / PagerDuty, or your own relay.
+
+```bash
+foreman secrets add webhook-url
+# paste the URL, hit Enter
+foreman secrets add webhook-secret      # optional — HMAC signing key
+foreman notify enable webhook
+foreman notify test webhook
+```
+
+Then edit `~/.foreman/notify.yaml`:
+
+```yaml
+channels:
+  webhook:
+    enabled: true
+    webhook_url_ref: webhook-url
+    signing_secret_ref: webhook-secret   # optional
+```
+
+**Payload shape** (`schema: "foreman.notification.v1"`):
+
+```json
+{
+  "schema": "foreman.notification.v1",
+  "id": "01JZ...",
+  "level": "critical",
+  "requestId": "req-abc",
+  "title": "[CRITICAL] hermes → claude-code · read_file",
+  "body": "Risk score: 80/100 (high)\n\nSecret-related (+60 pts):\n  +60  .env-style file …",
+  "actions": [
+    { "id": "allow", "label": "Allow once", "style": "primary" },
+    { "id": "deny", "label": "Deny", "style": "danger" }
+  ],
+  "agentBlocking": true,
+  "sentAt": 1779800000000
+}
+```
+
+**HMAC verification** — receivers should validate:
+
+```js
+const expected = "sha256=" + hmacSha256(SIGNING_SECRET, rawBody);
+if (!constantTimeEqual(expected, req.headers["x-foreman-signature"])) {
+  return reject("invalid signature");
+}
+```
+
+**No callback support yet** — Foreman doesn't run an inbound HTTP server in v0.1, so webhooks are delivery-only. A bidirectional flow (your automation POSTs back a decision) needs significant new infrastructure; tracked as a follow-up.
+
+### System — macOS / Linux native notifications
+
+Spawns `osascript "display notification …"` on macOS or `notify-send` (libnotify) on Linux. Useful as a heads-up *while you're at the terminal* — "you have a pending approval in the TUI". Native OS notifications don't support reliable button-callback capture from a CLI-spawned process, so this is outbound-only too.
+
+```yaml
+channels:
+  system:
+    enabled: true
+```
+
+```bash
+foreman notify enable system
+foreman notify test system
+# → look for a banner in your top-right corner (macOS) or notification area (Linux)
+```
+
+Windows support is deferred to v0.2 (PowerShell BurntToast).
 
 ---
 
@@ -166,8 +246,9 @@ C11a-2 ships the **`NotificationBridge`** — the missing wire from `onAnyDecisi
 | PR | Scope | Status |
 |---|---|---|
 | C11a-1 | Foundation: notify.yaml + NotificationService + TelegramChannel + CLI + migration + doctor | shipped |
-| **C11a-2** (this) | Mediator wire: NotificationBridge bridges bus ↔ channels; OOB tap unblocks the agent; "resolved elsewhere" update on race | shipped |
-| C11b | Discord / Slack / Webhook / System channels | follow-up |
+| C11a-2 | Mediator wire: NotificationBridge bridges bus ↔ channels; OOB tap unblocks the agent; "resolved elsewhere" update on race | shipped |
+| **C11b-1** (this) | Webhook (HMAC-signed outbound) + System (macOS osascript / Linux notify-send) channels | shipped |
+| C11b-2 | Discord (interactive components) + Slack (Block Kit, socket mode) — bidirectional channels | follow-up |
 | C11c | Daily digest scheduler + silence / mute commands | follow-up |
 
 ---
