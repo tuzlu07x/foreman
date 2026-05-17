@@ -63,16 +63,24 @@ export function ChatPage({
     >
       <Box justifyContent="space-between">
         <Text color={theme.accent.primary} bold>
-          Chat / Test console
+          Mediator test console
         </Text>
         <Text color={theme.fg.muted}>{scrollback.length} entries</Text>
+      </Box>
+      <Box marginTop={1}>
+        <Text color={theme.fg.muted}>
+          This isn't an LLM chat. Type a tool name + JSON args; Foreman runs
+          it through the mediator as if your agent did. To actually talk to
+          a model, use the agent itself (e.g. Hermes on Telegram, Claude
+          Code in your editor) — Foreman intercepts its tool calls.
+        </Text>
       </Box>
 
       <Box marginTop={1}>
         {agents.length === 0 ? (
           <EmptyState
             title="No agents registered yet"
-            body="The chat / test console drives a call through the mediator as if one of your agents made it. Add an agent first; you can pick which one drives each exchange."
+            body="The mediator test console drives a call through Foreman as if one of your agents made it. Add an agent first; you can pick which one drives each exchange."
             commands={[
               "foreman setup",
               "foreman agent add my-claude --type claude-code",
