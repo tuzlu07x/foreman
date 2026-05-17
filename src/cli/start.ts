@@ -41,7 +41,11 @@ import {
   channelConfig,
   isChannelEnabled,
   loadNotifyConfig,
+  routeFor,
 } from "../core/notification/notify-config.js";
+import { loadNotifyState } from "../core/notification/notify-state.js";
+import { DailyScheduler, parseSchedule } from "../core/notification/scheduler.js";
+import { generateSummary } from "../core/notification/summary-generator.js";
 import type {
   ChannelId,
   NotificationChannel,
@@ -122,11 +126,14 @@ export function startForeman(
   // OOB notification bridge (#235 / C11a-2). Best-effort: any failure here
   // (notify.yaml malformed, secret missing, etc.) is logged but does NOT
   // block start — the TUI modal still works on its own.
-  const notificationBridge = setupNotificationBridge({
+  const notificationSetup = setupNotificationBridge({
     db,
     secretStore,
     notifyConfigPath: paths.notifyConfigPath,
+    notifyStatePath: paths.notifyStatePath,
   });
+  const notificationBridge = notificationSetup?.bridge ?? null;
+  const dailyScheduler = notificationSetup?.scheduler ?? null;
 
   const bootInfo: BootInfo = {
     publicKey,
@@ -226,6 +233,7 @@ export function startForeman(
       r();
     }
     approvalBridge.stop();
+    if (dailyScheduler) dailyScheduler.stop();
     if (notificationBridge) {
       await notificationBridge.stop().catch(() => {
         /* best-effort cleanup */
@@ -266,7 +274,8 @@ function setupNotificationBridge(args: {
   db: ReturnType<typeof getDb>;
   secretStore: SecretStore;
   notifyConfigPath: string;
-}): NotificationBridge | null {
+  notifyStatePath: string;
+}): { bridge: NotificationBridge; scheduler: DailyScheduler | null } | null {
   let config;
   try {
     config = loadNotifyConfig(args.notifyConfigPath);
@@ -318,11 +327,37 @@ function setupNotificationBridge(args: {
   if (channels.size === 0) return null;
 
   const service = new NotificationService({ db: args.db, config, channels });
-  const bridge = new NotificationBridge(service, { bus });
+  // Bridge re-reads notify-state.json on every dispatch so silence / mute
+  // changes (CLI: `foreman notify silence 4h`) take effect without a restart.
+  const bridge = new NotificationBridge(service, {
+    bus,
+    getState: () => loadNotifyState(args.notifyStatePath),
+  });
   void bridge.start().catch(() => {
     /* best-effort */
   });
-  return bridge;
+
+  // Daily digest — fires on the configured schedule via every channel in the
+  // summary route. C11c only; no-op when routing.summary.schedule is unset
+  // or the schedule string doesn't parse.
+  let scheduler: DailyScheduler | null = null;
+  const summaryRoute = routeFor(config, "summary");
+  if (summaryRoute.schedule && summaryRoute.channels.length > 0) {
+    const parsed = parseSchedule(summaryRoute.schedule);
+    if (parsed) {
+      scheduler = new DailyScheduler(parsed, async () => {
+        const payload = generateSummary(args.db);
+        try {
+          await service.send("summary", payload);
+        } catch {
+          /* best-effort — failure already persisted in `notifications` */
+        }
+      });
+      scheduler.start();
+    }
+  }
+
+  return { bridge, scheduler };
 }
 
 // Returns true when the user appears to be a first-time user: no foreman home
