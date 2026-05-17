@@ -11,8 +11,10 @@ import {
 } from '../core/llm/config.js'
 import { AnthropicLlmClient } from '../core/llm/providers/anthropic.js'
 import {
+  featureSplit,
   getBudgetStatus,
-  recentUsage,
+  parseSince,
+  queryUsage,
   recordUsage,
 } from '../core/llm/budget.js'
 import { SecretNotFoundError, SecretStore } from '../core/secret-store.js'
@@ -259,20 +261,45 @@ llmCommand
 
     const db = getDb()
     const status = getBudgetStatus(db, config)
+    const split = featureSplit(db, config)
+    const monthLabel = new Date(status.windowStart).toLocaleString('en-US', {
+      month: 'long',
+      year: 'numeric',
+    })
     console.log('')
-    console.log(orange('LLM budget — current window'))
+    console.log(orange(`Budget — ${monthLabel}`))
+    console.log('')
+    console.log(`  cap            \$${status.capUsd.toFixed(2)}`)
+    const exhausted = status.spentUsd >= status.capUsd
+    const tripped =
+      status.alertTripped && !exhausted ? orange(' ⚠') : ''
+    const exhaustedTag = exhausted ? red(' ✗ exhausted') : ''
     console.log(
-      `  spent              \$${status.spentUsd.toFixed(4)} of \$${status.capUsd.toFixed(2)} (${status.spentPct.toFixed(1)}%)`,
+      `  spent          \$${status.spentUsd.toFixed(4)}  (${status.spentPct.toFixed(0)}%)${tripped}${exhaustedTag}`,
     )
-    console.log(`  remaining          \$${status.remainingUsd.toFixed(4)}`)
-    const start = new Date(status.windowStart).toISOString().slice(0, 10)
-    const end = new Date(status.windowEnd).toISOString().slice(0, 10)
-    console.log(`  window             ${start} → ${end}`)
+    console.log(`  remaining      \$${status.remainingUsd.toFixed(4)}`)
+    const daysUntilReset = Math.max(
+      0,
+      Math.ceil((status.windowEnd - Date.now()) / 86_400_000),
+    )
+    const endLabel = new Date(status.windowEnd).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+    })
     console.log(
-      `  alert threshold    ${config.budget.alert_threshold_pct}%${
-        status.alertTripped ? orange(' (tripped)') : ''
-      }`,
+      `  resets         in ${daysUntilReset} day${daysUntilReset === 1 ? '' : 's'}  (${endLabel})`,
     )
+    console.log(
+      `  alert at       \$${((config.budget.alert_threshold_pct / 100) * status.capUsd).toFixed(2)} (${config.budget.alert_threshold_pct}%)`,
+    )
+    if (split.length > 0) {
+      const splitLine = split
+        .map((s) => `${s.feature} \$${s.spentUsd.toFixed(2)}`)
+        .join(' · ')
+      console.log(`  feature split  ${splitLine}`)
+    }
+    console.log('')
+    console.log(`  ${renderBar(status.spentPct)}`)
     closeDb()
   })
 
@@ -284,30 +311,67 @@ llmCommand
   .command('usage')
   .description('Itemise recent LLM calls (cost + feature + tokens)')
   .option('--limit <n>', 'How many rows to show', (v) => parseInt(v, 10), 30)
+  .option('--since <Nd|Nh|Nm>', 'Only rows newer than this window (e.g. 24h, 7d)')
+  .option('--feature <name>', 'Filter to a single feature (verification / smart_report / test)')
   .option('--json', 'Output JSON instead of a table', false)
-  .action((options: { limit: number; json?: boolean }) => {
-    requireInitialised()
-    const db = getDb()
-    const rows = recentUsage(db, options.limit)
-    if (options.json) {
-      process.stdout.write(JSON.stringify(rows, null, 2) + '\n')
-      closeDb()
-      return
-    }
-    if (rows.length === 0) {
-      console.log(dim('(no LLM calls yet — `foreman llm test` to fire one)'))
-      closeDb()
-      return
-    }
-    for (const r of rows) {
-      const ts = new Date(r.ts).toISOString().slice(0, 19)
-      const cost = r.costUsd.toFixed(6)
+  .action(
+    (options: {
+      limit: number
+      since?: string
+      feature?: string
+      json?: boolean
+    }) => {
+      requireInitialised()
+      const db = getDb()
+      let sinceTs: number | undefined
+      if (options.since) {
+        try {
+          sinceTs = Date.now() - parseSince(options.since)
+        } catch (err) {
+          console.error(
+            red('error: ') +
+              (err instanceof Error ? err.message : String(err)),
+          )
+          closeDb()
+          process.exit(1)
+        }
+      }
+      const rows = queryUsage(db, {
+        limit: options.limit,
+        since: sinceTs,
+        feature: options.feature,
+      })
+      if (options.json) {
+        process.stdout.write(JSON.stringify(rows, null, 2) + '\n')
+        closeDb()
+        return
+      }
+      if (rows.length === 0) {
+        console.log(dim('(no matching LLM calls)'))
+        closeDb()
+        return
+      }
+      for (const r of rows) {
+        const ts = new Date(r.ts).toISOString().slice(0, 19).replace('T', ' ')
+        const cost = r.costUsd.toFixed(6)
+        const req = r.requestId
+          ? dim(` ${r.requestId.slice(0, 5)}…`)
+          : ''
+        console.log(
+          `${dim(ts)} ${r.provider.padEnd(9)} ${r.feature.padEnd(18)} ${r.model.padEnd(22)} in=${String(r.inputTokens).padStart(5)} out=${String(r.outputTokens).padStart(5)} \$${cost} ${dim(`${r.durationMs}ms`)}${r.cacheHit ? dim(' (cache)') : ''}${req}`,
+        )
+      }
+      const total = rows.reduce((s, r) => s + r.costUsd, 0)
+      const cached = rows.filter((r) => r.cacheHit).length
+      const label = options.since ? `${options.since} total` : `${rows.length}-row total`
       console.log(
-        `${dim(ts)} ${r.provider.padEnd(8)} ${r.feature.padEnd(20)} in=${String(r.inputTokens).padStart(5)} out=${String(r.outputTokens).padStart(5)} \$${cost} ${dim(`${r.durationMs}ms`)}${r.cacheHit ? dim(' (cache)') : ''}`,
+        dim(
+          `\n${label}: \$${total.toFixed(4)} across ${rows.length} call${rows.length === 1 ? '' : 's'} (${cached} cached)`,
+        ),
       )
-    }
-    closeDb()
-  })
+      closeDb()
+    },
+  )
 
 // ============================================================================
 // Helpers
@@ -331,6 +395,14 @@ function isKnownFeature(s: string): s is LlmFeature {
 
 function hasAnyFeatureOn(config: LlmConfig): boolean {
   return Object.values(config.features).some((v) => v === true)
+}
+
+function renderBar(pct: number, width = 30): string {
+  const clamped = Math.max(0, Math.min(100, pct))
+  const filled = Math.round((clamped / 100) * width)
+  const bar = '█'.repeat(filled) + '░'.repeat(width - filled)
+  const colour = clamped >= 100 ? red : clamped >= 80 ? orange : green
+  return colour(bar)
 }
 
 async function buildAnthropicClient(

@@ -10,6 +10,8 @@ import { MCPGateway } from "../mcp/gateway.js";
 import { getForemanPaths } from "../utils/config.js";
 import { legacyHasInterestingFiles } from "../utils/migrate-config.js";
 import { EventBus, type ForemanEventMap } from "./event-bus.js";
+import { getBudgetStatus } from "./llm/budget.js";
+import { loadLlmConfig } from "./llm/config.js";
 import { RegistryService } from "./registry.js";
 import { getUpdateCachePath, isNewer } from "./update-check.js";
 
@@ -387,6 +389,70 @@ export function checkLlmConfig(): CheckResult {
   }
 }
 
+// LLM budget — warns at alert_threshold_pct, fails when the cap is exhausted
+// (LLM features will refuse new calls until the next reset). Silent when LLM
+// is globally disabled — no point alarming users who never opted in.
+export function checkLlmBudget(): CheckResult {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.llmConfigPath)) {
+    return {
+      name: "llm_budget",
+      status: "ok",
+      message: "llm.yaml absent — LLM features disabled",
+    };
+  }
+  let config: ReturnType<typeof loadLlmConfig>;
+  try {
+    config = loadLlmConfig(paths.llmConfigPath);
+  } catch (err) {
+    return {
+      name: "llm_budget",
+      status: "warn",
+      message: `llm.yaml unreadable: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (!config.enabled) {
+    return {
+      name: "llm_budget",
+      status: "ok",
+      message: "LLM global switch is off — budget not in use",
+    };
+  }
+  try {
+    const db = getDb();
+    const status = getBudgetStatus(db, config);
+    const pctLabel = `${status.spentPct.toFixed(0)}%`;
+    if (status.spentUsd >= status.capUsd) {
+      return {
+        name: "llm_budget",
+        status: "fail",
+        message: `LLM budget exhausted — \$${status.spentUsd.toFixed(2)} of \$${status.capUsd.toFixed(2)} (${pctLabel}). Smart features paused until reset.`,
+        remediation:
+          "Run `foreman llm budget --set N` to raise the monthly cap, or wait for the next billing window.",
+      };
+    }
+    if (status.alertTripped) {
+      return {
+        name: "llm_budget",
+        status: "warn",
+        message: `LLM budget alert tripped — \$${status.spentUsd.toFixed(2)} of \$${status.capUsd.toFixed(2)} (${pctLabel}) spent.`,
+        remediation: `Inspect with \`foreman llm usage --since=7d\` or raise the cap with \`foreman llm budget --set N\`.`,
+      };
+    }
+    return {
+      name: "llm_budget",
+      status: "ok",
+      message: `\$${status.spentUsd.toFixed(2)} of \$${status.capUsd.toFixed(2)} (${pctLabel}) spent — well under the alert threshold`,
+    };
+  } catch (err) {
+    return {
+      name: "llm_budget",
+      status: "warn",
+      message: `budget check failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 export function checkAgentsRegistered(): CheckResult {
   const paths = getForemanPaths();
   if (!existsSync(paths.dbPath)) {
@@ -584,6 +650,7 @@ const CHECKS: (() => CheckResult)[] = [
   checkPolicyYaml,
   checkNotifyConfig,
   checkLlmConfig,
+  checkLlmBudget,
   checkAgentsRegistered,
   checkMcpGateway,
   checkLegacyHome,

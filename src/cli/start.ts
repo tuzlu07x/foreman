@@ -38,6 +38,7 @@ import { LlmVerifier } from "../core/llm/verifier.js";
 import { TelegramChannel } from "../core/notification/channels/telegram.js";
 import { SystemNotifyChannel } from "../core/notification/channels/system.js";
 import { WebhookChannel } from "../core/notification/channels/webhook.js";
+import { BudgetAlertBridge } from "../core/llm/budget-alert-bridge.js";
 import { NotificationBridge } from "../core/notification/notification-bridge.js";
 import { NotificationService } from "../core/notification/notification-service.js";
 import {
@@ -381,6 +382,12 @@ function setupNotificationBridge(args: {
   void bridge.start().catch(() => {
     /* best-effort */
   });
+
+  // C10 / #233 — turn `llm:budget-alert` bus events into OOB notifications
+  // through the same channels as everything else (system/telegram/webhook).
+  // The bridge tears down with the rest of the start lifecycle.
+  const budgetAlertBridge = new BudgetAlertBridge({ bus, notify: service });
+  budgetAlertBridge.start();
 
   // Daily digest — fires on the configured schedule via every channel in the
   // summary route. C11c only; no-op when routing.summary.schedule is unset
