@@ -67,6 +67,9 @@ export const requests = sqliteTable(
     }),
     // JSON-encoded LlmVerification populated by the C8 layer; NULL until then.
     llmVerification: text("llm_verification"),
+    // JSON-encoded SecurityReport (C9, #232) — 3-layer modal payload kept for
+    // compliance + future renderers. NULL for rows before migration 0010.
+    securityReport: text("security_report"),
     decision: text("decision", {
       enum: ["allowed", "denied", "pending"],
     }).notNull(),

@@ -11,6 +11,7 @@ import type {
   RiskBucket,
   RiskFactor,
 } from "./risk-rules/types.js";
+import type { SecurityReport } from "./security-report.js";
 
 export interface ApprovalRequest {
   requestId: string;
@@ -23,6 +24,8 @@ export interface ApprovalRequest {
   riskFactors: RiskFactor[];
   riskBucket: RiskBucket;
   llmVerification: LlmVerification | null;
+  /** Three-layer modal payload (#232 / C9). Modal renders directly from this. */
+  securityReport: SecurityReport | null;
   /** When set + a `loop` factor fires, the modal exposes `[k] halt session`. */
   sessionId?: string;
   context?: string;
@@ -365,6 +368,7 @@ export class ApprovalBridge {
         riskFactors: safeParseFactors(row.riskFactors),
         riskBucket: row.riskBucket ?? "medium",
         llmVerification: null,
+        securityReport: null,
       });
     }
     // Forget seen ids that have left the table (resolved + cleared later).

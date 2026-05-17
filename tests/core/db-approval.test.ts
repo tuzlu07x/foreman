@@ -23,6 +23,7 @@ function req(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
     riskFactors: [],
     riskBucket: "high",
     llmVerification: null,
+    securityReport: null,
     ...overrides,
   };
 }

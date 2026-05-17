@@ -64,6 +64,7 @@ function approvalEvent(
     ],
     riskBucket: 'high',
     llmVerification: null,
+    securityReport: null,
     sessionId: 'sess-1',
     ...overrides,
   }

@@ -135,6 +135,9 @@ export class AuditLogger {
           llmVerification: e.llmVerification
             ? JSON.stringify(e.llmVerification)
             : null,
+          securityReport: e.securityReport
+            ? JSON.stringify(e.securityReport)
+            : null,
           decision: e.decision,
           decidedBy: e.decidedBy,
           result: e.result === undefined ? null : JSON.stringify(e.result),

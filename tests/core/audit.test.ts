@@ -24,6 +24,7 @@ function emitDecided(
     riskFactors: [],
     riskBucket: 'low',
     llmVerification: null,
+    securityReport: null,
     durationMs: 5,
     createdAt: now - 5,
     decidedAt: now,
