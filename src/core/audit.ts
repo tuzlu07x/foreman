@@ -144,6 +144,11 @@ export class AuditLogger {
           durationMs: e.durationMs,
           createdAt: e.createdAt,
           decidedAt: e.decidedAt,
+          // #301 — persist the agent-to-agent flow tracking links so
+          // `foreman log tail --session <id>` + the upcoming TUI session-
+          // tree view can render the chain.
+          parentRequestId: e.parentRequestId ?? null,
+          sessionId: e.sessionId ?? null,
         })
       }),
       this.bus.on('agent:registered', (e) =>
