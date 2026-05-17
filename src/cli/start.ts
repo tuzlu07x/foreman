@@ -32,6 +32,9 @@ import {
 import { SetupWizard } from "../tui/setup-wizard.js";
 import { SecretStore, SecretNotFoundError } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
+import { isFeatureEnabled, loadLlmConfig } from "../core/llm/config.js";
+import { AnthropicLlmClient } from "../core/llm/providers/anthropic.js";
+import { LlmVerifier } from "../core/llm/verifier.js";
 import { TelegramChannel } from "../core/notification/channels/telegram.js";
 import { SystemNotifyChannel } from "../core/notification/channels/system.js";
 import { WebhookChannel } from "../core/notification/channels/webhook.js";
@@ -107,6 +110,14 @@ export function startForeman(
     bucketOverrides: () => policy.getBucketOverrides(),
   });
   const sessionManager = new SessionManager(db, { bus });
+  // Optional LLM verifier (#231 / C8) — only built when llm.yaml has the
+  // verification feature on AND credentials resolve. Failures are silent so
+  // the heuristic-only flow stays unaffected.
+  const verifier = setupLlmVerifier({
+    db,
+    secretStore,
+    llmConfigPath: paths.llmConfigPath,
+  });
   const mediator = new MediatorService({
     registry,
     policy,
@@ -115,6 +126,7 @@ export function startForeman(
     sessionManager,
     db,
     bus,
+    verifier: verifier ?? undefined,
   });
 
   // Surface pending approvals from spawned `foreman mcp-stdio` / `foreman
@@ -270,6 +282,39 @@ export function startForeman(
 // at least one channel could be built; null if there's nothing to do. Each
 // failure mode (no notify.yaml, channel disabled, secret missing) is silent
 // so the TUI keeps working on its own.
+// Construct an LlmVerifier when the user has opted into verification AND
+// the configured provider's credentials resolve. Returns null otherwise —
+// the mediator keeps working with heuristic-only behavior. Every failure
+// mode is silent so a bad LLM config can't crash boot.
+function setupLlmVerifier(args: {
+  db: ReturnType<typeof getDb>;
+  secretStore: SecretStore;
+  llmConfigPath: string;
+}): LlmVerifier | null {
+  let config;
+  try {
+    config = loadLlmConfig(args.llmConfigPath);
+  } catch {
+    return null;
+  }
+  if (!isFeatureEnabled(config, "verification")) return null;
+
+  // Anthropic is the only provider built in C7-1; OpenAI / Gemini / Ollama
+  // land in C7-2. Bail out cleanly for unsupported providers.
+  if (config.provider !== "anthropic") return null;
+  const cred = config.credentials.anthropic;
+  if (!cred?.secret_name) return null;
+
+  try {
+    const apiKey = args.secretStore.get(cred.secret_name);
+    const client = new AnthropicLlmClient({ apiKey, model: config.model });
+    return new LlmVerifier({ db: args.db, config, client });
+  } catch (err) {
+    if (err instanceof SecretNotFoundError) return null;
+    throw err;
+  }
+}
+
 function setupNotificationBridge(args: {
   db: ReturnType<typeof getDb>;
   secretStore: SecretStore;

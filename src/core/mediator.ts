@@ -15,6 +15,8 @@ import type {
   RiskBucket,
   RiskFactor,
 } from "./risk-rules/types.js";
+import { combineAssessment, type LlmVerifier } from "./llm/verifier.js";
+import { contextFromAssessment } from "./llm/prompts.js";
 import type { RegistryService } from "./registry.js";
 import { eq } from "drizzle-orm";
 import type { ForemanDb } from "../db/client.js";
@@ -58,6 +60,9 @@ export interface MediatorDeps {
   bus?: EventBus<ForemanEventMap>;
   timeoutMs?: number;
   secretStore?: SecretStore;
+  /** Optional LLM verifier (#231 / C8). When set + enabled in llm.yaml,
+   *  flagged calls get a second-opinion before the modal opens. */
+  verifier?: LlmVerifier;
 }
 
 export interface SecretGetInput {
@@ -154,13 +159,34 @@ export class MediatorService {
       });
     }
 
-    const assessment = this.deps.risk.assess({
+    const heuristic = this.deps.risk.assess({
       sourceAgent: input.sourceAgent,
       targetAgent: input.targetAgent,
       targetTool: input.targetTool,
       args: this.argsFromMessage(input.message),
       sessionId: input.sessionId,
     });
+
+    // Optional LLM verification pass — short-circuits gracefully when off /
+    // below threshold / over budget / cached. Combine folds the verdict back
+    // into the assessment (overrides recommendation only when confidence ≥0.7).
+    let assessment: RiskAssessment = heuristic;
+    if (this.deps.verifier) {
+      try {
+        const ctx = contextFromAssessment({
+          assessment: heuristic,
+          sourceAgent: input.sourceAgent,
+          targetAgent: input.targetAgent,
+          targetTool: input.targetTool,
+          callArgs: this.argsFromMessage(input.message),
+        });
+        const verdict = await this.deps.verifier.verify(ctx, requestId);
+        assessment = combineAssessment(heuristic, verdict);
+      } catch {
+        // Best-effort — any unexpected verifier error falls back to heuristic.
+        assessment = heuristic;
+      }
+    }
 
     let decision: "allowed" | "denied";
     let decidedBy: string;
