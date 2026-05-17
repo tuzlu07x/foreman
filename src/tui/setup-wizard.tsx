@@ -29,6 +29,7 @@ import {
   runUninstall,
 } from "../core/agent-install.js";
 import { buildMcpSnippet } from "../core/agent-mcp-snippet.js";
+import { buildMcpRegisterHint } from "../core/agent-mcp-register-hint.js";
 import {
   findAgent,
   loadActiveProviders,
@@ -2023,6 +2024,18 @@ export async function runInstallStep(
       if (cfg?.llmProvider) log(`    LLM provider: ${cfg.llmProvider}`);
       if (cfg?.responsibilityNote)
         log(`    Responsibility: ${cfg.responsibilityNote}`);
+      // Some agents (Hermes) keep their own MCP server registry CLI-side
+      // and don't read the YAML block we injected. Surface the extra step
+      // here so the user sees it in the right context (#298).
+      const registerHint = buildMcpRegisterHint(id, entry);
+      if (registerHint) {
+        log(`  ℹ ${entry.name} needs one extra step to route through Foreman:`);
+        if (registerHint.note) log(`     ${registerHint.note}`);
+        log(`     $ ${registerHint.command}`);
+        if (registerHint.verify) {
+          log(`     verify with: ${registerHint.verify}`);
+        }
+      }
       if (entry.identity_path) {
         try {
           const soulResult = applyForemanSoul(
