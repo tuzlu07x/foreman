@@ -1,4 +1,5 @@
 import type { ForemanDb } from '../../db/client.js'
+import type { ResponsibilityPolicy } from '../policy-engine.js'
 
 export interface RiskRequest {
   sourceAgent: string
@@ -13,6 +14,15 @@ export interface RiskRequest {
 
 export interface RiskContext {
   db: ForemanDb
+  /** Resolve the responsibility note registered for an agent id. Used by the
+   *  responsibility-violation rule (#300). Returns null when the agent is
+   *  unknown or has no declared responsibility. Optional so deployments /
+   *  unit-tests that don't wire this still evaluate other rules cleanly. */
+  getAgentResponsibility?(agentId: string): string | null
+  /** Snapshot of the policy engine's currently-loaded responsibility_policies
+   *  block (#299). Per-call closure so a YAML reload takes effect without
+   *  rebuilding the RiskScorer. */
+  responsibilityPolicies?: () => ResponsibilityPolicy[]
 }
 
 export type RiskCategory =

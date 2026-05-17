@@ -5,9 +5,11 @@ import {
   loopDetectionRule,
   networkPatternRule,
   previouslyDeniedPattern,
+  responsibilityViolationRule,
   secretPatternRule,
   shellPatternRule,
 } from './risk-rules/index.js'
+import type { ResponsibilityPolicy } from './policy-engine.js'
 import type {
   LlmVerification,
   RiskAssessment,
@@ -48,11 +50,18 @@ export const DEFAULT_RISK_RULES: readonly RiskRule[] = [
   loopDetectionRule,
   firstAgentToAgent,
   previouslyDeniedPattern,
+  responsibilityViolationRule,
 ]
 
 export interface RiskScorerOptions {
   /** Per-bucket recommendation overrides — typically supplied by the policy engine. */
   bucketOverrides?: () => BucketOverrides
+  /** Resolves an agent id → its responsibility note. Wires the
+   *  responsibility-violation rule (#300); when absent that rule no-ops. */
+  getAgentResponsibility?: (agentId: string) => string | null
+  /** Snapshot of the policy engine's responsibility_policies (#299). Per-call
+   *  closure so YAML reloads take effect without rebuilding the scorer. */
+  responsibilityPolicies?: () => ResponsibilityPolicy[]
 }
 
 export function bucketFor(totalScore: number): RiskBucket {
@@ -77,7 +86,11 @@ export class RiskScorer {
   ) {}
 
   assess(req: RiskRequest): RiskAssessment {
-    const ctx: RiskContext = { db: this.db }
+    const ctx: RiskContext = {
+      db: this.db,
+      getAgentResponsibility: this.options.getAgentResponsibility,
+      responsibilityPolicies: this.options.responsibilityPolicies,
+    }
     const factors: RiskFactor[] = []
     for (const rule of this.rules) {
       const produced = rule.evaluate(req, ctx)
