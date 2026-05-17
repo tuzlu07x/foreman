@@ -21,7 +21,24 @@
       "optional_services": ["telegram", "discord"],
       "mcp_compatible": true,
       "supported_versions": ">=2.0.0",
-      "min_foreman_version": "0.1.2"
+      "min_foreman_version": "0.1.2",
+      "secret_projection": {
+        "env_file": "~/.hermes/.env",
+        "env_vars": {
+          "ANTHROPIC_API_KEY": { "from_secret": "anthropic-key", "if_provider": "anthropic" },
+          "OPENAI_API_KEY": { "from_secret": "openai-key", "if_provider": "openai" },
+          "OPENROUTER_API_KEY": { "from_secret": "openrouter-key", "if_provider": "openrouter" },
+          "GEMINI_API_KEY": { "from_secret": "gemini-key", "if_provider": "gemini" },
+          "TELEGRAM_BOT_TOKEN": { "from_secret": "telegram-bot-token", "if_service": "telegram" },
+          "TELEGRAM_ALLOWED_USERS": { "from_secret": "telegram-chat-id", "if_service": "telegram" },
+          "DISCORD_BOT_TOKEN": { "from_secret": "discord-bot-token", "if_service": "discord" },
+          "SLACK_BOT_TOKEN": { "from_secret": "slack-bot-token", "if_service": "slack" }
+        },
+        "launch": [
+          { "command": "hermes", "label": "chat" },
+          { "command": "hermes gateway", "label": "daemon (Telegram/Discord)" }
+        ]
+      }
     },
     {
       "id": "openclaw",
@@ -35,8 +52,8 @@
         "binary": "openclaw"
       },
       "config_paths": [
-        "~/.openclaw/config.json",
-        "~/.config/openclaw/config.json"
+        "~/.openclaw/openclaw.json",
+        "~/.config/openclaw/openclaw.json"
       ],
       "config_snippet": "registry/snippets/openclaw.yaml",
       "required_secrets": ["anthropic-key"],
@@ -45,7 +62,42 @@
       "optional_services": ["telegram", "discord", "slack"],
       "mcp_compatible": true,
       "supported_versions": ">=1.4.0",
-      "min_foreman_version": "0.1.2"
+      "min_foreman_version": "0.1.2",
+      "secret_projection": {
+        "json_env": {
+          "path": "~/.openclaw/openclaw.json",
+          "section": "env"
+        },
+        "env_vars": {
+          "ANTHROPIC_API_KEY": { "from_secret": "anthropic-key", "if_provider": "anthropic" },
+          "OPENAI_API_KEY": { "from_secret": "openai-key", "if_provider": "openai" },
+          "GEMINI_API_KEY": { "from_secret": "gemini-key", "if_provider": "gemini" }
+        },
+        "json_channels": {
+          "path": "~/.openclaw/openclaw.json",
+          "channels": {
+            "telegram": {
+              "path": "channels.telegram.botToken",
+              "from_secret": "telegram-bot-token",
+              "if_service": "telegram"
+            },
+            "discord": {
+              "path": "channels.discord.token",
+              "from_secret": "discord-bot-token",
+              "if_service": "discord"
+            },
+            "slack": {
+              "path": "channels.slack.botToken",
+              "from_secret": "slack-bot-token",
+              "if_service": "slack"
+            }
+          }
+        },
+        "launch": [
+          { "command": "openclaw", "label": "chat" },
+          { "command": "openclaw gateway", "label": "daemon" }
+        ]
+      }
     },
     {
       "id": "codex",
@@ -67,7 +119,19 @@
       "optional_services": ["github"],
       "mcp_compatible": true,
       "supported_versions": ">=0.100.0",
-      "min_foreman_version": "0.1.2"
+      "min_foreman_version": "0.1.2",
+      "secret_projection": {
+        "toml_writes": [
+          { "path": "~/.codex/config.toml", "key": "preferred_auth_method", "value": "apikey" }
+        ],
+        "auth_json": {
+          "path": "~/.codex/auth.json",
+          "key": "OPENAI_API_KEY",
+          "from_secret": "openai-key",
+          "if_provider": "openai"
+        },
+        "launch": "codex"
+      }
     },
     {
       "id": "claude-code",
@@ -90,7 +154,17 @@
       "optional_services": ["github"],
       "mcp_compatible": true,
       "supported_versions": ">=0.5.0",
-      "min_foreman_version": "0.1.2"
+      "min_foreman_version": "0.1.2",
+      "secret_projection": {
+        "json_env": {
+          "path": "~/.claude/settings.json",
+          "section": "env"
+        },
+        "env_vars": {
+          "ANTHROPIC_API_KEY": { "from_secret": "anthropic-key", "if_provider": "anthropic" }
+        },
+        "launch": "claude"
+      }
     },
     {
       "id": "zeroclaw",
@@ -110,7 +184,18 @@
       "llm_compat": ["anthropic", "openai", "gemini"],
       "mcp_compatible": true,
       "supported_versions": ">=0.3.0",
-      "min_foreman_version": "0.1.2"
+      "min_foreman_version": "0.1.2",
+      "secret_projection": {
+        "toml_writes": [
+          { "path": "~/.zeroclaw/config.toml", "key": "default_provider", "value": "anthropic" },
+          {
+            "path": "~/.zeroclaw/config.toml",
+            "key": "api_key",
+            "value": { "from_secret": "anthropic-key" }
+          }
+        ],
+        "launch": "zeroclaw"
+      }
     },
     {
       "id": "generic-mcp",

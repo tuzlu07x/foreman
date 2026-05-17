@@ -12,6 +12,7 @@ import {
   planInjection,
   UnsupportedConfigFormatError,
 } from "../core/agent-config-injector.js";
+import { projectSecretsForAgent } from "../core/agent-secrets-projector.js";
 import { applyForemanSoul } from "../core/foreman-soul.js";
 import {
   detectInstall,
@@ -37,6 +38,14 @@ export interface AddScriptedOptions {
   type: string;
   configPath?: string;
   skipConfig?: boolean;
+  /** Skip the secret projection step (#222 / #223). Power-user flag for
+   *  callers that want Foreman to keep its hands off the agent's env files. */
+  skipProjection?: boolean;
+  /** Provider ids the user picked in the wizard — drives `if_provider` filters
+   *  during projection. The scripted CLI defaults to empty (filters opt-in). */
+  providersSelected?: string[];
+  /** Service ids the user picked in the wizard — drives `if_service` filters. */
+  servicesSelected?: string[];
   autoInstall?: boolean;
   keyOut?: string;
 }
@@ -152,6 +161,35 @@ export async function runAgentAddScripted(
           "no config path declared in the registry — paste this into the agent's config manually:",
       );
       log(snippet.yaml);
+    }
+  }
+
+  // Secret projection (#222 / #223) — write secrets into the agent's own
+  // env/config files so it launches without a separate setup step. Best-effort.
+  // For the scripted CLI path we project every projection the agent declares
+  // (no provider/service filter — the user explicitly added this agent and
+  // we don't have their wizard selection here).
+  if (!options.skipProjection) {
+    try {
+      const projection = projectSecretsForAgent(entry, {
+        providersSelected: options.providersSelected ?? [],
+        servicesSelected: options.servicesSelected ?? [],
+        secretStore: store,
+      });
+      for (const f of projection.files) {
+        const tag = f.replacedStale ? "⟳" : "✓";
+        log(
+          `${tag} projected ${f.secrets.length} secret${f.secrets.length === 1 ? "" : "s"} → ${f.path}`,
+        );
+      }
+      for (const s of projection.skipped) {
+        log(dim(`◦ skip projection of ${s.secret}: ${s.reason}`));
+      }
+    } catch (err) {
+      log(
+        orange("warn: ") +
+          `secret projection failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
