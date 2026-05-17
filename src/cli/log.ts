@@ -51,13 +51,25 @@ logCommand
   .description("Show the most recent requests")
   .option("-n, --limit <N>", "rows to show", (v) => parseInt(v, 10), 20)
   .option("-f, --follow", "poll for new rows every 2s", false)
+  .option(
+    "--session <id>",
+    "filter to one agent-to-agent chain (matches session_id column)",
+  )
   .option("--json", "output JSON")
   .action(
-    async (options: { limit: number; follow?: boolean; json?: boolean }) => {
+    async (options: {
+      limit: number;
+      follow?: boolean;
+      json?: boolean;
+      session?: string;
+    }) => {
       requireInitialised();
       getDb();
       const sqlite = getSqlite();
-      const initial = queryLogs(sqlite, { limit: options.limit });
+      const initial = queryLogs(sqlite, {
+        limit: options.limit,
+        sessionId: options.session,
+      });
       if (options.json) {
         process.stdout.write(
           JSON.stringify(initial.rows.map(renderRequestJson), null, 2) + "\n",
@@ -76,7 +88,10 @@ logCommand
       }
       let seen = new Set(initial.rows.map((r) => r.id));
       const poll = (): void => {
-        const next = queryLogs(sqlite, { limit: 100 });
+        const next = queryLogs(sqlite, {
+          limit: 100,
+          sessionId: options.session,
+        });
         const fresh = [...next.rows].reverse().filter((r) => !seen.has(r.id));
         for (const row of fresh) {
           if (options.json) {
@@ -138,6 +153,8 @@ logCommand
       durationMs: row.duration_ms as number | null,
       createdAt: row.created_at as number,
       decidedAt: row.decided_at as number | null,
+      parentRequestId: (row.parent_request_id ?? null) as string | null,
+      sessionId: (row.session_id ?? null) as string | null,
     };
     if (options.json) {
       process.stdout.write(

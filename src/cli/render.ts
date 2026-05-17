@@ -40,6 +40,10 @@ export function renderRequestJson(row: Request): unknown {
     decidedBy: row.decidedBy,
     durationMs: row.durationMs,
     result: row.result ? safeParse(row.result) : null,
+    // #301 — agent-to-agent flow tracking. Surfaced so JSON consumers
+    // (jq pipelines, external dashboards) can reconstruct the chain.
+    parentRequestId: row.parentRequestId ?? null,
+    sessionId: row.sessionId ?? null,
   };
 }
 
@@ -60,6 +64,14 @@ export function renderRequestDetail(row: Request): string {
       : row.riskReasons
         ? `${orange("reasons")}       ${formatList(row.riskReasons)}`
         : null,
+    // #301 — agent-to-agent lineage. Hidden when both are null so legacy
+    // rows + single-shot calls don't get noisy " (none) " stubs.
+    row.sessionId
+      ? `${orange("session")}       ${row.sessionId}`
+      : null,
+    row.parentRequestId
+      ? `${orange("parent")}        ${row.parentRequestId}`
+      : null,
     "",
     orange("args"),
     indent(prettyJson(row.args)),
