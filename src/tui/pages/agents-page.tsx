@@ -9,6 +9,7 @@ import type { RegisteredAgent } from "../../core/registry.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { formatTime } from "../format.js";
 import { singleBorder, theme } from "../theme.js";
+import { EmptyState } from "../components/empty-state.js";
 import { PageHeader } from "../components/typography.js";
 
 export interface AgentsPageProps {
@@ -74,9 +75,15 @@ export function AgentsPage({
 
       <Box flexDirection="column" marginTop={1}>
         {rows.length === 0 ? (
-          <Text color={theme.fg.muted}>
-            (no agents registered — run 'foreman setup' to add one)
-          </Text>
+          <EmptyState
+            title="No agents registered yet"
+            body="Foreman guards every MCP-compatible agent you connect. Once you register one, it shows up here with status, last-seen, and the policy rules it's bound by."
+            commands={[
+              "foreman setup",
+              "foreman agent add hermes --type hermes",
+            ]}
+            hotkeys={["[Esc] back to dashboard"]}
+          />
         ) : (
           rows.map((agent, i) => (
             <AgentRow

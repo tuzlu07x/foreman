@@ -12,6 +12,7 @@ import {
   targetLabel,
 } from "../format.js";
 import { singleBorder, theme } from "../theme.js";
+import { EmptyState } from "../components/empty-state.js";
 import { PageHeader } from "../components/typography.js";
 import {
   DEFAULT_FILTERS,
@@ -85,7 +86,15 @@ export function LogsPage(props: LogsPageProps): JSX.Element {
 
       <Box flexDirection="column" marginTop={1}>
         {results.length === 0 ? (
-          <Text color={theme.fg.muted}>(no rows match)</Text>
+          <EmptyState
+            title="No requests logged yet"
+            body="Foreman audits every tool call (allowed, denied, asked). Once an agent makes a request, you'll see it here with full risk factors, the decision, and a one-key replay."
+            commands={[
+              "foreman wrap --name claude-code -- claude",
+              "foreman mcp-stdio  # let an agent connect",
+            ]}
+            hotkeys={["[/] search · [1-4] filter · [Esc] back"]}
+          />
         ) : (
           visible.map((row, i) => {
             const absoluteIdx = offsetStart + i;

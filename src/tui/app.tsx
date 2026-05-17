@@ -924,7 +924,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
       ) : (
         <Box flexGrow={1}>{renderPanels(layout)}</Box>
       )}
-      <StatusBar quitConfirm={quitConfirm} />
+      <StatusBar quitConfirm={quitConfirm} page={page} />
     </Box>
   );
 }

@@ -11,6 +11,7 @@ import type { StoredSecretMeta } from "../../core/secret-store.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { formatTime } from "../format.js";
 import { singleBorder, theme } from "../theme.js";
+import { EmptyState } from "../components/empty-state.js";
 import { PageHeader } from "../components/typography.js";
 
 export type AddSecretMode =
@@ -122,10 +123,15 @@ export function SecretsPage({
 
       <Box flexDirection="column" marginTop={1}>
         {rows.length === 0 ? (
-          <Text color={theme.fg.muted}>
-            (no secrets stored — press [n] to add a custom entry, or use
-            the Providers / Services pages for the catalog-aware add flow)
-          </Text>
+          <EmptyState
+            title="No secrets stored yet"
+            body="Foreman's encrypted vault holds API keys, bot tokens and webhook URLs (AES-256-GCM). Catalog-aware add flow lives in the Providers / Services pages; this page is the raw view."
+            commands={[
+              "foreman secrets add anthropic-key",
+              "foreman secrets add telegram-bot-token",
+            ]}
+            hotkeys={["[n] add custom · [v] reveal · [r] rotate · [Esc] back"]}
+          />
         ) : (
           rows.map((row, i) => (
             <SecretRow
