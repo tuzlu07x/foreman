@@ -33,6 +33,17 @@ export interface BootBannerProps {
   agentUpdates?: AgentUpdateNotice[];
   /** Per-agent supported_versions overshoot warnings (#75). */
   agentOvershoots?: AgentOvershootNotice[];
+  /** Daemon crashes since boot (#378). One row per agent whose daemon
+   *  exited non-zero — surfaces invalid-config / missing-key failures
+   *  that would otherwise be silent. Cleared when the daemon restarts. */
+  daemonCrashes?: DaemonCrashNotice[];
+}
+
+export interface DaemonCrashNotice {
+  agentId: string;
+  exitCode: number;
+  /** First non-empty line of stderr, for a one-line actionable hint. */
+  stderrHint: string;
 }
 
 export function BootBanner({
@@ -41,6 +52,7 @@ export function BootBanner({
   updateNotice = null,
   agentUpdates = [],
   agentOvershoots = [],
+  daemonCrashes = [],
 }: BootBannerProps): JSX.Element {
   const lines = buildBootLines(info);
   const { stdout } = useStdout();
@@ -140,6 +152,33 @@ export function BootBanner({
                 </Text>
               </Box>
             ))}
+          </Box>
+        ) : null}
+        {daemonCrashes.length > 0 && visibleChecks >= lines.length ? (
+          <Box flexDirection="column" marginTop={1}>
+            <Text color={theme.accent.danger}>
+              {theme.symbols.bullet} Agent daemon crashed:
+            </Text>
+            {daemonCrashes.map((c) => (
+              <Box flexDirection="column" key={c.agentId}>
+                <Text>
+                  {"   "}
+                  <Text color={theme.fg.emphasis}>{padRight(c.agentId, 14)}</Text>{" "}
+                  <Text color={theme.fg.muted}>exit {c.exitCode}</Text>
+                  {c.stderrHint.length > 0 ? (
+                    <>
+                      <Text color={theme.fg.muted}>{" — "}</Text>
+                      <Text color={theme.accent.danger}>
+                        {c.stderrHint.slice(0, 80)}
+                      </Text>
+                    </>
+                  ) : null}
+                </Text>
+              </Box>
+            ))}
+            <Text color={theme.fg.muted}>
+              {"   Daemon manager won't auto-retry; fix the issue and re-run `foreman start`."}
+            </Text>
           </Box>
         ) : null}
       </Box>
