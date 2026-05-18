@@ -231,6 +231,18 @@ export const AgentEntrySchema = z
                *  e.g. `codex auth status`. Used by `foreman doctor`
                *  and the OAuth wrapper (Phase 4 + 5). */
               post_setup_verify: z.string().optional(),
+              /** #420 — Minimum agent version this variant applies to.
+               *  Semver string (e.g. "2.0.0"). When set, the resolver
+               *  detects the installed agent version and only picks
+               *  this variant when `version >= min_agent_version`.
+               *  Lets the same agent ship different config writes
+               *  across major versions (OpenClaw v1 vs v2 schema).
+               *  Optional — when absent, variant matches any version. */
+              min_agent_version: z.string().min(1).optional(),
+              /** #420 — Exclusive upper bound on agent version this
+               *  variant applies to (e.g. "2.0.0" means up to but not
+               *  including v2.0.0). Optional. */
+              max_agent_version: z.string().min(1).optional(),
             }),
           ),
         }),

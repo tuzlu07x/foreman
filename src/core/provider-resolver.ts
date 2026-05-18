@@ -16,6 +16,7 @@
 // resolver — Foreman's code only handles the mechanic; the data lives in
 // the registry, so adding a new agent is a registry-only operation.
 
+import { execFileSync } from "node:child_process";
 import { loadActiveProviders, type AgentEntry } from "./registry-catalog.js";
 
 export interface SecretAcquisition {
@@ -88,7 +89,8 @@ export interface ResolveOptions {
    *  variant template strings. */
   modelId: string;
   /** Override the preferred variant — e.g. user picked
-   *  `via-codex-oauth` over `via-openrouter` for Hermes. */
+   *  `via-codex-oauth` over `via-openrouter` for Hermes. When provided,
+   *  skips the version-range filter (the user knows what they want). */
   variantOverride?: string;
   /** Secret store lookup. When provided:
    *   - The resolver validates the variant's `required_secret` is present
@@ -99,6 +101,12 @@ export interface ResolveOptions {
    *   - Missing-secret check is skipped.
    *   - `${secret:<name>}` tokens are LEFT in place. */
   secretLookup?: (name: string) => string | null;
+  /** #420 — Installed agent version (e.g. "2.1.0"). Used to filter
+   *  variants by their `min_agent_version` / `max_agent_version`
+   *  range. When omitted, the resolver attempts auto-detect via the
+   *  agent's `install.binary --version` command. Pass `null`
+   *  explicitly to disable detection (variant ranges become no-ops). */
+  agentVersion?: string | null;
 }
 
 /**
@@ -128,7 +136,14 @@ export function resolveAgentProviderConfig(
     };
   }
 
-  const variantId = variantOverride ?? providerEntry.preferred;
+  // #420 — Variant resolution: explicit override wins (user knows their
+  // intent), otherwise filter by agent version range, otherwise fall back
+  // to `preferred`.
+  const variantId = variantOverride ?? selectVariantByVersion(
+    providerEntry.variants,
+    providerEntry.preferred,
+    resolveAgentVersion(opts),
+  );
   const variant = providerEntry.variants[variantId];
   if (!variant) {
     return {
@@ -272,4 +287,147 @@ export function deriveDefaultModelId(foremanProvider: string): string {
     /* registry load errors fall through to the safe sentinel */
   }
   return "default";
+}
+
+// =============================================================================
+// #420 — Version-aware variant selection
+// =============================================================================
+//
+// Agents change their config schema between major versions. Without
+// version-aware mapping the registry can only ship one shape and break
+// users on the other side of an upgrade boundary. This module lets a
+// variant declare `min_agent_version` + `max_agent_version` so the
+// resolver picks the right one for the user's installed binary.
+//
+// When the agent's version can't be detected (binary missing, --version
+// not supported, parse fails), the resolver falls back to `preferred`.
+
+interface VariantWithRange {
+  min_agent_version?: string;
+  max_agent_version?: string;
+}
+
+/**
+ * Pick a variant id based on the agent's installed version. Selection
+ * rules (in order):
+ *   1. If `preferred` matches the version range, return it.
+ *   2. Else scan remaining variants alphabetically; first match wins.
+ *   3. Else fall back to `preferred` (best-effort; resolver will error
+ *      downstream if the variant doesn't match the agent's config schema).
+ */
+export function selectVariantByVersion(
+  variants: Record<string, VariantWithRange>,
+  preferred: string,
+  agentVersion: string | null,
+): string {
+  if (!agentVersion) return preferred;
+  const preferredVariant = variants[preferred];
+  if (
+    preferredVariant &&
+    matchesAgentVersion(agentVersion, preferredVariant)
+  ) {
+    return preferred;
+  }
+  const sortedIds = Object.keys(variants).sort();
+  for (const id of sortedIds) {
+    if (id === preferred) continue;
+    const v = variants[id];
+    if (v && matchesAgentVersion(agentVersion, v)) {
+      return id;
+    }
+  }
+  return preferred;
+}
+
+/**
+ * True when `version` falls within `[min_agent_version, max_agent_version)`.
+ * Either bound is optional; missing bounds are treated as "no constraint
+ * on that side". Malformed semver strings fail closed (return false).
+ */
+export function matchesAgentVersion(
+  version: string,
+  range: VariantWithRange,
+): boolean {
+  const v = parseSemver(version);
+  if (!v) return false;
+  if (range.min_agent_version) {
+    const min = parseSemver(range.min_agent_version);
+    if (!min) return false;
+    if (compareSemver(v, min) < 0) return false;
+  }
+  if (range.max_agent_version) {
+    const max = parseSemver(range.max_agent_version);
+    if (!max) return false;
+    // max is EXCLUSIVE — `1.2.3` is in range `<1.2.3`? No.
+    if (compareSemver(v, max) >= 0) return false;
+  }
+  return true;
+}
+
+/**
+ * Try to detect the installed agent version by running `<binary> --version`.
+ * Returns null when the binary is missing, the command times out, or the
+ * output can't be parsed. Detection is best-effort — failures fall back
+ * to `preferred` variant. Called by resolveAgentProviderConfig when
+ * `opts.agentVersion` is undefined.
+ */
+export function detectAgentVersion(agent: AgentEntry): string | null {
+  const binary = agent.install.binary ?? agent.install.npm ?? null;
+  if (!binary) return null;
+  try {
+    const out = execFileSync(binary, ["--version"], {
+      encoding: "utf-8",
+      timeout: 3000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    // Extract first `MAJOR.MINOR.PATCH` (+ optional pre-release) from the
+    // output. Agents print version in different formats — `1.2.3`,
+    // `hermes v1.2.3`, `1.2.3-pre+build`. We just pick the first match.
+    const m = /(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(out);
+    return m?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveAgentVersion(opts: ResolveOptions): string | null {
+  if (opts.agentVersion !== undefined) return opts.agentVersion;
+  return detectAgentVersion(opts.agent);
+}
+
+// -----------------------------------------------------------------------------
+// Local semver — light parser + compare. Mirrors the shape used in
+// `update-check.ts` but lives here to avoid a cyclic import (update-check
+// pulls in HTTP fetch + registry + etc).
+// -----------------------------------------------------------------------------
+
+interface SemverParts {
+  major: number;
+  minor: number;
+  patch: number;
+  pre: string | null;
+}
+
+function parseSemver(s: string): SemverParts | null {
+  const m =
+    /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(
+      s.trim(),
+    );
+  if (!m) return null;
+  return {
+    major: Number.parseInt(m[1] ?? "0", 10),
+    minor: Number.parseInt(m[2] ?? "0", 10),
+    patch: Number.parseInt(m[3] ?? "0", 10),
+    pre: m[4] ?? null,
+  };
+}
+
+function compareSemver(a: SemverParts, b: SemverParts): number {
+  if (a.major !== b.major) return a.major - b.major;
+  if (a.minor !== b.minor) return a.minor - b.minor;
+  if (a.patch !== b.patch) return a.patch - b.patch;
+  if (a.pre === b.pre) return 0;
+  if (!a.pre && b.pre) return 1; // stable > pre-release
+  if (a.pre && !b.pre) return -1;
+  return (a.pre ?? "") > (b.pre ?? "") ? 1 : -1;
 }
