@@ -25,14 +25,23 @@ export function buildMcpSnippet(
   };
   const topKey = entry.mcp_servers_key ?? "mcpServers";
 
-  const json: Record<string, unknown> = entry.mcp_compatible
-    ? { [topKey]: { foreman: block } }
-    : {
-        mcp: {
-          enabled: true,
-          servers: { foreman: block },
-        },
-      };
+  // #385 — explicit mcp_format takes precedence over the (mcp_compatible
+  // ? flat : nested) heuristic. OpenClaw is mcp_compatible:true but
+  // expects the nested {mcp:{enabled,servers}} shape per docs.openclaw.ai
+  // — without this, Foreman writes a top-level `mcpServers` block its
+  // schema validator rejects.
+  const format =
+    entry.mcp_format ?? (entry.mcp_compatible ? "flat" : "nested");
+
+  const json: Record<string, unknown> =
+    format === "flat"
+      ? { [topKey]: { foreman: block } }
+      : {
+          mcp: {
+            enabled: true,
+            servers: { foreman: block },
+          },
+        };
 
   return { yaml: stringifyYaml(json), json };
 }
