@@ -74,6 +74,13 @@ export function projectSecretsForAgent(
   const expand = (p: string): string =>
     p.startsWith('~/') ? resolve(home, p.slice(2)) : resolve(p)
 
+  // #377 — Some agents (OpenClaw) need their own config file to exist with
+  // their full schema before Foreman can safely overlay keys. When the
+  // registry flags this and the target doesn't yet exist, skip the JSON
+  // writes entirely so we don't create a stripped-down file that the
+  // agent's binary then rejects with "invalid config".
+  const requiresExisting = entry.install.requires_existing_config === true
+
   // -----------------------------------------------------------------------
   // 1) env_vars → dotenv OR json env block
   // -----------------------------------------------------------------------
@@ -96,8 +103,17 @@ export function projectSecretsForAgent(
   }
   if (projection.json_env && Object.keys(envPairs).length > 0) {
     const path = expand(projection.json_env.path)
-    const w = writeJsonEnvBlock(path, projection.json_env.section, envPairs)
-    result.files.push({ path, secrets: envSecretNames, ...w })
+    if (requiresExisting && !existsSync(path)) {
+      for (const secret of envSecretNames) {
+        result.skipped.push({
+          secret,
+          reason: `target config ${path} doesn't exist yet — run \`${entry.install.binary ?? entry.id}\` once to initialise it, then \`foreman secrets repush ${entry.id}\``,
+        })
+      }
+    } else {
+      const w = writeJsonEnvBlock(path, projection.json_env.section, envPairs)
+      result.files.push({ path, secrets: envSecretNames, ...w })
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -113,8 +129,17 @@ export function projectSecretsForAgent(
       pairs.push({ dotPath: spec.path, value, secret: spec.from_secret })
     }
     if (pairs.length > 0) {
-      const w = writeJsonChannels(path, pairs)
-      result.files.push({ path, secrets: pairs.map((p) => p.secret), ...w })
+      if (requiresExisting && !existsSync(path)) {
+        for (const p of pairs) {
+          result.skipped.push({
+            secret: p.secret,
+            reason: `target config ${path} doesn't exist yet — run \`${entry.install.binary ?? entry.id}\` once to initialise it, then \`foreman secrets repush ${entry.id}\``,
+          })
+        }
+      } else {
+        const w = writeJsonChannels(path, pairs)
+        result.files.push({ path, secrets: pairs.map((p) => p.secret), ...w })
+      }
     }
   }
 
