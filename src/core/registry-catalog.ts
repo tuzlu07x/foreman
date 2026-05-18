@@ -263,6 +263,54 @@ export const AgentEntrySchema = z
             fix_command: z.string().optional(),
           })
           .optional(),
+        /** #396 — Agent-side security fields that block end-to-end usage if
+         *  unset, even though they don't carry user-supplied secrets.
+         *  OpenClaw's gateway refuses Telegram traffic without
+         *  `gateway.auth.token` (now mandatory, even on loopback) AND
+         *  `commands.ownerAllowFrom` (the paired Telegram chat id);
+         *  without these the daemon starts but every DM is silently
+         *  blocked / pair-prompted. */
+        security_bootstrap: z
+          .object({
+            /** Config file to write into (`~` expanded). */
+            path: z.string().min(1),
+            /** File format — drives parsing + serialization. */
+            format: z.enum(["yaml", "json"]),
+            /** Random token auto-generated when the dot-path is empty.
+             *  Preserved on subsequent runs so the gateway's clients (the
+             *  agent's own UI, MCP transport, etc) don't have to be
+             *  re-credentialed every wizard re-run. */
+            auth_token: z
+              .object({
+                /** Dot-path to the token field in the config. */
+                key: z.string().min(1),
+                /** Random bytes to generate (32 = 256-bit token). */
+                bytes: z.number().int().min(16).max(64),
+                /** Encoding for the generated value. */
+                encoding: z.enum(["hex", "base64", "base64url"]),
+              })
+              .optional(),
+            /** Owner allowlist projected from a Foreman-stored secret —
+             *  e.g. OpenClaw's `commands.ownerAllowFrom: ["telegram:<chatId>"]`
+             *  derived from the `telegram-chat-id` secret. Overwrites the
+             *  array on every run (deterministic given the same input). */
+            owner_allowlist: z
+              .object({
+                /** Dot-path to the array field. */
+                key: z.string().min(1),
+                /** Secret to read the raw chat id from. */
+                from_secret: z.string().min(1),
+                /** Template applied to the secret value. `{value}` is
+                 *  substituted. Use `telegram:{value}` to produce
+                 *  `telegram:123456789`. */
+                item_template: z.string().min(1),
+                /** Only project when this service is in the user's
+                 *  selection (Telegram, Discord, …). */
+                if_service: z.string().min(1).optional(),
+              })
+              .optional(),
+          })
+          .optional(),
       })
       .optional(),
   })
