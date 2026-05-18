@@ -87,6 +87,11 @@ import {
   loadLlmPresets,
   type LlmPreset,
 } from "../core/llm-provider-presets.js";
+import {
+  discoverModels,
+  ModelDiscoveryError,
+  type DiscoveredModel,
+} from "../core/llm/models-discovery.js";
 import { planOllamaInstall } from "../core/ollama-installer.js";
 import { RegistryService } from "../core/registry.js";
 import { SecretStore } from "../core/secret-store.js";
@@ -258,6 +263,7 @@ export type AgentsPhase = "picker" | "per-agent-config" | "confirm" | "running";
 // `ollama-*` and `preset-*` are sub-flows the user enters from the picker.
 export type ForemanLlmPhase =
   | "picker"
+  | "cloud-model"
   | "ollama-not-installed"
   | "ollama-model"
   | "preset-pick"
@@ -590,6 +596,9 @@ function persistForemanLlmChoice(args: {
   ollamaModel: string | null;
   preset: LlmPreset | null;
   presetKey: string;
+  /** #399 — When set, overrides the hardcoded default for cloud choices.
+   *  Bare model id (e.g. `gpt-5.4-mini`, not `openai/gpt-5.4-mini`). */
+  cloudModel?: string | null;
 }): void {
   try {
     const existing = loadLlmConfig(args.services.llmConfigPath);
@@ -615,13 +624,13 @@ function persistForemanLlmChoice(args: {
 
     if (args.choice === "anthropic") {
       next.provider = "anthropic";
-      next.model = "claude-haiku-4-5-20251001";
+      next.model = args.cloudModel ?? "claude-haiku-4-5-20251001";
     } else if (args.choice === "openai") {
       next.provider = "openai";
-      next.model = "gpt-4o-mini";
+      next.model = args.cloudModel ?? "gpt-4o-mini";
     } else if (args.choice === "gemini") {
       next.provider = "gemini";
-      next.model = "gemini-2.0-flash";
+      next.model = args.cloudModel ?? "gemini-2.0-flash";
     } else if (args.choice === "ollama" && args.ollamaModel) {
       next.provider = "ollama";
       next.model = args.ollamaModel;
@@ -806,6 +815,18 @@ export function SetupWizard({
     "picker",
   );
   const [foremanLlmDraft, setForemanLlmDraft] = useState<string | null>(null);
+  // #399 — live model picker. After the user picks a cloud provider, we
+  // fetch the actual available models for their key and let them choose.
+  // Loading → null options + null error. Error → null options + error msg.
+  // Success → options array, error null. Draft is the bare model id.
+  const [cloudModelProvider, setCloudModelProvider] = useState<
+    "openai" | "anthropic" | "gemini" | null
+  >(null);
+  const [cloudModelOptions, setCloudModelOptions] = useState<
+    DiscoveredModel[] | null
+  >(null);
+  const [cloudModelError, setCloudModelError] = useState<string | null>(null);
+  const [cloudModelDraft, setCloudModelDraft] = useState<string | null>(null);
   const [ollamaModelDraft, setOllamaModelDraft] = useState<string | null>(null);
   const [presetDraft, setPresetDraft] = useState<string | null>(null);
   const [presetKeyDraft, setPresetKeyDraft] = useState<string>("");
@@ -938,7 +959,57 @@ export function SetupWizard({
             setForemanLlmPhase("preset-pick");
             return;
           }
-          // cloud or skip — persist directly + advance
+          // #399 — Cloud providers go through the live model picker so
+          // users can pick e.g. gpt-5.4-mini instead of the hardcoded
+          // gpt-4o-mini default. Skip stays on the immediate-persist path.
+          if (
+            chosen === "openai" ||
+            chosen === "anthropic" ||
+            chosen === "gemini"
+          ) {
+            setCloudModelProvider(chosen);
+            setCloudModelOptions(null);
+            setCloudModelError(null);
+            setCloudModelDraft(null);
+            setForemanLlmPhase("cloud-model");
+            // Kick off async fetch — wizard renders the loading state in
+            // the meantime. We don't await here: useInput must stay
+            // synchronous, and the discovery cache means re-entries are
+            // cheap.
+            void (async (): Promise<void> => {
+              const keySecret = `${chosen}-key`;
+              try {
+                const apiKey = services.secretStore.exists(keySecret)
+                  ? services.secretStore.get(keySecret)
+                  : null;
+                if (!apiKey) {
+                  setCloudModelError(
+                    `No ${chosen}-key in the secret store — go back, set it in Step 1, then return here.`,
+                  );
+                  setCloudModelOptions([]);
+                  return;
+                }
+                const models = await discoverModels(chosen, { apiKey });
+                if (models.length === 0) {
+                  setCloudModelError(
+                    `${chosen} returned no chat-capable models for this key.`,
+                  );
+                }
+                setCloudModelOptions(models);
+              } catch (err) {
+                const msg =
+                  err instanceof ModelDiscoveryError
+                    ? err.message
+                    : err instanceof Error
+                      ? err.message
+                      : String(err);
+                setCloudModelError(msg);
+                setCloudModelOptions([]);
+              }
+            })();
+            return;
+          }
+          // skip — persist directly + advance
           persistForemanLlmChoice({
             services,
             choice: chosen,
@@ -947,6 +1018,85 @@ export function SetupWizard({
             presetKey: "",
           });
           setForemanLlmPhase("picker");
+          setForemanLlmDraft(null);
+          advance("foreman-llm");
+          return;
+        }
+      }
+
+      // ----- #399 cloud-model phase -----
+      // After the user picks a cloud provider, this phase fetches the
+      // real model list. Loading + error states accept Enter to fall
+      // back to the registry default; Esc returns to the picker.
+      if (foremanLlmPhase === "cloud-model") {
+        if (key.escape) {
+          setForemanLlmPhase("picker");
+          setCloudModelProvider(null);
+          setCloudModelOptions(null);
+          setCloudModelError(null);
+          setCloudModelDraft(null);
+          return;
+        }
+        // While loading there's nothing actionable except Esc.
+        if (cloudModelOptions === null) return;
+        // Error path: Enter accepts the default + advances. No model to
+        // pick because the fetch failed; we persist with cloudModel=null
+        // so persistForemanLlmChoice falls back to the hardcoded id.
+        if (cloudModelOptions.length === 0) {
+          if (key.return) {
+            if (cloudModelProvider) {
+              persistForemanLlmChoice({
+                services,
+                choice: cloudModelProvider,
+                ollamaModel: null,
+                preset: null,
+                presetKey: "",
+              });
+            }
+            setForemanLlmPhase("picker");
+            setCloudModelProvider(null);
+            setCloudModelOptions(null);
+            setCloudModelError(null);
+            setCloudModelDraft(null);
+            setForemanLlmDraft(null);
+            advance("foreman-llm");
+          }
+          return;
+        }
+        // Picker active — drive the cursor through cloudModelOptions.
+        const cursor =
+          cloudModelDraft ?? cloudModelOptions[0]?.id ?? null;
+        const idx = cloudModelOptions.findIndex((m) => m.id === cursor);
+        const safeIdx = idx < 0 ? 0 : idx;
+        if (key.upArrow) {
+          const len = cloudModelOptions.length;
+          const next =
+            cloudModelOptions[(safeIdx - 1 + len) % len]?.id ?? null;
+          setCloudModelDraft(next);
+          return;
+        }
+        if (key.downArrow) {
+          const len = cloudModelOptions.length;
+          const next = cloudModelOptions[(safeIdx + 1) % len]?.id ?? null;
+          setCloudModelDraft(next);
+          return;
+        }
+        if (key.return || input === " ") {
+          if (cloudModelProvider && cursor) {
+            persistForemanLlmChoice({
+              services,
+              choice: cloudModelProvider,
+              ollamaModel: null,
+              preset: null,
+              presetKey: "",
+              cloudModel: cursor,
+            });
+          }
+          setForemanLlmPhase("picker");
+          setCloudModelProvider(null);
+          setCloudModelOptions(null);
+          setCloudModelError(null);
+          setCloudModelDraft(null);
           setForemanLlmDraft(null);
           advance("foreman-llm");
           return;
@@ -1586,6 +1736,89 @@ export function SetupWizard({
           </Box>
           <Text color={theme.fg.muted}>
             [↑↓] move · [Enter] or [Space] confirms · [Esc] back to providers
+          </Text>
+        </Box>
+      );
+    }
+
+    // #399 — Live model picker. Loading / error / picker tri-state.
+    if (foremanLlmPhase === "cloud-model" && cloudModelProvider) {
+      const providerLabel =
+        cloudModelProvider === "openai"
+          ? "OpenAI"
+          : cloudModelProvider === "anthropic"
+            ? "Anthropic"
+            : "Google Gemini";
+      if (cloudModelOptions === null) {
+        return (
+          <Box flexDirection="column" gap={1} paddingY={1}>
+            <WizardProgress
+              current={2}
+              total={5}
+              label="Foreman's brain"
+              phase={`fetching ${providerLabel} models`}
+            />
+            <Text color={theme.fg.muted}>
+              Talking to {providerLabel}…
+            </Text>
+            <Text color={theme.fg.muted}>[Esc] cancel</Text>
+          </Box>
+        );
+      }
+      if (cloudModelOptions.length === 0) {
+        return (
+          <Box flexDirection="column" gap={1} paddingY={1}>
+            <WizardProgress
+              current={2}
+              total={5}
+              label="Foreman's brain"
+              phase={`couldn't list ${providerLabel} models`}
+            />
+            <Text color={theme.accent.warning}>
+              ⚠ {cloudModelError ?? "Unknown error talking to the API."}
+            </Text>
+            <Text color={theme.fg.muted}>
+              [Enter] continue with the default model · [Esc] back to providers
+            </Text>
+          </Box>
+        );
+      }
+      const cursor = cloudModelDraft ?? cloudModelOptions[0]?.id ?? null;
+      return (
+        <Box flexDirection="column" gap={1} paddingY={1}>
+          <WizardProgress
+            current={2}
+            total={5}
+            label="Foreman's brain"
+            phase={`pick a ${providerLabel} model`}
+          />
+          <Text color={theme.fg.muted}>
+            {cloudModelOptions.length} model
+            {cloudModelOptions.length === 1 ? "" : "s"} available for this key.
+            Pick which one Foreman should use for verification + smart
+            summaries.
+          </Text>
+          <Box flexDirection="column">
+            {cloudModelOptions.map((row) => {
+              const selected = row.id === cursor;
+              return (
+                <Box key={row.id} flexDirection="row">
+                  <Text
+                    color={selected ? theme.accent.primary : undefined}
+                    bold={selected}
+                  >
+                    {selected ? "❯ ✓ " : "    "}
+                    {row.label}
+                  </Text>
+                  {row.label !== row.id ? (
+                    <Text color={theme.fg.muted}>{"  "}({row.id})</Text>
+                  ) : null}
+                </Box>
+              );
+            })}
+          </Box>
+          <Text color={theme.fg.muted}>
+            [↑↓] move · [Enter] or [Space] confirms · [Esc] back to picker
           </Text>
         </Box>
       );
