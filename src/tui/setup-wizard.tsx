@@ -21,6 +21,10 @@ import {
   UnsupportedConfigFormatError,
 } from "../core/agent-config-injector.js";
 import { projectSecretsForAgent } from "../core/agent-secrets-projector.js";
+import {
+  detectProviderConflict,
+  formatConflictWarning,
+} from "../core/agent-provider-conflict.js";
 import { WizardProgress } from "./components/wizard-progress.js";
 import {
   detectInstall,
@@ -2058,6 +2062,25 @@ export async function runInstallStep(
       log(
         `  ⚠ secret projection failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+    }
+
+    // #350 — provider-config conflict check. Many agents have `provider:`
+    // baked into their own config from a previous setup; that value wins
+    // over the env vars we just projected. Warn loudly with a fix command
+    // so the user doesn't think Foreman is silently broken.
+    try {
+      const foremanProvider = agentConfigs[id]?.llmProvider;
+      if (foremanProvider) {
+        const conflict = detectProviderConflict(entry, foremanProvider);
+        if (conflict) {
+          log(`  ⚠ provider mismatch — Foreman's key won't be used:`);
+          for (const line of formatConflictWarning(conflict)) {
+            log(`     ${line}`);
+          }
+        }
+      }
+    } catch {
+      /* best-effort — malformed config files shouldn't block install */
     }
 
     if (services.registry.get(id)) {
