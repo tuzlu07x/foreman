@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   describeResolveError,
   deriveDefaultModelId,
+  matchesAgentVersion,
   resolveAgentProviderConfig,
+  selectVariantByVersion,
 } from "../../src/core/provider-resolver.js";
 import {
   loadBundledRegistry,
@@ -329,5 +331,224 @@ describe("deriveDefaultModelId (#419 — data-driven)", () => {
   it("returns 'default' for a provider that declares no default_model", () => {
     // openai-compatible is custom-endpoint — no sensible default model
     expect(deriveDefaultModelId("openai-compatible")).toBe("default");
+  });
+});
+
+// =============================================================================
+// #420 — Version-aware variant selection. Agents that change config schema
+// between major versions declare `min_agent_version` / `max_agent_version`
+// on their variants; the resolver picks the right one for the user's
+// installed binary.
+// =============================================================================
+
+describe("matchesAgentVersion (#420)", () => {
+  it("returns true when no range is declared (catch-all variant)", () => {
+    expect(matchesAgentVersion("1.0.0", {})).toBe(true);
+    expect(matchesAgentVersion("2.5.7", {})).toBe(true);
+  });
+
+  it("matches when version >= min_agent_version", () => {
+    expect(
+      matchesAgentVersion("2.0.0", { min_agent_version: "2.0.0" }),
+    ).toBe(true);
+    expect(
+      matchesAgentVersion("2.5.0", { min_agent_version: "2.0.0" }),
+    ).toBe(true);
+    expect(
+      matchesAgentVersion("1.9.99", { min_agent_version: "2.0.0" }),
+    ).toBe(false);
+  });
+
+  it("matches when version < max_agent_version (exclusive)", () => {
+    expect(
+      matchesAgentVersion("1.9.99", { max_agent_version: "2.0.0" }),
+    ).toBe(true);
+    expect(
+      matchesAgentVersion("2.0.0", { max_agent_version: "2.0.0" }),
+    ).toBe(false);
+    expect(
+      matchesAgentVersion("2.5.0", { max_agent_version: "2.0.0" }),
+    ).toBe(false);
+  });
+
+  it("combines min + max into a half-open range", () => {
+    const range = {
+      min_agent_version: "1.4.0",
+      max_agent_version: "2.0.0",
+    };
+    expect(matchesAgentVersion("1.4.0", range)).toBe(true);
+    expect(matchesAgentVersion("1.9.99", range)).toBe(true);
+    expect(matchesAgentVersion("2.0.0", range)).toBe(false);
+    expect(matchesAgentVersion("1.3.99", range)).toBe(false);
+  });
+
+  it("returns false for malformed version strings (fail-closed)", () => {
+    expect(
+      matchesAgentVersion("not-a-version", { min_agent_version: "1.0.0" }),
+    ).toBe(false);
+    expect(
+      matchesAgentVersion("1.0.0", { min_agent_version: "garbage" }),
+    ).toBe(false);
+  });
+
+  it("handles pre-release suffix correctly (stable > pre)", () => {
+    expect(
+      matchesAgentVersion("2.0.0-alpha", { min_agent_version: "2.0.0" }),
+    ).toBe(false);
+    expect(
+      matchesAgentVersion("2.0.0", { min_agent_version: "2.0.0-alpha" }),
+    ).toBe(true);
+  });
+});
+
+describe("selectVariantByVersion (#420)", () => {
+  it("returns preferred when agentVersion is null (no detection)", () => {
+    const variants = {
+      v1: { min_agent_version: "1.0.0", max_agent_version: "2.0.0" },
+      v2: { min_agent_version: "2.0.0" },
+    };
+    expect(selectVariantByVersion(variants, "v1", null)).toBe("v1");
+    expect(selectVariantByVersion(variants, "v2", null)).toBe("v2");
+  });
+
+  it("returns preferred when it matches the version", () => {
+    const variants = {
+      v1: { min_agent_version: "1.0.0", max_agent_version: "2.0.0" },
+      v2: { min_agent_version: "2.0.0" },
+    };
+    expect(selectVariantByVersion(variants, "v1", "1.5.0")).toBe("v1");
+    expect(selectVariantByVersion(variants, "v2", "2.1.0")).toBe("v2");
+  });
+
+  it("falls back to a sibling when preferred doesn't match the version", () => {
+    const variants = {
+      v1: { min_agent_version: "1.0.0", max_agent_version: "2.0.0" },
+      v2: { min_agent_version: "2.0.0" },
+    };
+    // preferred = "v1" but installed agent is 2.5 → falls back to "v2"
+    expect(selectVariantByVersion(variants, "v1", "2.5.0")).toBe("v2");
+  });
+
+  it("scans variants alphabetically for sibling fallback", () => {
+    const variants = {
+      "z-newest": { min_agent_version: "3.0.0" },
+      "a-old": { max_agent_version: "1.0.0" },
+      "m-mid": { min_agent_version: "1.0.0", max_agent_version: "3.0.0" },
+    };
+    // preferred is "z-newest" but agent is 2.0 → scan a-old (miss),
+    // m-mid (match) — alphabetic order picks m-mid.
+    expect(selectVariantByVersion(variants, "z-newest", "2.0.0")).toBe(
+      "m-mid",
+    );
+  });
+
+  it("returns preferred even when nothing matches (best-effort fallback)", () => {
+    const variants = {
+      v1: { min_agent_version: "5.0.0" },
+    };
+    expect(selectVariantByVersion(variants, "v1", "1.0.0")).toBe("v1");
+  });
+
+  it("treats variants without range as catch-all (matches any version)", () => {
+    const variants = {
+      v2: { min_agent_version: "2.0.0" },
+      catchall: {}, // no range — matches any version
+    };
+    // preferred = "v2", agent v1.0 → falls back to "catchall"
+    expect(selectVariantByVersion(variants, "v2", "1.0.0")).toBe(
+      "catchall",
+    );
+  });
+});
+
+describe("resolveAgentProviderConfig — version-aware path (#420)", () => {
+  function stubAgent(): AgentEntry {
+    // Synthetic agent with two version-gated variants for openai.
+    return {
+      id: "stub-versioned",
+      name: "Stub",
+      tagline: "t",
+      homepage: "https://example.com",
+      install: { npm: null, brew: null },
+      config_paths: [],
+      required_secrets: [],
+      optional_secrets: [],
+      mcp_compatible: true,
+      supported_versions: "*",
+      min_foreman_version: "0.1.2",
+      provider_mapping: {
+        openai: {
+          preferred: "native-v1",
+          variants: {
+            "native-v1": {
+              label: "Native v1.x",
+              writes: { "old.path.model": "openai/${model}" },
+              min_agent_version: "1.0.0",
+              max_agent_version: "2.0.0",
+            },
+            "native-v2": {
+              label: "Native v2+",
+              writes: { "runtime.model.id": "openai/${model}" },
+              min_agent_version: "2.0.0",
+            },
+          },
+        },
+      },
+    } as unknown as AgentEntry;
+  }
+
+  it("picks v1 variant when agent version is 1.5.0", () => {
+    const result = resolveAgentProviderConfig({
+      agent: stubAgent(),
+      foremanProvider: "openai",
+      modelId: "gpt-4o-mini",
+      agentVersion: "1.5.0",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.config.variantId).toBe("native-v1");
+    expect(result.config.configWrites["old.path.model"]).toBe(
+      "openai/gpt-4o-mini",
+    );
+  });
+
+  it("picks v2 variant when agent version is 2.1.0 (preferred doesn't match)", () => {
+    const result = resolveAgentProviderConfig({
+      agent: stubAgent(),
+      foremanProvider: "openai",
+      modelId: "gpt-4o-mini",
+      agentVersion: "2.1.0",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.config.variantId).toBe("native-v2");
+    expect(result.config.configWrites["runtime.model.id"]).toBe(
+      "openai/gpt-4o-mini",
+    );
+  });
+
+  it("variantOverride bypasses version selection (user knows their intent)", () => {
+    const result = resolveAgentProviderConfig({
+      agent: stubAgent(),
+      foremanProvider: "openai",
+      modelId: "gpt-4o-mini",
+      agentVersion: "1.5.0", // would normally pick v1
+      variantOverride: "native-v2", // user forces v2
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.config.variantId).toBe("native-v2");
+  });
+
+  it("falls back to preferred when agentVersion is null", () => {
+    const result = resolveAgentProviderConfig({
+      agent: stubAgent(),
+      foremanProvider: "openai",
+      modelId: "gpt-4o-mini",
+      agentVersion: null, // explicit opt-out of detection
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.config.variantId).toBe("native-v1"); // preferred wins
   });
 });
