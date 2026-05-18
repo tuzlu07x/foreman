@@ -251,4 +251,59 @@ describe("setup-state", () => {
       expect(JSON.parse(text).completed).toEqual(["welcome"]);
     });
   });
+
+  // #408 / #411 Phase 3 — required-setup step inserted between services
+  // and install. Order matters: services needs to finish (so we know which
+  // platforms the user wired up), then required-setup resolves per-agent
+  // secrets, then install runs.
+  describe("required-setup step (#411)", () => {
+    it("STEPS array includes 'required-setup' between 'services' and 'install'", () => {
+      expect(STEPS).toContain("required-setup");
+      const servicesIdx = STEPS.indexOf("services");
+      const requiredIdx = STEPS.indexOf("required-setup");
+      const installIdx = STEPS.indexOf("install");
+      expect(servicesIdx).toBeGreaterThanOrEqual(0);
+      expect(requiredIdx).toBe(servicesIdx + 1);
+      expect(installIdx).toBe(requiredIdx + 1);
+    });
+
+    it("nextStep advances welcome → providers → foreman-llm → agents → services → required-setup → install", () => {
+      let s = freshState();
+      const order = [
+        "welcome",
+        "providers",
+        "foreman-llm",
+        "agents",
+        "services",
+        "required-setup",
+        "install",
+      ];
+      for (const step of order) {
+        expect(nextStep(s)).toBe(step);
+        s = markCompleted(s, step as (typeof STEPS)[number]);
+      }
+      expect(nextStep(s)).toBe("done");
+    });
+
+    it("markUncompleted on 'services' drops everything from 'services' onward (including required-setup)", () => {
+      let s = freshState();
+      for (const step of [
+        "welcome",
+        "providers",
+        "foreman-llm",
+        "agents",
+        "services",
+        "required-setup",
+      ]) {
+        s = markCompleted(s, step as (typeof STEPS)[number]);
+      }
+      const rolled = markUncompleted(s, "services");
+      expect(rolled.completed).toEqual([
+        "welcome",
+        "providers",
+        "foreman-llm",
+        "agents",
+      ]);
+    });
+  });
 });
