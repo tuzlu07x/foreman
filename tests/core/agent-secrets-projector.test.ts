@@ -9,6 +9,7 @@ import {
   writeDotenv,
   writeJsonChannels,
   writeJsonEnvBlock,
+  writeSecurityBootstrap,
   writeTomlFields,
 } from '../../src/core/agent-secrets-projector.js'
 import { parse as parseYaml } from 'yaml'
@@ -864,5 +865,207 @@ describe('projectSecretsForAgent — config_overrides (#389)', () => {
     expect(parsed.model.provider).toBe('openai')
     expect(parsed.model.default).toBe('openai/gpt-4o-mini')
     expect(parsed.terminal.backend).toBe('docker') // user-added survives
+  })
+})
+
+// #396 — security_bootstrap writer + projector integration. OpenClaw's
+// gateway refuses Telegram traffic without `gateway.auth.token` AND
+// `commands.ownerAllowFrom`, so Foreman has to populate both — token
+// auto-generated once + preserved across runs, allowlist projected
+// from the `telegram-chat-id` secret formatted as `telegram:<chatId>`.
+describe('writeSecurityBootstrap (#396)', () => {
+  it('generates an auth token when the dot-path is empty', () => {
+    const path = join(tmp, 'openclaw.json')
+    writeFileSync(path, JSON.stringify({ gateway: {} }), { mode: 0o600 })
+    const out = writeSecurityBootstrap(path, 'json', {
+      authToken: {
+        key: 'gateway.auth.token',
+        generate: () => 'deterministic-token-for-test',
+      },
+    })
+    expect(out.created).toBe(false)
+    const parsed = JSON.parse(readFileSync(path, 'utf-8'))
+    expect(parsed.gateway.auth.token).toBe('deterministic-token-for-test')
+  })
+
+  it('preserves an existing non-empty auth token (no churn on re-run)', () => {
+    const path = join(tmp, 'openclaw.json')
+    writeFileSync(
+      path,
+      JSON.stringify({
+        gateway: { auth: { token: 'preserved-original' } },
+      }),
+      { mode: 0o600 },
+    )
+    writeSecurityBootstrap(path, 'json', {
+      authToken: {
+        key: 'gateway.auth.token',
+        generate: () => 'would-overwrite-but-shouldnt',
+      },
+    })
+    const parsed = JSON.parse(readFileSync(path, 'utf-8'))
+    expect(parsed.gateway.auth.token).toBe('preserved-original')
+  })
+
+  it('writes an owner allowlist array and overwrites a stale one', () => {
+    const path = join(tmp, 'openclaw.json')
+    writeFileSync(
+      path,
+      JSON.stringify({ commands: { ownerAllowFrom: ['telegram:999'] } }),
+      { mode: 0o600 },
+    )
+    const out = writeSecurityBootstrap(path, 'json', {
+      ownerAllowlist: {
+        key: 'commands.ownerAllowFrom',
+        values: ['telegram:42'],
+      },
+    })
+    expect(out.replacedStale).toBe(true)
+    const parsed = JSON.parse(readFileSync(path, 'utf-8'))
+    expect(parsed.commands.ownerAllowFrom).toEqual(['telegram:42'])
+  })
+
+  it('reports no stale replacement when the allowlist is already correct', () => {
+    const path = join(tmp, 'openclaw.json')
+    writeFileSync(
+      path,
+      JSON.stringify({ commands: { ownerAllowFrom: ['telegram:42'] } }),
+      { mode: 0o600 },
+    )
+    const out = writeSecurityBootstrap(path, 'json', {
+      ownerAllowlist: {
+        key: 'commands.ownerAllowFrom',
+        values: ['telegram:42'],
+      },
+    })
+    expect(out.replacedStale).toBe(false)
+  })
+
+  it('creates the file from scratch when missing', () => {
+    const path = join(tmp, 'fresh.json')
+    const out = writeSecurityBootstrap(path, 'json', {
+      authToken: { key: 'gateway.auth.token', generate: () => 'tk' },
+      ownerAllowlist: {
+        key: 'commands.ownerAllowFrom',
+        values: ['telegram:1'],
+      },
+    })
+    expect(out.created).toBe(true)
+    expect(mode(path)).toBe('600')
+    const parsed = JSON.parse(readFileSync(path, 'utf-8'))
+    expect(parsed.gateway.auth.token).toBe('tk')
+    expect(parsed.commands.ownerAllowFrom).toEqual(['telegram:1'])
+  })
+})
+
+describe('projectSecretsForAgent — security_bootstrap (#396)', () => {
+  let db: ForemanDb
+  let sqlite: ReturnType<typeof createInMemoryDb>['sqlite']
+  let store: SecretStore
+
+  beforeEach(() => {
+    const h = createInMemoryDb()
+    db = h.db
+    sqlite = h.sqlite
+    store = new SecretStore(db, Buffer.alloc(32, 1))
+  })
+  afterEach(() => {
+    sqlite.close()
+  })
+
+  function openclawEntry(): AgentEntry {
+    return {
+      id: 'openclaw',
+      name: 'OpenClaw',
+      tagline: 't',
+      homepage: 'https://example.com',
+      install: { npm: null, brew: null },
+      config_paths: [],
+      required_secrets: [],
+      optional_secrets: [],
+      mcp_compatible: true,
+      supported_versions: '*',
+      min_foreman_version: '0.1.2',
+      secret_projection: {
+        security_bootstrap: {
+          path: `${tmp}/openclaw.json`,
+          format: 'json',
+          auth_token: {
+            key: 'gateway.auth.token',
+            bytes: 32,
+            encoding: 'hex',
+          },
+          owner_allowlist: {
+            key: 'commands.ownerAllowFrom',
+            from_secret: 'telegram-chat-id',
+            item_template: 'telegram:{value}',
+            if_service: 'telegram',
+          },
+        },
+      },
+    } as AgentEntry
+  }
+
+  it('generates a hex token and writes the owner allowlist when telegram is selected', () => {
+    store.add('telegram-chat-id', '123456789')
+    const result = projectSecretsForAgent(openclawEntry(), {
+      providersSelected: [],
+      servicesSelected: ['telegram'],
+      secretStore: store,
+      home: tmp,
+    })
+    expect(result.files).toHaveLength(1)
+    expect(result.files[0]?.secrets).toEqual(['telegram-chat-id'])
+    const parsed = JSON.parse(readFileSync(`${tmp}/openclaw.json`, 'utf-8'))
+    expect(typeof parsed.gateway.auth.token).toBe('string')
+    expect(parsed.gateway.auth.token).toMatch(/^[a-f0-9]{64}$/) // 32 bytes hex
+    expect(parsed.commands.ownerAllowFrom).toEqual(['telegram:123456789'])
+  })
+
+  it('still generates the token even when telegram is NOT selected (auth is global)', () => {
+    const result = projectSecretsForAgent(openclawEntry(), {
+      providersSelected: [],
+      servicesSelected: [], // telegram not picked
+      secretStore: store,
+      home: tmp,
+    })
+    expect(result.files).toHaveLength(1)
+    const parsed = JSON.parse(readFileSync(`${tmp}/openclaw.json`, 'utf-8'))
+    expect(typeof parsed.gateway.auth.token).toBe('string')
+    expect(parsed.commands).toBeUndefined() // no allowlist written
+  })
+
+  it('is idempotent: re-running preserves the original token', () => {
+    store.add('telegram-chat-id', '123456789')
+    const ctx = {
+      providersSelected: [],
+      servicesSelected: ['telegram'],
+      secretStore: store,
+      home: tmp,
+    }
+    projectSecretsForAgent(openclawEntry(), ctx)
+    const firstToken = JSON.parse(
+      readFileSync(`${tmp}/openclaw.json`, 'utf-8'),
+    ).gateway.auth.token
+    projectSecretsForAgent(openclawEntry(), ctx)
+    const secondToken = JSON.parse(
+      readFileSync(`${tmp}/openclaw.json`, 'utf-8'),
+    ).gateway.auth.token
+    expect(firstToken).toBe(secondToken)
+  })
+
+  it('records the chat-id secret as missing when not in the store, but still writes the token', () => {
+    const result = projectSecretsForAgent(openclawEntry(), {
+      providersSelected: [],
+      servicesSelected: ['telegram'],
+      secretStore: store,
+      home: tmp,
+    })
+    // Token still gets generated even though the allowlist secret was missing
+    expect(result.files).toHaveLength(1)
+    expect(result.skipped.find((s) => s.secret === 'telegram-chat-id')).toBeDefined()
+    const parsed = JSON.parse(readFileSync(`${tmp}/openclaw.json`, 'utf-8'))
+    expect(typeof parsed.gateway.auth.token).toBe('string')
+    expect(parsed.commands).toBeUndefined()
   })
 })
