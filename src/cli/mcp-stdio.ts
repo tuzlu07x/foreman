@@ -167,6 +167,40 @@ export async function handleMessage(
             },
           },
         },
+        {
+          // #406 — Agent-routed approval flow. Foreman sends an
+          // approval-request notification to the user's chat with a
+          // `/approve <id>` / `/deny <id>` reply hint. When the user
+          // types that command, the agent (sole polling consumer on the
+          // bot) calls this tool to relay the user's decision back. See
+          // SOUL.md "Approval Routing" section for the agent-side
+          // routing rules.
+          name: "submit_approval",
+          description:
+            "Submit the user's decision on a pending Foreman approval. Call this when a user message in your chat is the literal slash command `/approve <id>`, `/approve_remember <id>`, `/deny <id>`, or `/deny_remember <id>`. The approval id comes from a Foreman notification message in the same chat. Pass `decision: \"allow\"` or `\"deny\"`, and `remember: true` only for the `_remember` variants. Do NOT call this on your own initiative — only when the user types the literal command.",
+          inputSchema: {
+            type: "object",
+            required: ["approval_id", "decision"],
+            properties: {
+              approval_id: {
+                type: "string",
+                description:
+                  "Approval id Foreman included in its notification (e.g. 'abc123').",
+              },
+              decision: {
+                type: "string",
+                enum: ["allow", "deny"],
+                description:
+                  "User's choice — 'allow' permits the pending tool call; 'deny' blocks it.",
+              },
+              remember: {
+                type: "boolean",
+                description:
+                  "When true, Foreman remembers this decision for the same source/target/tool combination and auto-resolves future identical calls.",
+              },
+            },
+          },
+        },
       ],
     });
   }
@@ -197,6 +231,63 @@ export async function handleMessage(
         });
       }
       return replyError(id, -32603, `Denied by ${result.decidedBy}`);
+    }
+
+    if (toolName === "submit_approval") {
+      // #406 — Agent-routed approval relay. Validates approval id +
+      // pending status, emits the resolution event so the in-flight
+      // mediator request unblocks.
+      const args = params?.arguments ?? {};
+      const approvalId =
+        typeof args.approval_id === "string" ? args.approval_id : "";
+      const decision = args.decision;
+      const remember = args.remember === true;
+      if (!approvalId) {
+        return replyError(
+          id,
+          -32602,
+          "submit_approval requires args.approval_id (string)",
+        );
+      }
+      if (decision !== "allow" && decision !== "deny") {
+        return replyError(
+          id,
+          -32602,
+          "submit_approval requires args.decision: 'allow' | 'deny'",
+        );
+      }
+      if (!services.approval.submitFromAgent) {
+        return replyError(
+          id,
+          -32603,
+          "submit_approval not supported by this Foreman build",
+        );
+      }
+      const result = await services.approval.submitFromAgent({
+        approvalId,
+        decision,
+        remember,
+        sourceAgent,
+      });
+      if (result.ok) {
+        return reply(id, {
+          content: [
+            {
+              type: "text",
+              text: `Submitted: ${approvalId} → ${decision}${remember ? " (remembered)" : ""}`,
+            },
+          ],
+        });
+      }
+      // isError lets the agent's LLM see the message text and surface
+      // it back to the user (e.g. "approval abc123 not found" → user
+      // types the right id).
+      return reply(id, {
+        content: [
+          { type: "text", text: result.error ?? "submit_approval failed" },
+        ],
+        isError: true,
+      });
     }
 
     const result = await services.mediator.handleRequest({
