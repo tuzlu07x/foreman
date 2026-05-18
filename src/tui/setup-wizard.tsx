@@ -248,7 +248,15 @@ export function buildAgentConfigPromptList(
     const choosable = configured
       ? compat.filter((p) => configured.has(p))
       : compat;
-    if (choosable.length > 1) {
+    // #355 — show the llm-choice picker whenever the agent supports
+    // multiple providers AND at least one of them is configured. Previously
+    // we skipped when `choosable.length === 1`, which silently picked the
+    // sole option without telling the user. Round-3 users had only one
+    // provider configured and never saw the picker, so they couldn't tell
+    // which LLM each agent ended up wired to (and felt they had no choice
+    // even when they later added a second provider). Single-option pickers
+    // are a 1-keystroke confirm — that's the right cost.
+    if (compat.length > 1 && choosable.length >= 1) {
       prompts.push({ agentId: id, kind: "llm-choice" });
     }
     prompts.push({ agentId: id, kind: "responsibility-note" });
@@ -1235,8 +1243,9 @@ export function SetupWizard({
             phase={`${agent.name} ${progress}`}
           />
           <Text color={theme.fg.muted}>
-            Pick the LLM provider {agent.name} should use. Only providers you
-            configured in Step 1 are shown.
+            {options.length > 1
+              ? `Pick the LLM provider ${agent.name} should use. Only providers you configured in Step 1 are shown.`
+              : `${agent.name} supports ${compat.length} providers, but only ${currentLabel} is configured. Press [Enter] to confirm.`}
           </Text>
           <Text>
             Currently selected:{" "}
@@ -1250,8 +1259,9 @@ export function SetupWizard({
             onChange={(value) => setLlmDraft(value)}
           />
           <Text color={theme.fg.muted}>
-            Use [↑↓] to move · [Enter] confirms the highlighted provider · [Esc]
-            goes back. (Space does nothing — this is single-select.)
+            {options.length > 1
+              ? "Use [↑↓] to move · [Enter] confirms the highlighted provider · [Esc] goes back. (Space does nothing — this is single-select.)"
+              : "[Enter] confirms · [Esc] goes back. Add another provider in Step 1 if you want to switch later."}
           </Text>
         </Box>
       );

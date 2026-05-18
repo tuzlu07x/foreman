@@ -84,15 +84,21 @@ describe("buildAgentConfigPromptList", () => {
   });
 
   // #297 — when configuredProviderIds is passed, gating narrows the picker.
+  // #355 — for multi-LLM-compat agents we keep the picker visible even when
+  // only one option is configured, so the user can SEE which LLM was wired
+  // (and Enter to confirm). Skipping silently picked the sole option and
+  // round-3 users couldn't tell what they ended up with.
   describe("with configuredProviderIds gating", () => {
-    it("skips llm-choice when only one compatible LLM is configured", () => {
-      // Hermes compat = [anthropic, openai], user has only anthropic
+    it("keeps llm-choice for multi-compat agent even when only one is configured (#355)", () => {
+      // Hermes compat = [anthropic, openai], user has only anthropic — still
+      // show picker so user can visually confirm.
       const prompts = buildAgentConfigPromptList(
         catalog,
         ["hermes"],
         ["anthropic"],
       );
       expect(prompts).toEqual([
+        { agentId: "hermes", kind: "llm-choice" },
         { agentId: "hermes", kind: "responsibility-note" },
       ]);
     });
@@ -110,7 +116,7 @@ describe("buildAgentConfigPromptList", () => {
     });
 
     it("skips llm-choice when zero compatible LLMs are configured", () => {
-      // needs-llm state — picker still allows selection but no choice to make
+      // needs-llm state — no point showing a 0-option picker.
       const prompts = buildAgentConfigPromptList(catalog, ["hermes"], ["gemini"]);
       expect(prompts).toEqual([
         { agentId: "hermes", kind: "responsibility-note" },
@@ -135,6 +141,19 @@ describe("buildAgentConfigPromptList", () => {
       expect(prompts).toEqual([
         { agentId: "hermes", kind: "llm-choice" },
         { agentId: "hermes", kind: "responsibility-note" },
+      ]);
+    });
+
+    it("never shows llm-choice for single-compat agents regardless of configured set (#355)", () => {
+      // Claude Code is anthropic-only — no choice ever, even if user has
+      // anthropic + openai configured.
+      const prompts = buildAgentConfigPromptList(
+        catalog,
+        ["claude-code"],
+        ["anthropic", "openai"],
+      );
+      expect(prompts).toEqual([
+        { agentId: "claude-code", kind: "responsibility-note" },
       ]);
     });
   });
