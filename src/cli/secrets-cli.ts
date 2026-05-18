@@ -305,6 +305,87 @@ secretsCommand
   });
 
 secretsCommand
+  .command("repush <agentId>")
+  .description(
+    "Re-run secret projection for an installed agent — useful after the agent's own config has been initialised (#377)",
+  )
+  .action((agentId: string) => {
+    const db = getDb();
+    const store = getStore();
+    try {
+      const registry = new RegistryService(db, new EventBus<ForemanEventMap>());
+      const agent = registry.get(agentId);
+      if (!agent) {
+        console.error(
+          red("error: ") +
+            `agent "${agentId}" not registered — run \`foreman agent add ${agentId}\` first`,
+        );
+        process.exit(1);
+      }
+      const { doc } = loadActiveRegistry();
+      const catalogId =
+        typeof agent.metadata?.registryId === "string"
+          ? agent.metadata.registryId
+          : agentId;
+      const entry = doc.agents.find((a) => a.id === catalogId);
+      if (!entry) {
+        console.error(
+          red("error: ") +
+            `no registry entry found for "${catalogId}" — corrupted install?`,
+        );
+        process.exit(1);
+      }
+      // Derive provider + service selection from what's actually in the
+      // store: every provider whose secret_name exists, every service id
+      // referenced by the agent whose token exists. This works without
+      // re-prompting because the only thing that's typically missing is
+      // the *target config file* (which is what `repush` is supposed to
+      // populate now that the user has initialised it).
+      const storedNames = new Set(store.list().map((s) => s.name));
+      const providersSelected: string[] = [];
+      if (storedNames.has("anthropic-key")) providersSelected.push("anthropic");
+      if (storedNames.has("openai-key")) providersSelected.push("openai");
+      if (storedNames.has("gemini-key")) providersSelected.push("gemini");
+      if (storedNames.has("openrouter-key"))
+        providersSelected.push("openrouter");
+      const servicesSelected: string[] = [];
+      if (storedNames.has("telegram-bot-token"))
+        servicesSelected.push("telegram");
+      if (storedNames.has("discord-bot-token"))
+        servicesSelected.push("discord");
+      if (storedNames.has("slack-bot-token"))
+        servicesSelected.push("slack");
+      const result = projectSecretsForAgent(entry, {
+        providersSelected,
+        servicesSelected,
+        secretStore: store,
+      });
+      if (result.files.length === 0 && result.skipped.length === 0) {
+        console.log(orange("note: ") + "nothing to re-project (no matching secrets in store)");
+        return;
+      }
+      for (const f of result.files) {
+        const tag = f.replacedStale
+          ? "⟳ rotated"
+          : f.created
+            ? "✓ wrote"
+            : "✓ updated";
+        console.log(
+          `  ${tag} ${f.secrets.length} secret${f.secrets.length === 1 ? "" : "s"} → ${f.path}`,
+        );
+      }
+      for (const s of result.skipped) {
+        console.log(orange("  ◦ ") + `skip ${s.secret}: ${s.reason}`);
+      }
+      console.log(green("✓") + ` repush complete for "${agentId}"`);
+    } catch (err) {
+      handleStoreError(err);
+    } finally {
+      closeDb();
+    }
+  });
+
+secretsCommand
   .command("rotate <name>")
   .description("Replace the value of an existing secret")
   .option("--value <value>", "supply value via flag instead of prompting")
