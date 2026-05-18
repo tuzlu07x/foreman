@@ -31,6 +31,13 @@ export const AgentEntrySchema = z
          *  otherwise opens /dev/tty and deadlocks against Foreman's Ink TUI
          *  in raw mode. Ignored for npm/brew installs. */
         non_interactive_args: z.array(z.string()).optional(),
+        /** When true, Foreman's projection step won't CREATE the agent's
+         *  config file if it doesn't already exist — only overlay onto an
+         *  existing one (#377). OpenClaw needs this because its install
+         *  doesn't seed ~/.openclaw/openclaw.json and the binary refuses
+         *  to start with the stripped-down JSON Foreman would write from
+         *  scratch. Default false → existing behaviour (Foreman creates). */
+        requires_existing_config: z.boolean().optional(),
       })
       .strict(),
     config_paths: z.array(z.string()),

@@ -2755,18 +2755,31 @@ export async function runInstallStep(
     }
 
     const configPath = pickConfigPath(entry);
+    const requiresExisting = entry.install.requires_existing_config === true;
     if (configPath) {
       try {
-        const snippet = buildMcpSnippet(id, entry);
-        const plan = planInjection(configPath, snippet.json);
-        if (plan.alreadyHasForeman) {
-          log(`  ✓ config already wired at ${configPath}`);
-        } else if (plan.replacedStale) {
-          applyInjection(configPath, plan);
-          log(`  ⟳ replaced stale foreman entry at ${configPath}`);
+        // #377 — Don't seed a stripped-down config from scratch for agents
+        // (OpenClaw) whose binary refuses minimal JSON. Tell the user to
+        // initialise the agent's own config first.
+        if (requiresExisting && !existsSync(configPath)) {
+          log(
+            `  ⚠ ${entry.name} config not initialised at ${configPath}`,
+          );
+          log(
+            `     Run \`${entry.install.binary ?? id}\` once to create it, then \`foreman secrets repush ${id}\` to apply Foreman's keys.`,
+          );
         } else {
-          applyInjection(configPath, plan);
-          log(`  ✓ wrote MCP snippet to ${configPath}`);
+          const snippet = buildMcpSnippet(id, entry);
+          const plan = planInjection(configPath, snippet.json);
+          if (plan.alreadyHasForeman) {
+            log(`  ✓ config already wired at ${configPath}`);
+          } else if (plan.replacedStale) {
+            applyInjection(configPath, plan);
+            log(`  ⟳ replaced stale foreman entry at ${configPath}`);
+          } else {
+            applyInjection(configPath, plan);
+            log(`  ✓ wrote MCP snippet to ${configPath}`);
+          }
         }
       } catch (err) {
         if (err instanceof UnsupportedConfigFormatError) {

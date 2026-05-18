@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -417,5 +417,153 @@ describe('projectSecretsForAgent — wiring', () => {
     })
     expect(result.files).toEqual([])
     expect(result.skipped).toEqual([])
+  })
+
+  // #377 — Agents (OpenClaw) whose binary refuses a stripped-down JSON
+  // must wait for the user to init their own config first.
+  describe('install.requires_existing_config (#377)', () => {
+    it('skips json_env when target file is missing AND requires_existing_config:true', () => {
+      const path = `${tmp}/openclaw.json`
+      const entry = fakeEntry({
+        install: {
+          npm: null,
+          brew: null,
+          binary: 'openclaw',
+          requires_existing_config: true,
+        },
+        secret_projection: {
+          json_env: { path, section: 'env' },
+          env_vars: {
+            OPENAI_API_KEY: { from_secret: 'openai-key', if_provider: 'openai' },
+          },
+        },
+      })
+      const result = projectSecretsForAgent(entry, {
+        providersSelected: ['openai'],
+        servicesSelected: [],
+        secretStore: store,
+        home: tmp,
+      })
+      expect(result.files).toHaveLength(0)
+      expect(result.skipped).toHaveLength(1)
+      expect(result.skipped[0]?.reason).toMatch(/doesn't exist/)
+      expect(result.skipped[0]?.reason).toContain('openclaw')
+      expect(existsSync(path)).toBe(false)
+    })
+
+    it('writes normally when target file already exists', () => {
+      const path = `${tmp}/openclaw.json`
+      writeFileSync(path, JSON.stringify({ defaultAgent: 'main', agents: {} }))
+      const entry = fakeEntry({
+        install: {
+          npm: null,
+          brew: null,
+          binary: 'openclaw',
+          requires_existing_config: true,
+        },
+        secret_projection: {
+          json_env: { path, section: 'env' },
+          env_vars: {
+            OPENAI_API_KEY: { from_secret: 'openai-key', if_provider: 'openai' },
+          },
+        },
+      })
+      const result = projectSecretsForAgent(entry, {
+        providersSelected: ['openai'],
+        servicesSelected: [],
+        secretStore: store,
+        home: tmp,
+      })
+      expect(result.files).toHaveLength(1)
+      const parsed = JSON.parse(readFileSync(path, 'utf-8'))
+      // Preserves existing defaultAgent
+      expect(parsed.defaultAgent).toBe('main')
+      // Adds env section
+      expect(parsed.env.OPENAI_API_KEY).toBe('sk-oa-1')
+    })
+
+    it('skips json_channels too when file missing + flag true', () => {
+      const path = `${tmp}/openclaw.json`
+      const entry = fakeEntry({
+        install: {
+          npm: null,
+          brew: null,
+          binary: 'openclaw',
+          requires_existing_config: true,
+        },
+        secret_projection: {
+          json_channels: {
+            path,
+            channels: {
+              telegram: {
+                path: 'channels.telegram.botToken',
+                from_secret: 'telegram-bot-token',
+                if_service: 'telegram',
+              },
+            },
+          },
+        },
+      })
+      const result = projectSecretsForAgent(entry, {
+        providersSelected: [],
+        servicesSelected: ['telegram'],
+        secretStore: store,
+        home: tmp,
+      })
+      expect(result.files).toHaveLength(0)
+      expect(result.skipped).toHaveLength(1)
+      expect(result.skipped[0]?.reason).toMatch(/doesn't exist/)
+      expect(existsSync(path)).toBe(false)
+    })
+
+    it('creates the file when requires_existing_config:false / undefined (default)', () => {
+      const path = `${tmp}/hermes-settings.json`
+      const entry = fakeEntry({
+        install: { npm: null, brew: null }, // no requires_existing_config
+        secret_projection: {
+          json_env: { path, section: 'env' },
+          env_vars: {
+            OPENAI_API_KEY: { from_secret: 'openai-key', if_provider: 'openai' },
+          },
+        },
+      })
+      const result = projectSecretsForAgent(entry, {
+        providersSelected: ['openai'],
+        servicesSelected: [],
+        secretStore: store,
+        home: tmp,
+      })
+      expect(result.files).toHaveLength(1)
+      expect(existsSync(path)).toBe(true)
+    })
+
+    it('env_file (dotenv) is always created regardless of flag — agents that need this rely on it', () => {
+      // dotenv is just key=value; no schema risk. Hermes' .env etc.
+      const path = `${tmp}/.env`
+      const entry = fakeEntry({
+        install: {
+          npm: null,
+          brew: null,
+          requires_existing_config: true,
+        },
+        secret_projection: {
+          env_file: path,
+          env_vars: {
+            ANTHROPIC_API_KEY: {
+              from_secret: 'anthropic-key',
+              if_provider: 'anthropic',
+            },
+          },
+        },
+      })
+      const result = projectSecretsForAgent(entry, {
+        providersSelected: ['anthropic'],
+        servicesSelected: [],
+        secretStore: store,
+        home: tmp,
+      })
+      expect(result.files).toHaveLength(1)
+      expect(existsSync(path)).toBe(true)
+    })
   })
 })
