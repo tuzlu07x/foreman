@@ -185,6 +185,25 @@ export const AgentEntrySchema = z
             ),
           ])
           .optional(),
+        /** Post-projection provider-conflict check (#350). Many agents have
+         *  a `provider:` field in their own config that takes priority over
+         *  the env vars Foreman writes. If the agent's config still names a
+         *  different provider than the one Foreman wired up, the agent
+         *  silently keeps using the old one — the user thinks Foreman is
+         *  broken. This block tells Foreman where to look + how to warn. */
+        provider_check: z
+          .object({
+            /** Config file to read (`~` expanded). */
+            path: z.string().min(1),
+            /** File format — drives parsing. */
+            format: z.enum(["yaml", "json"]),
+            /** Dot-path to the provider field inside the parsed config. */
+            key: z.string().min(1),
+            /** Optional CLI command the user can run to fix the mismatch
+             *  (e.g. `hermes model` opens Hermes' provider picker). */
+            fix_command: z.string().optional(),
+          })
+          .optional(),
       })
       .optional(),
   })

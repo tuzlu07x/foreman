@@ -51,7 +51,13 @@
         "launch": [
           { "command": "hermes", "label": "chat" },
           { "command": "hermes gateway", "label": "daemon (Telegram/Discord)" }
-        ]
+        ],
+        "provider_check": {
+          "path": "~/.hermes/config.yaml",
+          "format": "yaml",
+          "key": "provider",
+          "fix_command": "hermes model"
+        }
       }
     },
     {
@@ -115,7 +121,13 @@
         "launch": [
           { "command": "openclaw", "label": "chat" },
           { "command": "openclaw gateway", "label": "daemon" }
-        ]
+        ],
+        "provider_check": {
+          "path": "~/.openclaw/openclaw.json",
+          "format": "json",
+          "key": "provider",
+          "fix_command": "openclaw config set provider <name>"
+        }
       }
     },
     {
