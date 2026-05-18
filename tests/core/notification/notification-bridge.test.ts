@@ -496,3 +496,122 @@ describe('NotificationBridge — lifecycle', () => {
     handle.sqlite.close()
   })
 })
+
+// #383 — Auto-deny alert: when the risk engine slams the door without
+// asking the user, fire a fire-and-forget channel notification so the
+// user knows their guardian actually caught something.
+function deniedEvent(
+  overrides: Partial<ForemanEventMap['request:decided']> = {},
+): ForemanEventMap['request:decided'] {
+  return {
+    requestId: 'r-deny-1',
+    sourceAgent: 'openclaw',
+    targetAgent: undefined,
+    targetTool: 'read_file',
+    args: { path: '.env' },
+    decision: 'denied',
+    decidedBy: 'policy:secret_path',
+    riskScore: 80,
+    riskReasons: ['secret_path', 'workspace_root'],
+    riskFactors: [],
+    riskBucket: 'high',
+    llmVerification: null,
+    securityReport: null,
+    durationMs: 3800,
+    createdAt: 0,
+    decidedAt: 0,
+    ...overrides,
+  }
+}
+
+describe('NotificationBridge — bus.on(request:decided) → risk_deny alert (#383)', () => {
+  let bus: EventBus<ForemanEventMap>
+  let channel: FakeChannel
+  let bridge: NotificationBridge
+  let sqlite: Database.Database
+
+  beforeEach(() => {
+    const handle = createInMemoryDb()
+    sqlite = handle.sqlite
+    bus = new EventBus<ForemanEventMap>()
+    channel = new FakeChannel('telegram')
+    const service = new NotificationService({
+      db: handle.db,
+      config: configWithTelegram(),
+      channels: new Map<ChannelId, NotificationChannel>([['telegram', channel]]),
+    })
+    bridge = new NotificationBridge(service, { bus })
+  })
+
+  afterEach(async () => {
+    await bridge.stop()
+    sqlite.close()
+  })
+
+  it('sends a risk_deny notification when an auto-deny lands', async () => {
+    await bridge.start()
+    bus.emit('request:decided', deniedEvent())
+    await tick()
+    expect(channel.sendCalls).toHaveLength(1)
+    expect(channel.sendCalls[0]!.level).toBe('risk_deny')
+    expect(channel.sendCalls[0]!.title).toContain('openclaw')
+    expect(channel.sendCalls[0]!.body).toContain('secret_path')
+  })
+
+  it('skips when the decision is "allowed"', async () => {
+    await bridge.start()
+    bus.emit(
+      'request:decided',
+      deniedEvent({ decision: 'allowed', decidedBy: 'policy:safe' }),
+    )
+    await tick()
+    expect(channel.sendCalls).toHaveLength(0)
+  })
+
+  it('skips user-driven denials (user already knows)', async () => {
+    await bridge.start()
+    bus.emit(
+      'request:decided',
+      deniedEvent({ decidedBy: 'user:telegram' }),
+    )
+    await tick()
+    expect(channel.sendCalls).toHaveLength(0)
+  })
+
+  it('skips when source agent is muted', async () => {
+    await bridge.stop()
+    const service = new NotificationService({
+      db: createInMemoryDb().db,
+      config: configWithTelegram(),
+      channels: new Map<ChannelId, NotificationChannel>([['telegram', channel]]),
+    })
+    bridge = new NotificationBridge(service, {
+      bus,
+      getState: () => ({ silencedUntil: null, mutedAgents: ['openclaw'] }),
+    })
+    await bridge.start()
+    bus.emit('request:decided', deniedEvent())
+    await tick()
+    expect(channel.sendCalls).toHaveLength(0)
+  })
+
+  it('skips during a silence window', async () => {
+    await bridge.stop()
+    const service = new NotificationService({
+      db: createInMemoryDb().db,
+      config: configWithTelegram(),
+      channels: new Map<ChannelId, NotificationChannel>([['telegram', channel]]),
+    })
+    bridge = new NotificationBridge(service, {
+      bus,
+      getState: () => ({
+        silencedUntil: Date.now() + 60_000,
+        mutedAgents: [],
+      }),
+    })
+    await bridge.start()
+    bus.emit('request:decided', deniedEvent())
+    await tick()
+    expect(channel.sendCalls).toHaveLength(0)
+  })
+})
