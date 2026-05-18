@@ -1136,12 +1136,17 @@ export function SetupWizard({
     }
 
     if (
-      key.escape &&
       currentStep === "done" &&
       (donePhase === "doctor" || donePhase === "log")
     ) {
-      setDonePhase("main");
-      return;
+      // #381 — accept multiple back keys so the user isn't stuck if Esc
+      // misfires (some terminals translate Esc to multi-byte sequences
+      // that Ink doesn't surface as key.escape). Round-3 user got trapped
+      // on the doctor sub-page until they ^C the wizard.
+      if (key.escape || key.return || input === "b" || input === "q") {
+        setDonePhase("main");
+        return;
+      }
     }
 
     if (currentStep === "welcome") {
@@ -2439,7 +2444,7 @@ export function SetupWizard({
           );
         })}
         <Text color={theme.fg.muted}>
-          (exit code {doctorReport.exitCode}) — [Esc] back
+          (exit code {doctorReport.exitCode}) — [Esc] / [Enter] / [b] back
         </Text>
       </Box>
     );
@@ -2464,7 +2469,7 @@ export function SetupWizard({
             </Text>
           );
         })}
-        <Text color={theme.fg.muted}>[Esc] back</Text>
+        <Text color={theme.fg.muted}>[Esc] / [Enter] / [b] back</Text>
       </Box>
     );
   }
