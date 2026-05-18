@@ -54,6 +54,12 @@ export const NotifyConfigSchema = z
         info: RouteSchema.optional(),
         summary: RouteSchema.optional(),
         budget_alert: RouteSchema.optional(),
+        /** Auto-deny alert (#383). When the risk engine auto-denies a call
+         *  (high-risk pattern caught — typical: secret_path, prompt_injection),
+         *  fire a notification on these channels. Different from `critical`
+         *  which routes APPROVAL requests; this routes after-the-fact alerts
+         *  for things the user never had a chance to see. */
+        risk_deny: RouteSchema.optional(),
       })
       .default({}),
   })
@@ -82,6 +88,9 @@ export function defaultNotifyConfig(): NotifyConfig {
       info: { channels: [], timeout_seconds: 0 },
       summary: { channels: ['telegram'], timeout_seconds: 0, schedule: 'daily 20:00' },
       budget_alert: { channels: ['telegram'], timeout_seconds: 0 },
+      // #383 — auto-deny alerts ("Foreman caught X attempting Y") default
+      // to telegram so the user knows their guardian is actually working.
+      risk_deny: { channels: ['telegram'], timeout_seconds: 0 },
     },
   })
 }

@@ -35,6 +35,7 @@ export class NotificationBridge {
   private readonly getState: () => NotifyState
   private offRequested: (() => void) | null = null
   private offResolved: (() => void) | null = null
+  private offDecided: (() => void) | null = null
   /** Maps requestId → notificationIds we've sent, so the resolved handler
    *  knows which messages to update. Cleared once a resolution lands. */
   private readonly outstanding = new Map<string, Set<string>>()
@@ -66,7 +67,17 @@ export class NotificationBridge {
       })
     })
 
-    // 3. When a channel callback fires, translate into an approval:resolved
+    // 3. #383 — auto-deny alerts. When the risk engine auto-denies a call
+    //    (no approval was ever asked), the user has no way to know their
+    //    guardian actually caught something. Forward those as fire-and-
+    //    forget notifications on the `risk_deny` route.
+    this.offDecided = this.bus.on('request:decided', (req) => {
+      this.handleAutoDenied(req).catch(() => {
+        // best-effort — channel failures persisted in `notifications`
+      })
+    })
+
+    // 4. When a channel callback fires, translate into an approval:resolved
     //    event so the rest of Foreman behaves as if the TUI modal answered.
     this.service.onAnyDecision(async (d) => {
       await this.handleOobDecision(d)
@@ -83,6 +94,10 @@ export class NotificationBridge {
     if (this.offResolved) {
       this.offResolved()
       this.offResolved = null
+    }
+    if (this.offDecided) {
+      this.offDecided()
+      this.offDecided = null
     }
     this.outstanding.clear()
     await this.service.shutdown()
@@ -138,6 +153,43 @@ export class NotificationBridge {
       }
     }
     this.outstanding.delete(res.requestId)
+  }
+
+  /**
+   * #383 — Auto-deny alert. Fires after the risk engine slams the door
+   * (decision === "denied", decidedBy starts with "policy:" or "risk:"
+   * — NOT "user:" because the user already knows about their own
+   * actions). Routes via `risk_deny` config so the user can disable in
+   * notify.yaml if too noisy.
+   */
+  private async handleAutoDenied(
+    req: ForemanEventMap['request:decided'],
+  ): Promise<void> {
+    if (req.decision !== 'denied') return
+    // Don't notify on user-driven denials — the user just did it.
+    if (req.decidedBy.startsWith('user')) return
+    const state = this.getState()
+    if (isAgentMuted(state, req.sourceAgent)) return
+    // Silence window applies (the whole point of silence is no auto-pings).
+    if (isSilenced(state)) return
+
+    const reasons = req.riskReasons.length > 0
+      ? req.riskReasons.slice(0, 3).join(', ')
+      : 'no specific reason'
+    const target =
+      req.targetTool ?? req.targetAgent ?? 'unknown'
+    const body =
+      `🛡 Foreman blocked ${req.sourceAgent} from calling ${target}.\n` +
+      `   Risk score: ${req.riskScore}/100 (${req.riskBucket})\n` +
+      `   Reasons: ${reasons}`
+    await this.service.send('risk_deny', {
+      title: `Auto-denied: ${req.sourceAgent} → ${target}`,
+      body,
+      level: 'risk_deny',
+      requestId: req.requestId,
+      actions: [],
+      agentBlocking: false,
+    })
   }
 
   private async handleOobDecision(d: UserDecision): Promise<void> {
