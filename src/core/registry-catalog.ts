@@ -152,6 +152,90 @@ export const AgentEntrySchema = z
      *       config file.
      *  Omit the block entirely for agents that don't need projection
      *  (generic-mcp). */
+    /** #408 / #409 — Per-agent provider mapping. Maps Foreman's abstract
+     *  LLM provider ids (`openai`, `anthropic`, `gemini`, ...) to the
+     *  agent's native config shape + auth requirements.
+     *
+     *  Why: each agent has its own provider taxonomy. Hermes has no
+     *  native `openai` provider — must go through OpenRouter or Codex
+     *  OAuth. OpenClaw has native `openai`. Codex prefers OAuth over
+     *  API key. The wizard, projection, and doctor all need to know
+     *  these per-agent variants so the user can pick "OpenAI" once and
+     *  every selected agent gets configured correctly.
+     *
+     *  Phase 1 of #408 — schema only; consumed in Phase 2 (#410) via
+     *  `src/core/provider-resolver.ts`. Agents without `provider_mapping`
+     *  fall back to the legacy `secret_projection` path.
+     *
+     *  Template variables in `writes` / `env_vars` / `auth_json_writes.value`
+     *  / `toml_writes[].value`:
+     *   - `${model}` — bare model id user picked (e.g. `gpt-4o-mini`)
+     *   - `${secret:<slot-name>}` — Foreman secret store lookup, resolved
+     *     at projection time. */
+    provider_mapping: z
+      .record(
+        z.object({
+          /** The variant Foreman picks when the user doesn't override.
+           *  Must match a key in `variants`. Validated at runtime in
+           *  Phase 2; schema-level cross-check would require z.refine. */
+          preferred: z.string().min(1),
+          variants: z.record(
+            z.object({
+              /** Human-readable label for wizard + TUI surfaces. */
+              label: z.string().min(1),
+              /** Dot-paths to write to the agent's main config file
+               *  (path inferred from registry's existing config_paths).
+               *  Values support `${model}` + `${secret:<name>}`. */
+              writes: z.record(z.string()).optional(),
+              /** Env var name → value (template-expanded). Written to
+               *  the agent's env mechanism (dotenv, json_env, etc) per
+               *  the existing `secret_projection.env_file` / `json_env`
+               *  routing. */
+              env_vars: z.record(z.string()).optional(),
+              /** For Codex-style auth.json files. */
+              auth_json_writes: z
+                .object({
+                  path: z.string().min(1),
+                  key: z.string().min(1),
+                  value: z.string().min(1),
+                })
+                .optional(),
+              /** For TOML-based config files (Codex, ZeroClaw). */
+              toml_writes: z
+                .array(
+                  z.object({
+                    path: z.string().min(1),
+                    key: z.string().min(1),
+                    value: z.string().min(1),
+                  }),
+                )
+                .optional(),
+              /** Foreman secret-store slot the user must have populated.
+               *  `null` for OAuth-based variants that don't need a key. */
+              required_secret: z.string().nullable().optional(),
+              /** How the user gets this credential — shown in the
+               *  wizard's required-setup screen (Phase 3) and `foreman
+               *  provider list` CLI (Phase 4). */
+              secret_acquisition: z
+                .object({
+                  name: z.string().min(1),
+                  url: z.string().url().optional(),
+                  note: z.string().optional(),
+                })
+                .optional(),
+              /** CLI command the user runs to complete an OAuth flow
+               *  (`codex login`, `anthropic auth login`, …). Foreman
+               *  wraps these in Phase 5. */
+              interactive_setup: z.string().optional(),
+              /** Command Foreman runs to verify OAuth completed —
+               *  e.g. `codex auth status`. Used by `foreman doctor`
+               *  and the OAuth wrapper (Phase 4 + 5). */
+              post_setup_verify: z.string().optional(),
+            }),
+          ),
+        }),
+      )
+      .optional(),
     secret_projection: z
       .object({
         /** Dotenv file path (Hermes uses `~/.hermes/.env`). Null when the
