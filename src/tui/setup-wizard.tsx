@@ -77,6 +77,11 @@ import {
 } from "../core/machine-capability.js";
 import { detectOllama } from "../core/ollama-detector.js";
 import {
+  isRequiredSetupComplete,
+  resolveRequiredSetup,
+  type RequiredSetupResolution,
+} from "../core/required-setup.js";
+import {
   canRunModel,
   loadOllamaModels,
   type OllamaModel,
@@ -830,6 +835,20 @@ export function SetupWizard({
   const [ollamaModelDraft, setOllamaModelDraft] = useState<string | null>(null);
   const [presetDraft, setPresetDraft] = useState<string | null>(null);
   const [presetKeyDraft, setPresetKeyDraft] = useState<string>("");
+
+  // #408 / #411 Phase 3 — required-setup step state.
+  // The wizard precomputes a `RequiredSetupResolution` (which agents need
+  // which secrets, which OAuth flows queue up). User can paste missing
+  // keys or [s]kip them; skipped + missing secrets will block install
+  // until handled.
+  const [requiredSetupPhase, setRequiredSetupPhase] = useState<
+    "picker" | "paste"
+  >("picker");
+  const [requiredSetupCursor, setRequiredSetupCursor] = useState(0);
+  const [requiredSetupPasteValue, setRequiredSetupPasteValue] = useState("");
+  const [requiredSetupOverrides, setRequiredSetupOverrides] = useState<
+    Record<string, "saved-in-session" | "skipped">
+  >({});
   const machineCap = useMemo<MachineCapability>(
     () => detectMachineCapability(),
     [],
@@ -880,6 +899,36 @@ export function SetupWizard({
     providerCatalog,
     providersSaved,
     services.secretStore,
+  ]);
+
+  // #408 / #411 Phase 3 — required-setup resolution.
+  // Recomputed on every render so paste/skip actions reflect immediately.
+  // The aggregator dedupes secrets across agents (one paste prompt
+  // covers multiple agents sharing the same key slot) and queues OAuth
+  // flows that the Done screen surfaces as post-install hints.
+  const requiredSetupResolution = useMemo<RequiredSetupResolution>(() => {
+    const selectedEntries = agentCatalog.filter((a) =>
+      agentsSelected.includes(a.id),
+    );
+    const agentProviders: Record<string, string> = {};
+    for (const agent of selectedEntries) {
+      const cfg = agentConfigs[agent.id];
+      if (cfg?.llmProvider) {
+        agentProviders[agent.id] = cfg.llmProvider;
+      }
+    }
+    return resolveRequiredSetup({
+      agents: selectedEntries,
+      agentProviders,
+      secretStore: services.secretStore,
+      sessionOverrides: requiredSetupOverrides,
+    });
+  }, [
+    agentCatalog,
+    agentsSelected,
+    agentConfigs,
+    services.secretStore,
+    requiredSetupOverrides,
   ]);
 
   const serviceCatalog = useMemo(() => loadActiveServices().doc.services, []);
@@ -1262,6 +1311,111 @@ export function SetupWizard({
           return;
         }
       }
+    }
+
+    // #408 / #411 Phase 3 — required-setup step key handling.
+    // Two phases: picker (cursor over secrets+oauth list) + paste (single-line
+    // input for the focused secret). Aggregator output (`requiredSetupResolution`)
+    // is recomputed on every keystroke so paste/skip reactions are immediate.
+    if (currentStep === "required-setup") {
+      if (requiredSetupPhase === "paste") {
+        if (key.escape) {
+          setRequiredSetupPhase("picker");
+          setRequiredSetupPasteValue("");
+          return;
+        }
+        if (key.return) {
+          // Save the pasted value into the secret store + flag this slot
+          // as saved-in-session so the aggregator stops flagging it.
+          const slot =
+            requiredSetupResolution.secrets[requiredSetupCursor]?.slotName;
+          if (slot && requiredSetupPasteValue.length > 0) {
+            try {
+              if (services.secretStore.exists(slot)) {
+                services.secretStore.rotate(slot, requiredSetupPasteValue);
+              } else {
+                services.secretStore.add(slot, requiredSetupPasteValue);
+              }
+            } catch {
+              /* secret-store transient errors fall through — user sees
+                 a missing badge and can retry */
+            }
+            setRequiredSetupOverrides((prev) => ({
+              ...prev,
+              [slot]: "saved-in-session",
+            }));
+          }
+          setRequiredSetupPasteValue("");
+          setRequiredSetupPhase("picker");
+          return;
+        }
+        if (key.backspace || key.delete) {
+          setRequiredSetupPasteValue((v) => v.slice(0, -1));
+          return;
+        }
+        if (input && input.length > 0 && !key.ctrl && !key.meta) {
+          setRequiredSetupPasteValue((v) => v + input);
+        }
+        return;
+      }
+      // ---- picker phase ----
+      if (key.escape) {
+        // Back to services summary so user can change picks.
+        uncomplete("services");
+        setServicesPhase("summary");
+        return;
+      }
+      if (key.upArrow) {
+        setRequiredSetupCursor((c) =>
+          Math.max(0, c - 1),
+        );
+        return;
+      }
+      if (key.downArrow) {
+        setRequiredSetupCursor((c) =>
+          Math.min(requiredSetupResolution.secrets.length - 1, c + 1),
+        );
+        return;
+      }
+      if (key.return) {
+        // If picker has a focused secret in `missing` state → open paste.
+        // If everything is resolved → advance to install.
+        const cur = requiredSetupResolution.secrets[requiredSetupCursor];
+        if (
+          cur &&
+          (cur.status === "missing" || cur.status === "skipped")
+        ) {
+          setRequiredSetupPhase("paste");
+          return;
+        }
+        // No actionable row — try to advance if complete.
+        if (isRequiredSetupComplete(requiredSetupResolution)) {
+          advance("required-setup");
+        }
+        return;
+      }
+      if (input === "s") {
+        // Skip the currently focused secret. Install will still write
+        // everything else; the agent that needed this secret will fail
+        // at start time with a clear error (TUI crash banner).
+        const slot =
+          requiredSetupResolution.secrets[requiredSetupCursor]?.slotName;
+        if (slot) {
+          setRequiredSetupOverrides((prev) => ({
+            ...prev,
+            [slot]: "skipped",
+          }));
+        }
+        return;
+      }
+      if (input === "c") {
+        // Continue / install — only fires when nothing is `missing`.
+        if (isRequiredSetupComplete(requiredSetupResolution)) {
+          advance("required-setup");
+        }
+        return;
+      }
+      return;
     }
 
     if (currentStep === "done" && donePhase === "main") {
@@ -2523,6 +2677,158 @@ export function SetupWizard({
     );
   }
 
+  // ---------------- Required setup (#408 / #411 Phase 3) ----------------
+  if (currentStep === "required-setup") {
+    const res = requiredSetupResolution;
+    const totalSecrets = res.secrets.length;
+    const totalOauth = res.oauthSteps.length;
+    const totalErrors = res.errors.length;
+    const complete = isRequiredSetupComplete(res);
+
+    // Paste sub-phase: focused secret gets a single-line input.
+    if (requiredSetupPhase === "paste") {
+      const cur = res.secrets[requiredSetupCursor];
+      const masked =
+        requiredSetupPasteValue.length > 0
+          ? `${"•".repeat(Math.min(requiredSetupPasteValue.length, 32))}`
+          : "";
+      return (
+        <Box flexDirection="column" gap={1} paddingY={1}>
+          <WizardProgress
+            current={5}
+            total={5}
+            label="Required setup"
+            phase={`paste ${cur?.slotName ?? "key"}`}
+          />
+          {cur?.acquisition ? (
+            <Box flexDirection="column">
+              <Text color={theme.fg.muted}>
+                {cur.acquisition.name}
+                {cur.acquisition.url
+                  ? `  ·  Get one: ${cur.acquisition.url}`
+                  : ""}
+              </Text>
+              {cur.acquisition.note ? (
+                <Text color={theme.fg.muted}>{cur.acquisition.note}</Text>
+              ) : null}
+            </Box>
+          ) : null}
+          <Box>
+            <Text bold>{cur?.slotName ?? ""}: </Text>
+            <Text>{masked}</Text>
+            <Text color={theme.fg.muted}>{masked.length === 0 ? "_" : ""}</Text>
+          </Box>
+          <Text color={theme.fg.muted}>
+            [Enter] save · [Esc] cancel · {requiredSetupPasteValue.length} chars
+          </Text>
+        </Box>
+      );
+    }
+
+    // Picker sub-phase: aggregated summary + scrollable secrets list.
+    return (
+      <Box flexDirection="column" gap={1} paddingY={1}>
+        <WizardProgress
+          current={5}
+          total={5}
+          label="Required setup"
+          phase={complete ? "all set" : "missing keys"}
+        />
+        <Text color={theme.fg.muted}>
+          Foreman analyzed your agent + provider picks. Below is everything
+          needed before install can proceed.
+        </Text>
+        {totalErrors > 0 ? (
+          <Box flexDirection="column">
+            <Text color={theme.accent.warning} bold>
+              ⚠ Resolver errors ({totalErrors}) — go back to fix
+            </Text>
+            {res.errors.map((e) => (
+              <Text key={`${e.agentId}-${e.foremanProvider}`} color={theme.accent.warning}>
+                {"  "}• {e.agentId} / {e.foremanProvider}: {e.error}
+              </Text>
+            ))}
+          </Box>
+        ) : null}
+        {totalSecrets > 0 ? (
+          <Box flexDirection="column">
+            <Text bold>
+              Required secrets ({totalSecrets})
+            </Text>
+            {res.secrets.map((s, idx) => {
+              const focused = idx === requiredSetupCursor;
+              const tag =
+                s.status === "present"
+                  ? "✓"
+                  : s.status === "saved-in-session"
+                    ? "✓"
+                    : s.status === "skipped"
+                      ? "✗"
+                      : "⚠";
+              const colour =
+                s.status === "missing"
+                  ? theme.accent.warning
+                  : s.status === "skipped"
+                    ? theme.fg.muted
+                    : theme.accent.primary;
+              return (
+                <Box key={s.slotName} flexDirection="column">
+                  <Box flexDirection="row">
+                    <Text color={focused ? theme.accent.primary : undefined} bold={focused}>
+                      {focused ? "❯ " : "  "}
+                    </Text>
+                    <Text color={colour}>{tag}</Text>
+                    <Text> {s.slotName}</Text>
+                    <Text color={theme.fg.muted}>
+                      {"  "}for: {s.agents.join(", ")} · status: {s.status}
+                    </Text>
+                  </Box>
+                  {focused && s.acquisition ? (
+                    <Text color={theme.fg.muted}>
+                      {"     "}
+                      {s.acquisition.name}
+                      {s.acquisition.url
+                        ? `  ·  ${s.acquisition.url}`
+                        : ""}
+                    </Text>
+                  ) : null}
+                </Box>
+              );
+            })}
+          </Box>
+        ) : (
+          <Text color={theme.fg.muted}>No secrets needed — every selected agent uses OAuth or is already configured.</Text>
+        )}
+        {totalOauth > 0 ? (
+          <Box flexDirection="column">
+            <Text bold>OAuth steps queued ({totalOauth})</Text>
+            <Text color={theme.fg.muted}>
+              These you'll run manually AFTER setup completes:
+            </Text>
+            {res.oauthSteps.map((o) => (
+              <Text key={`${o.agentId}-${o.command}`} color={theme.fg.muted}>
+                {"  "}• {o.agentId}: <Text bold>{o.command}</Text>
+              </Text>
+            ))}
+          </Box>
+        ) : null}
+        <Text color={theme.fg.muted}>
+          [↑↓] move · [Enter] paste / continue · [s] skip · [c] continue (when clean) · [Esc] back to services
+        </Text>
+        {!complete && totalErrors === 0 ? (
+          <Text color={theme.accent.warning}>
+            ⚠ {res.secrets.filter((s) => s.status === "missing").length} secret(s) still missing
+          </Text>
+        ) : null}
+        {complete ? (
+          <Text color={theme.accent.primary}>
+            ✓ Ready to install — press [c] or [Enter] to continue
+          </Text>
+        ) : null}
+      </Box>
+    );
+  }
+
   // ---------------- Install ----------------
   if (currentStep === "install") {
     if (!installRunning) {
@@ -2746,6 +3052,24 @@ export function SetupWizard({
       )}
       {installSummary && installSummary.registered.length > 0 && (
         <LaunchCommands agentIds={installSummary.registered} />
+      )}
+      {/* #408 / #411 Phase 3 — surface queued OAuth flows that the user
+          accepted to run manually. Without this hint the wizard would
+          leave Codex / Claude Code in an un-authenticated state and the
+          user wouldn't know which command to run. */}
+      {requiredSetupResolution.oauthSteps.length > 0 && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold>Run these to finish OAuth setup</Text>
+          {requiredSetupResolution.oauthSteps.map((o) => (
+            <Box key={`${o.agentId}-${o.command}`} flexDirection="row" marginLeft={2}>
+              <Text color={theme.accent.primary}>▸ {o.command}</Text>
+              <Text color={theme.fg.muted}>
+                {"  "}({o.agentId}
+                {o.verify ? ` · verify: ${o.verify}` : ""})
+              </Text>
+            </Box>
+          ))}
+        </Box>
       )}
       <Box flexDirection="column" marginTop={1}>
         <Text bold>What next?</Text>
