@@ -8,6 +8,11 @@ export const STEPS = [
   "foreman-llm",
   "agents",
   "services",
+  // #408 / #411 Phase 3 — per-agent provider mapping resolution.
+  // Runs AFTER agent + service picks (needs both to compute which
+  // secrets are required) and BEFORE install (so missing keys are
+  // pasted in before the projector writes them).
+  "required-setup",
   "install",
   "done",
 ] as const;
