@@ -70,7 +70,8 @@
         "npm": "openclaw",
         "brew": null,
         "script": "https://openclaw.ai/install.sh",
-        "binary": "openclaw"
+        "binary": "openclaw",
+        "requires_existing_config": true
       },
       "config_paths": [
         "~/.openclaw/openclaw.json",
