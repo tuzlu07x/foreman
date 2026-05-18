@@ -13,6 +13,7 @@ import {
   isBrewManagedPath,
   preferredInstallCommand,
   preferredUninstallCommand,
+  runPostConfigCommands,
 } from "../../src/core/agent-install.js";
 
 describe("preferredInstallCommand", () => {
@@ -339,5 +340,55 @@ describe("detectInstall", () => {
     expect(result.found).toBe(true);
     expect(result.source).toBe("PATH");
     expect(result.path).toBe(join(pathBin, "hermes"));
+  });
+});
+
+// #398 — `post_config_commands` runner. OpenClaw uses this to invoke
+// `openclaw gateway install` after Foreman writes the config — without
+// it the gateway service is never registered with launchd / systemd
+// and `foreman start` finds no daemon to bring up.
+describe("runPostConfigCommands", () => {
+  it("returns an empty array when no commands are declared", async () => {
+    const results = await runPostConfigCommands({ npm: null, brew: null });
+    expect(results).toEqual([]);
+  });
+
+  it("runs each command sequentially and reports per-command ok/exitCode", async () => {
+    const results = await runPostConfigCommands({
+      npm: null,
+      brew: null,
+      post_config_commands: ["true", "false"],
+    });
+    expect(results).toHaveLength(2);
+    expect(results[0]).toMatchObject({ command: "true", ok: true, exitCode: 0 });
+    expect(results[1]).toMatchObject({
+      command: "false",
+      ok: false,
+      exitCode: 1,
+    });
+  });
+
+  it("forwards stdout lines to onLine — install logs show the agent's progress", async () => {
+    const captured: string[] = [];
+    const results = await runPostConfigCommands(
+      {
+        npm: null,
+        brew: null,
+        post_config_commands: ["echo hello-from-post-cmd"],
+      },
+      (line) => captured.push(line),
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0]?.ok).toBe(true);
+    expect(captured).toContain("hello-from-post-cmd");
+  });
+
+  it("keeps going after a failing command so later steps still run", async () => {
+    const results = await runPostConfigCommands({
+      npm: null,
+      brew: null,
+      post_config_commands: ["false", "true"],
+    });
+    expect(results.map((r) => r.ok)).toEqual([false, true]);
   });
 });
