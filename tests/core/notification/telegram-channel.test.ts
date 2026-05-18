@@ -1,10 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   escapeMd,
   TelegramChannel,
   type TelegramFetch,
 } from '../../../src/core/notification/channels/telegram.js'
-import type { Notification, UserDecision } from '../../../src/core/notification/types.js'
+import type { Notification } from '../../../src/core/notification/types.js'
+
+// =============================================================================
+// #406 — TelegramChannel is outbound-only. Polling was removed because it
+// fought the agent's own `getUpdates` consumer (Hermes / OpenClaw) for the
+// same bot. Approval routing now happens via the `submit_approval` MCP tool.
+// =============================================================================
 
 interface MockResponse {
   status?: number
@@ -35,11 +41,11 @@ function makeNotification(
   overrides: Partial<Notification> = {},
 ): Notification {
   return {
-    id: 'notif-1',
+    id: 'notif-abc123',
     level: 'critical',
     requestId: 'req-99',
     title: 'Hermes wants to read .env',
-    body: 'Phishing attempt detected. Tap to decide.',
+    body: 'Phishing pattern detected (.env file likely contains secrets).',
     actions: [
       { id: 'allow', label: 'Allow once', style: 'primary' },
       { id: 'deny', label: 'Deny', style: 'danger' },
@@ -62,23 +68,24 @@ describe('escapeMd', () => {
   })
 })
 
-describe('TelegramChannel — send', () => {
-  let channel: TelegramChannel
-  let calls: Array<{ url: string; body: unknown }>
-
-  beforeEach(() => {
+describe('TelegramChannel — send (outbound only, #406)', () => {
+  function setupChannel(): {
+    channel: TelegramChannel
+    calls: Array<{ url: string; body: unknown }>
+  } {
     const f = makeFetch([
       { body: { ok: true, result: { message_id: 42, chat: { id: 12345 } } } },
     ])
-    calls = f.calls
-    channel = new TelegramChannel({
+    const channel = new TelegramChannel({
       botToken: 'TEST_TOKEN',
       chatId: '12345',
       fetchImpl: f.fetchImpl,
     })
-  })
+    return { channel, calls: f.calls }
+  }
 
   it('hits the Telegram sendMessage endpoint with the correct body', async () => {
+    const { channel, calls } = setupChannel()
     const ref = await channel.send(makeNotification())
     expect(ref.channelMessageId).toBe('42')
     expect(calls).toHaveLength(1)
@@ -88,30 +95,68 @@ describe('TelegramChannel — send', () => {
     expect(body.parse_mode).toBe('MarkdownV2')
   })
 
-  it('renders the inline keyboard with one button per action', async () => {
+  it('embeds /approve <id> and /deny <id> slash commands in the body', async () => {
+    const { channel, calls } = setupChannel()
     await channel.send(makeNotification())
-    const body = calls[0]!.body as {
-      reply_markup: {
-        inline_keyboard: { text: string; callback_data: string }[][]
-      }
-    }
-    const row = body.reply_markup.inline_keyboard[0]!
-    expect(row).toHaveLength(2)
-    expect(row[0]!.text).toContain('Allow')
-    expect(row[0]!.callback_data).toBe('notif-1:allow')
-    expect(row[1]!.text).toContain('Deny')
-    expect(row[1]!.callback_data).toBe('notif-1:deny')
+    const body = calls[0]!.body as { text: string }
+    expect(body.text).toContain('/approve notif-abc123')
+    expect(body.text).toContain('/deny notif-abc123')
   })
 
-  it('emits an empty keyboard when actions list is empty (info-only alert)', async () => {
+  it('embeds /approve_remember and /deny_remember for allow_always / deny_always actions', async () => {
+    const { channel, calls } = setupChannel()
+    await channel.send(
+      makeNotification({
+        actions: [
+          { id: 'allow', label: 'Allow once' },
+          { id: 'allow_always', label: 'Allow + remember' },
+          { id: 'deny', label: 'Deny' },
+          { id: 'deny_always', label: 'Deny + remember' },
+        ],
+      }),
+    )
+    const body = calls[0]!.body as { text: string }
+    expect(body.text).toContain('/approve notif-abc123')
+    expect(body.text).toContain('/approve_remember notif-abc123')
+    expect(body.text).toContain('/deny notif-abc123')
+    expect(body.text).toContain('/deny_remember notif-abc123')
+  })
+
+  it('does NOT render a reply_markup field (no inline keyboard — Foreman never polls)', async () => {
+    const { channel, calls } = setupChannel()
+    await channel.send(makeNotification())
+    const body = calls[0]!.body as Record<string, unknown>
+    expect(body.reply_markup).toBeUndefined()
+  })
+
+  it('renders body only (no slash-command block) when actions is empty (info-only alert)', async () => {
+    const { channel, calls } = setupChannel()
     await channel.send(makeNotification({ actions: [] }))
-    const body = calls[0]!.body as {
-      reply_markup: { inline_keyboard: unknown[] }
-    }
-    expect(body.reply_markup.inline_keyboard).toEqual([])
+    const body = calls[0]!.body as { text: string }
+    expect(body.text).not.toContain('/approve')
+    expect(body.text).not.toContain('/deny')
+    expect(body.text).toContain('Phishing pattern')
+  })
+
+  it('skips inspect actions in the command list (no slash command for inspect)', async () => {
+    const { channel, calls } = setupChannel()
+    await channel.send(
+      makeNotification({
+        actions: [
+          { id: 'allow', label: 'Allow once' },
+          { id: 'inspect', label: 'Inspect' },
+          { id: 'deny', label: 'Deny' },
+        ],
+      }),
+    )
+    const body = calls[0]!.body as { text: string }
+    expect(body.text).toContain('/approve notif-abc123')
+    expect(body.text).toContain('/deny notif-abc123')
+    expect(body.text).not.toContain('/inspect')
   })
 
   it('escapes MarkdownV2 reserved chars in title + body', async () => {
+    const { channel, calls } = setupChannel()
     await channel.send(
       makeNotification({
         title: 'Hermes [risk] wants read_file(.env)',
@@ -135,229 +180,38 @@ describe('TelegramChannel — send', () => {
   })
 })
 
-describe('TelegramChannel — listen + callback validation', () => {
-  it('routes a valid callback to onDecision and rejects other chat_ids', async () => {
-    const f = makeFetch([
-      // 1st poll: one callback from the configured chat_id
-      {
-        body: {
-          ok: true,
-          result: [
-            {
-              update_id: 100,
-              callback_query: {
-                id: 'cb-1',
-                from: { id: 777 },
-                data: 'notif-1:allow',
-                message: { message_id: 42, chat: { id: 12345 } },
-              },
-            },
-          ],
-        },
-      },
-      // answerCallbackQuery response
-      { body: { ok: true } },
-      // 2nd poll: callback from a different chat (impersonation attempt)
-      {
-        body: {
-          ok: true,
-          result: [
-            {
-              update_id: 101,
-              callback_query: {
-                id: 'cb-2',
-                from: { id: 888 },
-                data: 'notif-1:deny',
-                message: { message_id: 42, chat: { id: 99999 } },
-              },
-            },
-          ],
-        },
-      },
-      // send response (initial)
-      { body: { ok: true, result: { message_id: 42, chat: { id: 12345 } } } },
-    ])
-    const sendResponse = f.fetchImpl
-    // Re-seed: first the send, then polls
-    const f2 = makeFetch([
-      { body: { ok: true, result: { message_id: 42, chat: { id: 12345 } } } },
-      {
-        body: {
-          ok: true,
-          result: [
-            {
-              update_id: 100,
-              callback_query: {
-                id: 'cb-1',
-                from: { id: 777 },
-                data: 'notif-1:allow',
-                message: { message_id: 42, chat: { id: 12345 } },
-              },
-            },
-          ],
-        },
-      },
-      { body: { ok: true } },
-      {
-        body: {
-          ok: true,
-          result: [
-            {
-              update_id: 101,
-              callback_query: {
-                id: 'cb-2',
-                from: { id: 888 },
-                data: 'notif-1:deny',
-                message: { message_id: 42, chat: { id: 99999 } },
-              },
-            },
-          ],
-        },
-      },
-    ])
-    void sendResponse
-
-    const channel = new TelegramChannel({
+describe('TelegramChannel — no polling (#406)', () => {
+  it('listen() is a no-op — never calls getUpdates', async () => {
+    const f = makeFetch([])
+    const ch = new TelegramChannel({
       botToken: 'X',
-      chatId: '12345',
-      fetchImpl: f2.fetchImpl,
-      maxPolls: 2,
+      chatId: '1',
+      fetchImpl: f.fetchImpl,
     })
-
-    await channel.send(makeNotification())
-
-    const decisions: UserDecision[] = []
-    await channel.listen(async (d) => {
-      decisions.push(d)
+    // The handler should never be invoked since the channel doesn't poll.
+    let handlerCalls = 0
+    await ch.listen(async () => {
+      handlerCalls++
     })
-
-    // Wait for the poll loop to complete its 2 iterations
-    await new Promise((r) => setTimeout(r, 50))
-    await channel.shutdown()
-
-    expect(decisions).toHaveLength(1)
-    expect(decisions[0]!.notificationId).toBe('notif-1')
-    expect(decisions[0]!.decision).toBe('allow')
-    expect(decisions[0]!.decidedBy).toBe('777')
+    // Give any rogue polling loop a chance to fire — there should be none.
+    await new Promise((r) => setTimeout(r, 30))
+    expect(handlerCalls).toBe(0)
+    expect(f.calls).toHaveLength(0)
   })
 
-  it('drops callbacks whose data targets an unknown notification', async () => {
-    const f = makeFetch([
-      { body: { ok: true, result: { message_id: 42, chat: { id: 12345 } } } },
-      {
-        body: {
-          ok: true,
-          result: [
-            {
-              update_id: 1,
-              callback_query: {
-                id: 'cb-3',
-                from: { id: 777 },
-                data: 'unknown-notif:allow',
-                message: { message_id: 99, chat: { id: 12345 } },
-              },
-            },
-          ],
-        },
-      },
-    ])
-    const channel = new TelegramChannel({
+  it('shutdown() is a no-op (no polling loop to stop)', async () => {
+    const f = makeFetch([])
+    const ch = new TelegramChannel({
       botToken: 'X',
-      chatId: '12345',
+      chatId: '1',
       fetchImpl: f.fetchImpl,
-      maxPolls: 1,
     })
-    await channel.send(makeNotification())
-    const decisions: UserDecision[] = []
-    await channel.listen(async (d) => {
-      decisions.push(d)
-    })
-    await new Promise((r) => setTimeout(r, 30))
-    await channel.shutdown()
-    expect(decisions).toEqual([])
-  })
-
-  it('drops callbacks with an unknown action verb', async () => {
-    const f = makeFetch([
-      { body: { ok: true, result: { message_id: 42, chat: { id: 12345 } } } },
-      {
-        body: {
-          ok: true,
-          result: [
-            {
-              update_id: 1,
-              callback_query: {
-                id: 'cb-x',
-                from: { id: 777 },
-                data: 'notif-1:format_drive', // not in ACTION_IDS
-                message: { message_id: 42, chat: { id: 12345 } },
-              },
-            },
-          ],
-        },
-      },
-    ])
-    const channel = new TelegramChannel({
-      botToken: 'X',
-      chatId: '12345',
-      fetchImpl: f.fetchImpl,
-      maxPolls: 1,
-    })
-    await channel.send(makeNotification())
-    const decisions: UserDecision[] = []
-    await channel.listen(async (d) => {
-      decisions.push(d)
-    })
-    await new Promise((r) => setTimeout(r, 30))
-    await channel.shutdown()
-    expect(decisions).toEqual([])
-  })
-
-  // #302 — friendlier toast text for each action so the user gets context
-  // when they tap a button from the lock screen.
-  it('answerCallbackQuery sends a friendly confirmation per action', async () => {
-    const f = makeFetch([
-      { body: { ok: true, result: { message_id: 42, chat: { id: 12345 } } } },
-      {
-        body: {
-          ok: true,
-          result: [
-            {
-              update_id: 1,
-              callback_query: {
-                id: 'cb-allow',
-                from: { id: 777 },
-                data: 'notif-1:allow',
-                message: { message_id: 42, chat: { id: 12345 } },
-              },
-            },
-          ],
-        },
-      },
-      { body: { ok: true } }, // answerCallbackQuery response
-    ])
-    const channel = new TelegramChannel({
-      botToken: 'X',
-      chatId: '12345',
-      fetchImpl: f.fetchImpl,
-      maxPolls: 1,
-    })
-    await channel.send(makeNotification())
-    await channel.listen(async () => {})
-    await new Promise((r) => setTimeout(r, 30))
-    await channel.shutdown()
-
-    // Find the answerCallbackQuery call
-    const answerCall = f.calls.find((c) =>
-      c.url.endsWith('/answerCallbackQuery'),
-    )
-    expect(answerCall).toBeDefined()
-    const body = answerCall!.body as { text: string }
-    expect(body.text).toMatch(/Approved.*Foreman has resumed/)
+    await ch.shutdown() // must not throw, must not call fetch
+    expect(f.calls).toHaveLength(0)
   })
 })
 
-describe('TelegramChannel — isReady + updateMessage + shutdown', () => {
+describe('TelegramChannel — isReady + updateMessage', () => {
   it('isReady returns true when getMe is ok', async () => {
     const f = makeFetch([{ body: { ok: true, result: { id: 1 } } }])
     const ch = new TelegramChannel({
@@ -390,20 +244,5 @@ describe('TelegramChannel — isReady + updateMessage + shutdown', () => {
     const body = f.calls[0]!.body as { text: string; message_id: number }
     expect(body.message_id).toBe(7)
     expect(body.text).toBe('Resolved at 14:18\\.')
-  })
-
-  it('shutdown stops the poll loop even when no decisions arrive', async () => {
-    const f = makeFetch(
-      Array.from({ length: 10 }, () => ({ body: { ok: true, result: [] } })),
-    )
-    const ch = new TelegramChannel({
-      botToken: 'X',
-      chatId: '1',
-      fetchImpl: f.fetchImpl,
-      maxPolls: 50,
-    })
-    await ch.listen(vi.fn())
-    await ch.shutdown()
-    // shutdown returns once the poll loop sees stopRequested.
   })
 })

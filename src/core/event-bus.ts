@@ -90,11 +90,27 @@ export interface ForemanEventMap {
     requestId: string;
     decision: "allowed" | "denied";
     remember?: "allow" | "deny";
-    resolvedBy: "user" | "timeout";
-    /** Channel surface that resolved this approval (#302). "tui" for the
-     *  Ink modal, "telegram"/"discord"/"slack"/"webhook" for OOB channels.
-     *  Used by the mediator to build `decidedBy: user:<via>`. */
-    via?: "tui" | "telegram" | "discord" | "slack" | "webhook";
+    /** Who resolved — `agent` added in #406 for MCP-routed approvals so
+     *  the audit log distinguishes them from direct TUI / timeout paths. */
+    resolvedBy: "user" | "timeout" | "agent";
+    /** Channel surface that resolved this approval (#302 / #406). "tui"
+     *  for the Ink modal, "telegram"/... for direct OOB callbacks (legacy
+     *  before #406), "agent_mcp" for the post-#406 path where an agent
+     *  relays the user's `/approve <id>` text command through the
+     *  `submit_approval` MCP tool. Used by the mediator to build
+     *  `decidedBy: user:<via>`. */
+    via?:
+      | "tui"
+      | "telegram"
+      | "discord"
+      | "slack"
+      | "webhook"
+      | "agent_mcp";
+    /** #406 — When `via === "agent_mcp"`, the agent id that routed the
+     *  user's decision (e.g. "hermes" or "openclaw"). Surfaces in the
+     *  TUI activity log as `via hermes (agent)` so the operator can see
+     *  which agent's chat the user typed `/approve` into. */
+    routedBy?: string;
   };
   "agent:message": {
     agentId: string;
