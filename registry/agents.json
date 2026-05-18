@@ -58,6 +58,36 @@
           "format": "yaml",
           "key": "provider",
           "fix_command": "hermes model"
+        },
+        "config_overrides": {
+          "path": "~/.hermes/config.yaml",
+          "format": "yaml",
+          "writes": [
+            {
+              "if_provider": "openai",
+              "set": {
+                "model.default": "gpt-4o-mini",
+                "model.provider": "openai",
+                "model.base_url": "https://api.openai.com/v1"
+              }
+            },
+            {
+              "if_provider": "anthropic",
+              "set": {
+                "model.default": "claude-haiku-4-5-20251001",
+                "model.provider": "anthropic",
+                "model.base_url": "https://api.anthropic.com/v1"
+              }
+            },
+            {
+              "if_provider": "gemini",
+              "set": {
+                "model.default": "gemini-2.0-flash",
+                "model.provider": "gemini",
+                "model.base_url": "https://generativelanguage.googleapis.com/v1beta/openai"
+              }
+            }
+          ]
         }
       }
     },
@@ -130,6 +160,33 @@
           "format": "json",
           "key": "provider",
           "fix_command": "openclaw config set provider <name>"
+        },
+        "config_overrides": {
+          "path": "~/.openclaw/openclaw.json",
+          "format": "json",
+          "writes": [
+            {
+              "if_provider": "openai",
+              "set": {
+                "agents.defaults.provider": "openai",
+                "agents.defaults.model": "gpt-4o-mini"
+              }
+            },
+            {
+              "if_provider": "anthropic",
+              "set": {
+                "agents.defaults.provider": "anthropic",
+                "agents.defaults.model": "claude-haiku-4-5-20251001"
+              }
+            },
+            {
+              "if_provider": "gemini",
+              "set": {
+                "agents.defaults.provider": "gemini",
+                "agents.defaults.model": "gemini-2.0-flash"
+              }
+            }
+          ]
         }
       }
     },
