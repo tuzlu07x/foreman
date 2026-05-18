@@ -29,7 +29,10 @@ import {
   runUninstall,
 } from "../core/agent-install.js";
 import { buildMcpSnippet } from "../core/agent-mcp-snippet.js";
-import { buildMcpRegisterHint } from "../core/agent-mcp-register-hint.js";
+import {
+  buildMcpRegisterHint,
+  writeMcpWrapperScript,
+} from "../core/agent-mcp-register-hint.js";
 import {
   findAgent,
   loadActiveProviders,
@@ -2085,6 +2088,20 @@ export async function runInstallStep(
       if (registerHint) {
         log(`  ℹ ${entry.name} needs one extra step to route through Foreman:`);
         if (registerHint.note) log(`     ${registerHint.note}`);
+        // #346 — write the wrapper script for agents (Hermes) that can't
+        // accept multi-token --args. The command above already points at
+        // wrapper.path via {wrapper_path} substitution.
+        if (registerHint.wrapper) {
+          try {
+            const wrote = writeMcpWrapperScript(registerHint.wrapper);
+            log(
+              `     ${wrote ? "✓ wrote" : "✓ wrapper present"} ${registerHint.wrapper.path}`,
+            );
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
+            log(`     ⚠ wrapper write failed: ${reason}`);
+          }
+        }
         log(`     $ ${registerHint.command}`);
         if (registerHint.verify) {
           log(`     verify with: ${registerHint.verify}`);

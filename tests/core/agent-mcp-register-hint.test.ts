@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { AgentEntry } from '../../src/core/registry-catalog.js'
-import { buildMcpRegisterHint } from '../../src/core/agent-mcp-register-hint.js'
+import {
+  buildMcpRegisterHint,
+  writeMcpWrapperScript,
+} from '../../src/core/agent-mcp-register-hint.js'
 
 // =============================================================================
 // Pure-logic tests for #298 — post-install MCP register hint
@@ -111,5 +117,112 @@ describe('buildMcpRegisterHint', () => {
       }),
     )
     expect(result!.command).toBe('first foo second foo done')
+  })
+
+  // #346 — Hermes' --args parsing mangles multi-token strings, so the
+  // documented `--args "mcp-stdio --source X"` never connects. The wrapper
+  // option writes a tiny exec-style script and points Hermes at the path.
+  describe('wrapper (#346)', () => {
+    it('returns wrapper payload + substitutes {wrapper_path} in command_template', () => {
+      const result = buildMcpRegisterHint(
+        'hermes',
+        agent({
+          mcp_register_cli: {
+            command_template: 'hermes mcp add foreman --command {wrapper_path}',
+            wrapper: {
+              path_template: '~/.foreman/wrappers/{agent_id}-mcp.sh',
+              content_template:
+                '#!/usr/bin/env bash\nexec foreman mcp-stdio --source {agent_id}\n',
+            },
+          },
+        }),
+        { homeDir: '/tmp/fake-home' },
+      )
+      expect(result!.wrapper).not.toBeNull()
+      expect(result!.wrapper!.path).toBe(
+        '/tmp/fake-home/.foreman/wrappers/hermes-mcp.sh',
+      )
+      expect(result!.wrapper!.content).toBe(
+        '#!/usr/bin/env bash\nexec foreman mcp-stdio --source hermes\n',
+      )
+      expect(result!.command).toBe(
+        'hermes mcp add foreman --command /tmp/fake-home/.foreman/wrappers/hermes-mcp.sh',
+      )
+    })
+
+    it('returns wrapper: null when the agent has no wrapper block', () => {
+      const result = buildMcpRegisterHint(
+        'hermes',
+        agent({
+          mcp_register_cli: {
+            command_template: 'cmd {agent_id}',
+          },
+        }),
+      )
+      expect(result!.wrapper).toBeNull()
+    })
+
+    it('uses the custom registered id in both path and content', () => {
+      const result = buildMcpRegisterHint(
+        'my-hermes',
+        agent({
+          id: 'hermes',
+          mcp_register_cli: {
+            command_template: '{wrapper_path}',
+            wrapper: {
+              path_template: '~/.foreman/wrappers/{agent_id}-mcp.sh',
+              content_template: 'exec foreman mcp-stdio --source {agent_id}\n',
+            },
+          },
+        }),
+        { homeDir: '/tmp/h' },
+      )
+      expect(result!.wrapper!.path).toBe(
+        '/tmp/h/.foreman/wrappers/my-hermes-mcp.sh',
+      )
+      expect(result!.wrapper!.content).toBe(
+        'exec foreman mcp-stdio --source my-hermes\n',
+      )
+    })
+  })
+})
+
+describe('writeMcpWrapperScript', () => {
+  let dir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'foreman-wrapper-'))
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('creates the parent dir, writes content, and chmod +x', () => {
+    const path = join(dir, 'wrappers', 'hermes-mcp.sh')
+    const wrote = writeMcpWrapperScript({
+      path,
+      content: '#!/usr/bin/env bash\nexec foreman mcp-stdio --source hermes\n',
+    })
+    expect(wrote).toBe(true)
+    expect(existsSync(path)).toBe(true)
+    expect(readFileSync(path, 'utf-8')).toContain('--source hermes')
+    // Owner exec bit must be set.
+    const mode = statSync(path).mode & 0o111
+    expect(mode).not.toBe(0)
+  })
+
+  it('is idempotent — no rewrite when existing content matches', () => {
+    const path = join(dir, 'hermes-mcp.sh')
+    const content = '#!/usr/bin/env bash\nexec foo\n'
+    expect(writeMcpWrapperScript({ path, content })).toBe(true)
+    expect(writeMcpWrapperScript({ path, content })).toBe(false)
+  })
+
+  it('overwrites when content drifted from previous version', () => {
+    const path = join(dir, 'hermes-mcp.sh')
+    expect(writeMcpWrapperScript({ path, content: 'v1\n' })).toBe(true)
+    expect(writeMcpWrapperScript({ path, content: 'v2\n' })).toBe(true)
+    expect(readFileSync(path, 'utf-8')).toBe('v2\n')
   })
 })
