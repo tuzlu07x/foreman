@@ -15,6 +15,11 @@ import {
   type AgentEntry,
   type RegistryDoc,
 } from "../core/registry-catalog.js";
+import {
+  fetchAndInstallRegistry,
+  getRegistryStatus,
+  rollbackRegistry,
+} from "../core/registry-fetch.js";
 import { bold, dim, green, orange, red } from "./colors.js";
 
 interface ListOptions {
@@ -28,6 +33,8 @@ interface InfoOptions {
 interface UpdateOptions {
   url?: string;
   force?: boolean;
+  /** #421 — Skip signature verification (NOT recommended for production). */
+  insecureNoVerify?: boolean;
 }
 
 export const registryCommand = new Command("registry").description(
@@ -110,29 +117,96 @@ registryCommand
 
 registryCommand
   .command("update")
-  .description("Re-fetch the registry from upstream and cache for 24 h")
+  .description(
+    "Re-fetch the registry from upstream (signed) and atomically install it. Backs up the previous cache to .bak so `foreman registry rollback` can restore it.",
+  )
   .option("--url <url>", "override the upstream URL")
   .option("--force", "ignore TTL and refresh even if the cached copy is fresh")
+  .option(
+    "--insecure-no-verify",
+    "skip signature verification — for dev / private mirrors without signing yet",
+  )
   .action(async (options: UpdateOptions) => {
     const url = options.url ?? getUpstreamRegistryUrl();
-    try {
-      const text = await fetchUpstreamRegistry(url);
-      const doc = parseRegistryText(text);
-      writeRegistryCache(doc);
-      console.log(green("✓") + ` registry refreshed from ${url}`);
-      console.log(`  ${dim(`cached at ${getRegistryCachePath()}`)}`);
-      console.log(
-        `  ${dim(`TTL: ${Math.round(REGISTRY_CACHE_TTL_MS / 3600_000)} h`)}`,
-      );
-      void options.force;
-    } catch (err) {
-      handleValidationError(err);
-      console.error(
-        red("error: ") +
-          `failed to refresh registry: ${err instanceof Error ? err.message : String(err)}`,
-      );
+    const result = await fetchAndInstallRegistry({
+      url,
+      allowInsecure: options.insecureNoVerify === true,
+    });
+    if (!result.ok) {
+      console.error(red("error: ") + result.message);
       process.exit(1);
     }
+    const sigNote = result.signatureVerified
+      ? green(" · signature verified")
+      : orange(" · ⚠ signature NOT verified (insecure mode)");
+    console.log(green("✓") + ` ${result.message}${sigNote}`);
+    if (result.backedUp) {
+      console.log(
+        `  ${dim("previous cache backed up — restore with 'foreman registry rollback'")}`,
+      );
+    }
+    if (result.doc) {
+      console.log(
+        `  ${dim(`${result.doc.agents.length} agents · version ${result.doc.version}`)}`,
+      );
+    }
+    void options.force;
+  });
+
+registryCommand
+  .command("status")
+  .description(
+    "Show the registry source URL, cache state, public key config, and rollback availability (#421)",
+  )
+  .option("--json", "machine-parseable JSON output")
+  .action((options: { json?: boolean }) => {
+    const status = getRegistryStatus();
+    if (options.json) {
+      process.stdout.write(JSON.stringify(status, null, 2) + "\n");
+      return;
+    }
+    console.log(bold("Registry status"));
+    console.log(`  ${dim("source:       ")} ${status.sourceUrl}`);
+    console.log(`  ${dim("cache path:   ")} ${status.cachePath}`);
+    if (status.cached) {
+      const when = status.cachedAt
+        ? new Date(status.cachedAt).toISOString()
+        : "?";
+      console.log(
+        `  ${dim("cached:       ")} ${green("yes")}  (${when} · ${status.sizeBytes ?? "?"} bytes)`,
+      );
+      if (status.version !== null) {
+        console.log(`  ${dim("schema ver:   ")} ${status.version}`);
+      }
+      if (status.agentCount !== null) {
+        console.log(`  ${dim("agent count:  ")} ${status.agentCount}`);
+      }
+    } else {
+      console.log(`  ${dim("cached:       ")} ${dim("no — using bundled fallback")}`);
+    }
+    console.log(
+      `  ${dim("public key:   ")} ${status.hasPublicKey ? green(status.publicKeyPath) : orange("missing — runs require --insecure-no-verify")}`,
+    );
+    console.log(
+      `  ${dim("rollback:     ")} ${status.hasBackup ? green("available (.bak present)") : dim("no backup yet")}`,
+    );
+  });
+
+registryCommand
+  .command("rollback")
+  .description(
+    "Restore the previous registry cache from .bak (one-deep rollback) (#421)",
+  )
+  .action(() => {
+    const result = rollbackRegistry();
+    if (!result.ok) {
+      console.error(red("error: ") + result.message);
+      process.exit(1);
+    }
+    console.log(green("✓") + ` ${result.message}`);
+    console.log(
+      `  ${dim("future updates will create a fresh .bak — repeated rollback is one-deep only")}`,
+    );
   });
 
 registryCommand
