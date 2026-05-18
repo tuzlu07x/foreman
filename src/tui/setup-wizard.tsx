@@ -1160,21 +1160,27 @@ export function SetupWizard({
       providerCatalog,
       pickerConfiguredProviders,
     );
-    const options = agentCatalog.map((a) => {
-      const status = gatingStatuses.get(a.id);
+    // #361 — hide agents whose required LLM isn't configured. Previous UX
+    // showed them with a `⚠ needs X key` suffix but kept them togglable,
+    // so round-3 users could Space-check Claude Code without an Anthropic
+    // key and end up with a registered-but-401-on-every-call install.
+    // Hidden agents are listed at the top with the unlock path so the user
+    // can step back (Esc) to Step 1 and add the missing key.
+    const hiddenAgents = agentCatalog.filter(
+      (a) => gatingStatuses.get(a.id)?.state === "needs-llm",
+    );
+    const visibleAgents = agentCatalog.filter(
+      (a) => gatingStatuses.get(a.id)?.state !== "needs-llm",
+    );
+    const options = visibleAgents.map((a) => {
       const installedSuffix = initialRegistered.includes(a.id)
         ? "  (installed)"
         : "";
-      const gateSuffix =
-        status?.state === "needs-llm" ? `  ⚠ ${status.hint}` : "";
       return {
         value: a.id,
-        label: `${a.name}${installedSuffix}${gateSuffix} — ${a.tagline}`,
+        label: `${a.name}${installedSuffix} — ${a.tagline}`,
       };
     });
-    // Don't pre-check agents whose required LLM isn't configured — keep the
-    // wizard from silently selecting broken installs. User can still toggle
-    // them on if they plan to add the key later.
     const compatibleDefaults = (
       initialRegistered.length > 0 ? initialRegistered : DEFAULT_AGENTS
     ).filter((id) => {
@@ -1182,9 +1188,6 @@ export function SetupWizard({
       return status?.state !== "needs-llm";
     });
     const defaults = compatibleDefaults;
-    const hasNeedsLlm = agentCatalog.some(
-      (a) => gatingStatuses.get(a.id)?.state === "needs-llm",
-    );
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <WizardProgress current={2} total={4} label="Agents" phase="pick which to install" />
@@ -1194,12 +1197,21 @@ export function SetupWizard({
           do. Newly-checked agents are installed; previously-installed agents
           you uncheck are uninstalled.
         </Text>
-        {hasNeedsLlm && (
-          <Text color={theme.accent.warning}>
-            ⚠ Some agents need an LLM key you haven't configured yet — they're
-            shown but won't run until you add the missing key (back out with
-            Esc to Step 1).
-          </Text>
+        {hiddenAgents.length > 0 && (
+          <Box flexDirection="column">
+            <Text color={theme.accent.warning}>
+              ⚠ Hidden — add a key in Step 1 (Esc) to unlock:
+            </Text>
+            {hiddenAgents.map((a) => {
+              const status = gatingStatuses.get(a.id);
+              return (
+                <Text key={a.id} color={theme.fg.muted}>
+                  {"   "}
+                  {a.name} ({status?.hint ?? "needs an LLM key"})
+                </Text>
+              );
+            })}
+          </Box>
         )}
         <Text color={theme.accent.primary}>
           Pre-checked: {defaults.length > 0 ? defaults.join(", ") : "(none)"}
