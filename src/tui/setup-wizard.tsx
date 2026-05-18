@@ -123,6 +123,94 @@ export function totalEstimatedMinutes(
   return steps.reduce((sum, s) => sum + s.estimateMinutes, 0);
 }
 
+export interface ForemanLlmPickerRow {
+  value: ForemanLlmChoice;
+  label: string;
+  sub: string;
+  /** Closed-cloud providers user hasn't configured yet. Rendered dimmed,
+   *  skipped by ↑↓ navigation, Enter/Space on a disabled row is a no-op.
+   *  The disabledReason takes the row's sub slot when disabled. */
+  disabled: boolean;
+  disabledReason?: string;
+}
+
+// #370 — Build the Foreman-LLM picker rows. Closed-cloud providers
+// (Anthropic / OpenAI / Gemini) ALWAYS appear; unconfigured ones are
+// marked disabled with a hint. Ollama / preset / skip are always
+// enabled.
+export function buildForemanLlmPickerRows(
+  configured: Set<string>,
+  ollamaInstalled: boolean,
+  ollamaModelCount: number,
+): ForemanLlmPickerRow[] {
+  const cloudCandidates: {
+    value: ForemanLlmChoice;
+    label: string;
+    sub: string;
+    providerKey: string;
+    keyName: string;
+  }[] = [
+    {
+      value: "anthropic",
+      label: "Anthropic — Claude Haiku",
+      sub: "cloud · ~$2/mo at default budget",
+      providerKey: "anthropic",
+      keyName: "Anthropic",
+    },
+    {
+      value: "openai",
+      label: "OpenAI — gpt-4o-mini",
+      sub: "cloud · ~$1/mo at default budget",
+      providerKey: "openai",
+      keyName: "OpenAI",
+    },
+    {
+      value: "gemini",
+      label: "Google Gemini — Gemini Flash",
+      sub: "cloud · free tier available",
+      providerKey: "gemini",
+      keyName: "Gemini",
+    },
+  ];
+
+  const cloudRows: ForemanLlmPickerRow[] = cloudCandidates.map((c) => {
+    const isConfigured = configured.has(c.providerKey);
+    return {
+      value: c.value,
+      label: c.label,
+      sub: c.sub,
+      disabled: !isConfigured,
+      disabledReason: isConfigured
+        ? undefined
+        : `needs ${c.keyName} key — [Esc] back to Step 1`,
+    };
+  });
+
+  return [
+    ...cloudRows,
+    {
+      value: "ollama",
+      label: "Local — Ollama on this machine",
+      sub: ollamaInstalled
+        ? `free · ${ollamaModelCount} model${ollamaModelCount === 1 ? "" : "s"} already pulled`
+        : "free · install + model wizard",
+      disabled: false,
+    },
+    {
+      value: "preset",
+      label: "Custom — OpenAI-compatible",
+      sub: "DeepSeek, Qwen, OpenRouter, Together, Groq",
+      disabled: false,
+    },
+    {
+      value: "skip",
+      label: "Skip — heuristics only",
+      sub: "no LLM calls, free, slightly less smart",
+      disabled: false,
+    },
+  ];
+}
+
 // Format the trailing tag for an Ollama model row in the wizard's picker.
 // `[recommended]` / `[balanced]` / `[tight — N%]` for enabled rows;
 // `[installed]` appended when the model is already pulled locally.
@@ -895,11 +983,21 @@ export function SetupWizard({
 
       // ----- picker phase -----
       if (foremanLlmPhase === "picker") {
-        const visible: ForemanLlmChoice[] = [];
-        if (configured.has("anthropic")) visible.push("anthropic");
-        if (configured.has("openai")) visible.push("openai");
-        if (configured.has("gemini")) visible.push("gemini");
-        visible.push("ollama", "preset", "skip");
+        // #370 — cursor only lands on enabled rows. Disabled cloud rows
+        // (unconfigured Anthropic / OpenAI / Gemini) are visual-only.
+        const allRows = buildForemanLlmPickerRows(
+          configured,
+          ollamaDetection.installed,
+          ollamaDetection.installedModels.length,
+        );
+        const visible: ForemanLlmChoice[] = allRows
+          .filter((r) => !r.disabled)
+          .map((r) => r.value);
+        if (visible.length === 0) {
+          // Edge case — every row disabled (shouldn't happen since skip
+          // is always enabled, but defensive).
+          return;
+        }
         const cursor =
           (foremanLlmDraft as ForemanLlmChoice | null) ?? visible[0] ?? "skip";
         const idx = Math.max(0, visible.indexOf(cursor));
@@ -1496,54 +1594,20 @@ export function SetupWizard({
     );
 
     if (foremanLlmPhase === "picker") {
-      // Universal picker — cloud rows surface only when user configured
-      // them in Step 1; ollama / preset / skip are always available.
-      const cloudRows: { value: ForemanLlmChoice; label: string; sub: string }[] = [];
-      if (configured.has("anthropic")) {
-        cloudRows.push({
-          value: "anthropic",
-          label: "Anthropic — Claude Haiku",
-          sub: "cloud · ~$2/mo at default budget",
-        });
-      }
-      if (configured.has("openai")) {
-        cloudRows.push({
-          value: "openai",
-          label: "OpenAI — gpt-4o-mini",
-          sub: "cloud · ~$1/mo at default budget",
-        });
-      }
-      if (configured.has("gemini")) {
-        cloudRows.push({
-          value: "gemini",
-          label: "Google Gemini — Gemini Flash",
-          sub: "cloud · free tier available",
-        });
-      }
-      const allRows: { value: ForemanLlmChoice; label: string; sub: string }[] = [
-        ...cloudRows,
-        {
-          value: "ollama",
-          label: "Local — Ollama on this machine",
-          sub: ollamaDetection.installed
-            ? `free · ${ollamaDetection.installedModels.length} model${
-                ollamaDetection.installedModels.length === 1 ? "" : "s"
-              } already pulled`
-            : "free · install + model wizard",
-        },
-        {
-          value: "preset",
-          label: "Custom — OpenAI-compatible",
-          sub: "DeepSeek, Qwen, OpenRouter, Together, Groq",
-        },
-        {
-          value: "skip",
-          label: "Skip — heuristics only",
-          sub: "no LLM calls, free, slightly less smart",
-        },
-      ];
+      // #370 — show ALL closed-cloud providers regardless of Step 1
+      // configuration. Unconfigured ones render dimmed with a hint to go
+      // back to Step 1; ↑↓ navigation skips them. Round-3 user feedback:
+      // hiding Anthropic when no key was configured made the picker feel
+      // narrower than Foreman's real coverage. Surfacing them as disabled
+      // is the discovery path.
+      const allRows = buildForemanLlmPickerRows(
+        configured,
+        ollamaDetection.installed,
+        ollamaDetection.installedModels.length,
+      );
+      const enabledRows = allRows.filter((r) => !r.disabled);
       const currentCursor: ForemanLlmChoice =
-        (foremanLlmDraft as ForemanLlmChoice | null) ?? allRows[0]?.value ?? "skip";
+        (foremanLlmDraft as ForemanLlmChoice | null) ?? enabledRows[0]?.value ?? "skip";
       return (
         <Box flexDirection="column" gap={1} paddingY={1}>
           <WizardProgress
@@ -1559,23 +1623,33 @@ export function SetupWizard({
           </Text>
           <Box flexDirection="column">
             {allRows.map((row) => {
-              const selected = row.value === currentCursor;
+              const selected = row.value === currentCursor && !row.disabled;
               return (
                 <Box key={row.value} flexDirection="row">
                   <Text
-                    color={selected ? theme.accent.primary : undefined}
+                    color={
+                      row.disabled
+                        ? theme.fg.muted
+                        : selected
+                          ? theme.accent.primary
+                          : undefined
+                    }
                     bold={selected}
+                    dimColor={row.disabled}
                   >
                     {selected ? "❯ ✓ " : "    "}
                     {row.label}
                   </Text>
-                  <Text color={theme.fg.muted}>{"  "}{row.sub}</Text>
+                  <Text color={theme.fg.muted} dimColor={row.disabled}>
+                    {"  "}
+                    {row.disabled ? row.disabledReason : row.sub}
+                  </Text>
                 </Box>
               );
             })}
           </Box>
           <Text color={theme.fg.muted}>
-            [↑↓] move · [Enter] or [Space] confirms · [Esc] back to providers
+            [↑↓] move (skips disabled) · [Enter] or [Space] confirms · [Esc] back to providers
           </Text>
         </Box>
       );
