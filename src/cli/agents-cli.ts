@@ -17,6 +17,7 @@ import {
   type AgentUpdateStatus,
 } from "../core/agent-update-check.js";
 import {
+  detectInstall,
   preferredUninstallCommand,
   runInstall,
   runUninstall,
@@ -172,11 +173,19 @@ agentsCommand
         registry.remove(name);
         console.log(`${green("✓")} agent ${name} removed`);
         if (!options.keepBinary && entry) {
-          const uninstallCmd = preferredUninstallCommand(entry.install);
+          // #357 — detect HOW the binary got installed, then pick the
+          // uninstall command that matches. Without this, OpenClaw (brew
+          // on the user's box, `brew: null` in registry) silently no-ops.
+          const detection = detectInstall(entry.install);
+          const uninstallCmd = preferredUninstallCommand(
+            entry.install,
+            detection,
+          );
           if (uninstallCmd) {
             console.log(orange(`uninstalling ${entry.name} (${uninstallCmd})…`));
             const result = await runUninstall({
               install: entry.install,
+              detection,
               onLine: (line) => console.log(`  ${dim(line)}`),
             });
             if (result.ok) {

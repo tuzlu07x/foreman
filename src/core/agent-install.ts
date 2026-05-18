@@ -15,7 +15,26 @@ export interface InstallSpec {
 export interface InstallDetection {
   found: boolean;
   path?: string;
-  source?: "PATH" | "npm-global" | "user-dirs";
+  /** Where the binary came from. `brew-managed` (#357) is a refinement of
+   *  `PATH` when the path lives in a brew prefix — uninstall has to go
+   *  through `brew uninstall` even if registry says `brew: null`. */
+  source?: "PATH" | "npm-global" | "user-dirs" | "brew-managed";
+  /** Formula name to feed `brew uninstall` when source=brew-managed.
+   *  Defaults to the binary basename. */
+  formula?: string;
+}
+
+// Brew puts its binaries in well-known prefixes. We treat these as
+// unambiguously brew-managed; `/usr/local/bin` is intentionally NOT here
+// because it's shared with npm-global + user `make install`, so a path
+// match there would falsely upgrade non-brew installs to `brew-managed`.
+const BREW_BIN_PREFIXES = [
+  "/opt/homebrew/bin/", // macOS Apple Silicon
+  "/home/linuxbrew/.linuxbrew/bin/", // Linux brew
+];
+
+export function isBrewManagedPath(binPath: string): boolean {
+  return BREW_BIN_PREFIXES.some((prefix) => binPath.startsWith(prefix));
 }
 
 // Synchronously detects whether the agent is already on the system. We deliberately
@@ -30,7 +49,22 @@ export function detectInstall(
 
   for (const bin of binCandidates) {
     const onPath = whichOnPath(bin, env);
-    if (onPath) return { found: true, path: onPath, source: "PATH" };
+    if (onPath) {
+      // #357 — refine PATH detection: if the binary lives in a brew prefix,
+      // record it as brew-managed so uninstall picks `brew uninstall` even
+      // when the registry entry doesn't declare a brew formula. The formula
+      // defaults to the binary basename (matches in 99% of cases — OpenClaw,
+      // ZeroClaw, etc).
+      if (isBrewManagedPath(onPath)) {
+        return {
+          found: true,
+          path: onPath,
+          source: "brew-managed",
+          formula: bin,
+        };
+      }
+      return { found: true, path: onPath, source: "PATH" };
+    }
   }
 
   if (install.npm) {
@@ -93,10 +127,18 @@ export async function runInstall(
   return runShell(command, options.onLine);
 }
 
+export interface RunUninstallOptions extends RunInstallOptions {
+  /** Optional detection result — when present, uninstall command tracks
+   *  the actually-installed source instead of the registry's declared one
+   *  (#357). E.g. if the registry says `brew: null` but the binary is at
+   *  `/opt/homebrew/bin/openclaw`, we still pick `brew uninstall`. */
+  detection?: InstallDetection;
+}
+
 export async function runUninstall(
-  options: RunInstallOptions,
+  options: RunUninstallOptions,
 ): Promise<InstallResult> {
-  const command = preferredUninstallCommand(options.install);
+  const command = preferredUninstallCommand(options.install, options.detection);
   if (!command) {
     const manual = options.install.script
       ? `(no automated uninstall — re-run the installer with its --uninstall flag, or remove the binary at ${options.install.binary ?? "<binary>"} manually)`
@@ -113,7 +155,22 @@ export function preferredInstallCommand(install: InstallSpec): string | null {
   return null;
 }
 
-export function preferredUninstallCommand(install: InstallSpec): string | null {
+export function preferredUninstallCommand(
+  install: InstallSpec,
+  detection?: InstallDetection,
+): string | null {
+  // #357 — Detection wins over registry hints when present. The user's
+  // actually-installed binary might not match what the registry declared
+  // (OpenClaw is `brew: null` in registry but brew-installed on the user's
+  // box). Picking by detection avoids silent no-op uninstalls.
+  if (detection?.source === "brew-managed") {
+    return `brew uninstall ${detection.formula ?? install.binary ?? ""}`.trim();
+  }
+  if (detection?.source === "npm-global" && install.npm) {
+    return `npm uninstall -g ${install.npm}`;
+  }
+  // No detection (or non-actionable source like user-dirs / plain PATH) →
+  // fall back to whatever the registry declared.
   if (install.npm) return `npm uninstall -g ${install.npm}`;
   if (install.brew) return `brew uninstall ${install.brew}`;
   return null;
