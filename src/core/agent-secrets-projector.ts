@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import {
   chmodSync,
   existsSync,
@@ -282,7 +283,75 @@ export function projectSecretsForAgent(
     }
   }
 
+  // -----------------------------------------------------------------------
+  // 6) security_bootstrap → gateway auth token + owner allowlist (#396)
+  // -----------------------------------------------------------------------
+  // OpenClaw's gateway refuses Telegram traffic without `gateway.auth.token`
+  // AND `commands.ownerAllowFrom`. The token is generated once + preserved
+  // across runs (clients would otherwise have to re-credentialize). The
+  // owner allowlist is overwritten on every run with the current
+  // `telegram-chat-id` value, formatted as `telegram:<chatId>`.
+  if (projection.security_bootstrap) {
+    const sb = projection.security_bootstrap
+    const path = expand(sb.path)
+    try {
+      // Resolve token + allowlist values BEFORE we open the file so we
+      // can skip the write entirely when neither side has anything to
+      // contribute (avoids creating an empty file for an agent that
+      // doesn't have the chat id yet).
+      const authToken = sb.auth_token
+        ? {
+            key: sb.auth_token.key,
+            generate: (): string =>
+              encodeRandomBytes(sb.auth_token!.bytes, sb.auth_token!.encoding),
+          }
+        : undefined
+      let ownerList: { key: string; values: string[] } | undefined
+      const secretsUsed: string[] = []
+      if (sb.owner_allowlist) {
+        const matchesService =
+          !sb.owner_allowlist.if_service ||
+          ctx.servicesSelected.includes(sb.owner_allowlist.if_service)
+        if (matchesService) {
+          const value = safeGet(
+            ctx.secretStore,
+            sb.owner_allowlist.from_secret,
+            result.skipped,
+          )
+          if (value !== null) {
+            ownerList = {
+              key: sb.owner_allowlist.key,
+              values: [
+                sb.owner_allowlist.item_template.replace(/\{value\}/g, value),
+              ],
+            }
+            secretsUsed.push(sb.owner_allowlist.from_secret)
+          }
+        }
+      }
+      if (authToken || ownerList) {
+        const written = writeSecurityBootstrap(path, sb.format, {
+          authToken,
+          ownerAllowlist: ownerList,
+        })
+        result.files.push({ path, secrets: secretsUsed, ...written })
+      }
+    } catch (err) {
+      result.skipped.push({
+        secret: '(security_bootstrap)',
+        reason: `failed to write ${path}: ${err instanceof Error ? err.message : String(err)}`,
+      })
+    }
+  }
+
   return result
+}
+
+function encodeRandomBytes(
+  bytes: number,
+  encoding: 'hex' | 'base64' | 'base64url',
+): string {
+  return randomBytes(bytes).toString(encoding)
 }
 
 function filterMatches(
@@ -562,6 +631,75 @@ export function writeConfigOverrides(
       : JSON.stringify(root, null, 2) + '\n'
   atomicWrite0600(path, serialized)
   return { created: !exists, replacedStale }
+}
+
+// =============================================================================
+//  #396 — security_bootstrap writer
+// =============================================================================
+
+/**
+ * Write OpenClaw-style security fields (auth token + owner allowlist) into
+ * the agent's JSON/YAML config. Auth-token rule: preserve any existing
+ * non-empty string at the dot-path so clients of the gateway don't have
+ * to be re-credentialized on every wizard re-run; only generate when
+ * absent. Owner-allowlist rule: overwrite the array with the supplied
+ * values on every run (deterministic given the same secret).
+ */
+export function writeSecurityBootstrap(
+  path: string,
+  format: 'yaml' | 'json',
+  options: {
+    authToken?: { key: string; generate: () => string }
+    ownerAllowlist?: { key: string; values: string[] }
+  },
+): WriteOutcome {
+  const exists = existsSync(path)
+  let root: Record<string, unknown> = {}
+  if (exists) {
+    try {
+      const raw = readFileSync(path, 'utf-8')
+      const parsed = format === 'yaml' ? parseYaml(raw) : JSON.parse(raw)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        root = parsed as Record<string, unknown>
+      }
+    } catch {
+      // Malformed file → start fresh. The user's broken file gets
+      // overwritten, which is the lesser evil vs leaving the gateway
+      // refusing to start.
+    }
+  }
+  let replacedStale = false
+  if (options.authToken) {
+    const existingToken = readDotPath(root, options.authToken.key)
+    if (typeof existingToken !== 'string' || existingToken.length === 0) {
+      writeDotPath(root, options.authToken.key, options.authToken.generate())
+      // Newly-generated token isn't a stale-replacement — it's a fresh
+      // fill. `replacedStale` stays false for that case.
+    }
+    // else: preserve existing — no write, no stale flag.
+  }
+  if (options.ownerAllowlist) {
+    const prev = readDotPath(root, options.ownerAllowlist.key)
+    const next = options.ownerAllowlist.values
+    if (!Array.isArray(prev) || !arraysEqualShallow(prev, next)) {
+      if (prev !== undefined) replacedStale = true
+      writeDotPath(root, options.ownerAllowlist.key, next)
+    }
+  }
+  const serialized =
+    format === 'yaml'
+      ? stringifyYaml(root, { lineWidth: 120 })
+      : JSON.stringify(root, null, 2) + '\n'
+  atomicWrite0600(path, serialized)
+  return { created: !exists, replacedStale }
+}
+
+function arraysEqualShallow(a: unknown[], b: unknown[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
 }
 
 // =============================================================================

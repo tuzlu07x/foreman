@@ -187,6 +187,21 @@
               }
             }
           ]
+        },
+        "security_bootstrap": {
+          "path": "~/.openclaw/openclaw.json",
+          "format": "json",
+          "auth_token": {
+            "key": "gateway.auth.token",
+            "bytes": 32,
+            "encoding": "hex"
+          },
+          "owner_allowlist": {
+            "key": "commands.ownerAllowFrom",
+            "from_secret": "telegram-chat-id",
+            "item_template": "telegram:{value}",
+            "if_service": "telegram"
+          }
         }
       }
     },
