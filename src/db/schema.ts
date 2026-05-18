@@ -23,6 +23,10 @@ export const agents = sqliteTable("agents", {
     .default("active"),
   metadata: text("metadata"),
   llmProvider: text("llm_provider"),
+  // #408 / #412 — Provider variant id within `llmProvider` (e.g. "via-openrouter"
+  // for Hermes/openai, "oauth" for Codex/openai, "native" for OpenClaw/openai).
+  // NULL falls back to the registry's `provider_mapping[llmProvider].preferred`.
+  providerVariant: text("provider_variant"),
   responsibilityNote: text("responsibility_note"),
 });
 
