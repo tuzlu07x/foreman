@@ -11,6 +11,12 @@ import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import {
+  deriveDefaultModelId,
+  describeResolveError,
+  resolveAgentProviderConfig,
+  type ResolvedAgentProviderConfig,
+} from './provider-resolver.js'
+import {
   resolveBundledTemplatePath,
   type AgentEntry,
 } from './registry-catalog.js'
@@ -115,11 +121,58 @@ export function projectSecretsForAgent(
   }
 
   // -----------------------------------------------------------------------
+  // 0) #408 / #410 Phase 2 — resolver path. If the agent declares
+  //    `provider_mapping` AND the user picked a Foreman LLM provider,
+  //    delegate provider-specific writes (env_vars, config_overrides,
+  //    auth_json, toml_writes) to the resolver. Channels + security_bootstrap
+  //    stay on the legacy path because they're not provider-coupled.
+  // -----------------------------------------------------------------------
+  let resolverWonProviderWrites = false
+  if (entry.provider_mapping && ctx.llmProvider) {
+    const lookup = (name: string): string | null => {
+      try {
+        if (!ctx.secretStore.exists(name)) return null
+        return ctx.secretStore.get(name)
+      } catch {
+        return null
+      }
+    }
+    const resolved = resolveAgentProviderConfig({
+      agent: entry,
+      foremanProvider: ctx.llmProvider,
+      // Phase 2 hardcoded default — Phase 3 wizard / PR #405 picker
+      // will pass through the user's actual choice.
+      modelId: deriveDefaultModelId(ctx.llmProvider),
+      secretLookup: lookup,
+    })
+    if (resolved.ok) {
+      resolverWonProviderWrites = true
+      applyResolverWrites(
+        entry,
+        resolved.config,
+        result,
+        expand,
+        seedTemplateIfMissing,
+        requiresExisting,
+        projection,
+      )
+    } else {
+      // Resolver gave up — log + fall through to legacy provider-specific
+      // sections so existing config_overrides etc still fire.
+      result.skipped.push({
+        secret: '(provider_mapping)',
+        reason: describeResolveError(resolved.error),
+      })
+    }
+  }
+
+  // -----------------------------------------------------------------------
   // 1) env_vars → dotenv OR json env block
+  //    Skipped when the resolver path won — resolver already wrote envs.
   // -----------------------------------------------------------------------
   const envPairs: Record<string, string> = {}
   const envSecretNames: string[] = []
-  if (projection.env_vars) {
+  if (projection.env_vars && !resolverWonProviderWrites) {
     for (const [varName, spec] of Object.entries(projection.env_vars)) {
       if (!filterMatches(spec, ctx)) continue
       const value = safeGet(ctx.secretStore, spec.from_secret, result.skipped)
@@ -184,7 +237,11 @@ export function projectSecretsForAgent(
   // -----------------------------------------------------------------------
   // 3) toml_writes → flat key=value
   // -----------------------------------------------------------------------
-  if (projection.toml_writes && projection.toml_writes.length > 0) {
+  if (
+    projection.toml_writes &&
+    projection.toml_writes.length > 0 &&
+    !resolverWonProviderWrites
+  ) {
     const grouped = new Map<
       string,
       { key: string; value: string; secret: string | null }[]
@@ -219,7 +276,7 @@ export function projectSecretsForAgent(
   // -----------------------------------------------------------------------
   // 4) auth_json → flat JSON map (Codex's auth.json)
   // -----------------------------------------------------------------------
-  if (projection.auth_json) {
+  if (projection.auth_json && !resolverWonProviderWrites) {
     if (filterMatches(projection.auth_json, ctx)) {
       const value = safeGet(
         ctx.secretStore,
@@ -246,7 +303,7 @@ export function projectSecretsForAgent(
   // used. Hermes' template defaults to OpenRouter; if the user picked
   // openai we now write `model.provider: openai` + `model.default:
   // gpt-4o-mini` directly into ~/.hermes/config.yaml.
-  if (projection.config_overrides) {
+  if (projection.config_overrides && !resolverWonProviderWrites) {
     const { path: rawPath, format, writes } = projection.config_overrides
     const path = expand(rawPath)
     const merged: Record<string, string | boolean | number | null> = {}
@@ -352,6 +409,116 @@ function encodeRandomBytes(
   encoding: 'hex' | 'base64' | 'base64url',
 ): string {
   return randomBytes(bytes).toString(encoding)
+}
+
+// =============================================================================
+// #408 / #410 Phase 2 — resolver-driven writes
+// =============================================================================
+//
+// Applies a resolved `provider_mapping` configuration via the existing writer
+// functions (writeDotenv / writeJsonEnvBlock / writeConfigOverrides / etc).
+// The resolver already substituted `${model}` + `${secret:…}` templates, so
+// these writes are concrete values ready to land on disk.
+//
+// File paths come from the agent's existing `secret_projection` block:
+//   - env vars go to `secret_projection.env_file` or `json_env.path`
+//   - configWrites go to `secret_projection.config_overrides.path` (or the
+//     resolver's `writes` path inferred from registry — see #410 follow-up)
+//   - tomlWrites carry their own `path` field
+//   - authJsonWrites carry their own `path` field
+function applyResolverWrites(
+  entry: AgentEntry,
+  resolved: ResolvedAgentProviderConfig,
+  result: ProjectionResult,
+  expand: (p: string) => string,
+  seedTemplateIfMissing: (path: string) => boolean,
+  requiresExisting: boolean,
+  projection: NonNullable<AgentEntry['secret_projection']>,
+): void {
+  // ----- env vars -----
+  const envPairs = resolved.envVars
+  const envSecretNames = [resolved.requiredSecret].filter(
+    (s): s is string => s !== null,
+  )
+  if (Object.keys(envPairs).length > 0) {
+    if (projection.env_file) {
+      const path = expand(projection.env_file)
+      const w = writeDotenv(path, envPairs)
+      result.files.push({ path, secrets: envSecretNames, ...w })
+    }
+    if (projection.json_env) {
+      const path = expand(projection.json_env.path)
+      const haveTarget = seedTemplateIfMissing(path)
+      if (!haveTarget && requiresExisting) {
+        for (const secret of envSecretNames) {
+          result.skipped.push({
+            secret,
+            reason: `target config ${path} doesn't exist yet — run \`${entry.install.binary ?? entry.id}\` once to initialise it, then \`foreman secrets repush ${entry.id}\``,
+          })
+        }
+      } else {
+        const w = writeJsonEnvBlock(
+          path,
+          projection.json_env.section,
+          envPairs,
+        )
+        result.files.push({ path, secrets: envSecretNames, ...w })
+      }
+    }
+  }
+
+  // ----- config writes (dot-paths into the agent's main config file) -----
+  if (
+    Object.keys(resolved.configWrites).length > 0 &&
+    projection.config_overrides
+  ) {
+    const path = expand(projection.config_overrides.path)
+    const format = projection.config_overrides.format
+    try {
+      const written = writeConfigOverrides(path, format, resolved.configWrites)
+      result.files.push({ path, secrets: [], ...written })
+    } catch (err) {
+      result.skipped.push({
+        secret: '(provider_mapping config writes)',
+        reason: `failed to write ${path}: ${err instanceof Error ? err.message : String(err)}`,
+      })
+    }
+  }
+
+  // ----- toml writes -----
+  if (resolved.tomlWrites.length > 0) {
+    const grouped = new Map<
+      string,
+      { key: string; value: string; secret: string | null }[]
+    >()
+    for (const w of resolved.tomlWrites) {
+      const path = expand(w.path)
+      const list = grouped.get(path) ?? []
+      list.push({ key: w.key, value: w.value, secret: resolved.requiredSecret })
+      grouped.set(path, list)
+    }
+    for (const [path, writes] of grouped.entries()) {
+      const written = writeTomlFields(path, writes)
+      result.files.push({
+        path,
+        secrets: writes
+          .map((w) => w.secret)
+          .filter((s): s is string => s !== null),
+        ...written,
+      })
+    }
+  }
+
+  // ----- auth.json writes (Codex) -----
+  for (const w of resolved.authJsonWrites) {
+    const path = expand(w.path)
+    const written = writeAuthJson(path, w.key, w.value)
+    result.files.push({
+      path,
+      secrets: resolved.requiredSecret ? [resolved.requiredSecret] : [],
+      ...written,
+    })
+  }
 }
 
 function filterMatches(
