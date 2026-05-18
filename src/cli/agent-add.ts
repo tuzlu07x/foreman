@@ -18,6 +18,7 @@ import {
   detectInstall,
   preferredInstallCommand,
   runInstall,
+  runPostConfigCommands,
 } from "../core/agent-install.js";
 import { buildMcpSnippet } from "../core/agent-mcp-snippet.js";
 import {
@@ -190,6 +191,30 @@ export async function runAgentAddScripted(
         orange("warn: ") +
           `secret projection failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+    }
+
+    // #398 — registry-declared post-config commands (OpenClaw's
+    // `gateway install` LaunchAgent step). Runs after secrets land so
+    // service installers see a valid config. Best-effort.
+    const postCmds = entry.install.post_config_commands ?? [];
+    if (postCmds.length > 0) {
+      try {
+        const results = await runPostConfigCommands(entry.install, (line) =>
+          log(dim(`    ${line}`)),
+        );
+        for (const r of results) {
+          if (r.ok) {
+            log(green("✓") + ` ${r.command}`);
+          } else {
+            log(orange("warn: ") + `${r.command} exited ${r.exitCode}`);
+          }
+        }
+      } catch (err) {
+        log(
+          orange("warn: ") +
+            `post-config commands failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
 
