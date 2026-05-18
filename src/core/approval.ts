@@ -34,15 +34,52 @@ export interface ApprovalRequest {
 export interface ApprovalDecision {
   decision: "allowed" | "denied";
   remember?: "allow" | "deny";
-  /** Which user-facing surface resolved this approval (#302). Propagates
-   *  into the mediator's `decidedBy` so the audit log distinguishes
-   *  Telegram-resolved approvals from TUI-resolved ones. Undefined for
-   *  programmatic / timeout resolutions. */
-  via?: "tui" | "telegram" | "discord" | "slack" | "webhook";
+  /** Which user-facing surface resolved this approval (#302 / #406).
+   *  Propagates into the mediator's `decidedBy` so the audit log
+   *  distinguishes Telegram-resolved approvals from TUI-resolved ones.
+   *  `agent_mcp` (added in #406) means the user typed `/approve <id>`
+   *  in an agent's chat and the agent relayed it via the
+   *  `submit_approval` MCP tool. Undefined for programmatic / timeout
+   *  resolutions. */
+  via?:
+    | "tui"
+    | "telegram"
+    | "discord"
+    | "slack"
+    | "webhook"
+    | "agent_mcp";
+}
+
+export interface SubmitApprovalFromAgentOpts {
+  approvalId: string;
+  decision: "allow" | "deny";
+  /** When true, remember the same source/target/tool combination so future
+   *  identical calls auto-resolve without prompting again. */
+  remember?: boolean;
+  /** The agent id that routed this approval (the `--source` flag the
+   *  agent passes to `foreman mcp-stdio`). Surfaces in the audit log so
+   *  operators can tell which agent's chat the user replied in. */
+  sourceAgent: string;
+}
+
+export interface SubmitApprovalResult {
+  ok: boolean;
+  /** Free-text error message when `ok === false`. Designed to be shown
+   *  back to the agent's user (e.g. "approval abc123 not found"). */
+  error?: string;
 }
 
 export interface ApprovalService {
   request(req: ApprovalRequest): Promise<ApprovalDecision>;
+  /** #406 — Agent-routed approval submission. Validates the
+   *  approval id exists + is still pending, then emits the
+   *  `approval:resolved` bus event so the in-flight `request()` call
+   *  unblocks. Implementations that don't support cross-process
+   *  resolution (BusApprovalService, DenyAllApprovalService) may
+   *  return `{ ok: false, error: "..." }`. */
+  submitFromAgent?(
+    opts: SubmitApprovalFromAgentOpts,
+  ): Promise<SubmitApprovalResult>;
 }
 
 export class DenyAllApprovalService implements ApprovalService {
@@ -265,6 +302,48 @@ export class DbApprovalService implements ApprovalService {
       resolvedBy: "timeout",
     });
     return { decision: "denied" };
+  }
+
+  // #406 — Agent-routed approval submission. Called from the
+  // `submit_approval` MCP tool when an agent (Hermes / OpenClaw / …)
+  // sees a `/approve <id>` or `/deny <id>` slash command in user chat
+  // and relays the decision. Validates the row + emits the bus event;
+  // ApprovalBridge then writes the resolution to SQLite which the
+  // in-flight `request()` polling picks up to unblock the original
+  // mediator call.
+  async submitFromAgent(
+    opts: SubmitApprovalFromAgentOpts,
+  ): Promise<SubmitApprovalResult> {
+    const row = this.db
+      .select({
+        status: pendingApprovals.status,
+      })
+      .from(pendingApprovals)
+      .where(eq(pendingApprovals.requestId, opts.approvalId))
+      .get();
+    if (!row) {
+      return { ok: false, error: `approval ${opts.approvalId} not found` };
+    }
+    if (row.status !== "pending") {
+      return {
+        ok: false,
+        error: `approval ${opts.approvalId} already ${row.status}`,
+      };
+    }
+    const decisionStr: "allowed" | "denied" =
+      opts.decision === "allow" ? "allowed" : "denied";
+    const rememberValue: "allow" | "deny" | undefined = opts.remember
+      ? opts.decision
+      : undefined;
+    this.bus.emit("approval:resolved", {
+      requestId: opts.approvalId,
+      decision: decisionStr,
+      remember: rememberValue,
+      resolvedBy: "agent",
+      via: "agent_mcp",
+      routedBy: opts.sourceAgent,
+    });
+    return { ok: true };
   }
 }
 

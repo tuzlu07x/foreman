@@ -13,6 +13,10 @@ function makeServices(
   decision: "allowed" | "denied",
   decidedBy = "policy:7",
   secretOutput?: SecretGetOutput,
+  submitApprovalResult: {
+    ok: boolean;
+    error?: string;
+  } = { ok: true },
 ): McpStdioServices {
   const result: MediatorOutput = {
     requestId: "r1",
@@ -29,6 +33,9 @@ function makeServices(
     mediator: {
       handleRequest: vi.fn(async () => result),
       handleSecretGet: vi.fn(async () => secretOutput),
+    },
+    approval: {
+      submitFromAgent: vi.fn(async () => submitApprovalResult),
     },
   } as unknown as McpStdioServices;
 }
@@ -157,5 +164,120 @@ describe("mcp-stdio handleMessage", () => {
     };
     expect(out.error.code).toBe(-32602);
     expect(services.mediator.handleSecretGet).not.toHaveBeenCalled();
+  });
+
+  // #406 — Agent-routed approval relay. Agent sees /approve <id> from the
+  // user, calls submit_approval, Foreman emits the bus event to unblock
+  // the original mediator request. No Telegram polling involved.
+  describe("submit_approval tool (#406)", () => {
+    it("advertises submit_approval on tools/list", async () => {
+      const out = (await handleMessage(makeServices("allowed"), "hermes", {
+        jsonrpc: "2.0",
+        id: 10,
+        method: "tools/list",
+      } as JSONRPCMessage)) as unknown as {
+        result: { tools: { name: string }[] };
+      };
+      const names = out.result.tools.map((t) => t.name);
+      expect(names).toContain("submit_approval");
+    });
+
+    it("forwards the approval id + decision + sourceAgent to approval.submitFromAgent", async () => {
+      const services = makeServices("allowed");
+      const out = (await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 11,
+        method: "tools/call",
+        params: {
+          name: "submit_approval",
+          arguments: {
+            approval_id: "abc123",
+            decision: "allow",
+            remember: false,
+          },
+        },
+      } as JSONRPCMessage)) as unknown as {
+        result: { content: { text: string }[] };
+      };
+      expect(services.approval.submitFromAgent).toHaveBeenCalledWith({
+        approvalId: "abc123",
+        decision: "allow",
+        remember: false,
+        sourceAgent: "hermes",
+      });
+      expect(out.result.content[0]?.text).toMatch(/Submitted.*abc123.*allow/);
+    });
+
+    it("flags remember=true for /approve_remember and /deny_remember commands", async () => {
+      const services = makeServices("allowed");
+      await handleMessage(services, "openclaw", {
+        jsonrpc: "2.0",
+        id: 12,
+        method: "tools/call",
+        params: {
+          name: "submit_approval",
+          arguments: {
+            approval_id: "xyz789",
+            decision: "deny",
+            remember: true,
+          },
+        },
+      } as JSONRPCMessage);
+      expect(services.approval.submitFromAgent).toHaveBeenCalledWith({
+        approvalId: "xyz789",
+        decision: "deny",
+        remember: true,
+        sourceAgent: "openclaw",
+      });
+    });
+
+    it("rejects submit_approval without approval_id (params)", async () => {
+      const out = (await handleMessage(makeServices("allowed"), "hermes", {
+        jsonrpc: "2.0",
+        id: 13,
+        method: "tools/call",
+        params: { name: "submit_approval", arguments: { decision: "allow" } },
+      } as JSONRPCMessage)) as unknown as {
+        error: { code: number; message: string };
+      };
+      expect(out.error.code).toBe(-32602);
+      expect(out.error.message).toMatch(/approval_id/);
+    });
+
+    it("rejects submit_approval with decision other than allow|deny", async () => {
+      const out = (await handleMessage(makeServices("allowed"), "hermes", {
+        jsonrpc: "2.0",
+        id: 14,
+        method: "tools/call",
+        params: {
+          name: "submit_approval",
+          arguments: { approval_id: "abc", decision: "maybe" },
+        },
+      } as JSONRPCMessage)) as unknown as {
+        error: { code: number; message: string };
+      };
+      expect(out.error.code).toBe(-32602);
+      expect(out.error.message).toMatch(/decision/);
+    });
+
+    it("returns isError true with the submitFromAgent error text on validation failure", async () => {
+      const services = makeServices("allowed", "policy:7", undefined, {
+        ok: false,
+        error: "approval missing-id not found",
+      });
+      const out = (await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 15,
+        method: "tools/call",
+        params: {
+          name: "submit_approval",
+          arguments: { approval_id: "missing-id", decision: "allow" },
+        },
+      } as JSONRPCMessage)) as unknown as {
+        result: { content: { text: string }[]; isError: boolean };
+      };
+      expect(out.result.isError).toBe(true);
+      expect(out.result.content[0]?.text).toContain("missing-id");
+    });
   });
 });
