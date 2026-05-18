@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import type { AgentEntry } from "./registry-catalog.js";
+import type { AgentEntry, ProviderEntry } from "./registry-catalog.js";
 import type { RegistryService } from "./registry.js";
 import type { SecretStore } from "./secret-store.js";
 
@@ -38,11 +38,44 @@ export function expandHome(path: string): string {
   return path;
 }
 
+export interface CheckSecretsOptions {
+  /** Provider id the user explicitly picked for this agent (#297). When
+   *  set, `checkSecrets` filters out `required_secrets` that belong to a
+   *  *different* provider — e.g. user picked openai for OpenClaw → the
+   *  registry's `required_secrets: ["anthropic-key"]` becomes empty
+   *  because anthropic-key belongs to anthropic, not openai (#373). */
+  llmProvider?: string;
+  /** Provider catalog used to resolve secret_name → owning provider id.
+   *  When omitted, the filter is skipped (legacy callers preserved). */
+  providerCatalog?: ProviderEntry[];
+}
+
+/**
+ * Map a secret name to the provider id that owns it (e.g. "anthropic-key" →
+ * "anthropic"). Returns null when the secret isn't a provider-owned key
+ * (Telegram bot tokens etc.) — those stay required regardless of
+ * llmProvider.
+ */
+export function providerOwningSecret(
+  secretName: string,
+  providerCatalog: ProviderEntry[],
+): string | null {
+  const provider = providerCatalog.find(
+    (p) => p.secret_name === secretName,
+  );
+  return provider?.id ?? null;
+}
+
 export function checkSecrets(
   entry: AgentEntry,
   store: SecretStore,
+  options: CheckSecretsOptions = {},
 ): SecretCheckResult {
-  const required = entry.required_secrets.map((name) => ({
+  const requiredFiltered = filterRequiredByProvider(
+    entry.required_secrets,
+    options,
+  );
+  const required = requiredFiltered.map((name) => ({
     name,
     present: store.exists(name),
   }));
@@ -55,6 +88,25 @@ export function checkSecrets(
     optional,
     hasAllRequired: required.every((s) => s.present),
   };
+}
+
+// #373 — Drop `required_secrets` entries that belong to a provider OTHER
+// than the one the user picked for this agent. Non-provider secrets
+// (Telegram bot token etc.) pass through unchanged.
+function filterRequiredByProvider(
+  required: readonly string[],
+  options: CheckSecretsOptions,
+): string[] {
+  if (!options.llmProvider || !options.providerCatalog) {
+    return [...required];
+  }
+  return required.filter((secretName) => {
+    const owner = providerOwningSecret(secretName, options.providerCatalog!);
+    // Not a provider key (or provider not in catalog) → keep required
+    if (owner === null) return true;
+    // Owner matches user's pick → still required
+    return owner === options.llmProvider;
+  });
 }
 
 export function pickConfigPath(entry: AgentEntry): string | null {
