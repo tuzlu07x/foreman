@@ -14,6 +14,11 @@ export interface InstallSpec {
    *  their interactive post-install wizards (#372). Hermes uses
    *  `["--skip-setup"]`. */
   non_interactive_args?: string[];
+  /** Shell commands run after secret projection finishes (#398). OpenClaw
+   *  uses this to run `openclaw gateway install` so its LaunchAgent gets
+   *  registered without forcing the user to invoke the agent's own
+   *  onboarding wizard. */
+  post_config_commands?: string[];
 }
 
 export interface InstallDetection {
@@ -137,6 +142,35 @@ export interface RunUninstallOptions extends RunInstallOptions {
    *  (#357). E.g. if the registry says `brew: null` but the binary is at
    *  `/opt/homebrew/bin/openclaw`, we still pick `brew uninstall`. */
   detection?: InstallDetection;
+}
+
+export interface PostConfigResult {
+  command: string;
+  ok: boolean;
+  exitCode: number;
+}
+
+/**
+ * Run the registry-declared `install.post_config_commands` in sequence
+ * after secrets are projected to the agent's config (#398). OpenClaw
+ * uses this for `openclaw gateway install` so its LaunchAgent gets
+ * registered without forcing the user to invoke the agent's own
+ * onboarding wizard separately. Best-effort: a non-zero exit on one
+ * command is recorded in the result but doesn't abort subsequent ones —
+ * the daemon-manager surfaces the real failure later if the gateway
+ * still doesn't come up.
+ */
+export async function runPostConfigCommands(
+  install: InstallSpec,
+  onLine?: (line: string) => void,
+): Promise<PostConfigResult[]> {
+  const commands = install.post_config_commands ?? [];
+  const results: PostConfigResult[] = [];
+  for (const command of commands) {
+    const r = await runShell(command, onLine);
+    results.push({ command, ok: r.ok, exitCode: r.exitCode });
+  }
+  return results;
 }
 
 export async function runUninstall(

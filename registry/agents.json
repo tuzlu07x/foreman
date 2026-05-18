@@ -101,7 +101,10 @@
         "brew": null,
         "script": "https://openclaw.ai/install.sh",
         "binary": "openclaw",
-        "config_template_path": "registry/templates/openclaw.json"
+        "config_template_path": "registry/templates/openclaw.json",
+        "post_config_commands": [
+          "openclaw gateway install"
+        ]
       },
       "config_paths": [
         "~/.openclaw/openclaw.json",

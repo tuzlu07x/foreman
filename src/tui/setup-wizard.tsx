@@ -31,6 +31,7 @@ import {
   detectInstall,
   preferredUninstallCommand,
   runInstall,
+  runPostConfigCommands,
   runUninstall,
 } from "../core/agent-install.js";
 import { buildMcpSnippet } from "../core/agent-mcp-snippet.js";
@@ -2853,6 +2854,32 @@ export async function runInstallStep(
       }
     } catch {
       /* best-effort — malformed config files shouldn't block install */
+    }
+
+    // #398 — post-config commands. Run registry-declared shell steps
+    // AFTER secrets are projected to the agent's config, so service
+    // installers (OpenClaw's `gateway install` LaunchAgent registration)
+    // run against valid config. Best-effort — non-zero exits surface
+    // as warnings; the daemon manager catches the real failure on next
+    // `foreman start` if the gateway still doesn't come up.
+    const postCmds = entry.install.post_config_commands ?? [];
+    if (postCmds.length > 0) {
+      try {
+        const results = await runPostConfigCommands(entry.install, (line) =>
+          log(`    ${line}`),
+        );
+        for (const r of results) {
+          if (r.ok) {
+            log(`  ✓ ${r.command}`);
+          } else {
+            log(`  ⚠ ${r.command} exited ${r.exitCode}`);
+          }
+        }
+      } catch (err) {
+        log(
+          `  ⚠ post-config commands failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     if (services.registry.get(id)) {
