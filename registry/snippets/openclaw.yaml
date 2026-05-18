@@ -1,7 +1,8 @@
-# OpenClaw uses TOML natively; this YAML mirror is the canonical form
-# `foreman agent add` rewrites into the agent's actual config syntax.
+# OpenClaw uses JSON natively (~/.openclaw/openclaw.json). This YAML mirror
+# is the canonical form `foreman agent add` rewrites into the agent's
+# actual config syntax. #395 — `mcp.enabled` is rejected by OpenClaw's
+# strict schema; only `mcp.servers` is valid.
 mcp:
-  enabled: true
   servers:
     foreman:
       command: foreman
