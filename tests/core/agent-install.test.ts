@@ -44,6 +44,80 @@ describe("preferredInstallCommand", () => {
   it("returns null when nothing is set", () => {
     expect(preferredInstallCommand({ npm: null, brew: null })).toBeNull();
   });
+
+  // #372 — non_interactive_args appended via `bash -s --` so script
+  // installers' post-install wizards stay silent + don't open /dev/tty.
+  describe("non_interactive_args (#372)", () => {
+    it("appends a single arg via `bash -s --` for script installs", () => {
+      expect(
+        preferredInstallCommand({
+          npm: null,
+          brew: null,
+          script: "https://hermes-agent.nousresearch.com/install.sh",
+          non_interactive_args: ["--skip-setup"],
+        }),
+      ).toBe(
+        "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-setup",
+      );
+    });
+
+    it("appends multiple args space-separated", () => {
+      expect(
+        preferredInstallCommand({
+          npm: null,
+          brew: null,
+          script: "https://example.com/install.sh",
+          non_interactive_args: ["--skip-setup", "--no-prompt"],
+        }),
+      ).toBe(
+        "curl -fsSL https://example.com/install.sh | bash -s -- --skip-setup --no-prompt",
+      );
+    });
+
+    it("returns plain pipe when non_interactive_args is empty", () => {
+      expect(
+        preferredInstallCommand({
+          npm: null,
+          brew: null,
+          script: "https://example.com/install.sh",
+          non_interactive_args: [],
+        }),
+      ).toBe("curl -fsSL https://example.com/install.sh | bash");
+    });
+
+    it("returns plain pipe when non_interactive_args is omitted (backward compat)", () => {
+      expect(
+        preferredInstallCommand({
+          npm: null,
+          brew: null,
+          script: "https://example.com/install.sh",
+        }),
+      ).toBe("curl -fsSL https://example.com/install.sh | bash");
+    });
+
+    it("ignores non_interactive_args for npm installs (only meaningful for shell scripts)", () => {
+      expect(
+        preferredInstallCommand({
+          npm: "@openai/codex",
+          brew: null,
+          non_interactive_args: ["--skip-setup"],
+        }),
+      ).toBe("npm install -g @openai/codex");
+    });
+
+    it("filters empty strings out of non_interactive_args (defensive)", () => {
+      expect(
+        preferredInstallCommand({
+          npm: null,
+          brew: null,
+          script: "https://example.com/install.sh",
+          non_interactive_args: ["--skip-setup", "", "--quiet"],
+        }),
+      ).toBe(
+        "curl -fsSL https://example.com/install.sh | bash -s -- --skip-setup --quiet",
+      );
+    });
+  });
 });
 
 describe("preferredUninstallCommand", () => {

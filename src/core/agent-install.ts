@@ -10,6 +10,10 @@ export interface InstallSpec {
   script?: string | null;
   /** Override the binary name to look for on PATH when it differs from the npm package. */
   binary?: string | null;
+  /** Args appended via `bash -s -- <args>` so script installers run without
+   *  their interactive post-install wizards (#372). Hermes uses
+   *  `["--skip-setup"]`. */
+  non_interactive_args?: string[];
 }
 
 export interface InstallDetection {
@@ -151,7 +155,17 @@ export async function runUninstall(
 export function preferredInstallCommand(install: InstallSpec): string | null {
   if (install.npm) return `npm install -g ${install.npm}`;
   if (install.brew) return `brew install ${install.brew}`;
-  if (install.script) return `curl -fsSL ${install.script} | bash`;
+  if (install.script) {
+    // #372 — Append non-interactive args via `bash -s --` so script
+    // installers (Hermes) skip their post-install wizards. Without this,
+    // Hermes opens /dev/tty for its Y/n prompt and deadlocks against
+    // Foreman's Ink TUI raw-mode capture.
+    const args = (install.non_interactive_args ?? []).filter(
+      (a) => a.length > 0,
+    );
+    const argsSuffix = args.length > 0 ? ` -s -- ${args.join(" ")}` : "";
+    return `curl -fsSL ${install.script} | bash${argsSuffix}`;
+  }
   return null;
 }
 
@@ -176,6 +190,16 @@ export function preferredUninstallCommand(
   return null;
 }
 
+/** Idle-output watchdog for install subprocesses. If no stdout/stderr
+ *  arrives for this long, the install is assumed stuck on an interactive
+ *  prompt our \`stdio: ["ignore", ...]\` couldn't suppress (#372 defence in
+ *  depth — script-installer authors might add new prompts we don't know
+ *  about). 90s is generous enough for slow network pulls (uv resolve, npm
+ *  pack download) but short enough that the user doesn't sit on a frozen
+ *  TUI for ten minutes. */
+const INSTALL_IDLE_TIMEOUT_MS = 90_000;
+const INSTALL_WATCHDOG_TICK_MS = 5_000;
+
 function runShell(
   command: string,
   onLine?: (line: string) => void,
@@ -189,7 +213,21 @@ function runShell(
           const [cmd, ...args] = command.split(" ");
           return spawn(cmd!, args, { stdio: ["ignore", "pipe", "pipe"] });
         })();
+    let lastOutputAt = Date.now();
+    let killedForIdle = false;
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastOutputAt > INSTALL_IDLE_TIMEOUT_MS) {
+        killedForIdle = true;
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* already dead */
+        }
+        clearInterval(watchdog);
+      }
+    }, INSTALL_WATCHDOG_TICK_MS);
     const onChunk = (chunk: Buffer): void => {
+      lastOutputAt = Date.now();
       const text = chunk.toString("utf8");
       for (const line of text.split(/\r?\n/)) {
         if (line.length > 0) onLine?.(line);
@@ -198,9 +236,22 @@ function runShell(
     child.stdout.on("data", onChunk);
     child.stderr.on("data", onChunk);
     child.on("error", () => {
+      clearInterval(watchdog);
       resolveResult({ ok: false, exitCode: -1, manualCommand: command });
     });
     child.on("close", (code) => {
+      clearInterval(watchdog);
+      if (killedForIdle) {
+        resolveResult({
+          ok: false,
+          exitCode: -1,
+          manualCommand:
+            `(install timed out — no output for ${Math.round(
+              INSTALL_IDLE_TIMEOUT_MS / 1000,
+            )}s, likely stuck on an interactive prompt. Run manually: ${command})`,
+        });
+        return;
+      }
       resolveResult({
         ok: code === 0,
         exitCode: code ?? -1,
