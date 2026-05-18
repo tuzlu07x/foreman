@@ -1818,14 +1818,12 @@ export function SetupWizard({
       pickerConfiguredProviders,
     );
     // #361 — hide agents whose required LLM isn't configured. Previous UX
-    // showed them with a `⚠ needs X key` suffix but kept them togglable,
-    // so round-3 users could Space-check Claude Code without an Anthropic
-    // key and end up with a registered-but-401-on-every-call install.
-    // Hidden agents are listed at the top with the unlock path so the user
-    // can step back (Esc) to Step 1 and add the missing key.
-    const hiddenAgents = agentCatalog.filter(
-      (a) => gatingStatuses.get(a.id)?.state === "needs-llm",
-    );
+    // showed them with a "⚠ needs X key" suffix but kept them togglable;
+    // round-3 users could Space-check Claude Code without an Anthropic key
+    // and end up with a 401-on-every-call install. We also tried surfacing
+    // a "Hidden — add a key in Step 1" notice (#393), but round-3 users
+    // kept reading it as "Foreman defaulted to Claude" — silent hiding is
+    // the cleanest UX.
     const visibleAgents = agentCatalog.filter(
       (a) => gatingStatuses.get(a.id)?.state !== "needs-llm",
     );
@@ -1854,22 +1852,11 @@ export function SetupWizard({
           do. Newly-checked agents are installed; previously-installed agents
           you uncheck are uninstalled.
         </Text>
-        {hiddenAgents.length > 0 && (
-          <Box flexDirection="column">
-            <Text color={theme.accent.warning}>
-              ⚠ Hidden — add a key in Step 1 (Esc) to unlock:
-            </Text>
-            {hiddenAgents.map((a) => {
-              const status = gatingStatuses.get(a.id);
-              return (
-                <Text key={a.id} color={theme.fg.muted}>
-                  {"   "}
-                  {a.name} ({status?.hint ?? "needs an LLM key"})
-                </Text>
-              );
-            })}
-          </Box>
-        )}
+        {/* #393 — Hidden-agent notice removed entirely. Round-3 user
+            kept reading it as \"Foreman is defaulting to Claude\" when
+            we meant \"Claude Code is hidden because you can't pick it\".
+            Silent hiding is the cleanest UX — the picker only shows
+            agents the user CAN actually install. */}
         <Text color={theme.accent.primary}>
           Pre-checked: {defaults.length > 0 ? defaults.join(", ") : "(none)"}
         </Text>
