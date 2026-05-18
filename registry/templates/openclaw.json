@@ -9,13 +9,9 @@
   "gateway": {
     "mode": "local",
     "port": 18789,
-    "bind": "loopback",
-    "auth": {
-      "enabled": false
-    }
+    "bind": "loopback"
   },
   "mcp": {
-    "enabled": true,
     "servers": {}
   }
 }
