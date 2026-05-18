@@ -54,6 +54,21 @@ export const AgentEntrySchema = z
          *  per-command, so interactive prompts that read stdin get killed
          *  rather than hanging the wizard. */
         post_config_commands: z.array(z.string().min(1)).optional(),
+        /** Disable a macOS LaunchAgent the agent's installer drops, so
+         *  the gateway doesn't auto-respawn outside Foreman's daemon
+         *  manager (#394). Hermes uses this — its installer registers
+         *  `~/Library/LaunchAgents/ai.hermes.gateway.plist` which fights
+         *  Foreman for the Telegram bot token across reboots. The
+         *  bootout-then-rename is idempotent + reversible (suffix is
+         *  `.foreman-disabled`). No-op on non-macOS platforms. */
+        macos_launch_agent_disable: z
+          .object({
+            /** launchd service label, e.g. "ai.hermes.gateway". */
+            label: z.string().min(1),
+            /** Path to the .plist file, `~/` expanded against $HOME. */
+            plist_path: z.string().min(1),
+          })
+          .optional(),
       })
       .strict(),
     config_paths: z.array(z.string()),

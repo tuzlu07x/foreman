@@ -16,6 +16,7 @@ import { projectSecretsForAgent } from "../core/agent-secrets-projector.js";
 import { applyForemanSoul } from "../core/foreman-soul.js";
 import {
   detectInstall,
+  disableManagedLaunchAgent,
   preferredInstallCommand,
   runInstall,
   runPostConfigCommands,
@@ -191,6 +192,30 @@ export async function runAgentAddScripted(
         orange("warn: ") +
           `secret projection failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+    }
+
+    // #394 — Disable any agent-managed macOS LaunchAgent so Foreman's
+    // daemon manager owns the lifecycle. Best-effort, macOS-only.
+    if (entry.install.macos_launch_agent_disable) {
+      try {
+        const r = await disableManagedLaunchAgent(
+          entry.install.macos_launch_agent_disable,
+        );
+        if (!r.platformSkipped && r.plistRenamed) {
+          log(
+            green("✓") +
+              ` disabled ${entry.install.macos_launch_agent_disable.label} LaunchAgent`,
+          );
+        }
+        for (const err of r.errors) {
+          log(orange("warn: ") + err);
+        }
+      } catch (err) {
+        log(
+          orange("warn: ") +
+            `LaunchAgent disable failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     // #398 — registry-declared post-config commands (OpenClaw's

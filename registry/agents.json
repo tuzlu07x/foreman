@@ -11,7 +11,11 @@
         "brew": null,
         "script": "https://hermes-agent.nousresearch.com/install.sh",
         "binary": "hermes",
-        "non_interactive_args": ["--skip-setup"]
+        "non_interactive_args": ["--skip-setup"],
+        "macos_launch_agent_disable": {
+          "label": "ai.hermes.gateway",
+          "plist_path": "~/Library/LaunchAgents/ai.hermes.gateway.plist"
+        }
       },
       "config_paths": ["~/.hermes/config.yaml", "~/.config/hermes/config.yaml"],
       "config_snippet": "registry/snippets/hermes.yaml",
