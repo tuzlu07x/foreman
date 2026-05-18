@@ -1069,3 +1069,256 @@ describe('projectSecretsForAgent — security_bootstrap (#396)', () => {
     expect(parsed.commands).toBeUndefined()
   })
 })
+
+// =============================================================================
+// #408 / #410 Phase 2 — resolver-driven projection
+// =============================================================================
+//
+// These tests exercise `projectSecretsForAgent` against agent entries that
+// carry the new `provider_mapping` block (Phase 1 / #409). The resolver path
+// MUST supersede the legacy provider-specific writes (config_overrides,
+// env_vars, auth_json, toml_writes) while still running channels +
+// security_bootstrap from the legacy `secret_projection` block.
+describe('projectSecretsForAgent — resolver path (#408 phase 2)', () => {
+  let db: ForemanDb
+  let sqlite: ReturnType<typeof createInMemoryDb>['sqlite']
+  let store: SecretStore
+
+  beforeEach(() => {
+    const h = createInMemoryDb()
+    db = h.db
+    sqlite = h.sqlite
+    store = new SecretStore(db, Buffer.alloc(32, 1))
+  })
+  afterEach(() => {
+    sqlite.close()
+  })
+
+  function hermesWithMapping(): AgentEntry {
+    // Mirrors the bundled registry's Hermes shape — provider_mapping
+    // takes precedence over config_overrides for the openai path.
+    return {
+      id: 'hermes',
+      name: 'Hermes',
+      tagline: 't',
+      homepage: 'https://example.com',
+      install: { npm: null, brew: null },
+      config_paths: [`${tmp}/hermes.yaml`],
+      required_secrets: [],
+      optional_secrets: [],
+      mcp_compatible: true,
+      supported_versions: '*',
+      min_foreman_version: '0.1.2',
+      provider_mapping: {
+        openai: {
+          preferred: 'via-openrouter',
+          variants: {
+            'via-openrouter': {
+              label: 'OpenAI via OpenRouter',
+              writes: {
+                'model.default': 'openai/${model}',
+                'model.provider': 'openrouter',
+                'model.base_url': '',
+              },
+              env_vars: {
+                OPENROUTER_API_KEY: '${secret:openrouter-key}',
+              },
+              required_secret: 'openrouter-key',
+              secret_acquisition: {
+                name: 'OpenRouter',
+                url: 'https://openrouter.ai/keys',
+              },
+            },
+          },
+        },
+      },
+      secret_projection: {
+        env_file: `${tmp}/.env`,
+        // Legacy config_overrides — should be SKIPPED when resolver wins.
+        config_overrides: {
+          path: `${tmp}/hermes.yaml`,
+          format: 'yaml',
+          writes: [
+            {
+              if_provider: 'openai',
+              set: {
+                'model.default': 'should-not-appear',
+                'model.provider': 'should-not-appear',
+              },
+            },
+          ],
+        },
+      },
+    } as unknown as AgentEntry
+  }
+
+  it('writes resolver-driven config + env vars for Hermes openai', () => {
+    store.add('openrouter-key', 'sk-or-test-123')
+    const result = projectSecretsForAgent(hermesWithMapping(), {
+      providersSelected: ['openai'],
+      servicesSelected: [],
+      llmProvider: 'openai',
+      secretStore: store,
+      home: tmp,
+    })
+    // Both env file AND yaml config got written.
+    const yamlFile = result.files.find((f) => f.path.endsWith('hermes.yaml'))
+    const envFile = result.files.find((f) => f.path.endsWith('.env'))
+    expect(yamlFile).toBeDefined()
+    expect(envFile).toBeDefined()
+
+    const yamlContent = parseYaml(readFileSync(`${tmp}/hermes.yaml`, 'utf-8')) as {
+      model: { default: string; provider: string }
+    }
+    expect(yamlContent.model.default).toBe('openai/gpt-4o-mini')
+    expect(yamlContent.model.provider).toBe('openrouter')
+    // Legacy "should-not-appear" did NOT land — resolver took precedence.
+    expect(yamlContent.model.provider).not.toBe('should-not-appear')
+
+    const envContent = readFileSync(`${tmp}/.env`, 'utf-8')
+    expect(envContent).toContain('OPENROUTER_API_KEY=sk-or-test-123')
+  })
+
+  it('returns provider_mapping skip reason when required secret is missing', () => {
+    const result = projectSecretsForAgent(hermesWithMapping(), {
+      providersSelected: ['openai'],
+      servicesSelected: [],
+      llmProvider: 'openai',
+      secretStore: store, // empty — openrouter-key not added
+      home: tmp,
+    })
+    // Resolver returned missing_secret → recorded in skipped + fell back to legacy.
+    const mappingSkip = result.skipped.find((s) =>
+      s.secret.includes('provider_mapping'),
+    )
+    expect(mappingSkip).toBeDefined()
+    expect(mappingSkip?.reason).toMatch(/openrouter-key/)
+  })
+
+  it('legacy path fires when agent has no provider_mapping (backward compat)', () => {
+    const legacyEntry: AgentEntry = {
+      id: 'legacy-agent',
+      name: 'Legacy',
+      tagline: 't',
+      homepage: 'https://example.com',
+      install: { npm: null, brew: null },
+      config_paths: [],
+      required_secrets: [],
+      optional_secrets: [],
+      mcp_compatible: true,
+      supported_versions: '*',
+      min_foreman_version: '0.1.2',
+      secret_projection: {
+        env_file: `${tmp}/legacy.env`,
+        env_vars: {
+          OPENAI_API_KEY: {
+            from_secret: 'openai-key',
+            if_provider: 'openai',
+          },
+        },
+      },
+    } as unknown as AgentEntry
+    store.add('openai-key', 'sk-legacy-direct')
+    const result = projectSecretsForAgent(legacyEntry, {
+      providersSelected: ['openai'],
+      servicesSelected: [],
+      llmProvider: 'openai',
+      secretStore: store,
+      home: tmp,
+    })
+    // Legacy env_vars path fired — no provider_mapping skip recorded.
+    expect(
+      result.skipped.find((s) => s.secret.includes('provider_mapping')),
+    ).toBeUndefined()
+    const envContent = readFileSync(`${tmp}/legacy.env`, 'utf-8')
+    expect(envContent).toContain('OPENAI_API_KEY=sk-legacy-direct')
+  })
+
+  it('channels + security_bootstrap still fire under the resolver path', () => {
+    // OpenClaw-style: provider_mapping (openai/native) + json_channels for
+    // telegram + security_bootstrap for auth token. All three should land.
+    store.add('openai-key', 'sk-oc-test')
+    store.add('telegram-bot-token', 'tg-123')
+    store.add('telegram-chat-id', '999')
+    const openclawWithMapping: AgentEntry = {
+      id: 'openclaw',
+      name: 'OpenClaw',
+      tagline: 't',
+      homepage: 'https://example.com',
+      install: { npm: null, brew: null },
+      config_paths: [`${tmp}/openclaw.json`],
+      required_secrets: [],
+      optional_secrets: [],
+      mcp_compatible: true,
+      supported_versions: '*',
+      min_foreman_version: '0.1.2',
+      provider_mapping: {
+        openai: {
+          preferred: 'native',
+          variants: {
+            native: {
+              label: 'OpenAI native',
+              writes: {
+                'agents.defaults.model.primary': 'openai/${model}',
+              },
+              env_vars: {
+                OPENAI_API_KEY: '${secret:openai-key}',
+              },
+              required_secret: 'openai-key',
+            },
+          },
+        },
+      },
+      secret_projection: {
+        json_env: { path: `${tmp}/openclaw.json`, section: 'env' },
+        config_overrides: {
+          path: `${tmp}/openclaw.json`,
+          format: 'json',
+          writes: [], // empty — resolver provides the writes
+        },
+        json_channels: {
+          path: `${tmp}/openclaw.json`,
+          channels: {
+            telegram: {
+              path: 'channels.telegram.botToken',
+              from_secret: 'telegram-bot-token',
+              if_service: 'telegram',
+            },
+          },
+        },
+        security_bootstrap: {
+          path: `${tmp}/openclaw.json`,
+          format: 'json',
+          auth_token: {
+            key: 'gateway.auth.token',
+            bytes: 32,
+            encoding: 'hex',
+          },
+          owner_allowlist: {
+            key: 'commands.ownerAllowFrom',
+            from_secret: 'telegram-chat-id',
+            item_template: 'telegram:{value}',
+            if_service: 'telegram',
+          },
+        },
+      },
+    } as unknown as AgentEntry
+    const result = projectSecretsForAgent(openclawWithMapping, {
+      providersSelected: ['openai'],
+      servicesSelected: ['telegram'],
+      llmProvider: 'openai',
+      secretStore: store,
+      home: tmp,
+    })
+    expect(result.files.length).toBeGreaterThan(0)
+    const parsed = JSON.parse(readFileSync(`${tmp}/openclaw.json`, 'utf-8'))
+    // Resolver wrote the model + env
+    expect(parsed.agents.defaults.model.primary).toBe('openai/gpt-4o-mini')
+    expect(parsed.env.OPENAI_API_KEY).toBe('sk-oc-test')
+    // Legacy json_channels fired (orthogonal to provider)
+    expect(parsed.channels.telegram.botToken).toBe('tg-123')
+    // Legacy security_bootstrap fired (orthogonal to provider)
+    expect(typeof parsed.gateway.auth.token).toBe('string')
+    expect(parsed.commands.ownerAllowFrom).toEqual(['telegram:999'])
+  })
+})
