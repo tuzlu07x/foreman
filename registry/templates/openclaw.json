@@ -1,0 +1,13 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "~/.openclaw/workspace"
+    }
+  },
+  "channels": {},
+  "env": {},
+  "mcp": {
+    "enabled": true,
+    "servers": {}
+  }
+}

@@ -33,11 +33,17 @@ export const AgentEntrySchema = z
         non_interactive_args: z.array(z.string()).optional(),
         /** When true, Foreman's projection step won't CREATE the agent's
          *  config file if it doesn't already exist — only overlay onto an
-         *  existing one (#377). OpenClaw needs this because its install
-         *  doesn't seed ~/.openclaw/openclaw.json and the binary refuses
-         *  to start with the stripped-down JSON Foreman would write from
-         *  scratch. Default false → existing behaviour (Foreman creates). */
+         *  existing one (#377). Defensive fallback for agents whose
+         *  installer doesn't seed a config AND we don't bundle a template
+         *  for. Default false. */
         requires_existing_config: z.boolean().optional(),
+        /** Path (relative to registry/) to a bundled template Foreman
+         *  writes when the agent's config file is missing (#385). Replaces
+         *  the manual `run agent once → foreman secrets repush` dance
+         *  from #378 for agents whose installers don't seed configs
+         *  (OpenClaw). Template is written first, then secret projection
+         *  + MCP injection overlay onto it. */
+        config_template_path: z.string().min(1).optional(),
       })
       .strict(),
     config_paths: z.array(z.string()),
@@ -65,6 +71,11 @@ export const AgentEntrySchema = z
      * callers read as `entry.optional_services ?? []`. */
     optional_services: z.array(z.string()).optional(),
     mcp_compatible: z.boolean(),
+    /** MCP config block shape (#385). `flat` writes `{<mcp_servers_key>:
+     *  {foreman: ...}}` (Claude Code / Hermes / Codex). `nested` writes
+     *  `{mcp: {enabled: true, servers: {foreman: ...}}}` (OpenClaw).
+     *  Default `flat` for backward-compat. */
+    mcp_format: z.enum(["flat", "nested"]).optional(),
     supported_versions: z.string().min(1),
     min_foreman_version: z.string().min(1),
     /** Optional background daemon (#349). When set, `foreman start` spawns
@@ -397,6 +408,21 @@ export function resolveBundledRegistryPath(): string | null {
 
 export function getRegistryCachePath(): string {
   return resolve(getForemanPaths().cacheDir, "registry.json");
+}
+
+/** #385 — Resolve a bundled config template path stored in the registry
+ *  entry. Same convention as `config_snippet`: paths are project-root
+ *  relative (e.g. "registry/templates/openclaw.json"). Returns null if
+ *  the file isn't found; callers fall back to either the
+ *  `requires_existing_config` skip path or "create from scratch". */
+export function resolveBundledTemplatePath(
+  projectRootRelative: string,
+): string | null {
+  const registryPath = resolveBundledRegistryPath();
+  if (!registryPath) return null;
+  const registryRoot = registryPath.replace(/agents\.json$/, "");
+  const candidate = resolve(registryRoot, "..", projectRootRelative);
+  return existsSync(candidate) ? candidate : null;
 }
 
 export function getUpstreamRegistryUrl(): string {
