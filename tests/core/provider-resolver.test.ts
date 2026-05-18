@@ -311,16 +311,23 @@ describe("describeResolveError", () => {
   });
 });
 
-describe("deriveDefaultModelId", () => {
-  it("returns sane defaults per Foreman provider", () => {
+describe("deriveDefaultModelId (#419 — data-driven)", () => {
+  it("reads the default model from registry/providers.json", () => {
+    // Defaults populated in PR fix/419 — registry edit, no TS change
     expect(deriveDefaultModelId("openai")).toBe("gpt-4o-mini");
     expect(deriveDefaultModelId("anthropic")).toBe(
       "claude-haiku-4-5-20251001",
     );
     expect(deriveDefaultModelId("gemini")).toBe("gemini-2.0-flash");
+    expect(deriveDefaultModelId("ollama")).toBe("llama3.2");
   });
 
   it("returns 'default' for an unknown provider (safe fallback)", () => {
     expect(deriveDefaultModelId("cohere")).toBe("default");
+  });
+
+  it("returns 'default' for a provider that declares no default_model", () => {
+    // openai-compatible is custom-endpoint — no sensible default model
+    expect(deriveDefaultModelId("openai-compatible")).toBe("default");
   });
 });

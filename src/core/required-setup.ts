@@ -13,6 +13,7 @@
 //   - Records resolver errors with human-readable descriptions
 
 import {
+  deriveDefaultModelId,
   describeResolveError,
   resolveAgentProviderConfig,
   type SecretAcquisition,
@@ -213,14 +214,8 @@ function mergeStatus(a: SecretStatus, b: SecretStatus): SecretStatus {
 }
 
 function defaultModel(foremanProvider: string): string {
-  // Re-defined here to avoid a circular import with provider-resolver.
-  // Same defaults as deriveDefaultModelId(). Phase 5 will unify these
-  // via the live model picker (#399 / PR #405).
-  const map: Record<string, string> = {
-    openai: "gpt-4o-mini",
-    anthropic: "claude-haiku-4-5-20251001",
-    gemini: "gemini-2.0-flash",
-    ollama: "llama3.2",
-  };
-  return map[foremanProvider] ?? "default";
+  // #419 — Delegate to the resolver's data-driven lookup
+  // (registry/providers.json default_model field). Keeps the default
+  // table in one place — no more duplicated hardcoded maps.
+  return deriveDefaultModelId(foremanProvider);
 }

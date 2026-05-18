@@ -16,7 +16,8 @@
         "Copy the key here"
       ],
       "endpoint_default": null,
-      "endpoint_required": false
+      "endpoint_required": false,
+      "default_model": "claude-haiku-4-5-20251001"
     },
     {
       "id": "openai",
@@ -32,7 +33,8 @@
         "Copy immediately (won't show again)"
       ],
       "endpoint_default": null,
-      "endpoint_required": false
+      "endpoint_required": false,
+      "default_model": "gpt-4o-mini"
     },
     {
       "id": "gemini",
@@ -48,7 +50,8 @@
         "Copy the key here"
       ],
       "endpoint_default": null,
-      "endpoint_required": false
+      "endpoint_required": false,
+      "default_model": "gemini-2.0-flash"
     },
     {
       "id": "ollama",
@@ -64,7 +67,8 @@
         "Default endpoint is http://localhost:11434"
       ],
       "endpoint_default": "http://localhost:11434",
-      "endpoint_required": true
+      "endpoint_required": true,
+      "default_model": "llama3.2"
     },
     {
       "id": "openai-compatible",
