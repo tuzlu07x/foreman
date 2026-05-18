@@ -8,6 +8,7 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import {
   resolveBundledTemplatePath,
   type AgentEntry,
@@ -37,6 +38,11 @@ export interface ProjectionContext {
   providersSelected: string[]
   /** Service ids the user picked (drives `if_service` filters). */
   servicesSelected: string[]
+  /** #389 — Per-agent LLM provider choice. Drives `if_provider` on
+   *  `config_overrides` writes so e.g. Hermes' config.yaml gets
+   *  `model.provider: openai` when the user picked openai. Optional;
+   *  when omitted, no per-agent override fires. */
+  llmProvider?: string
   /** Source of truth for secret values. */
   secretStore: SecretStore
   /** Override $HOME (mostly for tests). */
@@ -226,6 +232,51 @@ export function projectSecretsForAgent(
           path,
           secrets: [projection.auth_json.from_secret],
           ...w,
+        })
+      }
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // 5) config_overrides → per-provider YAML/JSON deep-merge (#389)
+  // -----------------------------------------------------------------------
+  // Solves the #350 root cause: Foreman projects env keys but the agent's
+  // own config defaults to a different provider, so the keys never get
+  // used. Hermes' template defaults to OpenRouter; if the user picked
+  // openai we now write `model.provider: openai` + `model.default:
+  // gpt-4o-mini` directly into ~/.hermes/config.yaml.
+  if (projection.config_overrides) {
+    const { path: rawPath, format, writes } = projection.config_overrides
+    const path = expand(rawPath)
+    const merged: Record<string, string | boolean | number | null> = {}
+    for (const w of writes) {
+      // if_provider matches per-agent llmProvider OR (legacy fallback)
+      // global providersSelected — keep both for tests + back-compat.
+      if (w.if_provider) {
+        const matchesAgent = ctx.llmProvider === w.if_provider
+        const matchesGlobal = ctx.providersSelected.includes(w.if_provider)
+        if (!matchesAgent && !matchesGlobal) continue
+      }
+      if (w.if_service && !ctx.servicesSelected.includes(w.if_service)) {
+        continue
+      }
+      for (const [dot, value] of Object.entries(w.set)) {
+        merged[dot] = value
+      }
+    }
+    if (Object.keys(merged).length > 0) {
+      try {
+        const written = writeConfigOverrides(path, format, merged)
+        result.files.push({
+          path,
+          // No secrets land in config_overrides — they stay in env_vars.
+          secrets: [],
+          ...written,
+        })
+      } catch (err) {
+        result.skipped.push({
+          secret: '(config_overrides)',
+          reason: `failed to write ${path}: ${err instanceof Error ? err.message : String(err)}`,
         })
       }
     }
@@ -470,6 +521,49 @@ export function writeAuthJson(
 
 // =============================================================================
 // Helpers
+// =============================================================================
+//  #389 — config_overrides writer
+// =============================================================================
+
+/**
+ * Deep-merge dot-path values into a YAML or JSON config file. Preserves
+ * every sibling key the user (or the agent's installer) put there.
+ * Idempotent: writes only when the merged content differs.
+ */
+export function writeConfigOverrides(
+  path: string,
+  format: 'yaml' | 'json',
+  dotPathValues: Record<string, string | boolean | number | null>,
+): WriteOutcome {
+  const exists = existsSync(path)
+  let root: Record<string, unknown> = {}
+  if (exists) {
+    try {
+      const raw = readFileSync(path, 'utf-8')
+      const parsed =
+        format === 'yaml' ? parseYaml(raw) : JSON.parse(raw)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        root = parsed as Record<string, unknown>
+      }
+    } catch {
+      // Malformed input: start fresh. The user's broken file gets overwritten,
+      // which is the lesser evil vs leaving the agent stranded.
+    }
+  }
+  let replacedStale = false
+  for (const [dotPath, value] of Object.entries(dotPathValues)) {
+    const prev = readDotPath(root, dotPath)
+    if (prev !== undefined && prev !== value) replacedStale = true
+    writeDotPath(root, dotPath, value)
+  }
+  const serialized =
+    format === 'yaml'
+      ? stringifyYaml(root, { lineWidth: 120 })
+      : JSON.stringify(root, null, 2) + '\n'
+  atomicWrite0600(path, serialized)
+  return { created: !exists, replacedStale }
+}
+
 // =============================================================================
 
 function atomicWrite0600(path: string, content: string): void {
