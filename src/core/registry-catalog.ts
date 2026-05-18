@@ -54,6 +54,19 @@ export const AgentEntrySchema = z
     mcp_compatible: z.boolean(),
     supported_versions: z.string().min(1),
     min_foreman_version: z.string().min(1),
+    /** Optional background daemon (#349). When set, `foreman start` spawns
+     *  this command + tracks the PID in `<stateDir>/daemons/<id>.pid`;
+     *  shutdown sends SIGTERM. Null = the agent has no long-running
+     *  process (e.g. CLI-only agents like generic-mcp). */
+    daemon: z
+      .object({
+        command: z.string().min(1),
+        args: z.array(z.string()).optional(),
+        /** Human-readable label for the TUI Agents page status row. */
+        label: z.string().min(1).optional(),
+      })
+      .nullable()
+      .optional(),
     /** Some agents (Hermes notably) maintain their own MCP server registry
      *  CLI-side rather than reading the YAML/JSON config block we inject.
      *  When set, the wizard's install log surfaces the CLI command the user
