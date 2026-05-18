@@ -22,6 +22,10 @@ export interface AgentManifest {
   publicKey?: Buffer;
   /** LLM provider id for multi-provider agents. Single-provider agents leave NULL. */
   llmProvider?: string;
+  /** #408 / #412 — Variant id within `llmProvider` (e.g. "via-openrouter"
+   *  for Hermes/openai). NULL → defaults to the registry's
+   *  `provider_mapping[llmProvider].preferred` at resolve time. */
+  providerVariant?: string;
   /** Free-text describing what the agent is for; surfaces in audit + approval. */
   responsibilityNote?: string;
 }
@@ -36,6 +40,7 @@ export interface RegisteredAgent {
   lastSeenAt: number | null;
   metadata: Record<string, unknown> | null;
   llmProvider: string | null;
+  providerVariant: string | null;
   responsibilityNote: string | null;
 }
 
@@ -80,6 +85,7 @@ export class RegistryService {
         status: "active",
         metadata: manifest.metadata ? JSON.stringify(manifest.metadata) : null,
         llmProvider: manifest.llmProvider ?? null,
+        providerVariant: manifest.providerVariant ?? null,
         responsibilityNote: manifest.responsibilityNote ?? null,
       })
       .run();
@@ -240,6 +246,25 @@ export class RegistryService {
     });
   }
 
+  // #408 / #412 — Variant tracking. Set by the wizard (Phase 3) on
+  // first install and by `foreman provider switch` later. NULL means
+  // "use the registry's preferred variant for the active llmProvider".
+  setProviderVariant(agentId: string, variantId: string | null): void {
+    const existing = this.get(agentId);
+    if (!existing) throw new AgentNotFoundError(agentId);
+    this.db
+      .update(agents)
+      .set({ providerVariant: variantId })
+      .where(eq(agents.id, agentId))
+      .run();
+    this.bus.emit("agent:config-updated", {
+      agentId,
+      llmProvider: existing.llmProvider,
+      responsibilityNote: existing.responsibilityNote,
+      updatedAt: Date.now(),
+    });
+  }
+
   setResponsibilityNote(agentId: string, note: string | null): void {
     const existing = this.get(agentId);
     if (!existing) throw new AgentNotFoundError(agentId);
@@ -276,6 +301,7 @@ function toRegisteredAgent(row: typeof agents.$inferSelect): RegisteredAgent {
       ? (JSON.parse(row.metadata) as Record<string, unknown>)
       : null,
     llmProvider: row.llmProvider,
+    providerVariant: row.providerVariant,
     responsibilityNote: row.responsibilityNote,
   };
 }

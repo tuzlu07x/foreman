@@ -12,7 +12,10 @@ import { legacyHasInterestingFiles } from "../utils/migrate-config.js";
 import { EventBus, type ForemanEventMap } from "./event-bus.js";
 import { getBudgetStatus } from "./llm/budget.js";
 import { loadLlmConfig } from "./llm/config.js";
-import { loadActiveProviders } from "./registry-catalog.js";
+import {
+  loadActiveProviders,
+  loadActiveRegistry,
+} from "./registry-catalog.js";
 import { detectProviderByPrefix } from "./key-prefix-detect.js";
 import { loadVoiceConfig } from "./notification/voice-config.js";
 import { findDuplicateSlots } from "./secret-slot-migration.js";
@@ -692,6 +695,129 @@ export function checkAgentsRegistered(): CheckResult {
   }
 }
 
+// #408 / #412 — Validate that every registered agent with a
+// provider_mapping has its required secret (or OAuth credential) in
+// place. Surfaces ✓ / ⚠ / ✗ per-agent so the operator can see at a
+// glance which agents will start cleanly and which need attention.
+export function checkProviderMapping(): CheckResult {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.dbPath)) {
+    return {
+      name: "provider_mapping",
+      status: "ok",
+      message: "skipped (no database yet)",
+    };
+  }
+  try {
+    const db = getDb();
+    const registry = new RegistryService(db, new EventBus<ForemanEventMap>());
+    const allRows = registry.listAll();
+    const registryDoc = loadActiveRegistry();
+    const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
+    const lines: string[] = [];
+    const remediations: string[] = [];
+    let anyFail = false;
+    let anyWarn = false;
+    for (const row of allRows) {
+      const entry = registryDoc.doc.agents.find((a) => a.id === row.id);
+      if (!entry) continue;
+      // Skip agents without provider_mapping — older agents fall back
+      // to the legacy projection path; doctor doesn't try to validate
+      // them here (other checks cover their secrets).
+      if (!entry.provider_mapping) continue;
+      const provider = row.llmProvider;
+      if (!provider) {
+        // Pre-setup / fresh-install state — the agent is registered but
+        // the user hasn't completed the wizard's provider step yet.
+        // Silently skip so doctor doesn't surface a warning during a
+        // mid-setup `foreman doctor` run.
+        continue;
+      }
+      const providerMapping = entry.provider_mapping[provider];
+      if (!providerMapping) {
+        lines.push(
+          `  ✗ ${row.id} — provider '${provider}' has no mapping (available: ${Object.keys(entry.provider_mapping).join(", ")})`,
+        );
+        remediations.push(
+          `foreman provider switch ${row.id} <${Object.keys(entry.provider_mapping).join("|")}>`,
+        );
+        anyFail = true;
+        continue;
+      }
+      const variantId = row.providerVariant ?? providerMapping.preferred;
+      const variant = providerMapping.variants[variantId];
+      if (!variant) {
+        lines.push(
+          `  ✗ ${row.id} — variant '${variantId}' not found in '${provider}' mapping`,
+        );
+        anyFail = true;
+        continue;
+      }
+      if (variant.required_secret) {
+        const present = secretStore.exists(variant.required_secret);
+        if (present) {
+          lines.push(
+            `  ✓ ${row.id} — ${provider}/${variantId} (${variant.required_secret} present)`,
+          );
+        } else {
+          lines.push(
+            `  ✗ ${row.id} — ${provider}/${variantId} requires '${variant.required_secret}' (missing)`,
+          );
+          remediations.push(`foreman secrets add ${variant.required_secret}`);
+          anyFail = true;
+        }
+      } else if (variant.interactive_setup) {
+        // OAuth variants: we can't verify OAuth status from here without
+        // running `post_setup_verify`. Report as ⚠ — user should know
+        // they may still need to complete the flow.
+        lines.push(
+          `  ⚠ ${row.id} — ${provider}/${variantId} uses OAuth (run \`${variant.interactive_setup}\` if not done)`,
+        );
+        anyWarn = true;
+      } else {
+        lines.push(`  ✓ ${row.id} — ${provider}/${variantId} (no auth needed)`);
+      }
+    }
+    if (lines.length === 0) {
+      return {
+        name: "provider_mapping",
+        status: "ok",
+        message: "no agents with provider_mapping registered",
+      };
+    }
+    const message = lines.join("\n");
+    if (anyFail) {
+      return {
+        name: "provider_mapping",
+        status: "fail",
+        message,
+        remediation:
+          remediations.length > 0
+            ? `Try: ${[...new Set(remediations)].join(" · ")}`
+            : undefined,
+      };
+    }
+    if (anyWarn) {
+      return {
+        name: "provider_mapping",
+        status: "warn",
+        message,
+      };
+    }
+    return {
+      name: "provider_mapping",
+      status: "ok",
+      message,
+    };
+  } catch (err) {
+    return {
+      name: "provider_mapping",
+      status: "fail",
+      message: `provider_mapping check threw: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 export function checkMcpGateway(): CheckResult {
   try {
     const gateway = new MCPGateway(new EventBus<ForemanEventMap>());
@@ -846,6 +972,7 @@ const CHECKS: (() => CheckResult)[] = [
   checkSecretSlotDuplicates,
   checkVoiceConfig,
   checkAgentsRegistered,
+  checkProviderMapping,
   checkMcpGateway,
   checkLegacyHome,
   checkUpdate,
