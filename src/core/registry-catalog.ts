@@ -195,6 +195,31 @@ export const AgentEntrySchema = z
             if_provider: z.string().optional(),
           })
           .optional(),
+        /** #389 — Per-provider config overrides written to the agent's own
+         *  config file after install (Hermes config.yaml `model.provider`,
+         *  OpenClaw openclaw.json `agents.defaults.provider`, etc).
+         *  Solves the #350 root cause: Foreman projects env keys but the
+         *  agent's config defaults to a different provider, so the keys
+         *  are ignored. Each write filters by `if_provider` / `if_service`
+         *  against the user's per-agent choice; matching writes are
+         *  deep-merged into the existing file. */
+        config_overrides: z
+          .object({
+            path: z.string().min(1),
+            format: z.enum(["yaml", "json"]),
+            writes: z.array(
+              z.object({
+                if_provider: z.string().optional(),
+                if_service: z.string().optional(),
+                /** Dot-path → value pairs. Each path written via deep
+                 *  merge so siblings the user added survive. */
+                set: z.record(
+                  z.union([z.string(), z.boolean(), z.number(), z.null()]),
+                ),
+              }),
+            ),
+          })
+          .optional(),
         /** Shown on the wizard's Done screen — what command to run to start
          *  this agent. Single string OR an array of `{command, label}` for
          *  agents with multiple modes (e.g. Hermes chat vs gateway). */
