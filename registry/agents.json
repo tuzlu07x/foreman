@@ -10,7 +10,8 @@
         "npm": null,
         "brew": null,
         "script": "https://hermes-agent.nousresearch.com/install.sh",
-        "binary": "hermes"
+        "binary": "hermes",
+        "non_interactive_args": ["--skip-setup"]
       },
       "config_paths": ["~/.hermes/config.yaml", "~/.config/hermes/config.yaml"],
       "config_snippet": "registry/snippets/hermes.yaml",

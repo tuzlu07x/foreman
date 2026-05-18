@@ -25,6 +25,12 @@ export const AgentEntrySchema = z
         script: z.string().url().nullable().optional(),
         /** Override the binary name when it differs from the npm package basename. */
         binary: z.string().nullable().optional(),
+        /** Args appended to script-based installers via `bash -s -- <args>` so
+         *  the wizard runs non-interactively (#372). Hermes uses
+         *  `["--skip-setup"]` to suppress its post-install wizard, which
+         *  otherwise opens /dev/tty and deadlocks against Foreman's Ink TUI
+         *  in raw mode. Ignored for npm/brew installs. */
+        non_interactive_args: z.array(z.string()).optional(),
       })
       .strict(),
     config_paths: z.array(z.string()),
