@@ -1,0 +1,215 @@
+{
+  "version": 1,
+  "_comment": "Foreman's bundled Ollama model catalog (#367). runtime_ram_gb is the steady-state inference footprint — usually ~1.5× the download size to allow for KV cache + working buffers. Numbers are conservative; real usage depends on context length + concurrent requests. Refresh quarterly.",
+  "models": [
+    {
+      "name": "llama3.2:3b",
+      "family": "llama",
+      "params_b": 3,
+      "download_size_gb": 2.0,
+      "runtime_ram_gb": 3.2,
+      "context_length": 128000,
+      "license": "llama-3.2",
+      "description": "fast, quality OK",
+      "recommended": true
+    },
+    {
+      "name": "llama3.2:1b",
+      "family": "llama",
+      "params_b": 1,
+      "download_size_gb": 1.3,
+      "runtime_ram_gb": 2.2,
+      "context_length": 128000,
+      "license": "llama-3.2",
+      "description": "smallest viable, for constrained boxes",
+      "recommended": false
+    },
+    {
+      "name": "qwen2.5:3b",
+      "family": "qwen",
+      "params_b": 3,
+      "download_size_gb": 1.9,
+      "runtime_ram_gb": 3.1,
+      "context_length": 128000,
+      "license": "qwen-research",
+      "description": "fast, multilingual",
+      "recommended": false
+    },
+    {
+      "name": "qwen2.5:7b",
+      "family": "qwen",
+      "params_b": 7,
+      "download_size_gb": 4.7,
+      "runtime_ram_gb": 6.5,
+      "context_length": 128000,
+      "license": "qwen-research",
+      "description": "balanced, strong reasoning",
+      "recommended": false
+    },
+    {
+      "name": "mistral:7b",
+      "family": "mistral",
+      "params_b": 7,
+      "download_size_gb": 4.4,
+      "runtime_ram_gb": 6.2,
+      "context_length": 32000,
+      "license": "apache-2.0",
+      "description": "balanced classic, well-supported",
+      "recommended": false
+    },
+    {
+      "name": "llama3.1:8b",
+      "family": "llama",
+      "params_b": 8,
+      "download_size_gb": 4.9,
+      "runtime_ram_gb": 6.8,
+      "context_length": 128000,
+      "license": "llama-3.1",
+      "description": "balanced, broad capability",
+      "recommended": false
+    },
+    {
+      "name": "gemma2:2b",
+      "family": "gemma",
+      "params_b": 2,
+      "download_size_gb": 1.7,
+      "runtime_ram_gb": 2.8,
+      "context_length": 8192,
+      "license": "gemma",
+      "description": "tiny, surprisingly capable",
+      "recommended": false
+    },
+    {
+      "name": "gemma2:9b",
+      "family": "gemma",
+      "params_b": 9,
+      "download_size_gb": 5.5,
+      "runtime_ram_gb": 7.6,
+      "context_length": 8192,
+      "license": "gemma",
+      "description": "balanced, strong reasoning",
+      "recommended": false
+    },
+    {
+      "name": "gemma2:27b",
+      "family": "gemma",
+      "params_b": 27,
+      "download_size_gb": 16,
+      "runtime_ram_gb": 21,
+      "context_length": 8192,
+      "license": "gemma",
+      "description": "higher quality, slower",
+      "recommended": false
+    },
+    {
+      "name": "phi3.5:3.8b",
+      "family": "phi",
+      "params_b": 3.8,
+      "download_size_gb": 2.2,
+      "runtime_ram_gb": 3.6,
+      "context_length": 128000,
+      "license": "mit",
+      "description": "fast, Microsoft Phi 3.5",
+      "recommended": false
+    },
+    {
+      "name": "deepseek-r1:8b",
+      "family": "deepseek",
+      "params_b": 8,
+      "download_size_gb": 4.9,
+      "runtime_ram_gb": 6.8,
+      "context_length": 64000,
+      "license": "mit",
+      "description": "reasoning model, R1 distilled",
+      "recommended": false
+    },
+    {
+      "name": "deepseek-r1:14b",
+      "family": "deepseek",
+      "params_b": 14,
+      "download_size_gb": 9,
+      "runtime_ram_gb": 12,
+      "context_length": 64000,
+      "license": "mit",
+      "description": "stronger reasoning, slower",
+      "recommended": false
+    },
+    {
+      "name": "qwen2.5:14b",
+      "family": "qwen",
+      "params_b": 14,
+      "download_size_gb": 9,
+      "runtime_ram_gb": 12,
+      "context_length": 128000,
+      "license": "qwen-research",
+      "description": "higher quality, slower",
+      "recommended": false
+    },
+    {
+      "name": "qwen2.5:32b",
+      "family": "qwen",
+      "params_b": 32,
+      "download_size_gb": 19,
+      "runtime_ram_gb": 25,
+      "context_length": 128000,
+      "license": "qwen-research",
+      "description": "high quality, needs 32 GB+",
+      "recommended": false
+    },
+    {
+      "name": "llama3.1:70b",
+      "family": "llama",
+      "params_b": 70,
+      "download_size_gb": 39,
+      "runtime_ram_gb": 48,
+      "context_length": 128000,
+      "license": "llama-3.1",
+      "description": "frontier-class, needs serious RAM",
+      "recommended": false
+    },
+    {
+      "name": "qwen2.5:72b",
+      "family": "qwen",
+      "params_b": 72,
+      "download_size_gb": 41,
+      "runtime_ram_gb": 50,
+      "context_length": 128000,
+      "license": "qwen-research",
+      "description": "frontier-class, needs serious RAM",
+      "recommended": false
+    },
+    {
+      "name": "deepseek-r1:32b",
+      "family": "deepseek",
+      "params_b": 32,
+      "download_size_gb": 19,
+      "runtime_ram_gb": 25,
+      "context_length": 64000,
+      "license": "mit",
+      "description": "strong reasoning, needs 32 GB+",
+      "recommended": false
+    },
+    {
+      "name": "deepseek-r1:70b",
+      "family": "deepseek",
+      "params_b": 70,
+      "download_size_gb": 39,
+      "runtime_ram_gb": 48,
+      "context_length": 64000,
+      "license": "mit",
+      "description": "frontier reasoning, needs serious RAM",
+      "recommended": false
+    },
+    {
+      "name": "deepseek-r1:671b",
+      "family": "deepseek",
+      "params_b": 671,
+      "download_size_gb": 400,
+      "runtime_ram_gb": 480,
+      "context_length": 64000,
+      "license": "mit",
+      "description": "full DeepSeek R1, dedicated hardware",
+      "recommended": false
+    }
+  ]
+}
