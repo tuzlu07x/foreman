@@ -64,6 +64,7 @@ import { computeAgentLlmStatuses } from "./setup-wizard-agent-llm-gating.js";
 import { persistVoiceConfig } from "./setup-wizard-voice-persist.js";
 import { useLayout } from "./hooks.js";
 import { osc8 } from "./osc8.js";
+import { blockFallbackFrame } from "./components/mascot-frames.js";
 import { RegistryService } from "../core/registry.js";
 import { SecretStore } from "../core/secret-store.js";
 import type { ForemanDb } from "../db/client.js";
@@ -103,19 +104,12 @@ export function totalEstimatedMinutes(
   return steps.reduce((sum, s) => sum + s.estimateMinutes, 0);
 }
 
-// Tiny ASCII mascot for the Welcome screen — kept small enough to fit a
-// 22-col left column without dominating the layout. Rendered only on
-// terminals wide enough for the side-by-side layout (>= 80 cols).
-const WELCOME_MASCOT = [
-  "   ___[F]___   ",
-  "  /         \\  ",
-  " |__/ o o \\__| ",
-  "    | \\_/ |    ",
-  "   /|_____|\\   ",
-  "  / |==VST=| \\ ",
-  " /__|=====|__\\ ",
-  "    |_____|    ",
-];
+// Welcome-screen mascot. Reuses the boot-time block-character frame
+// (#365) so the wizard's first impression matches the post-boot
+// dashboard the user sees seconds later. Static — no morph/blink — to
+// keep the welcome screen quiet. Rendered only on terminals wide enough
+// for the side-by-side layout (>= 80 cols).
+const WELCOME_MASCOT = blockFallbackFrame(false).lines;
 
 export interface WizardServices {
   db: ForemanDb;
