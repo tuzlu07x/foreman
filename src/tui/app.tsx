@@ -111,6 +111,19 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     spentPct: number;
     daysUntilReset: number;
   } | null>(null);
+  // #378 — Daemon crash visibility. Without this, agents that fail to
+  // start (OpenClaw with invalid config, Hermes without keys) silently
+  // disappear; the user sees no daemon in `ps` and assumes Foreman never
+  // tried. We collect crash events from agent-daemon-manager and surface
+  // them as a top banner with the stderr first line + agent name.
+  const [daemonCrashes, setDaemonCrashes] = useState<
+    Array<{
+      agentId: string;
+      exitCode: number;
+      stderrHint: string;
+      crashedAt: number;
+    }>
+  >([]);
 
   useEffect(() => {
     const offUpdate = bus.on("update:available", (e) => {
@@ -131,11 +144,37 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
         daysUntilReset: e.daysUntilReset,
       });
     });
+    const offDaemonCrashed = bus.on("agent:daemon-crashed", (e) => {
+      // First non-empty line of stderr — keeps the banner narrow + actionable.
+      const stderrHint = (e.stderr ?? "")
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .find((l) => l.length > 0) ?? "";
+      setDaemonCrashes((prev) => {
+        // Dedupe by agentId — latest crash wins.
+        const filtered = prev.filter((c) => c.agentId !== e.agentId);
+        return [
+          ...filtered,
+          {
+            agentId: e.agentId,
+            exitCode: e.exitCode,
+            stderrHint,
+            crashedAt: e.crashedAt,
+          },
+        ];
+      });
+    });
+    const offDaemonStarted = bus.on("agent:daemon-started", (e) => {
+      // Clear any prior crash row for this agent — it's running again.
+      setDaemonCrashes((prev) => prev.filter((c) => c.agentId !== e.agentId));
+    });
     return () => {
       offUpdate();
       offAgentUpdate();
       offAgentOvershoot();
       offBudgetAlert();
+      offDaemonCrashed();
+      offDaemonStarted();
     };
   }, [bus]);
 
@@ -819,6 +858,11 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
         updateNotice={updateNotice}
         agentUpdates={agentUpdates}
         agentOvershoots={agentOvershoots}
+        daemonCrashes={daemonCrashes.map((c) => ({
+          agentId: c.agentId,
+          exitCode: c.exitCode,
+          stderrHint: c.stderrHint,
+        }))}
       />
       {budgetAlertNotice ? (
         <Box paddingX={1}>
