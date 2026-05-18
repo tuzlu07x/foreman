@@ -27,6 +27,84 @@
       "mcp_compatible": true,
       "supported_versions": ">=2.0.0",
       "min_foreman_version": "0.1.2",
+      "provider_mapping": {
+        "openai": {
+          "preferred": "via-openrouter",
+          "variants": {
+            "via-openrouter": {
+              "label": "OpenAI models via OpenRouter (recommended)",
+              "writes": {
+                "model.default": "openai/${model}",
+                "model.provider": "openrouter",
+                "model.base_url": ""
+              },
+              "env_vars": {
+                "OPENROUTER_API_KEY": "${secret:openrouter-key}"
+              },
+              "required_secret": "openrouter-key",
+              "secret_acquisition": {
+                "name": "OpenRouter API key",
+                "url": "https://openrouter.ai/keys",
+                "note": "Hermes routes OpenAI calls through OpenRouter — there's no native OpenAI provider in Hermes' enum. Get a key (free trial available), paste it here, and Hermes will use it to call OpenAI models."
+              }
+            },
+            "via-codex-oauth": {
+              "label": "OpenAI via Codex OAuth (uses your ChatGPT subscription)",
+              "writes": {
+                "model.default": "openai/${model}",
+                "model.provider": "codex"
+              },
+              "interactive_setup": "hermes model",
+              "post_setup_verify": "hermes doctor"
+            }
+          }
+        },
+        "anthropic": {
+          "preferred": "direct",
+          "variants": {
+            "direct": {
+              "label": "Anthropic direct API",
+              "writes": {
+                "model.default": "anthropic/${model}",
+                "model.provider": "anthropic",
+                "model.base_url": ""
+              },
+              "env_vars": {
+                "ANTHROPIC_API_KEY": "${secret:anthropic-key}"
+              },
+              "required_secret": "anthropic-key",
+              "secret_acquisition": {
+                "name": "Anthropic API key",
+                "url": "https://console.anthropic.com/",
+                "note": "Hermes has a native Anthropic provider — paste your Anthropic API key for direct access."
+              }
+            }
+          }
+        },
+        "gemini": {
+          "preferred": "direct",
+          "variants": {
+            "direct": {
+              "label": "Google AI Studio (Gemini direct)",
+              "writes": {
+                "model.default": "google/${model}",
+                "model.provider": "google",
+                "model.base_url": ""
+              },
+              "env_vars": {
+                "GOOGLE_API_KEY": "${secret:gemini-key}",
+                "GEMINI_API_KEY": "${secret:gemini-key}"
+              },
+              "required_secret": "gemini-key",
+              "secret_acquisition": {
+                "name": "Google AI Studio API key",
+                "url": "https://aistudio.google.com/app/apikey",
+                "note": "Hermes uses Google's native Gemini API via the openai-compatible endpoint."
+              }
+            }
+          }
+        }
+      },
       "daemon": {
         "command": "hermes",
         "args": ["gateway"],
@@ -123,6 +201,65 @@
       "mcp_format": "nested",
       "supported_versions": ">=1.4.0",
       "min_foreman_version": "0.1.2",
+      "provider_mapping": {
+        "openai": {
+          "preferred": "native",
+          "variants": {
+            "native": {
+              "label": "OpenAI direct API",
+              "writes": {
+                "agents.defaults.model.primary": "openai/${model}"
+              },
+              "env_vars": {
+                "OPENAI_API_KEY": "${secret:openai-key}"
+              },
+              "required_secret": "openai-key",
+              "secret_acquisition": {
+                "name": "OpenAI API key",
+                "url": "https://platform.openai.com/api-keys"
+              }
+            }
+          }
+        },
+        "anthropic": {
+          "preferred": "native",
+          "variants": {
+            "native": {
+              "label": "Anthropic direct API",
+              "writes": {
+                "agents.defaults.model.primary": "anthropic/${model}"
+              },
+              "env_vars": {
+                "ANTHROPIC_API_KEY": "${secret:anthropic-key}"
+              },
+              "required_secret": "anthropic-key",
+              "secret_acquisition": {
+                "name": "Anthropic API key",
+                "url": "https://console.anthropic.com/"
+              }
+            }
+          }
+        },
+        "gemini": {
+          "preferred": "native",
+          "variants": {
+            "native": {
+              "label": "Google Gemini direct API",
+              "writes": {
+                "agents.defaults.model.primary": "google/${model}"
+              },
+              "env_vars": {
+                "GEMINI_API_KEY": "${secret:gemini-key}"
+              },
+              "required_secret": "gemini-key",
+              "secret_acquisition": {
+                "name": "Google AI Studio API key",
+                "url": "https://aistudio.google.com/app/apikey"
+              }
+            }
+          }
+        }
+      },
       "daemon": {
         "command": "openclaw",
         "args": ["gateway"],
@@ -231,6 +368,50 @@
       "mcp_compatible": true,
       "supported_versions": ">=0.100.0",
       "min_foreman_version": "0.1.2",
+      "provider_mapping": {
+        "openai": {
+          "preferred": "oauth",
+          "variants": {
+            "oauth": {
+              "label": "ChatGPT account OAuth (recommended — covered by your subscription)",
+              "toml_writes": [
+                {
+                  "path": "~/.codex/config.toml",
+                  "key": "preferred_auth_method",
+                  "value": "chatgpt"
+                }
+              ],
+              "interactive_setup": "codex login",
+              "post_setup_verify": "codex auth status",
+              "required_secret": null,
+              "secret_acquisition": {
+                "name": "ChatGPT account login",
+                "note": "Codex OAuth uses your existing ChatGPT subscription — no API key needed. After Foreman setup completes, run `codex login` once in a separate terminal."
+              }
+            },
+            "api-key": {
+              "label": "OpenAI API key (pay-per-token)",
+              "toml_writes": [
+                {
+                  "path": "~/.codex/config.toml",
+                  "key": "preferred_auth_method",
+                  "value": "apikey"
+                }
+              ],
+              "auth_json_writes": {
+                "path": "~/.codex/auth.json",
+                "key": "OPENAI_API_KEY",
+                "value": "${secret:openai-key}"
+              },
+              "required_secret": "openai-key",
+              "secret_acquisition": {
+                "name": "OpenAI API key",
+                "url": "https://platform.openai.com/api-keys"
+              }
+            }
+          }
+        }
+      },
       "secret_projection": {
         "toml_writes": [
           { "path": "~/.codex/config.toml", "key": "preferred_auth_method", "value": "apikey" }
@@ -266,6 +447,34 @@
       "mcp_compatible": true,
       "supported_versions": ">=0.5.0",
       "min_foreman_version": "0.1.2",
+      "provider_mapping": {
+        "anthropic": {
+          "preferred": "direct",
+          "variants": {
+            "direct": {
+              "label": "Anthropic direct API",
+              "env_vars": {
+                "ANTHROPIC_API_KEY": "${secret:anthropic-key}"
+              },
+              "required_secret": "anthropic-key",
+              "secret_acquisition": {
+                "name": "Anthropic API key",
+                "url": "https://console.anthropic.com/"
+              }
+            },
+            "oauth": {
+              "label": "Claude Pro/Max subscription (OAuth)",
+              "interactive_setup": "claude auth login",
+              "post_setup_verify": "claude auth status",
+              "required_secret": null,
+              "secret_acquisition": {
+                "name": "Claude Pro/Max account",
+                "note": "Claude Code uses your existing Claude Pro/Max subscription — no API key needed. After Foreman setup completes, run `claude auth login` once in a separate terminal."
+              }
+            }
+          }
+        }
+      },
       "secret_projection": {
         "json_env": {
           "path": "~/.claude/settings.json",
@@ -296,6 +505,83 @@
       "mcp_compatible": true,
       "supported_versions": ">=0.3.0",
       "min_foreman_version": "0.1.2",
+      "provider_mapping": {
+        "openai": {
+          "preferred": "direct",
+          "variants": {
+            "direct": {
+              "label": "OpenAI direct API",
+              "toml_writes": [
+                {
+                  "path": "~/.zeroclaw/config.toml",
+                  "key": "default_provider",
+                  "value": "openai"
+                },
+                {
+                  "path": "~/.zeroclaw/config.toml",
+                  "key": "api_key",
+                  "value": "${secret:openai-key}"
+                }
+              ],
+              "required_secret": "openai-key",
+              "secret_acquisition": {
+                "name": "OpenAI API key",
+                "url": "https://platform.openai.com/api-keys"
+              }
+            }
+          }
+        },
+        "anthropic": {
+          "preferred": "direct",
+          "variants": {
+            "direct": {
+              "label": "Anthropic direct API",
+              "toml_writes": [
+                {
+                  "path": "~/.zeroclaw/config.toml",
+                  "key": "default_provider",
+                  "value": "anthropic"
+                },
+                {
+                  "path": "~/.zeroclaw/config.toml",
+                  "key": "api_key",
+                  "value": "${secret:anthropic-key}"
+                }
+              ],
+              "required_secret": "anthropic-key",
+              "secret_acquisition": {
+                "name": "Anthropic API key",
+                "url": "https://console.anthropic.com/"
+              }
+            }
+          }
+        },
+        "gemini": {
+          "preferred": "direct",
+          "variants": {
+            "direct": {
+              "label": "Google Gemini direct API",
+              "toml_writes": [
+                {
+                  "path": "~/.zeroclaw/config.toml",
+                  "key": "default_provider",
+                  "value": "gemini"
+                },
+                {
+                  "path": "~/.zeroclaw/config.toml",
+                  "key": "api_key",
+                  "value": "${secret:gemini-key}"
+                }
+              ],
+              "required_secret": "gemini-key",
+              "secret_acquisition": {
+                "name": "Google AI Studio API key",
+                "url": "https://aistudio.google.com/app/apikey"
+              }
+            }
+          }
+        }
+      },
       "secret_projection": {
         "toml_writes": [
           { "path": "~/.zeroclaw/config.toml", "key": "default_provider", "value": "anthropic" },
