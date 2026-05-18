@@ -153,6 +153,32 @@ export interface ForemanEventMap {
     windowEnd: number;
     daysUntilReset: number;
   };
+  /** Agent daemon lifecycle (#349). Emitted by AgentDaemonManager so the TUI
+   *  Agents page can render ● running / ✗ crashed and #309's health daemon
+   *  can react to unexpected exits. */
+  "agent:daemon-started": {
+    agentId: string;
+    pid: number;
+    command: string;
+    startedAt: number;
+  };
+  "agent:daemon-stopped": {
+    agentId: string;
+    pid: number;
+    reason: "user" | "shutdown";
+    stoppedAt: number;
+  };
+  "agent:daemon-crashed": {
+    agentId: string;
+    pid: number;
+    exitCode: number;
+    stderr: string;
+    crashedAt: number;
+  };
+  "agent:daemon-skipped": {
+    agentId: string;
+    reason: string;
+  };
 }
 
 export type ForemanEvent = keyof ForemanEventMap;

@@ -8,6 +8,7 @@ import {
   ReadlineApprovalService,
   type ApprovalService,
 } from "../core/approval.js";
+import { AgentDaemonManager } from "../core/agent-daemon-manager.js";
 import { AuditLogger } from "../core/audit.js";
 import { bus } from "../core/event-bus.js";
 import { MediatorService } from "../core/mediator.js";
@@ -117,6 +118,51 @@ export function startForeman(
     : new ReadlineApprovalService({ bus });
   const policy = new PolicyEngine(db, bus);
   if (existsSync(paths.policyPath)) policy.loadFromYaml(paths.policyPath);
+  // #349 — auto-launch every registered agent that declares a `daemon` block
+  // in registry/agents.json (Hermes gateway, OpenClaw daemon, etc). Interactive
+  // agents (Codex, Claude Code) have `daemon: null` and are skipped silently;
+  // the TUI surfaces them as "interactive — launch manually".
+  const daemonManager = new AgentDaemonManager({
+    paths,
+    registry,
+    onLifecycle: (event) => {
+      const now = Date.now();
+      switch (event.kind) {
+        case "started":
+          bus.emit("agent:daemon-started", {
+            agentId: event.agentId,
+            pid: event.pid,
+            command: event.command,
+            startedAt: now,
+          });
+          break;
+        case "stopped":
+          bus.emit("agent:daemon-stopped", {
+            agentId: event.agentId,
+            pid: event.pid,
+            reason: event.reason,
+            stoppedAt: now,
+          });
+          break;
+        case "crashed":
+          bus.emit("agent:daemon-crashed", {
+            agentId: event.agentId,
+            pid: event.pid,
+            exitCode: event.exitCode,
+            stderr: event.stderr,
+            crashedAt: now,
+          });
+          break;
+        case "skipped":
+          bus.emit("agent:daemon-skipped", {
+            agentId: event.agentId,
+            reason: event.reason,
+          });
+          break;
+      }
+    },
+  });
+  daemonManager.startAll();
   const risk = new RiskScorer(db, undefined, {
     bucketOverrides: () => policy.getBucketOverrides(),
     // Wire the responsibility-violation rule (#300). Both lookups close
@@ -318,6 +364,11 @@ export function startForeman(
         /* best-effort cleanup */
       });
     }
+    // SIGTERM every tracked agent daemon, wait up to 5s, then SIGKILL.
+    // Awaited so foreman doesn't exit with stranded children.
+    await daemonManager.stopAll().catch(() => {
+      /* best-effort cleanup */
+    });
     audit.dispose();
     closeDb();
   };
