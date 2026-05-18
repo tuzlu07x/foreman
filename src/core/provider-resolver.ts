@@ -16,7 +16,7 @@
 // resolver — Foreman's code only handles the mechanic; the data lives in
 // the registry, so adding a new agent is a registry-only operation.
 
-import type { AgentEntry } from "./registry-catalog.js";
+import { loadActiveProviders, type AgentEntry } from "./registry-catalog.js";
 
 export interface SecretAcquisition {
   name: string;
@@ -254,16 +254,22 @@ function substituteTemplate(
 // Default model picks per Foreman provider
 // =============================================================================
 //
-// Used by the projector when the wizard hasn't surfaced a per-agent model
-// choice yet (Phase 2 hardcoded fallback). Phase 3 wizard will let the user
-// pick, and Phase 5 will hook the live-model-picker (PR #405) into this.
-const DEFAULT_MODEL_PER_PROVIDER: Record<string, string> = {
-  openai: "gpt-4o-mini",
-  anthropic: "claude-haiku-4-5-20251001",
-  gemini: "gemini-2.0-flash",
-  ollama: "llama3.2",
-};
+// #419 — Reads from `registry/providers.json` so new flagship model versions
+// (gpt-5, claude-opus-5, gemini-3) can ship as a registry-only edit. No
+// TypeScript release required to update defaults.
+//
+// Falls back to "default" string only when the provider doesn't declare
+// `default_model` (e.g. custom OpenAI-compatible endpoints). Caller path
+// must still handle this — the projector / live model picker (PR #405)
+// override with the user's actual pick at runtime.
 
 export function deriveDefaultModelId(foremanProvider: string): string {
-  return DEFAULT_MODEL_PER_PROVIDER[foremanProvider] ?? "default";
+  try {
+    const { doc } = loadActiveProviders();
+    const entry = doc.providers.find((p) => p.id === foremanProvider);
+    if (entry?.default_model) return entry.default_model;
+  } catch {
+    /* registry load errors fall through to the safe sentinel */
+  }
+  return "default";
 }

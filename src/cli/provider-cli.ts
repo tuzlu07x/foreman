@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { bus } from "../core/event-bus.js";
 import {
+  deriveDefaultModelId,
   describeResolveError,
   resolveAgentProviderConfig,
 } from "../core/provider-resolver.js";
@@ -264,17 +265,9 @@ const providerSwitchCommand = new Command("switch")
 // =============================================================================
 
 function defaultModelFor(foremanProvider: string): string {
-  // Mirror `deriveDefaultModelId` from the resolver — Phase 4 doesn't
-  // need a model id for the validation flow (variant + secret matter,
-  // model id is just template substitution). Kept here as a stable
-  // string so any provider passes the substitution stage cleanly.
-  const map: Record<string, string> = {
-    openai: "gpt-4o-mini",
-    anthropic: "claude-haiku-4-5-20251001",
-    gemini: "gemini-2.0-flash",
-    ollama: "llama3.2",
-  };
-  return map[foremanProvider] ?? "default";
+  // #419 — Single-source data lookup via the resolver's data-driven
+  // helper (registry/providers.json default_model field).
+  return deriveDefaultModelId(foremanProvider);
 }
 
 // =============================================================================
