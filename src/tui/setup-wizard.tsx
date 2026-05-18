@@ -1188,14 +1188,37 @@ export function SetupWizard({
       const availableCompat = compat.filter((id) =>
         llmChoiceConfigured.has(id),
       );
-      const options = availableCompat.map((id) => {
+      // #348 — Order options by USER PREFERENCE (the order in which they
+      // saved providers in Step 1), not by the agent's static llm_compat
+      // array. Otherwise every multi-provider agent defaults to whatever
+      // the catalog lists first (Anthropic for Hermes) regardless of what
+      // the user actually configured first. Round 3 hit this: user only
+      // had openai creds but Hermes defaulted to anthropic → 401.
+      const userPreferenceOrder = providersSaved
+        .map((name) => providerCatalog.find((p) => p.secret_name === name)?.id)
+        .filter((id): id is string => typeof id === "string");
+      const orderedAvailable = [...availableCompat].sort((a, b) => {
+        const aIdx = userPreferenceOrder.indexOf(a);
+        const bIdx = userPreferenceOrder.indexOf(b);
+        if (aIdx === -1 && bIdx === -1) return 0;
+        if (aIdx === -1) return 1;
+        if (bIdx === -1) return -1;
+        return aIdx - bIdx;
+      });
+      // No trailing ✓ on labels — the Select component renders its own
+      // selection indicator. Two checkmarks made round-3 users think the
+      // current default "had more configured" and was unswitchable.
+      const options = orderedAvailable.map((id) => {
         const provider = providerCatalog.find((p) => p.id === id);
         return {
           value: id,
-          label: provider ? `${provider.name} ✓` : `${id} ✓`,
+          label: provider ? provider.name : id,
         };
       });
-      const defaultChoice = availableCompat[0] ?? compat[0];
+      const defaultChoice = orderedAvailable[0] ?? compat[0];
+      const currentChoice = llmDraft ?? defaultChoice;
+      const currentProvider = providerCatalog.find((p) => p.id === currentChoice);
+      const currentLabel = currentProvider?.name ?? currentChoice;
       return (
         <Box flexDirection="column" gap={1} paddingY={1}>
           <WizardProgress
@@ -1205,16 +1228,23 @@ export function SetupWizard({
             phase={`${agent.name} ${progress}`}
           />
           <Text color={theme.fg.muted}>
-            Pick the LLM provider this agent should use. Only providers you
+            Pick the LLM provider {agent.name} should use. Only providers you
             configured in Step 1 are shown.
+          </Text>
+          <Text>
+            Currently selected:{" "}
+            <Text bold color={theme.accent.primary}>
+              {currentLabel}
+            </Text>
           </Text>
           <Select
             options={options}
-            defaultValue={llmDraft ?? defaultChoice}
+            defaultValue={currentChoice}
             onChange={(value) => setLlmDraft(value)}
           />
           <Text color={theme.fg.muted}>
-            [↑↓] move · [Enter] confirm · [Esc] back to selection
+            Use [↑↓] to move · [Enter] confirms the highlighted provider · [Esc]
+            goes back. (Space does nothing — this is single-select.)
           </Text>
         </Box>
       );
