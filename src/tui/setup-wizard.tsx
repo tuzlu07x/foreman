@@ -1945,11 +1945,16 @@ export async function runInstallStep(
     summary.removed.push(id);
     log(`  ✓ unregistered "${id}"`);
     if (entry) {
-      const cmd = preferredUninstallCommand(entry.install);
+      // #357 — pick uninstall command by *detected* source, not registry
+      // hints, so brew-installed binaries (OpenClaw at /opt/homebrew/bin/)
+      // actually get `brew uninstall` instead of a silent npm no-op.
+      const detection = detectInstall(entry.install);
+      const cmd = preferredUninstallCommand(entry.install, detection);
       if (cmd) {
         log(`  uninstalling (${cmd})…`);
         const result = await runUninstall({
           install: entry.install,
+          detection,
           onLine: (l) => log(`  ${l}`),
         });
         if (result.ok) log(`  ✓ ${entry.name} uninstalled`);

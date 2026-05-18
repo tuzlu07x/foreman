@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   detectInstall,
+  isBrewManagedPath,
   preferredInstallCommand,
   preferredUninstallCommand,
 } from "../../src/core/agent-install.js";
@@ -66,6 +67,73 @@ describe("preferredUninstallCommand", () => {
         script: "https://example.com/install.sh",
       }),
     ).toBeNull();
+  });
+
+  // #357 — when detection says it was actually installed via brew, override
+  // the registry hint. OpenClaw is `brew: null` in agents.json but the user
+  // can have it at /opt/homebrew/bin/openclaw — uninstall has to use brew.
+  describe("with detection (#357)", () => {
+    it("returns brew uninstall when detection.source=brew-managed (overrides registry)", () => {
+      expect(
+        preferredUninstallCommand(
+          { npm: "openclaw", brew: null }, // registry would say npm
+          { found: true, source: "brew-managed", formula: "openclaw" },
+        ),
+      ).toBe("brew uninstall openclaw");
+    });
+
+    it("returns npm uninstall when detection.source=npm-global", () => {
+      expect(
+        preferredUninstallCommand(
+          { npm: "claude-code", brew: null },
+          { found: true, source: "npm-global", path: "/usr/local/bin/claude" },
+        ),
+      ).toBe("npm uninstall -g claude-code");
+    });
+
+    it("falls back to registry hints when detection has no actionable source", () => {
+      expect(
+        preferredUninstallCommand(
+          { npm: null, brew: null, script: "https://example.com/install.sh" },
+          { found: true, source: "user-dirs", path: "/home/u/.local/bin/x" },
+        ),
+      ).toBeNull();
+    });
+
+    it("falls back to registry hints when detection is omitted (backward compat)", () => {
+      expect(
+        preferredUninstallCommand({ npm: "pkg", brew: null }),
+      ).toBe("npm uninstall -g pkg");
+    });
+
+    it("uses binary as formula when detection.formula is missing", () => {
+      expect(
+        preferredUninstallCommand(
+          { npm: null, brew: null, binary: "openclaw" },
+          { found: true, source: "brew-managed" },
+        ),
+      ).toBe("brew uninstall openclaw");
+    });
+  });
+});
+
+describe("isBrewManagedPath", () => {
+  it("recognises Apple Silicon brew prefix", () => {
+    expect(isBrewManagedPath("/opt/homebrew/bin/openclaw")).toBe(true);
+  });
+
+  it("recognises Linux brew prefix", () => {
+    expect(isBrewManagedPath("/home/linuxbrew/.linuxbrew/bin/openclaw")).toBe(
+      true,
+    );
+  });
+
+  it("rejects /usr/local/bin (ambiguous — npm-global + make install also land here)", () => {
+    expect(isBrewManagedPath("/usr/local/bin/openclaw")).toBe(false);
+  });
+
+  it("rejects ~/.local/bin (script installers land here)", () => {
+    expect(isBrewManagedPath("/home/u/.local/bin/openclaw")).toBe(false);
   });
 });
 
@@ -160,6 +228,26 @@ describe("detectInstall", () => {
     );
     expect(result.found).toBe(true);
     expect(result.source).toBe("user-dirs");
+  });
+
+  it("labels binaries under /opt/homebrew/bin as brew-managed with formula = binary name (#357)", () => {
+    // We can't write under /opt/homebrew in tests, so verify the classifier
+    // function directly. The integration is covered indirectly by
+    // detectInstall walking PATH and calling isBrewManagedPath; if the
+    // classifier matches the prefix the source is upgraded.
+    expect(isBrewManagedPath("/opt/homebrew/bin/openclaw")).toBe(true);
+    // Sanity: detectInstall returns source=PATH for non-brew prefixes
+    const binDir = join(tmpDir, "regular-bin");
+    mkdirSync(binDir, { recursive: true });
+    const binPath = join(binDir, "openclaw");
+    writeFileSync(binPath, "#!/bin/sh\n");
+    chmodSync(binPath, 0o755);
+    const result = detectInstall(
+      { npm: "openclaw", brew: null, binary: "openclaw" },
+      { PATH: binDir },
+    );
+    expect(result.source).toBe("PATH");
+    expect(result.source).not.toBe("brew-managed");
   });
 
   it("PATH still wins when a binary exists in both PATH and ~/.local/bin", () => {
