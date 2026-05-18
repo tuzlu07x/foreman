@@ -5,6 +5,7 @@ import { getForemanPaths } from "../utils/config.js";
 export const STEPS = [
   "welcome",
   "providers",
+  "foreman-llm",
   "agents",
   "services",
   "install",
