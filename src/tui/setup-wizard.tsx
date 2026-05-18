@@ -1,4 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { homedir } from "node:os";
 import { Box, Text, useApp, useInput } from "ink";
 import { parse as parseYaml } from "yaml";
 import {
@@ -41,6 +43,7 @@ import {
   loadActiveProviders,
   loadActiveRegistry,
   loadActiveServices,
+  resolveBundledTemplatePath,
   type AgentEntry,
   type ProviderEntry,
   type ServiceEntry,
@@ -2763,10 +2766,34 @@ export async function runInstallStep(
     const requiresExisting = entry.install.requires_existing_config === true;
     if (configPath) {
       try {
-        // #377 — Don't seed a stripped-down config from scratch for agents
-        // (OpenClaw) whose binary refuses minimal JSON. Tell the user to
-        // initialise the agent's own config first.
-        if (requiresExisting && !existsSync(configPath)) {
+        // #385 — Seed bundled template first when the agent's config file
+        // doesn't exist (OpenClaw). Template ships under
+        // registry/templates/<agent>.json; Foreman writes it expanded so
+        // the MCP/secret overlay lands on a schema-valid base. Replaces
+        // the #377/#378 "skip + manual repush" workaround.
+        const templatePath = entry.install.config_template_path
+          ? resolveBundledTemplatePath(entry.install.config_template_path)
+          : null;
+        let seeded = false;
+        if (!existsSync(configPath) && templatePath) {
+          try {
+            const raw = readFileSync(templatePath, "utf-8");
+            const expanded = raw.replace(/~\//g, `${homedir()}/`);
+            mkdirSync(dirname(configPath), { recursive: true });
+            writeFileSync(configPath, expanded, { mode: 0o600 });
+            seeded = true;
+            log(
+              `  ✓ seeded ${entry.name} config from bundled template → ${configPath}`,
+            );
+          } catch (seedErr) {
+            log(
+              `  ⚠ template seed failed: ${seedErr instanceof Error ? seedErr.message : String(seedErr)}`,
+            );
+          }
+        }
+        // #377 fallback — when no template is bundled AND the registry
+        // flags requires_existing_config, leave the file alone and hint.
+        if (!seeded && requiresExisting && !existsSync(configPath)) {
           log(
             `  ⚠ ${entry.name} config not initialised at ${configPath}`,
           );

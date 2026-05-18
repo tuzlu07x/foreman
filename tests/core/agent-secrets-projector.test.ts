@@ -537,6 +537,78 @@ describe('projectSecretsForAgent — wiring', () => {
       expect(existsSync(path)).toBe(true)
     })
 
+    // #385 — When config_template_path is set + file missing, projector
+    // seeds the bundled template before overlaying keys. Replaces the
+    // manual "openclaw onboard → repush" dance.
+    it('seeds from bundled template when file missing + template path set (#385)', () => {
+      // Use the real bundled openclaw.json template — verifies the
+      // resolveBundledTemplatePath path actually resolves in a test env.
+      const targetPath = `${tmp}/openclaw.json`
+      const entry = fakeEntry({
+        install: {
+          npm: null,
+          brew: null,
+          binary: 'openclaw',
+          // requires_existing_config NOT set — template eliminates the need
+          config_template_path: 'registry/templates/openclaw.json',
+        },
+        secret_projection: {
+          json_env: { path: targetPath, section: 'env' },
+          env_vars: {
+            OPENAI_API_KEY: { from_secret: 'openai-key', if_provider: 'openai' },
+          },
+        },
+      })
+      const result = projectSecretsForAgent(entry, {
+        providersSelected: ['openai'],
+        servicesSelected: [],
+        secretStore: store,
+        home: tmp,
+      })
+      expect(existsSync(targetPath)).toBe(true)
+      expect(result.files).toHaveLength(1)
+      const parsed = JSON.parse(readFileSync(targetPath, 'utf-8'))
+      // Template's `agents.defaults.workspace` should be preserved
+      expect(parsed.agents.defaults.workspace).toContain('.openclaw/workspace')
+      // ~/ in template gets expanded to the home arg's path
+      expect(parsed.agents.defaults.workspace.startsWith(tmp)).toBe(true)
+      // Foreman overlays env section
+      expect(parsed.env.OPENAI_API_KEY).toBe('sk-oa-1')
+      // Template's other top-level fields stay intact
+      expect(parsed.mcp.enabled).toBe(true)
+      expect(parsed.channels).toEqual({})
+    })
+
+    it('skips seeding when template path is set but template is missing', () => {
+      const targetPath = `${tmp}/missing-template.json`
+      const entry = fakeEntry({
+        install: {
+          npm: null,
+          brew: null,
+          binary: 'missing-agent',
+          requires_existing_config: true,
+          config_template_path: 'registry/templates/nonexistent.json',
+        },
+        secret_projection: {
+          json_env: { path: targetPath, section: 'env' },
+          env_vars: {
+            OPENAI_API_KEY: { from_secret: 'openai-key', if_provider: 'openai' },
+          },
+        },
+      })
+      const result = projectSecretsForAgent(entry, {
+        providersSelected: ['openai'],
+        servicesSelected: [],
+        secretStore: store,
+        home: tmp,
+      })
+      // Template missing → seed fails → requires_existing_config kicks in → skip
+      expect(existsSync(targetPath)).toBe(false)
+      expect(result.files).toHaveLength(0)
+      expect(result.skipped).toHaveLength(1)
+      expect(result.skipped[0]?.reason).toMatch(/doesn't exist/)
+    })
+
     it('env_file (dotenv) is always created regardless of flag — agents that need this rely on it', () => {
       // dotenv is just key=value; no schema risk. Hermes' .env etc.
       const path = `${tmp}/.env`

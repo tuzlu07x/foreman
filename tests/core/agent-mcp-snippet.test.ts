@@ -52,4 +52,34 @@ describe("buildMcpSnippet", () => {
     ).mcpServers;
     expect(servers.foreman.args).toContain("custom-name-123");
   });
+
+  // #385 — explicit mcp_format overrides the (mcp_compatible ? flat : nested)
+  // heuristic. OpenClaw is mcp_compatible:true but needs the nested form.
+  it("mcp_format=nested produces {mcp:{enabled,servers}} even when mcp_compatible:true", () => {
+    const snippet = buildMcpSnippet(
+      "openclaw",
+      makeEntry({ mcp_compatible: true, mcp_format: "nested" }),
+    );
+    const block = snippet.json as {
+      mcp?: { enabled?: boolean; servers?: Record<string, unknown> };
+      mcpServers?: unknown;
+    };
+    expect(block.mcp?.enabled).toBe(true);
+    expect(block.mcp?.servers).toHaveProperty("foreman");
+    // Flat key should NOT be present when nested is explicit
+    expect(block.mcpServers).toBeUndefined();
+  });
+
+  it("mcp_format=flat produces {<topKey>:{foreman}} even when mcp_compatible:false", () => {
+    const snippet = buildMcpSnippet(
+      "weird",
+      makeEntry({ mcp_compatible: false, mcp_format: "flat" }),
+    );
+    const block = snippet.json as {
+      mcpServers?: { foreman?: unknown };
+      mcp?: unknown;
+    };
+    expect(block.mcpServers?.foreman).toBeDefined();
+    expect(block.mcp).toBeUndefined();
+  });
 });

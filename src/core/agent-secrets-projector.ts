@@ -8,7 +8,10 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
-import type { AgentEntry } from './registry-catalog.js'
+import {
+  resolveBundledTemplatePath,
+  type AgentEntry,
+} from './registry-catalog.js'
 import type { SecretStore } from './secret-store.js'
 
 // =============================================================================
@@ -79,7 +82,30 @@ export function projectSecretsForAgent(
   // registry flags this and the target doesn't yet exist, skip the JSON
   // writes entirely so we don't create a stripped-down file that the
   // agent's binary then rejects with "invalid config".
+  // #385 — When `install.config_template_path` is set AND the target is
+  // missing, seed it from the bundled template first so the rest of the
+  // projection has a schema-valid file to overlay onto. Eliminates the
+  // need for the user to run `<agent> onboard` + `foreman secrets repush`.
   const requiresExisting = entry.install.requires_existing_config === true
+  const seedTemplateIfMissing = (path: string): boolean => {
+    if (existsSync(path)) return true
+    if (!entry.install.config_template_path) return false
+    const templatePath = resolveBundledTemplatePath(
+      entry.install.config_template_path,
+    )
+    if (!templatePath) return false
+    try {
+      const contents = readFileSync(templatePath, 'utf-8')
+      // Expand `~/` in the template body itself so workspace paths are
+      // user-specific. Template should keep `~/` literal; we substitute here.
+      const expanded = contents.replace(/~\//g, `${home}/`)
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, expanded, { mode: 0o600 })
+      return true
+    } catch {
+      return false
+    }
+  }
 
   // -----------------------------------------------------------------------
   // 1) env_vars → dotenv OR json env block
@@ -103,7 +129,10 @@ export function projectSecretsForAgent(
   }
   if (projection.json_env && Object.keys(envPairs).length > 0) {
     const path = expand(projection.json_env.path)
-    if (requiresExisting && !existsSync(path)) {
+    // #385 — Try to seed from bundled template first. seedTemplateIfMissing
+    // returns true if the path exists OR was successfully seeded.
+    const haveTarget = seedTemplateIfMissing(path)
+    if (!haveTarget && requiresExisting) {
       for (const secret of envSecretNames) {
         result.skipped.push({
           secret,
@@ -129,7 +158,9 @@ export function projectSecretsForAgent(
       pairs.push({ dotPath: spec.path, value, secret: spec.from_secret })
     }
     if (pairs.length > 0) {
-      if (requiresExisting && !existsSync(path)) {
+      // #385 — Same template-seed path as json_env.
+      const haveTarget = seedTemplateIfMissing(path)
+      if (!haveTarget && requiresExisting) {
         for (const p of pairs) {
           result.skipped.push({
             secret: p.secret,
