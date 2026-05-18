@@ -217,4 +217,138 @@ describe("ApprovalBridge", () => {
 
     expect(requests).toHaveLength(1);
   });
+
+  // #406 — Agent-routed approval submission. Hermes / OpenClaw call the
+  // `submit_approval` MCP tool when the user types `/approve <id>` in
+  // their chat; mcp-stdio forwards to this method.
+  describe("submitFromAgent (#406)", () => {
+    it("validates the approval row exists + is pending, then emits the bus event", async () => {
+      const service = new DbApprovalService(db, {
+        bus,
+        timeoutMs: 5000,
+        pollIntervalMs: 25,
+      });
+      db.insert(pendingApprovals)
+        .values({
+          requestId: "agent-route-1",
+          sourceAgent: "claude-code",
+          args: "{}",
+          riskScore: 50,
+          riskReasons: "[]",
+          status: "pending",
+          requestedAt: Date.now(),
+        })
+        .run();
+      const events: ForemanEventMap["approval:resolved"][] = [];
+      bus.on("approval:resolved", (e) => events.push(e));
+      const out = await service.submitFromAgent({
+        approvalId: "agent-route-1",
+        decision: "allow",
+        sourceAgent: "hermes",
+      });
+      expect(out.ok).toBe(true);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        requestId: "agent-route-1",
+        decision: "allowed",
+        resolvedBy: "agent",
+        via: "agent_mcp",
+        routedBy: "hermes",
+      });
+    });
+
+    it("emits remember when the caller asked for it", async () => {
+      const service = new DbApprovalService(db, {
+        bus,
+        timeoutMs: 5000,
+        pollIntervalMs: 25,
+      });
+      db.insert(pendingApprovals)
+        .values({
+          requestId: "agent-route-remember",
+          sourceAgent: "claude-code",
+          args: "{}",
+          riskScore: 50,
+          riskReasons: "[]",
+          status: "pending",
+          requestedAt: Date.now(),
+        })
+        .run();
+      const events: ForemanEventMap["approval:resolved"][] = [];
+      bus.on("approval:resolved", (e) => events.push(e));
+      await service.submitFromAgent({
+        approvalId: "agent-route-remember",
+        decision: "deny",
+        remember: true,
+        sourceAgent: "openclaw",
+      });
+      expect(events[0]).toMatchObject({
+        decision: "denied",
+        remember: "deny",
+        routedBy: "openclaw",
+      });
+    });
+
+    it("returns ok=false with a clear error when the approval id doesn't exist", async () => {
+      const service = new DbApprovalService(db, { bus });
+      const out = await service.submitFromAgent({
+        approvalId: "never-existed",
+        decision: "allow",
+        sourceAgent: "hermes",
+      });
+      expect(out.ok).toBe(false);
+      expect(out.error).toMatch(/not found/);
+    });
+
+    it("returns ok=false when the approval is already resolved", async () => {
+      const service = new DbApprovalService(db, { bus });
+      db.insert(pendingApprovals)
+        .values({
+          requestId: "already-done",
+          sourceAgent: "claude-code",
+          args: "{}",
+          riskScore: 50,
+          riskReasons: "[]",
+          status: "resolved",
+          decision: "denied",
+          resolvedBy: "timeout",
+          requestedAt: Date.now() - 60_000,
+          resolvedAt: Date.now() - 1000,
+        })
+        .run();
+      const out = await service.submitFromAgent({
+        approvalId: "already-done",
+        decision: "allow",
+        sourceAgent: "hermes",
+      });
+      expect(out.ok).toBe(false);
+      expect(out.error).toMatch(/already/);
+    });
+
+    it("end-to-end: agent submission unblocks an in-flight request() call", async () => {
+      const service = new DbApprovalService(db, {
+        bus,
+        timeoutMs: 5000,
+        pollIntervalMs: 20,
+      });
+      // The bridge writes status=resolved when it sees the bus event.
+      const bridge = new ApprovalBridge(db, { bus, pollIntervalMs: 20 });
+      bridge.start();
+      try {
+        const pending = service.request(req({ requestId: "e2e-agent-1" }));
+        // Give request() a tick to insert the row.
+        await new Promise((r) => setTimeout(r, 30));
+        const out = await service.submitFromAgent({
+          approvalId: "e2e-agent-1",
+          decision: "allow",
+          sourceAgent: "hermes",
+        });
+        expect(out.ok).toBe(true);
+        const decision = await pending;
+        expect(decision.decision).toBe("allowed");
+      } finally {
+        bridge.stop();
+      }
+    });
+  });
 });

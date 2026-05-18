@@ -135,3 +135,31 @@ describe("applyForemanSoul", () => {
     expect(readFileSync(result!.path, "utf-8")).toBe(DEFAULT_FOREMAN_SOUL);
   });
 });
+
+// #406 — The default SOUL.md template carries an "Approval Routing"
+// section so any agent that calls `applyForemanSoul` (Hermes, Codex,
+// future agents that declare `identity_path` in the registry) gets the
+// same instruction: when the user types `/approve <id>` in chat, call
+// the `submit_approval` MCP tool.
+describe("DEFAULT_FOREMAN_SOUL — approval routing (#406)", () => {
+  it("contains the Approval Routing section header", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toContain("## Approval Routing");
+  });
+
+  it("documents every slash command the Telegram channel may emit", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toContain("/approve <id>");
+    expect(DEFAULT_FOREMAN_SOUL).toContain("/deny <id>");
+    expect(DEFAULT_FOREMAN_SOUL).toContain("/approve_remember <id>");
+    expect(DEFAULT_FOREMAN_SOUL).toContain("/deny_remember <id>");
+  });
+
+  it("references the submit_approval MCP tool by exact name", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toContain("`submit_approval`");
+  });
+
+  it("instructs the agent to relay decisions verbatim — no chained reasoning", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(
+      /Never.*call.*submit_approval.*on your own initiative/i,
+    );
+  });
+});
