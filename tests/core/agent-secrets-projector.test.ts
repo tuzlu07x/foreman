@@ -575,8 +575,9 @@ describe('projectSecretsForAgent — wiring', () => {
       // Foreman overlays env section
       expect(parsed.env.OPENAI_API_KEY).toBe('sk-oa-1')
       // Template's other top-level fields stay intact
-      expect(parsed.mcp.enabled).toBe(true)
+      expect(parsed.mcp.servers).toEqual({})
       expect(parsed.channels).toEqual({})
+      expect(parsed.gateway.mode).toBe('local')
     })
 
     it('skips seeding when template path is set but template is missing', () => {
