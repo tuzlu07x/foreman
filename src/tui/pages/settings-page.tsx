@@ -7,6 +7,7 @@ import {
   type FeatureSplit,
 } from "../../core/llm/budget.js";
 import { loadLlmConfig, type LlmConfig } from "../../core/llm/config.js";
+import { checkProviderMapping } from "../../core/doctor.js";
 import { getDb } from "../../db/client.js";
 import { getForemanPaths } from "../../utils/config.js";
 import { useDashboardServices } from "../dashboard-context.js";
@@ -101,6 +102,8 @@ export function SettingsPage({
       </Box>
 
       {llmSnapshot ? <LlmTile snapshot={llmSnapshot} /> : null}
+
+      <ProviderMappingTile />
 
       {notice && (
         <Box marginTop={1}>
@@ -231,4 +234,66 @@ function renderBar(pct: number, width: number): string {
   const clamped = Math.max(0, Math.min(100, pct));
   const filled = Math.round((clamped / 100) * width);
   return "█".repeat(filled) + "░".repeat(width - filled);
+}
+
+// =============================================================================
+// Provider mapping tile (#408 / #413 Phase 5)
+// =============================================================================
+//
+// Read-only view of every registered agent's active provider/variant +
+// secret status. Mirrors what `foreman provider list` shows on the CLI.
+// Interactive switching stays on the CLI (`foreman provider switch
+// <agent> <provider>`) — that's a v0.3 polish follow-up if user demand
+// shows up.
+
+function ProviderMappingTile(): JSX.Element | null {
+  // checkProviderMapping is synchronous (queries SQLite via better-sqlite3).
+  // Settings page renders on every keystroke so we call it inline — the
+  // check is cheap (a handful of secret-store lookups).
+  let report: ReturnType<typeof checkProviderMapping>;
+  try {
+    report = checkProviderMapping();
+  } catch {
+    return null;
+  }
+  // Only show the tile when there's something to surface — empty/ok
+  // with no message means no agents have provider_mapping yet.
+  if (!report.message || report.message.length === 0) return null;
+  const statusIcon =
+    report.status === "ok"
+      ? "✓"
+      : report.status === "warn"
+        ? "⚠"
+        : "✗";
+  const statusColor =
+    report.status === "ok"
+      ? theme.accent.success
+      : report.status === "warn"
+        ? theme.accent.warning
+        : theme.accent.danger;
+  // Multi-line message — split + render each per-agent line.
+  const lines = report.message.split("\n");
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text bold>
+        Provider mappings <Text color={statusColor}>{statusIcon}</Text>
+      </Text>
+      {lines.map((line, i) => (
+        <Box key={`pm-${i}`} marginLeft={2}>
+          <Text color={theme.fg.muted}>{line.replace(/^\s+/, "")}</Text>
+        </Box>
+      ))}
+      {report.remediation ? (
+        <Box marginLeft={2} marginTop={1}>
+          <Text color={theme.accent.warning}>{report.remediation}</Text>
+        </Box>
+      ) : null}
+      <Box marginLeft={2} marginTop={1}>
+        <Text color={theme.fg.muted}>
+          Switch via CLI:{" "}
+          <Text bold>foreman provider switch &lt;agent&gt; &lt;provider&gt;</Text>
+        </Text>
+      </Box>
+    </Box>
+  );
 }

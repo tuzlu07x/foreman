@@ -81,6 +81,7 @@ import {
   resolveRequiredSetup,
   type RequiredSetupResolution,
 } from "../core/required-setup.js";
+import { openInBrowser } from "../utils/browser-open.js";
 import {
   canRunModel,
   loadOllamaModels,
@@ -1405,6 +1406,20 @@ export function SetupWizard({
             ...prev,
             [slot]: "skipped",
           }));
+        }
+        return;
+      }
+      if (input === "o") {
+        // #408 / #413 Phase 5 — open the acquisition URL in the user's
+        // default browser. Best-effort: if the platform handler fails,
+        // silently no-op (user can still copy-paste from the picker
+        // text). React state mirror not needed — the URL is static.
+        const acq =
+          requiredSetupResolution.secrets[requiredSetupCursor]?.acquisition;
+        if (acq?.url) {
+          void openInBrowser(acq.url).catch(() => {
+            /* swallowed — fall back to manual copy */
+          });
         }
         return;
       }
@@ -2813,7 +2828,7 @@ export function SetupWizard({
           </Box>
         ) : null}
         <Text color={theme.fg.muted}>
-          [↑↓] move · [Enter] paste / continue · [s] skip · [c] continue (when clean) · [Esc] back to services
+          [↑↓] move · [Enter] paste · [o] open URL · [s] skip · [c] continue · [Esc] back
         </Text>
         {!complete && totalErrors === 0 ? (
           <Text color={theme.accent.warning}>
