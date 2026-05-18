@@ -6,6 +6,14 @@
   },
   "channels": {},
   "env": {},
+  "gateway": {
+    "mode": "local",
+    "port": 18789,
+    "bind": "loopback",
+    "auth": {
+      "enabled": false
+    }
+  },
   "mcp": {
     "enabled": true,
     "servers": {}
