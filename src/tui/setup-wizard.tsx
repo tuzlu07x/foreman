@@ -5,7 +5,6 @@ import {
   ConfirmInput,
   MultiSelect,
   PasswordInput,
-  Select,
   StatusMessage,
   TextInput,
 } from "@inkjs/ui";
@@ -649,6 +648,44 @@ export function SetupWizard({
   const [agentConfigs, setAgentConfigs] = useState<AgentConfigsMap>({});
   const [llmDraft, setLlmDraft] = useState<string | null>(null);
 
+  // #358 — Computed once per relevant state change so both render and the
+  // useInput handler operate on the same ordered list. Empty array when
+  // we're not in the llm-choice phase, so callers can early-return.
+  const llmPickerOptions = useMemo<string[]>(() => {
+    if (agentsPhase !== "per-agent-config") return [];
+    const prompt = agentConfigPrompts[agentConfigIdx];
+    if (!prompt || prompt.kind !== "llm-choice") return [];
+    const agent = agentCatalog.find((a) => a.id === prompt.agentId);
+    if (!agent) return [];
+    const compat = agent.llm_compat ?? [];
+    const storedNames = new Set(
+      services.secretStore.list().map((s) => s.name),
+    );
+    const configured = new Set(
+      configuredProviderIds(providerCatalog, storedNames),
+    );
+    const available = compat.filter((id) => configured.has(id));
+    const prefOrder = providersSaved
+      .map((name) => providerCatalog.find((p) => p.secret_name === name)?.id)
+      .filter((id): id is string => typeof id === "string");
+    return [...available].sort((a, b) => {
+      const aIdx = prefOrder.indexOf(a);
+      const bIdx = prefOrder.indexOf(b);
+      if (aIdx === -1 && bIdx === -1) return 0;
+      if (aIdx === -1) return 1;
+      if (bIdx === -1) return -1;
+      return aIdx - bIdx;
+    });
+  }, [
+    agentsPhase,
+    agentConfigPrompts,
+    agentConfigIdx,
+    agentCatalog,
+    providerCatalog,
+    providersSaved,
+    services.secretStore,
+  ]);
+
   const serviceCatalog = useMemo(() => loadActiveServices().doc.services, []);
   const [servicesSelected, setServicesSelected] = useState<string[]>([]);
   const [serviceIdx, setServiceIdx] = useState(0);
@@ -676,31 +713,54 @@ export function SetupWizard({
   // ConfirmInput handle n=exit). Selections held in React state are
   // preserved across back-steps because we only mutate phase / completion.
   useInput((input, key) => {
+    // #358 — Per-agent LLM picker key handling. ↑↓ live-updates the
+    // selection (cursor + ✓ travel together — round-3 muscle memory
+    // expectation), Space or Enter commits and advances. The render side
+    // pulls from llmDraft so updating it re-renders the radio in place.
     if (
-      key.return &&
       currentStep === "agents" &&
-      agentsPhase === "per-agent-config"
+      agentsPhase === "per-agent-config" &&
+      llmPickerOptions.length > 0
     ) {
       const prompt = agentConfigPrompts[agentConfigIdx];
       if (prompt && prompt.kind === "llm-choice") {
-        const chosen = llmDraft;
-        if (chosen) {
-          setAgentConfigs((prev) => {
-            const existing = prev[prompt.agentId] ?? {};
-            return {
-              ...prev,
-              [prompt.agentId]: { ...existing, llmProvider: chosen },
-            };
-          });
+        const currentChoice = llmDraft ?? llmPickerOptions[0];
+        const currentIdx = Math.max(
+          0,
+          llmPickerOptions.indexOf(currentChoice ?? ""),
+        );
+        if (key.upArrow) {
+          const nextIdx =
+            (currentIdx - 1 + llmPickerOptions.length) %
+            llmPickerOptions.length;
+          setLlmDraft(llmPickerOptions[nextIdx] ?? null);
+          return;
         }
-        const result = applyAgentConfigSubmit({
-          currentIdx: agentConfigIdx,
-          totalPrompts: agentConfigPrompts.length,
-        });
-        setAgentConfigIdx(result.nextIdx);
-        setAgentsPhase(result.nextPhase);
-        setLlmDraft(null);
-        return;
+        if (key.downArrow) {
+          const nextIdx = (currentIdx + 1) % llmPickerOptions.length;
+          setLlmDraft(llmPickerOptions[nextIdx] ?? null);
+          return;
+        }
+        if (key.return || input === " ") {
+          const chosen = llmDraft ?? llmPickerOptions[0];
+          if (chosen) {
+            setAgentConfigs((prev) => {
+              const existing = prev[prompt.agentId] ?? {};
+              return {
+                ...prev,
+                [prompt.agentId]: { ...existing, llmProvider: chosen },
+              };
+            });
+          }
+          const result = applyAgentConfigSubmit({
+            currentIdx: agentConfigIdx,
+            totalPrompts: agentConfigPrompts.length,
+          });
+          setAgentConfigIdx(result.nextIdx);
+          setAgentsPhase(result.nextPhase);
+          setLlmDraft(null);
+          return;
+        }
       }
     }
 
@@ -1189,40 +1249,12 @@ export function SetupWizard({
     }
     const progress = `(${agentConfigIdx + 1}/${agentConfigPrompts.length})`;
     if (prompt.kind === "llm-choice") {
-      // Filter compat to providers the user has actually configured (#297).
-      // buildAgentConfigPromptList already filters out agents with
-      // compat.length <= 1, so we only reach this branch when there's a
-      // genuine choice between configured providers.
+      // llmPickerOptions (component-scoped useMemo) is the single source of
+      // truth for both render and the ↑↓/Space/Enter handler in useInput.
+      // #297 filters compat to configured providers; #348 sorts by user
+      // preference order from Step 1; #358 lets render + input share state.
       const compat = agent.llm_compat ?? [];
-      const llmChoiceStoredNames = new Set(
-        services.secretStore.list().map((s) => s.name),
-      );
-      const llmChoiceConfigured = new Set(
-        configuredProviderIds(providerCatalog, llmChoiceStoredNames),
-      );
-      const availableCompat = compat.filter((id) =>
-        llmChoiceConfigured.has(id),
-      );
-      // #348 — Order options by USER PREFERENCE (the order in which they
-      // saved providers in Step 1), not by the agent's static llm_compat
-      // array. Otherwise every multi-provider agent defaults to whatever
-      // the catalog lists first (Anthropic for Hermes) regardless of what
-      // the user actually configured first. Round 3 hit this: user only
-      // had openai creds but Hermes defaulted to anthropic → 401.
-      const userPreferenceOrder = providersSaved
-        .map((name) => providerCatalog.find((p) => p.secret_name === name)?.id)
-        .filter((id): id is string => typeof id === "string");
-      const orderedAvailable = [...availableCompat].sort((a, b) => {
-        const aIdx = userPreferenceOrder.indexOf(a);
-        const bIdx = userPreferenceOrder.indexOf(b);
-        if (aIdx === -1 && bIdx === -1) return 0;
-        if (aIdx === -1) return 1;
-        if (bIdx === -1) return -1;
-        return aIdx - bIdx;
-      });
-      // No trailing ✓ on labels — the Select component renders its own
-      // selection indicator. Two checkmarks made round-3 users think the
-      // current default "had more configured" and was unswitchable.
+      const orderedAvailable = llmPickerOptions;
       const options = orderedAvailable.map((id) => {
         const provider = providerCatalog.find((p) => p.id === id);
         return {
@@ -1234,6 +1266,12 @@ export function SetupWizard({
       const currentChoice = llmDraft ?? defaultChoice;
       const currentProvider = providerCatalog.find((p) => p.id === currentChoice);
       const currentLabel = currentProvider?.name ?? currentChoice;
+      // #358 — Custom radio render so the cursor (❯) and the selection (✓)
+      // travel together as one indicator. Round-3 users with @inkjs/ui's
+      // Select kept pressing Space expecting the ✓ to follow the cursor, and
+      // the "Space does nothing" footer hint never caught up with muscle
+      // memory. The ↑↓ / Space / Enter handlers live in the wizard's main
+      // useInput at line ~678.
       return (
         <Box flexDirection="column" gap={1} paddingY={1}>
           <WizardProgress
@@ -1253,14 +1291,24 @@ export function SetupWizard({
               {currentLabel}
             </Text>
           </Text>
-          <Select
-            options={options}
-            defaultValue={currentChoice}
-            onChange={(value) => setLlmDraft(value)}
-          />
+          <Box flexDirection="column">
+            {options.map((opt) => {
+              const isSelected = opt.value === currentChoice;
+              return (
+                <Text
+                  key={opt.value}
+                  color={isSelected ? theme.accent.primary : undefined}
+                  bold={isSelected}
+                >
+                  {isSelected ? "❯ ✓ " : "    "}
+                  {opt.label}
+                </Text>
+              );
+            })}
+          </Box>
           <Text color={theme.fg.muted}>
             {options.length > 1
-              ? "Use [↑↓] to move · [Enter] confirms the highlighted provider · [Esc] goes back. (Space does nothing — this is single-select.)"
+              ? "[↑↓] move · [Enter] or [Space] confirms · [Esc] goes back."
               : "[Enter] confirms · [Esc] goes back. Add another provider in Step 1 if you want to switch later."}
           </Text>
         </Box>
