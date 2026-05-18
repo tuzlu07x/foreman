@@ -10,6 +10,10 @@ export type NotificationLevel =
   | 'info'
   | 'summary'
   | 'budget_alert'
+  /** #383 — auto-deny alert. Fired after the risk engine blocks a call
+   *  without asking the user first (high-risk pattern caught). Routed
+   *  via notify.yaml's `routing.risk_deny.channels`. */
+  | 'risk_deny'
 
 export type ChannelId = 'telegram' | 'discord' | 'slack' | 'webhook' | 'system'
 
