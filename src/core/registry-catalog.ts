@@ -65,6 +65,19 @@ export const AgentEntrySchema = z
         command_template: z.string().min(1),
         verify_template: z.string().min(1).optional(),
         note: z.string().optional(),
+        /** Some agents (Hermes #346) mangle multi-token `--args` strings,
+         *  so the documented `--args "mcp-stdio --source X"` invocation
+         *  never connects. When set, Foreman writes a tiny wrapper script
+         *  at `path_template` and the install hint points the agent at the
+         *  wrapper instead. `{wrapper_path}` is substituted in
+         *  `command_template`. `{agent_id}` is substituted in
+         *  `path_template` + `content_template`. */
+        wrapper: z
+          .object({
+            path_template: z.string().min(1),
+            content_template: z.string().min(1),
+          })
+          .optional(),
       })
       .optional(),
     /** Where to project Foreman secrets so this agent picks them up at startup
