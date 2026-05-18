@@ -650,7 +650,7 @@ describe('writeConfigOverrides (#389)', () => {
   it('creates a fresh YAML file with the dot-path values', () => {
     const path = join(tmp, 'config.yaml')
     const out = writeConfigOverrides(path, 'yaml', {
-      'model.default': 'gpt-4o-mini',
+      'model.default': 'openai/gpt-4o-mini',
       'model.provider': 'openai',
     })
     expect(out.created).toBe(true)
@@ -659,11 +659,15 @@ describe('writeConfigOverrides (#389)', () => {
       string,
       unknown
     >
-    expect((parsed.model as { default: string }).default).toBe('gpt-4o-mini')
+    expect((parsed.model as { default: string }).default).toBe(
+      'openai/gpt-4o-mini',
+    )
     expect((parsed.model as { provider: string }).provider).toBe('openai')
   })
 
   it('overlays into existing YAML preserving siblings', () => {
+    // #397 — Hermes' model.default uses slash-form "<provider>/<model>" per
+    // docs (https://hermes-agent.nousresearch.com/docs/user-guide/configuring-models).
     const path = join(tmp, 'hermes.yaml')
     writeFileSync(
       path,
@@ -671,7 +675,7 @@ describe('writeConfigOverrides (#389)', () => {
       { mode: 0o600 },
     )
     const out = writeConfigOverrides(path, 'yaml', {
-      'model.default': 'gpt-4o-mini',
+      'model.default': 'openai/gpt-4o-mini',
       'model.provider': 'openai',
       'model.base_url': 'https://api.openai.com/v1',
     })
@@ -681,7 +685,7 @@ describe('writeConfigOverrides (#389)', () => {
       model: { default: string; provider: string; base_url: string }
       terminal: { backend: string }
     }
-    expect(parsed.model.default).toBe('gpt-4o-mini')
+    expect(parsed.model.default).toBe('openai/gpt-4o-mini')
     expect(parsed.model.provider).toBe('openai')
     expect(parsed.model.base_url).toBe('https://api.openai.com/v1')
     // Sibling top-level keys survive
@@ -766,14 +770,14 @@ describe('projectSecretsForAgent — config_overrides (#389)', () => {
             {
               if_provider: 'openai',
               set: {
-                'model.default': 'gpt-4o-mini',
+                'model.default': 'openai/gpt-4o-mini',
                 'model.provider': 'openai',
               },
             },
             {
               if_provider: 'anthropic',
               set: {
-                'model.default': 'claude-haiku-4-5-20251001',
+                'model.default': 'anthropic/claude-haiku-4-5-20251001',
                 'model.provider': 'anthropic',
               },
             },
@@ -796,7 +800,7 @@ describe('projectSecretsForAgent — config_overrides (#389)', () => {
       model: { default: string; provider: string }
     }
     expect(parsed.model.provider).toBe('openai')
-    expect(parsed.model.default).toBe('gpt-4o-mini')
+    expect(parsed.model.default).toBe('openai/gpt-4o-mini')
   })
 
   it('writes the anthropic overrides when llmProvider=anthropic', () => {
@@ -858,7 +862,7 @@ describe('projectSecretsForAgent — config_overrides (#389)', () => {
       terminal: { backend: string }
     }
     expect(parsed.model.provider).toBe('openai')
-    expect(parsed.model.default).toBe('gpt-4o-mini')
+    expect(parsed.model.default).toBe('openai/gpt-4o-mini')
     expect(parsed.terminal.backend).toBe('docker') // user-added survives
   })
 })
