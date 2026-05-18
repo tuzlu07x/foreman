@@ -50,8 +50,10 @@ describe("setup-state", () => {
     });
 
     it("returns the first step not in `completed`", () => {
+      // #367 — inserted "foreman-llm" between providers and agents, so
+      // [welcome, providers] now advances to foreman-llm (not agents).
       const s = { ...freshState(), completed: ["welcome", "providers"] as const };
-      expect(nextStep(s as never)).toBe("agents");
+      expect(nextStep(s as never)).toBe("foreman-llm");
     });
 
     it("returns 'done' once every step is completed", () => {

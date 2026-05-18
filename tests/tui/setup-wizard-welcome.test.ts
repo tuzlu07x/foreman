@@ -5,18 +5,19 @@ import {
 } from "../../src/tui/setup-wizard.js";
 
 describe("WELCOME_STEPS", () => {
-  it("lists four steps", () => {
-    expect(WELCOME_STEPS).toHaveLength(4);
+  it("lists five steps after #367 added Foreman's brain", () => {
+    expect(WELCOME_STEPS).toHaveLength(5);
   });
 
   it("step names + numbers match the wizard's actual flow", () => {
     expect(WELCOME_STEPS.map((s) => s.name)).toEqual([
       "LLM Providers",
+      "Foreman's brain",
       "Agents",
       "Services",
       "Install + Verify",
     ]);
-    expect(WELCOME_STEPS.map((s) => s.number)).toEqual([1, 2, 3, 4]);
+    expect(WELCOME_STEPS.map((s) => s.number)).toEqual([1, 2, 3, 4, 5]);
   });
 
   it("marks the Services step as optional", () => {
@@ -39,8 +40,8 @@ describe("WELCOME_STEPS", () => {
 });
 
 describe("totalEstimatedMinutes", () => {
-  it("sums the default WELCOME_STEPS to about 8 minutes (per spec)", () => {
-    expect(totalEstimatedMinutes()).toBe(8);
+  it("sums the default WELCOME_STEPS to about 9 minutes after #367", () => {
+    expect(totalEstimatedMinutes()).toBe(9);
   });
 
   it("sums any subset that's passed in", () => {
