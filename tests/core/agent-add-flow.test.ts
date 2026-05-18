@@ -5,6 +5,7 @@ import {
   checkSecrets,
   expandHome,
   pickConfigPath,
+  providerOwningSecret,
   registerAgent,
 } from "../../src/core/agent-add-flow.js";
 import { EventBus, type ForemanEventMap } from "../../src/core/event-bus.js";
@@ -12,7 +13,49 @@ import { RegistryService } from "../../src/core/registry.js";
 import { SecretStore } from "../../src/core/secret-store.js";
 import { createInMemoryDb, type ForemanDb } from "../../src/db/client.js";
 import { generateMasterKey } from "../../src/identity/encryption.js";
-import type { AgentEntry } from "../../src/core/registry-catalog.js";
+import type {
+  AgentEntry,
+  ProviderEntry,
+} from "../../src/core/registry-catalog.js";
+
+const FAKE_PROVIDER_CATALOG: ProviderEntry[] = [
+  {
+    id: "anthropic",
+    name: "Anthropic",
+    description: "Claude",
+    secret_name: "anthropic-key",
+    key_prefix: "sk-ant-",
+    where_to_get: "https://console.anthropic.com",
+    format_hint: "starts with sk-ant-",
+    instructions: [],
+    endpoint_default: null,
+    endpoint_required: false,
+  },
+  {
+    id: "openai",
+    name: "OpenAI",
+    description: "GPT",
+    secret_name: "openai-key",
+    key_prefix: "sk-",
+    where_to_get: "https://platform.openai.com",
+    format_hint: "starts with sk-",
+    instructions: [],
+    endpoint_default: null,
+    endpoint_required: false,
+  },
+  {
+    id: "gemini",
+    name: "Google Gemini",
+    description: "Gemini",
+    secret_name: "gemini-key",
+    key_prefix: "AIza",
+    where_to_get: "https://aistudio.google.com",
+    format_hint: "starts with AIza",
+    instructions: [],
+    endpoint_default: null,
+    endpoint_required: false,
+  },
+];
 
 function makeEntry(overrides: Partial<AgentEntry> = {}): AgentEntry {
   return {
@@ -78,6 +121,124 @@ describe("checkSecrets", () => {
     const result = checkSecrets(makeEntry(), store);
     expect(result.hasAllRequired).toBe(true);
     expect(result.required[0]?.present).toBe(true);
+  });
+
+  // #373 — drop cross-provider required_secrets when user picks a specific
+  // LLM provider for this agent. Round-3 user picked OpenAI for OpenClaw,
+  // Foreman still warned about anthropic-key because checkSecrets was
+  // provider-blind.
+  describe("with llmProvider filter (#373)", () => {
+    it("drops anthropic-key when user picked openai for the agent", () => {
+      const result = checkSecrets(
+        makeEntry({ required_secrets: ["anthropic-key"] }),
+        store,
+        { llmProvider: "openai", providerCatalog: FAKE_PROVIDER_CATALOG },
+      );
+      expect(result.required).toEqual([]);
+      expect(result.hasAllRequired).toBe(true);
+    });
+
+    it("keeps anthropic-key when user picked anthropic", () => {
+      const result = checkSecrets(
+        makeEntry({ required_secrets: ["anthropic-key"] }),
+        store,
+        { llmProvider: "anthropic", providerCatalog: FAKE_PROVIDER_CATALOG },
+      );
+      expect(result.required).toEqual([
+        { name: "anthropic-key", present: false },
+      ]);
+      expect(result.hasAllRequired).toBe(false);
+    });
+
+    it("keeps non-provider keys (telegram-bot-token) regardless of llmProvider", () => {
+      const result = checkSecrets(
+        makeEntry({ required_secrets: ["telegram-bot-token"] }),
+        store,
+        { llmProvider: "openai", providerCatalog: FAKE_PROVIDER_CATALOG },
+      );
+      expect(result.required).toEqual([
+        { name: "telegram-bot-token", present: false },
+      ]);
+    });
+
+    it("filters a mixed list — drops cross-provider, keeps non-provider + matching", () => {
+      const result = checkSecrets(
+        makeEntry({
+          required_secrets: [
+            "anthropic-key",
+            "telegram-bot-token",
+            "openai-key",
+          ],
+        }),
+        store,
+        { llmProvider: "openai", providerCatalog: FAKE_PROVIDER_CATALOG },
+      );
+      expect(result.required.map((r) => r.name)).toEqual([
+        "telegram-bot-token",
+        "openai-key",
+      ]);
+    });
+
+    it("no filter applied when llmProvider is omitted (backward compat)", () => {
+      const result = checkSecrets(
+        makeEntry({ required_secrets: ["anthropic-key"] }),
+        store,
+        { providerCatalog: FAKE_PROVIDER_CATALOG },
+      );
+      expect(result.required.map((r) => r.name)).toEqual(["anthropic-key"]);
+    });
+
+    it("no filter applied when providerCatalog is omitted (backward compat)", () => {
+      const result = checkSecrets(
+        makeEntry({ required_secrets: ["anthropic-key"] }),
+        store,
+        { llmProvider: "openai" },
+      );
+      expect(result.required.map((r) => r.name)).toEqual(["anthropic-key"]);
+    });
+
+    it("matches store presence correctly after filter", () => {
+      store.add("openai-key", "sk-1");
+      const result = checkSecrets(
+        makeEntry({ required_secrets: ["anthropic-key", "openai-key"] }),
+        store,
+        { llmProvider: "openai", providerCatalog: FAKE_PROVIDER_CATALOG },
+      );
+      // anthropic-key filtered out; openai-key remains + is present
+      expect(result.required).toEqual([
+        { name: "openai-key", present: true },
+      ]);
+      expect(result.hasAllRequired).toBe(true);
+    });
+  });
+});
+
+describe("providerOwningSecret", () => {
+  it("returns the provider id for a provider-owned secret", () => {
+    expect(
+      providerOwningSecret("anthropic-key", FAKE_PROVIDER_CATALOG),
+    ).toBe("anthropic");
+    expect(
+      providerOwningSecret("openai-key", FAKE_PROVIDER_CATALOG),
+    ).toBe("openai");
+    expect(
+      providerOwningSecret("gemini-key", FAKE_PROVIDER_CATALOG),
+    ).toBe("gemini");
+  });
+
+  it("returns null for non-provider secrets (Telegram bot token etc.)", () => {
+    expect(
+      providerOwningSecret("telegram-bot-token", FAKE_PROVIDER_CATALOG),
+    ).toBeNull();
+    expect(
+      providerOwningSecret("discord-bot-token", FAKE_PROVIDER_CATALOG),
+    ).toBeNull();
+  });
+
+  it("returns null for unknown secrets", () => {
+    expect(
+      providerOwningSecret("nonexistent-key", FAKE_PROVIDER_CATALOG),
+    ).toBeNull();
   });
 });
 
