@@ -2639,6 +2639,9 @@ export async function runInstallStep(
     removed: [],
   };
   const { doc } = loadActiveRegistry();
+  // #373 — load provider catalog once so checkSecrets can filter
+  // cross-provider required_secrets per the user's per-agent llmProvider.
+  const providerCatalog = loadActiveProviders().doc.providers;
 
   // --- Process unchecks first: uninstall the binary, remove the row -----
   for (const id of toRemove) {
@@ -2734,7 +2737,14 @@ export async function runInstallStep(
     }
     if (skipThisAgent) continue;
 
-    const secretCheck = checkSecrets(entry, services.secretStore);
+    // #373 — Pass the user's per-agent llmProvider so checkSecrets drops
+    // cross-provider required_secrets (e.g. OpenClaw's anthropic-key when
+    // user picked openai). Without this filter, Foreman warns about keys
+    // the user doesn't need.
+    const secretCheck = checkSecrets(entry, services.secretStore, {
+      llmProvider: agentConfigs[id]?.llmProvider,
+      providerCatalog,
+    });
     if (!secretCheck.hasAllRequired) {
       const missing = secretCheck.required
         .filter((s) => !s.present)
