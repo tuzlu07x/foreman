@@ -44,6 +44,16 @@ export const AgentEntrySchema = z
          *  (OpenClaw). Template is written first, then secret projection
          *  + MCP injection overlay onto it. */
         config_template_path: z.string().min(1).optional(),
+        /** Shell commands run sequentially AFTER secret projection
+         *  finishes (#398). Use for service-install steps the agent's
+         *  installer doesn't run itself — OpenClaw uses
+         *  `["openclaw doctor --fix", "openclaw gateway install"]` to
+         *  register its LaunchAgent post-config-write. Best-effort: each
+         *  command's stdout/stderr is logged but a non-zero exit doesn't
+         *  abort setup. The 90s idle watchdog from `runShell` applies
+         *  per-command, so interactive prompts that read stdin get killed
+         *  rather than hanging the wizard. */
+        post_config_commands: z.array(z.string().min(1)).optional(),
       })
       .strict(),
     config_paths: z.array(z.string()),
