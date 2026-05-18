@@ -10,6 +10,7 @@ import { assertBudget, recordUsageAndCheckBudget } from './budget.js'
 import { LlmBudgetExceededError, LlmProviderError, type LlmClient } from './client.js'
 import { LruCache } from './cache.js'
 import { isFeatureEnabled, type LlmConfig } from './config.js'
+import { debugLogLlmError } from './debug.js'
 import { parseVerification, VerificationParseError } from './parse-verification.js'
 import {
   buildVerificationPrompt,
@@ -157,6 +158,10 @@ export class LlmVerifier {
         err instanceof VerificationParseError ||
         err instanceof LlmProviderError
       ) {
+        // #347 — opt-in stderr line when FOREMAN_LLM_DEBUG=1, so the user
+        // can tell *why* the verifier silently fell back to heuristics
+        // ("provider error" with no detail was unactionable in QA round 3).
+        debugLogLlmError('verifier', err)
         return this.skippedShell('llm_error', ctx)
       }
       throw err

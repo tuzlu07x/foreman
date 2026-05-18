@@ -268,6 +268,17 @@ Every failure mode returns a `skipped` shell rather than throwing — the mediat
 
 Heuristic-only behavior is **identical** to running without verification — the modal still opens, factors render, user decides.
 
+**Diagnosing `llm_error`** (#347): every fallback above is silent by default — set `FOREMAN_LLM_DEBUG=1` in the env to surface the underlying error message on stderr:
+
+```
+$ FOREMAN_LLM_DEBUG=1 foreman start
+…
+[foreman llm:verifier] openai 401: invalid api key
+[foreman llm:summary] anthropic 429: rate limit exceeded
+```
+
+One line per failure, no stack traces. Off by default so production output stays quiet.
+
 ### Persistence
 
 Every LLM call writes a `llm_usage` row (provider, model, tokens, cost, requestId, feature, latency, cache_hit). The verification verdict (including `skipped` reason) is persisted on the `requests.llm_verification` column as JSON. `foreman log show <id>` includes it in `--json` output.
