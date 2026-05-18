@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "_comment": "OpenAI-compatible preset endpoints (#367). All hit the standard /v1/chat/completions shape — Foreman's existing openai-compatible provider transport reuses them. Refresh quarterly as endpoints change.",
+  "presets": [
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "endpoint": "https://api.deepseek.com/v1",
+      "key_secret_name": "deepseek-api-key",
+      "default_model": "deepseek-chat",
+      "alt_models": ["deepseek-reasoner"],
+      "where_to_get": "https://platform.deepseek.com/api_keys",
+      "cost_hint": "$0.14/MTok input — cheapest cloud option",
+      "description": "DeepSeek V3 (chat) and R1 (reasoner) via official API"
+    },
+    {
+      "id": "qwen-dashscope",
+      "name": "Qwen — DashScope (Alibaba)",
+      "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "key_secret_name": "qwen-dashscope-api-key",
+      "default_model": "qwen-plus",
+      "alt_models": ["qwen-turbo", "qwen-max", "qwen2.5-72b-instruct"],
+      "where_to_get": "https://dashscope.console.aliyun.com/apiKey",
+      "cost_hint": "pay-per-token, generous free tier",
+      "description": "Alibaba's Qwen 2.5 family via DashScope OpenAI-compat endpoint"
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "endpoint": "https://openrouter.ai/api/v1",
+      "key_secret_name": "openrouter-api-key",
+      "default_model": "openai/gpt-4o-mini",
+      "alt_models": [
+        "anthropic/claude-haiku-4-5",
+        "google/gemini-flash-1.5",
+        "deepseek/deepseek-chat",
+        "meta-llama/llama-3.1-8b-instruct"
+      ],
+      "where_to_get": "https://openrouter.ai/keys",
+      "cost_hint": "many providers, one key — varies by model",
+      "description": "Single API to ~200 models from Anthropic, OpenAI, Google, Meta, DeepSeek, …"
+    },
+    {
+      "id": "together",
+      "name": "Together AI",
+      "endpoint": "https://api.together.xyz/v1",
+      "key_secret_name": "together-api-key",
+      "default_model": "meta-llama/Llama-3.1-8B-Instruct-Turbo",
+      "alt_models": [
+        "Qwen/Qwen2.5-7B-Instruct-Turbo",
+        "mistralai/Mistral-7B-Instruct-v0.3",
+        "deepseek-ai/DeepSeek-V3"
+      ],
+      "where_to_get": "https://api.together.xyz/settings/api-keys",
+      "cost_hint": "open-weights models hosted, $0.20–$5/MTok",
+      "description": "Hosted open-weights models — Llama, Qwen, Mistral, DeepSeek"
+    },
+    {
+      "id": "groq",
+      "name": "Groq",
+      "endpoint": "https://api.groq.com/openai/v1",
+      "key_secret_name": "groq-api-key",
+      "default_model": "llama-3.1-8b-instant",
+      "alt_models": [
+        "llama-3.3-70b-versatile",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it"
+      ],
+      "where_to_get": "https://console.groq.com/keys",
+      "cost_hint": "fastest inference — LPU hardware",
+      "description": "Specialised LPU silicon — very fast token throughput on Llama + Mixtral + Gemma"
+    }
+  ]
+}

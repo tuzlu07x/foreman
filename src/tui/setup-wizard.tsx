@@ -65,6 +65,24 @@ import { persistVoiceConfig } from "./setup-wizard-voice-persist.js";
 import { useLayout } from "./hooks.js";
 import { osc8 } from "./osc8.js";
 import { blockFallbackFrame } from "./components/mascot-frames.js";
+import {
+  bytesToGb,
+  detectMachineCapability,
+  type MachineCapability,
+} from "../core/machine-capability.js";
+import { detectOllama } from "../core/ollama-detector.js";
+import {
+  canRunModel,
+  loadOllamaModels,
+  type OllamaModel,
+  type RunStatus,
+} from "../core/ollama-models.js";
+import {
+  findPreset,
+  loadLlmPresets,
+  type LlmPreset,
+} from "../core/llm-provider-presets.js";
+import { planOllamaInstall } from "../core/ollama-installer.js";
 import { RegistryService } from "../core/registry.js";
 import { SecretStore } from "../core/secret-store.js";
 import type { ForemanDb } from "../db/client.js";
@@ -93,15 +111,37 @@ export interface WelcomeStep {
 // model from this screen matches what they see in Steps 1–4.
 export const WELCOME_STEPS: WelcomeStep[] = [
   { number: 1, name: "LLM Providers", estimateMinutes: 2 },
-  { number: 2, name: "Agents", estimateMinutes: 2 },
-  { number: 3, name: "Services", estimateMinutes: 1, optional: true },
-  { number: 4, name: "Install + Verify", estimateMinutes: 3 },
+  { number: 2, name: "Foreman's brain", estimateMinutes: 1 },
+  { number: 3, name: "Agents", estimateMinutes: 2 },
+  { number: 4, name: "Services", estimateMinutes: 1, optional: true },
+  { number: 5, name: "Install + Verify", estimateMinutes: 3 },
 ];
 
 export function totalEstimatedMinutes(
   steps: readonly WelcomeStep[] = WELCOME_STEPS,
 ): number {
   return steps.reduce((sum, s) => sum + s.estimateMinutes, 0);
+}
+
+// Format the trailing tag for an Ollama model row in the wizard's picker.
+// `[recommended]` / `[balanced]` / `[tight — N%]` for enabled rows;
+// `[installed]` appended when the model is already pulled locally.
+export function formatOllamaRunTag(
+  model: OllamaModel,
+  status: RunStatus,
+  installedModels: readonly string[],
+): string {
+  const installed = installedModels.includes(model.name);
+  const parts: string[] = [];
+  if (status.state === "recommended") {
+    if (model.recommended) parts.push("[recommended]");
+  } else if (status.state === "balanced") {
+    parts.push("[balanced]");
+  } else if (status.state === "tight") {
+    parts.push(`[tight — ${status.ramPct}% RAM]`);
+  }
+  if (installed) parts.push("[installed]");
+  return parts.length > 0 ? "  " + parts.join(" ") : "";
 }
 
 // Welcome-screen mascot. Reuses the boot-time block-character frame
@@ -208,6 +248,25 @@ export interface ProviderValueSubmitResult {
 // where multi-provider agents pick an LLM and every agent gets an optional
 // responsibility note (#174).
 export type AgentsPhase = "picker" | "per-agent-config" | "confirm" | "running";
+
+// #367 — Foreman's-LLM step sub-phases. `picker` is the universal choice;
+// `ollama-*` and `preset-*` are sub-flows the user enters from the picker.
+export type ForemanLlmPhase =
+  | "picker"
+  | "ollama-not-installed"
+  | "ollama-model"
+  | "preset-pick"
+  | "preset-key";
+
+// Stable ids for the universal picker rows. Cloud ids match provider
+// catalog ids; `ollama`, `preset`, `skip` are wizard-level sentinels.
+export type ForemanLlmChoice =
+  | "anthropic"
+  | "openai"
+  | "gemini"
+  | "ollama"
+  | "preset"
+  | "skip";
 
 export type AgentConfigPromptKind = "llm-choice" | "responsibility-note";
 
@@ -515,6 +574,99 @@ function persistLlmConfigFromWizardState(
   }
 }
 
+// #367 — Persist the user's explicit Foreman-LLM choice from the new
+// Step 2. Sets `provider` + `model` to the picked path, flips
+// `features.verification + smart_report` on (off when user picked
+// "Skip"), and wires preset credentials into `credentials.openai_compatible`.
+// For preset choices, also writes the user's API key to the secret store.
+function persistForemanLlmChoice(args: {
+  services: WizardServices;
+  choice: ForemanLlmChoice;
+  ollamaModel: string | null;
+  preset: LlmPreset | null;
+  presetKey: string;
+}): void {
+  try {
+    const existing = loadLlmConfig(args.services.llmConfigPath);
+    const next = { ...existing };
+
+    if (args.choice === "skip") {
+      next.enabled = false;
+      next.features = {
+        ...existing.features,
+        verification: false,
+        smart_report: false,
+      };
+      saveLlmConfig(args.services.llmConfigPath, next);
+      return;
+    }
+
+    next.enabled = true;
+    next.features = {
+      ...existing.features,
+      verification: true,
+      smart_report: true,
+    };
+
+    if (args.choice === "anthropic") {
+      next.provider = "anthropic";
+      next.model = "claude-haiku-4-5-20251001";
+    } else if (args.choice === "openai") {
+      next.provider = "openai";
+      next.model = "gpt-4o-mini";
+    } else if (args.choice === "gemini") {
+      next.provider = "gemini";
+      next.model = "gemini-2.0-flash";
+    } else if (args.choice === "ollama" && args.ollamaModel) {
+      next.provider = "ollama";
+      next.model = args.ollamaModel;
+      next.credentials = {
+        ...existing.credentials,
+        ollama: {
+          ...(existing.credentials.ollama ?? {}),
+          endpoint: existing.credentials.ollama?.endpoint ??
+            "http://localhost:11434",
+          secret_name: null,
+        },
+      };
+    } else if (args.choice === "preset" && args.preset) {
+      next.provider = "openai_compatible";
+      next.model = args.preset.default_model;
+      next.credentials = {
+        ...existing.credentials,
+        openai_compatible: {
+          endpoint_secret: `${args.preset.id}-endpoint`,
+          key_secret: args.preset.key_secret_name,
+        },
+      };
+      // Save the API key + endpoint URL to the secret store so the
+      // openai_compatible client can resolve them at call time. Use
+      // rotate when the secret already exists (user re-runs the wizard).
+      const upsertSecret = (name: string, value: string): void => {
+        try {
+          args.services.secretStore.add(name, value);
+        } catch {
+          try {
+            args.services.secretStore.rotate(name, value);
+          } catch (err) {
+            console.error(
+              `⚠ failed to save secret ${name}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+      };
+      upsertSecret(args.preset.key_secret_name, args.presetKey);
+      upsertSecret(`${args.preset.id}-endpoint`, args.preset.endpoint);
+    }
+
+    saveLlmConfig(args.services.llmConfigPath, next);
+  } catch (err) {
+    console.error(
+      `⚠ failed to persist Foreman-LLM choice: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 // Sibling of persistLlmConfigFromWizardState (#289) — writes notify.yaml
 // after the services step so the wizard's "✓ wired N services" claim
 // actually translates to enabled channels. Same best-effort semantics:
@@ -642,6 +794,30 @@ export function SetupWizard({
   const [agentConfigs, setAgentConfigs] = useState<AgentConfigsMap>({});
   const [llmDraft, setLlmDraft] = useState<string | null>(null);
 
+  // #367 — Foreman's own LLM (verifier + smart summary). The wizard's new
+  // Step 2 makes this an explicit choice instead of silently picking the
+  // first configured provider from Step 1.
+  const [foremanLlmPhase, setForemanLlmPhase] = useState<ForemanLlmPhase>(
+    "picker",
+  );
+  const [foremanLlmDraft, setForemanLlmDraft] = useState<string | null>(null);
+  const [ollamaModelDraft, setOllamaModelDraft] = useState<string | null>(null);
+  const [presetDraft, setPresetDraft] = useState<string | null>(null);
+  const [presetKeyDraft, setPresetKeyDraft] = useState<string>("");
+  const machineCap = useMemo<MachineCapability>(
+    () => detectMachineCapability(),
+    [],
+  );
+  const ollamaModelDoc = useMemo(() => loadOllamaModels(), []);
+  const llmPresetDoc = useMemo(() => loadLlmPresets(), []);
+  // Re-detect Ollama whenever we hit a foreman-llm phase that needs it —
+  // user might have run `brew install ollama` in another terminal between
+  // wizard renders.
+  const ollamaDetection = useMemo(
+    () => detectOllama(),
+    [foremanLlmPhase, currentStep],
+  );
+
   // #358 — Computed once per relevant state change so both render and the
   // useInput handler operate on the same ordered list. Empty array when
   // we're not in the llm-choice phase, so callers can early-return.
@@ -707,6 +883,181 @@ export function SetupWizard({
   // ConfirmInput handle n=exit). Selections held in React state are
   // preserved across back-steps because we only mutate phase / completion.
   useInput((input, key) => {
+    // #367 — Foreman's-LLM step key handling. Each phase has its own
+    // ↑↓ cursor + Space/Enter commit + Esc back-out.
+    if (currentStep === "foreman-llm") {
+      const storedNames = new Set(
+        services.secretStore.list().map((s) => s.name),
+      );
+      const configured = new Set(
+        configuredProviderIds(providerCatalog, storedNames),
+      );
+
+      // ----- picker phase -----
+      if (foremanLlmPhase === "picker") {
+        const visible: ForemanLlmChoice[] = [];
+        if (configured.has("anthropic")) visible.push("anthropic");
+        if (configured.has("openai")) visible.push("openai");
+        if (configured.has("gemini")) visible.push("gemini");
+        visible.push("ollama", "preset", "skip");
+        const cursor =
+          (foremanLlmDraft as ForemanLlmChoice | null) ?? visible[0] ?? "skip";
+        const idx = Math.max(0, visible.indexOf(cursor));
+        if (key.upArrow) {
+          setForemanLlmDraft(
+            visible[(idx - 1 + visible.length) % visible.length] ?? null,
+          );
+          return;
+        }
+        if (key.downArrow) {
+          setForemanLlmDraft(visible[(idx + 1) % visible.length] ?? null);
+          return;
+        }
+        if (key.escape) {
+          // Send the user back to providers — uncompleted providers state
+          // re-renders Step 1 with their current saves.
+          uncomplete("providers");
+          return;
+        }
+        if (key.return || input === " ") {
+          const chosen = cursor;
+          if (chosen === "ollama") {
+            if (!ollamaDetection.installed) {
+              setForemanLlmPhase("ollama-not-installed");
+            } else {
+              setForemanLlmPhase("ollama-model");
+            }
+            return;
+          }
+          if (chosen === "preset") {
+            setForemanLlmPhase("preset-pick");
+            return;
+          }
+          // cloud or skip — persist directly + advance
+          persistForemanLlmChoice({
+            services,
+            choice: chosen,
+            ollamaModel: null,
+            preset: null,
+            presetKey: "",
+          });
+          setForemanLlmPhase("picker");
+          setForemanLlmDraft(null);
+          advance("foreman-llm");
+          return;
+        }
+      }
+
+      // ----- ollama-not-installed phase -----
+      if (foremanLlmPhase === "ollama-not-installed") {
+        if (key.escape) {
+          setForemanLlmPhase("picker");
+          return;
+        }
+        if (key.return) {
+          // Re-check on Enter — `ollamaDetection` re-runs every phase
+          // change, so if user installed it in another terminal we pick
+          // it up on next phase transition.
+          if (ollamaDetection.installed) {
+            setForemanLlmPhase("ollama-model");
+          } else {
+            // Force a re-render by toggling phase. detectOllama() runs
+            // again because foremanLlmPhase is in its deps.
+            setForemanLlmPhase("picker");
+            setTimeout(() => setForemanLlmPhase("ollama-not-installed"), 0);
+          }
+          return;
+        }
+      }
+
+      // ----- ollama-model phase -----
+      if (foremanLlmPhase === "ollama-model") {
+        const enabled = ollamaModelDoc.models.filter((m) => {
+          const status = canRunModel(m, machineCap);
+          return (
+            status.state !== "disabled-ram" && status.state !== "disabled-disk"
+          );
+        });
+        if (enabled.length === 0) {
+          if (key.escape) setForemanLlmPhase("picker");
+          return;
+        }
+        const cursor = ollamaModelDraft ?? enabled[0]?.name ?? "";
+        const idx = Math.max(0, enabled.findIndex((m) => m.name === cursor));
+        if (key.upArrow) {
+          setOllamaModelDraft(
+            enabled[(idx - 1 + enabled.length) % enabled.length]?.name ?? null,
+          );
+          return;
+        }
+        if (key.downArrow) {
+          setOllamaModelDraft(
+            enabled[(idx + 1) % enabled.length]?.name ?? null,
+          );
+          return;
+        }
+        if (key.escape) {
+          setForemanLlmPhase("picker");
+          return;
+        }
+        if (key.return || input === " ") {
+          const chosen = enabled[idx]?.name;
+          if (chosen) {
+            persistForemanLlmChoice({
+              services,
+              choice: "ollama",
+              ollamaModel: chosen,
+              preset: null,
+              presetKey: "",
+            });
+            setForemanLlmPhase("picker");
+            setForemanLlmDraft(null);
+            setOllamaModelDraft(null);
+            advance("foreman-llm");
+          }
+          return;
+        }
+      }
+
+      // ----- preset-pick phase -----
+      if (foremanLlmPhase === "preset-pick") {
+        const presets = llmPresetDoc.presets;
+        const cursor = presetDraft ?? presets[0]?.id ?? "";
+        const idx = Math.max(0, presets.findIndex((p) => p.id === cursor));
+        if (key.upArrow) {
+          setPresetDraft(
+            presets[(idx - 1 + presets.length) % presets.length]?.id ?? null,
+          );
+          return;
+        }
+        if (key.downArrow) {
+          setPresetDraft(presets[(idx + 1) % presets.length]?.id ?? null);
+          return;
+        }
+        if (key.escape) {
+          setForemanLlmPhase("picker");
+          return;
+        }
+        if (key.return || input === " ") {
+          const chosen = presets[idx];
+          if (chosen) {
+            setPresetDraft(chosen.id);
+            setForemanLlmPhase("preset-key");
+          }
+          return;
+        }
+      }
+
+      // preset-key — handled by the PasswordInput's onSubmit. Esc back-out:
+      if (foremanLlmPhase === "preset-key") {
+        if (key.escape) {
+          setForemanLlmPhase("preset-pick");
+          setPresetKeyDraft("");
+          return;
+        }
+      }
+    }
+
     // #358 — Per-agent LLM picker key handling. ↑↓ live-updates the
     // selection (cursor + ✓ travel together — round-3 muscle memory
     // expectation), Space or Enter commits and advances. The render side
@@ -1133,6 +1484,310 @@ export function SetupWizard({
         </Text>
       </Box>
     );
+  }
+
+  // ---------------- Foreman's brain (#367) ----------------
+  if (currentStep === "foreman-llm") {
+    const storedNames = new Set(
+      services.secretStore.list().map((s) => s.name),
+    );
+    const configured = new Set(
+      configuredProviderIds(providerCatalog, storedNames),
+    );
+
+    if (foremanLlmPhase === "picker") {
+      // Universal picker — cloud rows surface only when user configured
+      // them in Step 1; ollama / preset / skip are always available.
+      const cloudRows: { value: ForemanLlmChoice; label: string; sub: string }[] = [];
+      if (configured.has("anthropic")) {
+        cloudRows.push({
+          value: "anthropic",
+          label: "Anthropic — Claude Haiku",
+          sub: "cloud · ~$2/mo at default budget",
+        });
+      }
+      if (configured.has("openai")) {
+        cloudRows.push({
+          value: "openai",
+          label: "OpenAI — gpt-4o-mini",
+          sub: "cloud · ~$1/mo at default budget",
+        });
+      }
+      if (configured.has("gemini")) {
+        cloudRows.push({
+          value: "gemini",
+          label: "Google Gemini — Gemini Flash",
+          sub: "cloud · free tier available",
+        });
+      }
+      const allRows: { value: ForemanLlmChoice; label: string; sub: string }[] = [
+        ...cloudRows,
+        {
+          value: "ollama",
+          label: "Local — Ollama on this machine",
+          sub: ollamaDetection.installed
+            ? `free · ${ollamaDetection.installedModels.length} model${
+                ollamaDetection.installedModels.length === 1 ? "" : "s"
+              } already pulled`
+            : "free · install + model wizard",
+        },
+        {
+          value: "preset",
+          label: "Custom — OpenAI-compatible",
+          sub: "DeepSeek, Qwen, OpenRouter, Together, Groq",
+        },
+        {
+          value: "skip",
+          label: "Skip — heuristics only",
+          sub: "no LLM calls, free, slightly less smart",
+        },
+      ];
+      const currentCursor: ForemanLlmChoice =
+        (foremanLlmDraft as ForemanLlmChoice | null) ?? allRows[0]?.value ?? "skip";
+      return (
+        <Box flexDirection="column" gap={1} paddingY={1}>
+          <WizardProgress
+            current={2}
+            total={5}
+            label="Foreman's brain"
+            phase="pick an LLM"
+          />
+          <Text color={theme.fg.muted}>
+            Foreman uses an LLM to verify risky agent calls and write daily
+            summaries. Pick where Foreman should run its own LLM. (Different
+            from the per-agent picker in Step 3.)
+          </Text>
+          <Box flexDirection="column">
+            {allRows.map((row) => {
+              const selected = row.value === currentCursor;
+              return (
+                <Box key={row.value} flexDirection="row">
+                  <Text
+                    color={selected ? theme.accent.primary : undefined}
+                    bold={selected}
+                  >
+                    {selected ? "❯ ✓ " : "    "}
+                    {row.label}
+                  </Text>
+                  <Text color={theme.fg.muted}>{"  "}{row.sub}</Text>
+                </Box>
+              );
+            })}
+          </Box>
+          <Text color={theme.fg.muted}>
+            [↑↓] move · [Enter] or [Space] confirms · [Esc] back to providers
+          </Text>
+        </Box>
+      );
+    }
+
+    if (foremanLlmPhase === "ollama-not-installed") {
+      const plan = planOllamaInstall(machineCap.os);
+      return (
+        <Box flexDirection="column" gap={1} paddingY={1}>
+          <WizardProgress
+            current={2}
+            total={5}
+            label="Foreman's brain"
+            phase="Ollama not installed"
+          />
+          <Text color={theme.accent.warning}>
+            ⚠ Ollama not detected on this machine.
+          </Text>
+          {plan.command ? (
+            <Box flexDirection="column">
+              <Text>To install (run in a separate terminal, then come back):</Text>
+              <Text bold color={theme.accent.primary}>
+                {"  "}$ {plan.command}
+              </Text>
+              <Text color={theme.fg.muted}>{plan.description}</Text>
+            </Box>
+          ) : (
+            <Box flexDirection="column">
+              <Text>
+                Windows install is a manual download:{" "}
+                <Text color={theme.accent.primary}>{plan.manualUrl}</Text>
+              </Text>
+              <Text color={theme.fg.muted}>{plan.description}</Text>
+            </Box>
+          )}
+          <Text color={theme.fg.muted}>
+            [Enter] re-check · [Esc] back to the picker (pick a different LLM)
+          </Text>
+        </Box>
+      );
+    }
+
+    if (foremanLlmPhase === "ollama-model") {
+      const usableGb = bytesToGb(
+        // usable inference RAM — same heuristic as canRunModel
+        Math.max(machineCap.freeRamBytes, machineCap.totalRamBytes - 4 * 1024 ** 3),
+      ).toFixed(1);
+      const rows = ollamaModelDoc.models.map((model) => ({
+        model,
+        status: canRunModel(model, machineCap),
+      }));
+      const enabledRows = rows.filter(
+        (r) =>
+          r.status.state !== "disabled-ram" &&
+          r.status.state !== "disabled-disk",
+      );
+      const disabledRows = rows.filter(
+        (r) =>
+          r.status.state === "disabled-ram" ||
+          r.status.state === "disabled-disk",
+      );
+      const cursor =
+        ollamaModelDraft ?? enabledRows[0]?.model.name ?? "llama3.2:3b";
+      return (
+        <Box flexDirection="column" gap={1} paddingY={1}>
+          <WizardProgress
+            current={2}
+            total={5}
+            label="Foreman's brain"
+            phase="Ollama ▸ pick a model"
+          />
+          <Text color={theme.fg.muted}>
+            {usableGb} GB usable RAM · {bytesToGb(
+              machineCap.freeDiskBytesHome ?? 0,
+            ).toFixed(0)} GB free disk · disabled rows can't run on this machine.
+          </Text>
+          <Box flexDirection="column">
+            {enabledRows.map(({ model, status }) => {
+              const selected = model.name === cursor;
+              const tag = formatOllamaRunTag(model, status, ollamaDetection.installedModels);
+              return (
+                <Box key={model.name} flexDirection="row">
+                  <Text
+                    color={selected ? theme.accent.primary : undefined}
+                    bold={selected}
+                  >
+                    {selected ? "❯ ✓ " : "    "}
+                    {model.name.padEnd(20, " ")}
+                  </Text>
+                  <Text color={theme.fg.muted}>
+                    {model.runtime_ram_gb.toFixed(1).padStart(5, " ")} GB · {model.description}{tag}
+                  </Text>
+                </Box>
+              );
+            })}
+            {disabledRows.length > 0 && (
+              <Box flexDirection="column" marginTop={1}>
+                <Text color={theme.fg.muted}>
+                  ────────────────────────────────────────────────────────────
+                </Text>
+                {disabledRows.map(({ model, status }) => {
+                  const reason =
+                    status.state === "disabled-ram" || status.state === "disabled-disk"
+                      ? status.reason
+                      : "";
+                  return (
+                    <Box key={model.name} flexDirection="row">
+                      <Text color={theme.fg.muted}>{"    "}
+                        {model.name.padEnd(20, " ")} {model.runtime_ram_gb.toFixed(0).padStart(4, " ")} GB · ✗ {reason}
+                      </Text>
+                    </Box>
+                  );
+                })}
+              </Box>
+            )}
+          </Box>
+          <Text color={theme.fg.muted}>
+            [↑↓] move within enabled rows · [Enter] or [Space] confirms · [Esc] back
+          </Text>
+        </Box>
+      );
+    }
+
+    if (foremanLlmPhase === "preset-pick") {
+      const cursor = presetDraft ?? llmPresetDoc.presets[0]?.id ?? "deepseek";
+      return (
+        <Box flexDirection="column" gap={1} paddingY={1}>
+          <WizardProgress
+            current={2}
+            total={5}
+            label="Foreman's brain"
+            phase="OpenAI-compatible ▸ pick a preset"
+          />
+          <Text color={theme.fg.muted}>
+            All speak the OpenAI /v1/chat/completions shape — pick a preset, paste your API key on the next screen.
+          </Text>
+          <Box flexDirection="column">
+            {llmPresetDoc.presets.map((preset) => {
+              const selected = preset.id === cursor;
+              return (
+                <Box key={preset.id} flexDirection="row">
+                  <Text
+                    color={selected ? theme.accent.primary : undefined}
+                    bold={selected}
+                  >
+                    {selected ? "❯ ✓ " : "    "}
+                    {preset.name.padEnd(24, " ")}
+                  </Text>
+                  <Text color={theme.fg.muted}>
+                    {preset.cost_hint}
+                  </Text>
+                </Box>
+              );
+            })}
+          </Box>
+          <Text color={theme.fg.muted}>
+            [↑↓] move · [Enter] or [Space] confirms · [Esc] back to the picker
+          </Text>
+        </Box>
+      );
+    }
+
+    if (foremanLlmPhase === "preset-key") {
+      const preset = presetDraft
+        ? findPreset(llmPresetDoc, presetDraft)
+        : null;
+      if (!preset) {
+        setForemanLlmPhase("preset-pick");
+        return <Text>…</Text>;
+      }
+      return (
+        <Box flexDirection="column" gap={1} paddingY={1}>
+          <WizardProgress
+            current={2}
+            total={5}
+            label="Foreman's brain"
+            phase={`${preset.name} ▸ API key`}
+          />
+          <Text color={theme.fg.muted}>{preset.description}</Text>
+          <Text>
+            Get your key at{" "}
+            <Text color={theme.accent.primary}>{preset.where_to_get}</Text>
+          </Text>
+          <Text>Paste your {preset.name} API key:</Text>
+          <PasswordInput
+            key={`foreman-llm-preset:${preset.id}`}
+            placeholder="••••••••"
+            onChange={(v) => setPresetKeyDraft(v)}
+            onSubmit={(v) => {
+              const trimmed = (v ?? "").trim();
+              if (trimmed.length === 0) return;
+              persistForemanLlmChoice({
+                services,
+                choice: "preset",
+                ollamaModel: null,
+                preset,
+                presetKey: trimmed,
+              });
+              setForemanLlmPhase("picker");
+              setForemanLlmDraft(null);
+              setPresetKeyDraft("");
+              advance("foreman-llm");
+            }}
+          />
+          <Text color={theme.fg.muted}>
+            [Enter] save + continue · [Esc] back to preset picker
+          </Text>
+        </Box>
+      );
+    }
+
+    return <Text>…</Text>;
   }
 
   // ---------------- Agents — picker ----------------
