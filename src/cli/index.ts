@@ -10,6 +10,10 @@ import { migrateCommand } from "./migrate.js";
 import { llmCommand } from "./llm-cli.js";
 import { migrateConfigCommand } from "./migrate-config.js";
 import { notifyCommand } from "./notify-cli.js";
+import {
+  claudeLoginCommand,
+  codexLoginCommand,
+} from "./oauth-wrapper.js";
 import { policyCommand } from "./policy-cli.js";
 import { providerCommand } from "./provider-cli.js";
 import { registryCommand } from "./registry-cli.js";
@@ -36,6 +40,8 @@ program.addCommand(notifyCommand);
 program.addCommand(llmCommand);
 program.addCommand(agentsCommand);
 program.addCommand(providerCommand);
+program.addCommand(codexLoginCommand);
+program.addCommand(claudeLoginCommand);
 program.addCommand(secretsCommand);
 program.addCommand(registryCommand);
 program.addCommand(identityCommand);
