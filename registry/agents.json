@@ -17,7 +17,7 @@
       "identity_path": "~/.hermes/SOUL.md",
       "required_secrets": ["anthropic-key"],
       "optional_secrets": ["telegram-bot-token", "discord-bot-token"],
-      "llm_compat": ["anthropic", "openai"],
+      "llm_compat": ["anthropic", "openai", "gemini"],
       "optional_services": ["telegram", "discord"],
       "mcp_compatible": true,
       "supported_versions": ">=2.0.0",
