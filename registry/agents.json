@@ -66,7 +66,7 @@
             {
               "if_provider": "openai",
               "set": {
-                "model.default": "gpt-4o-mini",
+                "model.default": "openai/gpt-4o-mini",
                 "model.provider": "openai",
                 "model.base_url": "https://api.openai.com/v1"
               }
@@ -74,7 +74,7 @@
             {
               "if_provider": "anthropic",
               "set": {
-                "model.default": "claude-haiku-4-5-20251001",
+                "model.default": "anthropic/claude-haiku-4-5-20251001",
                 "model.provider": "anthropic",
                 "model.base_url": "https://api.anthropic.com/v1"
               }
@@ -82,8 +82,8 @@
             {
               "if_provider": "gemini",
               "set": {
-                "model.default": "gemini-2.0-flash",
-                "model.provider": "gemini",
+                "model.default": "google/gemini-2.0-flash",
+                "model.provider": "google",
                 "model.base_url": "https://generativelanguage.googleapis.com/v1beta/openai"
               }
             }
