@@ -168,22 +168,19 @@
             {
               "if_provider": "openai",
               "set": {
-                "agents.defaults.provider": "openai",
-                "agents.defaults.model": "gpt-4o-mini"
+                "agents.defaults.model.primary": "openai/gpt-4o-mini"
               }
             },
             {
               "if_provider": "anthropic",
               "set": {
-                "agents.defaults.provider": "anthropic",
-                "agents.defaults.model": "claude-haiku-4-5-20251001"
+                "agents.defaults.model.primary": "anthropic/claude-haiku-4-5-20251001"
               }
             },
             {
               "if_provider": "gemini",
               "set": {
-                "agents.defaults.provider": "gemini",
-                "agents.defaults.model": "gemini-2.0-flash"
+                "agents.defaults.model.primary": "google/gemini-2.0-flash"
               }
             }
           ]

@@ -688,7 +688,11 @@ describe('writeConfigOverrides (#389)', () => {
     expect(parsed.terminal.backend).toBe('local')
   })
 
-  it('overlays into JSON files too', () => {
+  it('overlays into JSON files too — OpenClaw canonical nested model shape', () => {
+    // #395 — OpenClaw's schema requires `agents.defaults.model.primary`
+    // (object) carrying a slash-form `<provider>/<model>` value. The bare
+    // `agents.defaults.model: "gpt-4o-mini"` shape produces a doctor
+    // fallback warning, and `agents.defaults.provider` is a rejected key.
     const path = join(tmp, 'openclaw.json')
     writeFileSync(
       path,
@@ -699,16 +703,16 @@ describe('writeConfigOverrides (#389)', () => {
       { mode: 0o600 },
     )
     const out = writeConfigOverrides(path, 'json', {
-      'agents.defaults.provider': 'openai',
-      'agents.defaults.model': 'gpt-4o-mini',
+      'agents.defaults.model.primary': 'openai/gpt-4o-mini',
     })
     expect(out.created).toBe(false)
     const parsed = JSON.parse(readFileSync(path, 'utf-8'))
-    expect(parsed.agents.defaults.provider).toBe('openai')
-    expect(parsed.agents.defaults.model).toBe('gpt-4o-mini')
+    expect(parsed.agents.defaults.model.primary).toBe('openai/gpt-4o-mini')
     // Existing keys preserved
     expect(parsed.agents.defaults.workspace).toBe('~/.openclaw')
     expect(parsed.channels.telegram.token).toBe('tok')
+    // No leftover `provider` field — registry no longer writes it
+    expect(parsed.agents.defaults.provider).toBeUndefined()
   })
 
   it('starts fresh on malformed YAML (no crash)', () => {

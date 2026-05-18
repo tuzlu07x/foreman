@@ -55,7 +55,9 @@ describe("buildMcpSnippet", () => {
 
   // #385 — explicit mcp_format overrides the (mcp_compatible ? flat : nested)
   // heuristic. OpenClaw is mcp_compatible:true but needs the nested form.
-  it("mcp_format=nested produces {mcp:{enabled,servers}} even when mcp_compatible:true", () => {
+  // #395 — the nested form must NOT carry `mcp.enabled`; OpenClaw's strict
+  // schema rejects unknown keys.
+  it("mcp_format=nested produces {mcp:{servers}} without an enabled flag", () => {
     const snippet = buildMcpSnippet(
       "openclaw",
       makeEntry({ mcp_compatible: true, mcp_format: "nested" }),
@@ -64,10 +66,12 @@ describe("buildMcpSnippet", () => {
       mcp?: { enabled?: boolean; servers?: Record<string, unknown> };
       mcpServers?: unknown;
     };
-    expect(block.mcp?.enabled).toBe(true);
     expect(block.mcp?.servers).toHaveProperty("foreman");
+    expect(block.mcp?.enabled).toBeUndefined();
     // Flat key should NOT be present when nested is explicit
     expect(block.mcpServers).toBeUndefined();
+    // YAML mirror should also be free of the rejected key
+    expect(snippet.yaml).not.toContain("enabled:");
   });
 
   it("mcp_format=flat produces {<topKey>:{foreman}} even when mcp_compatible:false", () => {

@@ -27,9 +27,10 @@ export function buildMcpSnippet(
 
   // #385 — explicit mcp_format takes precedence over the (mcp_compatible
   // ? flat : nested) heuristic. OpenClaw is mcp_compatible:true but
-  // expects the nested {mcp:{enabled,servers}} shape per docs.openclaw.ai
-  // — without this, Foreman writes a top-level `mcpServers` block its
-  // schema validator rejects.
+  // expects the nested {mcp:{servers}} shape per docs.openclaw.ai —
+  // without this, Foreman writes a top-level `mcpServers` block its
+  // schema validator rejects. #395 — the nested form must NOT include
+  // `mcp.enabled`; OpenClaw's strict schema rejects it.
   const format =
     entry.mcp_format ?? (entry.mcp_compatible ? "flat" : "nested");
 
@@ -38,7 +39,6 @@ export function buildMcpSnippet(
       ? { [topKey]: { foreman: block } }
       : {
           mcp: {
-            enabled: true,
             servers: { foreman: block },
           },
         };
