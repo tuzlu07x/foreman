@@ -444,6 +444,14 @@ export const ProviderEntrySchema = z.object({
   instructions: z.array(z.string()),
   endpoint_default: z.string().nullable(),
   endpoint_required: z.boolean(),
+  /** #419 — Default model id consumed by `deriveDefaultModelId()`
+   *  (provider-resolver) when the wizard hasn't surfaced an explicit
+   *  per-agent model pick yet. Updating to a new flagship model (e.g.
+   *  gpt-5 → gpt-6) is now a registry-only change, no TypeScript
+   *  release needed. Nullable so providers without a sensible default
+   *  (Ollama-local, custom endpoints) opt out — the resolver falls
+   *  back to the literal `"default"` placeholder in that case. */
+  default_model: z.string().min(1).nullable().optional(),
 });
 
 export const ProviderCatalogSchema = z.object({
