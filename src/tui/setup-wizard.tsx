@@ -29,6 +29,7 @@ import {
 import { WizardProgress } from "./components/wizard-progress.js";
 import {
   detectInstall,
+  disableManagedLaunchAgent,
   preferredUninstallCommand,
   runInstall,
   runPostConfigCommands,
@@ -2854,6 +2855,36 @@ export async function runInstallStep(
       }
     } catch {
       /* best-effort — malformed config files shouldn't block install */
+    }
+
+    // #394 — Disable any agent-managed macOS LaunchAgent so Foreman's
+    // daemon manager has sole ownership. Hermes' installer drops one
+    // that auto-respawns the gateway across reboots; without this
+    // disable, two Hermes processes fight for the Telegram bot token.
+    // No-op on non-macOS hosts. Idempotent: bootout returns success
+    // when not loaded, rename is skipped when already renamed.
+    if (entry.install.macos_launch_agent_disable) {
+      try {
+        const r = await disableManagedLaunchAgent(
+          entry.install.macos_launch_agent_disable,
+        );
+        if (r.platformSkipped) {
+          // Don't log — non-macOS users don't need to hear about LaunchAgents.
+        } else if (r.plistRenamed) {
+          log(
+            `  ✓ disabled ${entry.install.macos_launch_agent_disable.label} LaunchAgent (Foreman daemon owns the process now)`,
+          );
+        } else if (r.bootedOut) {
+          log(`  ◦ ${entry.install.macos_launch_agent_disable.label} LaunchAgent already disabled`);
+        }
+        for (const err of r.errors) {
+          log(`  ⚠ ${err}`);
+        }
+      } catch (err) {
+        log(
+          `  ⚠ LaunchAgent disable failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     // #398 — post-config commands. Run registry-declared shell steps

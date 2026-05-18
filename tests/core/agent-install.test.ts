@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   detectInstall,
+  disableManagedLaunchAgent,
   isBrewManagedPath,
   preferredInstallCommand,
   preferredUninstallCommand,
@@ -390,5 +391,78 @@ describe("runPostConfigCommands", () => {
       post_config_commands: ["false", "true"],
     });
     expect(results.map((r) => r.ok)).toEqual([false, true]);
+  });
+});
+
+// #394 — disableManagedLaunchAgent. Hermes' installer drops
+// ~/Library/LaunchAgents/ai.hermes.gateway.plist which auto-respawns the
+// gateway and fights Foreman for the Telegram bot token. Bootout + rename
+// hands ownership to Foreman's daemon manager.
+describe("disableManagedLaunchAgent", () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "foreman-launchagent-"));
+  });
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("is a no-op on non-macOS hosts (returns platformSkipped)", async () => {
+    if (process.platform === "darwin") {
+      return; // run the inverse check below
+    }
+    const r = await disableManagedLaunchAgent({
+      label: "ai.hermes.gateway",
+      plist_path: join(tmpDir, "ai.hermes.gateway.plist"),
+    });
+    expect(r.platformSkipped).toBe(true);
+    expect(r.bootedOut).toBe(false);
+    expect(r.plistRenamed).toBe(false);
+  });
+
+  it("renames an existing plist to .foreman-disabled (macOS)", async () => {
+    if (process.platform !== "darwin") {
+      return; // macOS-only behavior
+    }
+    const plist = join(tmpDir, "fake.foreman-test.plist");
+    writeFileSync(plist, "<plist/>", { mode: 0o644 });
+    const r = await disableManagedLaunchAgent({
+      label: "com.foreman.test-nonexistent",
+      plist_path: plist,
+    });
+    expect(r.platformSkipped).toBe(false);
+    expect(r.plistRenamed).toBe(true);
+    // Plist moved aside; .foreman-disabled successor present
+    expect(() => writeFileSync(plist, "shouldn't exist")).not.toThrow();
+  });
+
+  it("returns plistRenamed=false when plist is absent (idempotent re-run)", async () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+    const r = await disableManagedLaunchAgent({
+      label: "com.foreman.test-nonexistent",
+      plist_path: join(tmpDir, "never-existed.plist"),
+    });
+    expect(r.platformSkipped).toBe(false);
+    expect(r.plistRenamed).toBe(false);
+    // bootout still runs (no-ops cleanly on a non-loaded label)
+    expect(r.bootedOut).toBe(true);
+  });
+
+  it("expands `~/` in plist_path against the supplied home dir", async () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+    const r = await disableManagedLaunchAgent(
+      {
+        label: "com.foreman.test-nonexistent",
+        plist_path: "~/missing.plist",
+      },
+      { home: tmpDir },
+    );
+    // The path resolved under tmpDir; file didn't exist so renamed=false
+    expect(r.platformSkipped).toBe(false);
+    expect(r.plistRenamed).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, renameSync } from "node:fs";
 import { delimiter } from "node:path";
 import { homedir } from "node:os";
 
@@ -148,6 +148,102 @@ export interface PostConfigResult {
   command: string;
   ok: boolean;
   exitCode: number;
+}
+
+export interface LaunchAgentDisableSpec {
+  /** launchd service label, e.g. "ai.hermes.gateway". */
+  label: string;
+  /** Path to the .plist file. `~/` is expanded against the user's home. */
+  plist_path: string;
+}
+
+export interface LaunchAgentDisableResult {
+  /** Non-macOS hosts skip entirely — no error. */
+  platformSkipped: boolean;
+  /** Did `launchctl bootout` complete (regardless of exit code — bootout
+   *  returns non-zero when the service was never loaded, which is fine). */
+  bootedOut: boolean;
+  /** Was the plist renamed to `<plist>.foreman-disabled` so logout/reboot
+   *  doesn't reload it. False when the plist is already renamed or never
+   *  existed. */
+  plistRenamed: boolean;
+  /** Captured stderr lines + thrown errors for diagnostics. None of these
+   *  abort the calling install flow. */
+  errors: string[];
+}
+
+/**
+ * Disable an agent's macOS LaunchAgent so it doesn't auto-respawn outside
+ * Foreman's daemon manager (#394). Hermes' installer drops one that
+ * keeps reclaiming the Telegram bot token across reboots, producing a
+ * 5-hour zombie-respawn debugging session if left alone.
+ *
+ * Idempotent + best-effort: `launchctl bootout` is a no-op if the
+ * service was never loaded; the rename is a no-op if the plist is
+ * already renamed (or never existed). On non-macOS hosts the function
+ * returns immediately with `platformSkipped: true`.
+ */
+export async function disableManagedLaunchAgent(
+  spec: LaunchAgentDisableSpec,
+  options: { home?: string } = {},
+): Promise<LaunchAgentDisableResult> {
+  const result: LaunchAgentDisableResult = {
+    platformSkipped: false,
+    bootedOut: false,
+    plistRenamed: false,
+    errors: [],
+  };
+  if (process.platform !== "darwin") {
+    result.platformSkipped = true;
+    return result;
+  }
+  const home = options.home ?? homedir();
+  const plistPath = spec.plist_path.startsWith("~/")
+    ? `${home}/${spec.plist_path.slice(2)}`
+    : spec.plist_path;
+  // 1) bootout. `launchctl unload` returns `Input/output error` on
+  // Catalina+; `bootout gui/<uid>/<label>` is the documented modern
+  // command. Non-zero exit means "service wasn't loaded" — we still
+  // proceed to rename the plist.
+  const uid = process.getuid?.() ?? 0;
+  await new Promise<void>((resolveBoot) => {
+    const child = spawn(
+      "launchctl",
+      ["bootout", `gui/${uid}/${spec.label}`],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    child.stderr.on("data", (chunk: Buffer) => {
+      const txt = chunk.toString("utf8").trim();
+      // "Boot-out failed: Could not find service" = already not loaded.
+      // Worth recording but not surfacing as a user-visible error.
+      if (txt.length > 0 && !/Could not find service/i.test(txt)) {
+        result.errors.push(`launchctl: ${txt}`);
+      }
+    });
+    child.on("close", () => {
+      result.bootedOut = true;
+      resolveBoot();
+    });
+    child.on("error", (err) => {
+      result.errors.push(`launchctl bootout failed: ${err.message}`);
+      resolveBoot();
+    });
+  });
+  // 2) Rename plist so logout/reboot doesn't reload it. The
+  // `.foreman-disabled` suffix is reversible by the user if they want
+  // Hermes' standalone LaunchAgent back.
+  try {
+    if (existsSync(plistPath)) {
+      const disabledPath = `${plistPath}.foreman-disabled`;
+      renameSync(plistPath, disabledPath);
+      result.plistRenamed = true;
+    }
+  } catch (err) {
+    result.errors.push(
+      `plist rename failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  return result;
 }
 
 /**
