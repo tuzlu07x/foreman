@@ -28,9 +28,13 @@
         "label": "Telegram/Discord gateway"
       },
       "mcp_register_cli": {
-        "command_template": "hermes mcp add foreman --command foreman --args \"mcp-stdio --source {agent_id}\"",
+        "command_template": "hermes mcp add foreman --command {wrapper_path}",
         "verify_template": "hermes mcp list",
-        "note": "Hermes keeps its own MCP registry separately from the YAML config block. Run this once so it routes through Foreman."
+        "note": "Hermes' --args parsing strips multi-token strings, so we point it at a one-line wrapper instead. Foreman writes the wrapper for you; just run the hermes command above once.",
+        "wrapper": {
+          "path_template": "~/.foreman/wrappers/{agent_id}-mcp.sh",
+          "content_template": "#!/usr/bin/env bash\nexec foreman mcp-stdio --source {agent_id}\n"
+        }
       },
       "secret_projection": {
         "env_file": "~/.hermes/.env",
