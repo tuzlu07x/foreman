@@ -1,4 +1,5 @@
 import type { LlmClient } from "./client.js";
+import { debugLogLlmError } from "./debug.js";
 import type { SummaryStats } from "../notification/summary-generator.js";
 
 // =============================================================================
@@ -92,6 +93,11 @@ export async function narrateSummary(
       durationMs: res.durationMs,
     };
   } catch (err) {
+    // #347 — opt-in stderr line so the user can diagnose smart-summary
+    // fallback (FOREMAN_LLM_DEBUG=1). The reason is still kept on the
+    // returned outcome for callers, but the TUI / digest pipeline doesn't
+    // surface it.
+    debugLogLlmError('summary', err);
     return {
       status: "failed",
       reason: err instanceof Error ? err.message : String(err),
