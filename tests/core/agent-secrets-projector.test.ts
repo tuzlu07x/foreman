@@ -5,11 +5,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   projectSecretsForAgent,
   writeAuthJson,
+  writeConfigOverrides,
   writeDotenv,
   writeJsonChannels,
   writeJsonEnvBlock,
   writeTomlFields,
 } from '../../src/core/agent-secrets-projector.js'
+import { parse as parseYaml } from 'yaml'
 import type { AgentEntry } from '../../src/core/registry-catalog.js'
 import { SecretStore } from '../../src/core/secret-store.js'
 import { createInMemoryDb, type ForemanDb } from '../../src/db/client.js'
@@ -637,5 +639,221 @@ describe('projectSecretsForAgent — wiring', () => {
       expect(result.files).toHaveLength(1)
       expect(existsSync(path)).toBe(true)
     })
+  })
+})
+
+// #389 — config_overrides writer + per-provider projection logic. Solves
+// the Hermes/OpenClaw "config.yaml provider stays at template default"
+// problem (was Option B from #350).
+describe('writeConfigOverrides (#389)', () => {
+  it('creates a fresh YAML file with the dot-path values', () => {
+    const path = join(tmp, 'config.yaml')
+    const out = writeConfigOverrides(path, 'yaml', {
+      'model.default': 'gpt-4o-mini',
+      'model.provider': 'openai',
+    })
+    expect(out.created).toBe(true)
+    expect(out.replacedStale).toBe(false)
+    const parsed = parseYaml(readFileSync(path, 'utf-8')) as Record<
+      string,
+      unknown
+    >
+    expect((parsed.model as { default: string }).default).toBe('gpt-4o-mini')
+    expect((parsed.model as { provider: string }).provider).toBe('openai')
+  })
+
+  it('overlays into existing YAML preserving siblings', () => {
+    const path = join(tmp, 'hermes.yaml')
+    writeFileSync(
+      path,
+      'model:\n  default: anthropic/claude\n  provider: auto\nterminal:\n  backend: local\n',
+      { mode: 0o600 },
+    )
+    const out = writeConfigOverrides(path, 'yaml', {
+      'model.default': 'gpt-4o-mini',
+      'model.provider': 'openai',
+      'model.base_url': 'https://api.openai.com/v1',
+    })
+    expect(out.created).toBe(false)
+    expect(out.replacedStale).toBe(true)
+    const parsed = parseYaml(readFileSync(path, 'utf-8')) as {
+      model: { default: string; provider: string; base_url: string }
+      terminal: { backend: string }
+    }
+    expect(parsed.model.default).toBe('gpt-4o-mini')
+    expect(parsed.model.provider).toBe('openai')
+    expect(parsed.model.base_url).toBe('https://api.openai.com/v1')
+    // Sibling top-level keys survive
+    expect(parsed.terminal.backend).toBe('local')
+  })
+
+  it('overlays into JSON files too', () => {
+    const path = join(tmp, 'openclaw.json')
+    writeFileSync(
+      path,
+      JSON.stringify({
+        agents: { defaults: { workspace: '~/.openclaw' } },
+        channels: { telegram: { token: 'tok' } },
+      }),
+      { mode: 0o600 },
+    )
+    const out = writeConfigOverrides(path, 'json', {
+      'agents.defaults.provider': 'openai',
+      'agents.defaults.model': 'gpt-4o-mini',
+    })
+    expect(out.created).toBe(false)
+    const parsed = JSON.parse(readFileSync(path, 'utf-8'))
+    expect(parsed.agents.defaults.provider).toBe('openai')
+    expect(parsed.agents.defaults.model).toBe('gpt-4o-mini')
+    // Existing keys preserved
+    expect(parsed.agents.defaults.workspace).toBe('~/.openclaw')
+    expect(parsed.channels.telegram.token).toBe('tok')
+  })
+
+  it('starts fresh on malformed YAML (no crash)', () => {
+    const path = join(tmp, 'broken.yaml')
+    writeFileSync(path, ':\n  invalid: [not yaml at all', { mode: 0o600 })
+    const out = writeConfigOverrides(path, 'yaml', {
+      'model.provider': 'openai',
+    })
+    expect(out.created).toBe(false)
+    const parsed = parseYaml(readFileSync(path, 'utf-8')) as Record<
+      string,
+      unknown
+    >
+    expect((parsed.model as { provider: string }).provider).toBe('openai')
+  })
+})
+
+describe('projectSecretsForAgent — config_overrides (#389)', () => {
+  let db: ForemanDb
+  let sqlite: ReturnType<typeof createInMemoryDb>['sqlite']
+  let store: SecretStore
+
+  beforeEach(() => {
+    const h = createInMemoryDb()
+    db = h.db
+    sqlite = h.sqlite
+    store = new SecretStore(db, Buffer.alloc(32, 1))
+  })
+  afterEach(() => {
+    sqlite.close()
+  })
+
+  function hermesEntry(): AgentEntry {
+    return {
+      id: 'hermes',
+      name: 'Hermes',
+      tagline: 't',
+      homepage: 'https://example.com',
+      install: { npm: null, brew: null },
+      config_paths: [],
+      required_secrets: [],
+      optional_secrets: [],
+      mcp_compatible: true,
+      supported_versions: '*',
+      min_foreman_version: '0.1.2',
+      secret_projection: {
+        config_overrides: {
+          path: `${tmp}/hermes.yaml`,
+          format: 'yaml',
+          writes: [
+            {
+              if_provider: 'openai',
+              set: {
+                'model.default': 'gpt-4o-mini',
+                'model.provider': 'openai',
+              },
+            },
+            {
+              if_provider: 'anthropic',
+              set: {
+                'model.default': 'claude-haiku-4-5-20251001',
+                'model.provider': 'anthropic',
+              },
+            },
+          ],
+        },
+      },
+    } as AgentEntry
+  }
+
+  it('writes the openai overrides when llmProvider=openai', () => {
+    const result = projectSecretsForAgent(hermesEntry(), {
+      providersSelected: ['openai'],
+      servicesSelected: [],
+      llmProvider: 'openai',
+      secretStore: store,
+      home: tmp,
+    })
+    expect(result.files).toHaveLength(1)
+    const parsed = parseYaml(readFileSync(`${tmp}/hermes.yaml`, 'utf-8')) as {
+      model: { default: string; provider: string }
+    }
+    expect(parsed.model.provider).toBe('openai')
+    expect(parsed.model.default).toBe('gpt-4o-mini')
+  })
+
+  it('writes the anthropic overrides when llmProvider=anthropic', () => {
+    const result = projectSecretsForAgent(hermesEntry(), {
+      providersSelected: ['openai', 'anthropic'],
+      servicesSelected: [],
+      llmProvider: 'anthropic',
+      secretStore: store,
+      home: tmp,
+    })
+    expect(result.files).toHaveLength(1)
+    const parsed = parseYaml(readFileSync(`${tmp}/hermes.yaml`, 'utf-8')) as {
+      model: { provider: string }
+    }
+    expect(parsed.model.provider).toBe('anthropic')
+  })
+
+  it('writes nothing when no llmProvider is set and no global match', () => {
+    const result = projectSecretsForAgent(hermesEntry(), {
+      providersSelected: [], // no global match either
+      servicesSelected: [],
+      secretStore: store,
+      home: tmp,
+    })
+    expect(result.files).toHaveLength(0)
+    expect(existsSync(`${tmp}/hermes.yaml`)).toBe(false)
+  })
+
+  it('falls back to providersSelected when llmProvider omitted (back-compat)', () => {
+    const result = projectSecretsForAgent(hermesEntry(), {
+      providersSelected: ['openai'],
+      servicesSelected: [],
+      // no llmProvider
+      secretStore: store,
+      home: tmp,
+    })
+    expect(result.files).toHaveLength(1)
+    const parsed = parseYaml(readFileSync(`${tmp}/hermes.yaml`, 'utf-8')) as {
+      model: { provider: string }
+    }
+    expect(parsed.model.provider).toBe('openai')
+  })
+
+  it('preserves siblings the user added to the YAML file', () => {
+    writeFileSync(
+      `${tmp}/hermes.yaml`,
+      'model:\n  default: anthropic/claude\n  provider: auto\nterminal:\n  backend: docker\n',
+      { mode: 0o600 },
+    )
+    projectSecretsForAgent(hermesEntry(), {
+      providersSelected: ['openai'],
+      servicesSelected: [],
+      llmProvider: 'openai',
+      secretStore: store,
+      home: tmp,
+    })
+    const parsed = parseYaml(readFileSync(`${tmp}/hermes.yaml`, 'utf-8')) as {
+      model: { provider: string; default: string }
+      terminal: { backend: string }
+    }
+    expect(parsed.model.provider).toBe('openai')
+    expect(parsed.model.default).toBe('gpt-4o-mini')
+    expect(parsed.terminal.backend).toBe('docker') // user-added survives
   })
 })

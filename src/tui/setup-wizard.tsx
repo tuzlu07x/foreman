@@ -2831,6 +2831,9 @@ export async function runInstallStep(
       const projection = projectSecretsForAgent(entry, {
         providersSelected: projectionCtx.providersSelected,
         servicesSelected: projectionCtx.servicesSelected,
+        // #389 — per-agent llmProvider so config_overrides' if_provider
+        // resolves to the user's per-agent pick (not the global Step 1 set).
+        llmProvider: agentConfigs[id]?.llmProvider,
         secretStore: services.secretStore,
       });
       for (const f of projection.files) {
