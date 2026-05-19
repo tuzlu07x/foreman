@@ -2,7 +2,7 @@ import type Database from "better-sqlite3";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EventBus,
   type ForemanEventMap,
@@ -12,6 +12,7 @@ import {
   registerBuiltinCommands,
   type ForemanCommandContext,
 } from "../../src/core/foreman-command.js";
+import { writeForemanPidfile } from "../../src/core/foreman-pidfile.js";
 import { RegistryService } from "../../src/core/registry.js";
 import { createInMemoryDb, type ForemanDb } from "../../src/db/client.js";
 
@@ -37,6 +38,7 @@ describe("ForemanCommandRouter (#431)", () => {
       db,
       registry,
       llmConfigPath,
+      configDir: tmp,
       sourceAgent: "hermes",
     };
   });
@@ -80,12 +82,13 @@ describe("ForemanCommandRouter (#431)", () => {
   });
 
   describe("help", () => {
-    it("lists every registered verb", async () => {
+    it("lists every registered verb (help / status / stop / llm)", async () => {
       const result = await router.dispatch("help", [], ctx);
       expect(result.ok).toBe(true);
       // Built-ins must all appear.
       expect(result.text).toContain("help");
       expect(result.text).toContain("status");
+      expect(result.text).toContain("stop");
       expect(result.text).toContain("llm");
     });
 
@@ -193,6 +196,54 @@ describe("ForemanCommandRouter (#431)", () => {
       expect(result.ok).toBe(false);
       expect(result.errorCode).toBe("UNKNOWN_SUBCOMMAND");
       expect(result.text).toContain("chaos");
+    });
+  });
+
+  // #431 — `/foreman stop` sends SIGTERM to the PID recorded in
+  // `<configDir>/foreman.pid`. The handler is process-bridging: it
+  // runs in `mcp-stdio` but signals `foreman start`.
+  describe("stop", () => {
+    it("returns NOT_AVAILABLE when no pidfile exists", async () => {
+      const result = await router.dispatch("stop", [], ctx);
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe("NOT_AVAILABLE");
+      expect(result.text.toLowerCase()).toContain("isn't running");
+    });
+
+    it("returns NOT_AVAILABLE when pidfile points at a dead process", async () => {
+      // PID 1 belongs to init/systemd in real environments but we
+      // can't kill it; the pidfile-stale check uses kill(pid, 0)
+      // which will succeed there. Use a definitely-gone PID instead:
+      // 2^31 - 1, way out of normal ranges.
+      writeForemanPidfile(ctx.configDir);
+      // Overwrite with a bogus PID. writeForemanPidfile uses
+      // process.pid by default, so re-create the file directly.
+      writeFileSync(join(ctx.configDir, "foreman.pid"), "2147483647", "utf-8");
+      const result = await router.dispatch("stop", [], ctx);
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe("NOT_AVAILABLE");
+    });
+
+    it("sends SIGTERM to the PID and reports success", async () => {
+      writeForemanPidfile(ctx.configDir);
+      // Mock process.kill so the test doesn't actually kill itself.
+      const killSpy = vi
+        .spyOn(process, "kill")
+        .mockImplementation(() => true);
+      try {
+        const result = await router.dispatch("stop", [], ctx);
+        expect(result.ok).toBe(true);
+        expect(result.text).toContain("Shutting down");
+        expect(result.text).toContain(String(process.pid));
+        // First call is the alive-check (kill(pid, 0)); second is SIGTERM.
+        const sigtermCall = killSpy.mock.calls.find(
+          (c) => c[1] === "SIGTERM",
+        );
+        expect(sigtermCall).toBeDefined();
+        expect(sigtermCall?.[0]).toBe(process.pid);
+      } finally {
+        killSpy.mockRestore();
+      }
     });
   });
 });

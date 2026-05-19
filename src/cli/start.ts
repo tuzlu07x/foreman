@@ -14,6 +14,10 @@ import { bus } from "../core/event-bus.js";
 import { MediatorService } from "../core/mediator.js";
 import { PolicyEngine } from "../core/policy-engine.js";
 import { ChatPrimaryService } from "../core/chat-primary.js";
+import {
+  deleteForemanPidfile,
+  writeForemanPidfile,
+} from "../core/foreman-pidfile.js";
 import { RegistryService } from "../core/registry.js";
 import { RiskScorer } from "../core/risk-scorer.js";
 import { SessionManager } from "../core/session.js";
@@ -107,6 +111,10 @@ export function startForeman(
   if (!existsSync(paths.root) || !existsSync(paths.identityPath)) {
     throw new NotInitialisedError(paths.root);
   }
+  // #431 — Write the start.ts PID to a pidfile so `foreman mcp-stdio`
+  // can signal us when a user types `/foreman stop` into an agent's
+  // Telegram chat. Cleanup happens in shutdown().
+  writeForemanPidfile(paths.configDir);
   const { publicKey } = loadOrCreateMasterKey();
   const db = getDb();
   const sqlite = getSqlite();
@@ -371,17 +379,23 @@ export function startForeman(
       /* best-effort cleanup */
     });
     audit.dispose();
+    deleteForemanPidfile(paths.configDir);
     closeDb();
   };
 
-  process.once("SIGINT", () => {
+  // SIGINT (Ctrl-C in TUI) AND SIGTERM (delivered by `/foreman stop`
+  // via the mcp-stdio command router) both unblock the exit promise
+  // and let the shutdown path run.
+  const onSignal = (): void => {
     if (instance) instance.unmount();
     if (exitResolve) {
       const r = exitResolve;
       exitResolve = null;
       r();
     }
-  });
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
 
   return {
     registry,

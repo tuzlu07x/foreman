@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import type { ForemanDb } from "../db/client.js";
+import { readForemanPid } from "./foreman-pidfile.js";
 import { getBudgetStatus } from "./llm/budget.js";
 import {
   defaultLlmConfig,
@@ -31,6 +32,9 @@ export interface ForemanCommandContext {
   /** Path to `llm.yaml` so handlers can read the current Foreman LLM
    *  config + budget without hardcoding the location. */
   llmConfigPath: string;
+  /** Foreman's `<configDir>` — used by the stop handler to locate the
+   *  pidfile written by `foreman start`. */
+  configDir: string;
   /** Agent id that routed the user's command (mirrors `submit_approval`
    *  pattern). Used for the audit log + future per-agent gating. */
   sourceAgent: string;
@@ -108,6 +112,11 @@ export function registerBuiltinCommands(router: ForemanCommandRouter): void {
     "One-line summary — registered agents, runtime status, Foreman build version.",
   );
   router.register(
+    "stop",
+    stopHandler,
+    "Gracefully shut down `foreman start` + every agent daemon it owns.",
+  );
+  router.register(
     "llm",
     llmSubrouterHandler,
     "Inspect / manage Foreman's own LLM. Try `/foreman llm status`.",
@@ -156,6 +165,38 @@ function statusHandler(
     if (agents.length > 10) lines.push(`  … and ${agents.length - 10} more`);
   }
   return { ok: true, text: lines.join("\n") };
+}
+
+function stopHandler(
+  _args: string[],
+  ctx: ForemanCommandContext,
+): ForemanCommandResult {
+  const pid = readForemanPid(ctx.configDir);
+  if (pid === null) {
+    return {
+      ok: false,
+      text:
+        "Foreman start isn't running (no pidfile or stale PID). " +
+        "If you think it is, check `ps aux | grep foreman` on the host.",
+      errorCode: "NOT_AVAILABLE",
+    };
+  }
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch (err) {
+    return {
+      ok: false,
+      text:
+        `Failed to signal Foreman PID ${pid}: ${err instanceof Error ? err.message : String(err)}`,
+      errorCode: "NOT_AVAILABLE",
+    };
+  }
+  return {
+    ok: true,
+    text:
+      `Shutting down Foreman (PID ${pid}). ` +
+      `Agent daemons will receive SIGTERM and exit within ~5s.`,
+  };
 }
 
 function llmSubrouterHandler(
