@@ -170,6 +170,99 @@ describe("buildAgentConfigPromptList", () => {
       ]);
     });
   });
+
+  // #450 — Variant pick prompt emitted whenever agent has
+  // provider_mapping. Runtime auto-skips single-variant providers; the
+  // prompt list always includes it (build time can't see picked provider).
+  describe("variant-pick (#450)", () => {
+    function withMapping(id: string, llm_compat: string[]): AgentEntry {
+      return agent({
+        id,
+        llm_compat,
+        provider_mapping: {
+          openai: {
+            preferred: "via-openrouter",
+            variants: {
+              "via-openrouter": {
+                label: "OpenRouter → OpenAI",
+                writes: { "model.default": "openai/${model}" },
+                required_secret: "openrouter-key",
+              },
+              "via-codex-oauth": {
+                label: "Codex OAuth → OpenAI",
+                writes: { "model.default": "openai/${model}" },
+                required_secret: null,
+              },
+            },
+          },
+          anthropic: {
+            preferred: "direct",
+            variants: {
+              direct: {
+                label: "Anthropic direct",
+                writes: { "model.default": "claude/${model}" },
+                required_secret: "anthropic-key",
+              },
+            },
+          },
+        },
+      }) as AgentEntry;
+    }
+
+    it("emits variant-pick after llm-choice for multi-compat agent with provider_mapping", () => {
+      const mapped = withMapping("hermes-mapped", ["anthropic", "openai"]);
+      const prompts = buildAgentConfigPromptList(
+        [mapped],
+        ["hermes-mapped"],
+        ["anthropic", "openai"],
+      );
+      expect(prompts).toEqual([
+        { agentId: "hermes-mapped", kind: "llm-choice" },
+        { agentId: "hermes-mapped", kind: "variant-pick" },
+        { agentId: "hermes-mapped", kind: "model-pick" },
+        { agentId: "hermes-mapped", kind: "responsibility-note" },
+      ]);
+    });
+
+    it("emits variant-pick for single-compat agent that has provider_mapping (#434 keeps model-pick too)", () => {
+      const mapped = withMapping("codex-mapped", ["openai"]);
+      const prompts = buildAgentConfigPromptList(
+        [mapped],
+        ["codex-mapped"],
+        ["openai"],
+      );
+      expect(prompts).toEqual([
+        { agentId: "codex-mapped", kind: "variant-pick" },
+        { agentId: "codex-mapped", kind: "model-pick" },
+        { agentId: "codex-mapped", kind: "responsibility-note" },
+      ]);
+    });
+
+    it("skips variant-pick for agents WITHOUT provider_mapping", () => {
+      const noMapping = agent({
+        id: "legacy-agent",
+        llm_compat: ["anthropic", "openai"],
+      });
+      const prompts = buildAgentConfigPromptList(
+        [noMapping],
+        ["legacy-agent"],
+        ["anthropic", "openai"],
+      );
+      const kinds = prompts.map((p) => p.kind);
+      expect(kinds).not.toContain("variant-pick");
+    });
+
+    it("skips variant-pick when no compat provider is configured", () => {
+      const mapped = withMapping("hermes-mapped", ["anthropic", "openai"]);
+      const prompts = buildAgentConfigPromptList(
+        [mapped],
+        ["hermes-mapped"],
+        ["gemini"], // not in compat
+      );
+      const kinds = prompts.map((p) => p.kind);
+      expect(kinds).not.toContain("variant-pick");
+    });
+  });
 });
 
 describe("applyAgentConfigSubmit", () => {

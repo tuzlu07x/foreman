@@ -54,6 +54,11 @@ export interface ProjectionContext {
    *  set, the resolver substitutes this for `${model}` in variant
    *  writes; when omitted, falls back to `deriveDefaultModelId(provider)`. */
   modelVersion?: string
+  /** #450 — Variant id within the chosen provider's mapping (e.g.
+   *  "via-codex-oauth" instead of the default "via-openrouter" for
+   *  Hermes/openai). When omitted, the resolver uses the registry's
+   *  `preferred` variant. */
+  providerVariant?: string
   /** Source of truth for secret values. */
   secretStore: SecretStore
   /** Override $HOME (mostly for tests). */
@@ -156,6 +161,9 @@ export function projectSecretsForAgent(
       // when set. Falls back to deriveDefaultModelId so existing
       // agents keep their variant defaults.
       modelId: ctx.modelVersion ?? deriveDefaultModelId(ctx.llmProvider),
+      // #450 — Variant override (e.g. via-codex-oauth instead of the
+      // mapping's `preferred`). Falls back inside the resolver.
+      variantOverride: ctx.providerVariant,
       secretLookup: lookup,
     })
     if (resolved.ok) {

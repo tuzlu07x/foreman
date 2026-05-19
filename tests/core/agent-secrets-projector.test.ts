@@ -1217,6 +1217,85 @@ describe('projectSecretsForAgent — resolver path (#408 phase 2)', () => {
     expect(yamlContent.model.default).toBe('openai/gpt-4o-mini')
   })
 
+  // #450 — ctx.providerVariant overrides the registry's `preferred`
+  // for the chosen llmProvider. Foreman uses this to honour the
+  // user's variant pick from the wizard (e.g. via-codex-oauth instead
+  // of via-openrouter for Hermes/openai).
+  it('uses ctx.providerVariant to override the registry preferred variant (#450)', () => {
+    // Build a Hermes-shape entry with TWO openai variants so we can
+    // verify the resolver picks the non-preferred one when overridden.
+    const entry: AgentEntry = {
+      id: 'hermes',
+      name: 'Hermes',
+      tagline: 't',
+      homepage: 'https://example.com',
+      install: { npm: null, brew: null },
+      config_paths: [`${tmp}/hermes.yaml`],
+      required_secrets: [],
+      optional_secrets: [],
+      mcp_compatible: true,
+      supported_versions: '*',
+      min_foreman_version: '0.1.2',
+      provider_mapping: {
+        openai: {
+          preferred: 'via-openrouter',
+          variants: {
+            'via-openrouter': {
+              label: 'OpenRouter route',
+              writes: {
+                'model.default': 'openai/${model}',
+                'model.provider': 'openrouter',
+              },
+              env_vars: { OPENROUTER_API_KEY: '${secret:openrouter-key}' },
+              required_secret: 'openrouter-key',
+            },
+            'via-codex-oauth': {
+              label: 'Codex OAuth',
+              writes: {
+                'model.default': 'openai/${model}',
+                'model.provider': 'codex-oauth',
+              },
+              required_secret: null,
+              auth_json_writes: {
+                path: `${tmp}/hermes.auth.json`,
+                key: 'oauth.profile',
+                value: 'codex',
+              },
+            },
+          },
+        },
+      },
+      secret_projection: {
+        env_file: `${tmp}/.env`,
+        config_overrides: {
+          path: `${tmp}/hermes.yaml`,
+          format: 'yaml',
+          writes: [],
+        },
+      },
+    } as unknown as AgentEntry
+    const result = projectSecretsForAgent(entry, {
+      providersSelected: ['openai'],
+      servicesSelected: [],
+      llmProvider: 'openai',
+      providerVariant: 'via-codex-oauth',
+      secretStore: store, // openrouter-key NOT added — but variant doesn't need it
+      home: tmp,
+    })
+    // Wrote the yaml via the codex-oauth variant, not the openrouter one.
+    expect(result.files.length).toBeGreaterThan(0)
+    const yamlContent = parseYaml(readFileSync(`${tmp}/hermes.yaml`, 'utf-8')) as {
+      model: { default: string; provider: string }
+    }
+    expect(yamlContent.model.provider).toBe('codex-oauth')
+    // OpenRouter env var did NOT land — different variant.
+    const envFile = result.files.find((f) => f.path.endsWith('.env'))
+    if (envFile) {
+      const envContent = readFileSync(envFile.path, 'utf-8')
+      expect(envContent).not.toContain('OPENROUTER_API_KEY')
+    }
+  })
+
   it('returns provider_mapping skip reason when required secret is missing', () => {
     const result = projectSecretsForAgent(hermesWithMapping(), {
       providersSelected: ['openai'],

@@ -125,6 +125,12 @@ export interface RegisterAgentInput {
   entry: AgentEntry;
   registry: RegistryService;
   llmProvider?: string;
+  /** #450 — Variant override within the provider's mapping. Optional;
+   *  when omitted, the resolver picks `provider_mapping[provider].preferred`. */
+  providerVariant?: string;
+  /** #434 — Specific model id pinned for this agent. Optional; when
+   *  omitted, the variant default is used. */
+  modelVersion?: string;
   responsibilityNote?: string;
 }
 
@@ -146,6 +152,8 @@ export function registerAgent(input: RegisterAgentInput): RegisterAgentResult {
       registryHomepage: input.entry.homepage,
     },
     llmProvider: input.llmProvider,
+    providerVariant: input.providerVariant,
+    modelVersion: input.modelVersion,
     responsibilityNote: input.responsibilityNote,
   });
   if (!result.privateKey) {
