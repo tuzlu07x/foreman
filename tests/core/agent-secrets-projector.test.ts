@@ -1391,4 +1391,98 @@ describe('projectSecretsForAgent — resolver path (#408 phase 2)', () => {
     expect(env).not.toContain('OPENAI_API_KEY=')
     expect(env).not.toContain('ANTHROPIC_API_KEY=')
   })
+
+  // #426 — chat-primary gate: when N>1 chat_capable agents are selected and
+  // a primary is configured, the projector must skip channel-tied writes
+  // for non-primary agents. Otherwise both Hermes + OpenClaw would receive
+  // the same Telegram bot token and fight over the polling session.
+  it('skips if_service env_vars when agent is not the chat primary (#426)', () => {
+    store.add('telegram-bot-token', 'tg-test-456')
+    const fakePrimary = {
+      isPrimary: (channel: string, agentId: string): boolean => {
+        if (channel !== 'telegram') return true
+        return agentId === 'hermes'
+      },
+    }
+    const entry = fakeEntry({
+      id: 'openclaw',
+      secret_projection: {
+        env_file: `${tmp}/.env`,
+        env_vars: {
+          TELEGRAM_BOT_TOKEN: {
+            from_secret: 'telegram-bot-token',
+            if_service: 'telegram',
+          },
+        },
+      },
+    })
+    const result = projectSecretsForAgent(entry, {
+      providersSelected: [],
+      servicesSelected: ['telegram'],
+      secretStore: store,
+      home: tmp,
+      chatPrimary: fakePrimary,
+    })
+    expect(result.files).toHaveLength(0)
+  })
+
+  it('writes if_service env_vars when agent IS the chat primary (#426)', () => {
+    store.add('telegram-bot-token', 'tg-test-456')
+    const fakePrimary = {
+      isPrimary: (channel: string, agentId: string): boolean => {
+        if (channel !== 'telegram') return true
+        return agentId === 'hermes'
+      },
+    }
+    const entry = fakeEntry({
+      id: 'hermes',
+      secret_projection: {
+        env_file: `${tmp}/.env`,
+        env_vars: {
+          TELEGRAM_BOT_TOKEN: {
+            from_secret: 'telegram-bot-token',
+            if_service: 'telegram',
+          },
+        },
+      },
+    })
+    const result = projectSecretsForAgent(entry, {
+      providersSelected: [],
+      servicesSelected: ['telegram'],
+      secretStore: store,
+      home: tmp,
+      chatPrimary: fakePrimary,
+    })
+    expect(result.files).toHaveLength(1)
+    const env = readFileSync(`${tmp}/.env`, 'utf-8')
+    expect(env).toContain('TELEGRAM_BOT_TOKEN=tg-test-456')
+  })
+
+  it('writes if_service env_vars for every agent when no primary configured (#426 legacy compat)', () => {
+    store.add('telegram-bot-token', 'tg-test-456')
+    const fakePrimary = {
+      // Mimic ChatPrimaryService.isPrimary when no row exists.
+      isPrimary: (): boolean => true,
+    }
+    const entry = fakeEntry({
+      id: 'openclaw',
+      secret_projection: {
+        env_file: `${tmp}/.env`,
+        env_vars: {
+          TELEGRAM_BOT_TOKEN: {
+            from_secret: 'telegram-bot-token',
+            if_service: 'telegram',
+          },
+        },
+      },
+    })
+    const result = projectSecretsForAgent(entry, {
+      providersSelected: [],
+      servicesSelected: ['telegram'],
+      secretStore: store,
+      home: tmp,
+      chatPrimary: fakePrimary,
+    })
+    expect(result.files).toHaveLength(1)
+  })
 })

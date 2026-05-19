@@ -92,6 +92,13 @@
       "when": 1780600000000,
       "tag": "0012_agent_provider_variant",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "5",
+      "when": 1780800000000,
+      "tag": "0013_chat_primary",
+      "breakpoints": true
     }
   ]
 }

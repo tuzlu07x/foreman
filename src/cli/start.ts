@@ -13,6 +13,7 @@ import { AuditLogger } from "../core/audit.js";
 import { bus } from "../core/event-bus.js";
 import { MediatorService } from "../core/mediator.js";
 import { PolicyEngine } from "../core/policy-engine.js";
+import { ChatPrimaryService } from "../core/chat-primary.js";
 import { RegistryService } from "../core/registry.js";
 import { RiskScorer } from "../core/risk-scorer.js";
 import { SessionManager } from "../core/session.js";
@@ -631,6 +632,7 @@ async function runOnboardingWizard(): Promise<void> {
   const db = getDb();
   const registry = new RegistryService(db, bus);
   const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
+  const chatPrimary = new ChatPrimaryService(db, { bus });
   const instance = render(
     React.createElement(SetupWizard, {
       initialState: loadSetupState() ?? freshState(),
@@ -638,6 +640,7 @@ async function runOnboardingWizard(): Promise<void> {
         db,
         secretStore,
         registry,
+        chatPrimary,
         policyPath: paths.policyPath,
         llmConfigPath: paths.llmConfigPath,
         notifyConfigPath: paths.notifyConfigPath,
