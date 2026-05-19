@@ -15,9 +15,15 @@ import { MediatorService } from "../core/mediator.js";
 import { PolicyEngine } from "../core/policy-engine.js";
 import { ChatPrimaryService } from "../core/chat-primary.js";
 import {
+  ControlChannel,
+  ControlDrainPoller,
+  type ControlHandler,
+} from "../core/control-channel.js";
+import {
   deleteForemanPidfile,
   writeForemanPidfile,
 } from "../core/foreman-pidfile.js";
+import { saveLlmConfig } from "../core/llm/config.js";
 import { RegistryService } from "../core/registry.js";
 import { RiskScorer } from "../core/risk-scorer.js";
 import { SessionManager } from "../core/session.js";
@@ -365,6 +371,7 @@ export function startForeman(
       r();
     }
     approvalBridge.stop();
+    controlPoller.stop();
     if (dailyScheduler) dailyScheduler.stop();
     if (patternDetector) patternDetector.stop();
     if (voice) voice.dispose();
@@ -396,6 +403,86 @@ export function startForeman(
   };
   process.once("SIGINT", onSignal);
   process.once("SIGTERM", onSignal);
+
+  // #440 — Cross-process control channel. mcp-stdio enqueues
+  // mutating commands; this drain loop dispatches them inside the
+  // `foreman start` process where the daemon manager + LlmConfig live.
+  const controlChannel = new ControlChannel(db);
+  const controlHandlers = new Map<string, ControlHandler>([
+    [
+      "stop",
+      async () => {
+        // Schedule shutdown after the row is marked applied so the
+        // channel write commits before we exit.
+        setTimeout(() => {
+          onSignal();
+        }, 50);
+        return { status: "applied" };
+      },
+    ],
+    [
+      "llm-switch",
+      async (row) => {
+        try {
+          const [provider, model] = JSON.parse(row.args) as string[];
+          if (!provider || !model) {
+            return {
+              status: "rejected",
+              error: "llm-switch requires provider + model args",
+            };
+          }
+          const current = existsSync(paths.llmConfigPath)
+            ? loadLlmConfig(paths.llmConfigPath)
+            : ({} as ReturnType<typeof loadLlmConfig>);
+          const next = {
+            ...current,
+            enabled: true,
+            provider: provider as typeof current.provider,
+            model,
+          };
+          saveLlmConfig(paths.llmConfigPath, next);
+          return { status: "applied" };
+        } catch (err) {
+          return {
+            status: "failed",
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      },
+    ],
+    [
+      "llm-budget",
+      async (row) => {
+        try {
+          const [usdStr] = JSON.parse(row.args) as string[];
+          const usd = Number.parseFloat(usdStr ?? "");
+          if (!Number.isFinite(usd) || usd <= 0) {
+            return {
+              status: "rejected",
+              error: "llm-budget requires a positive USD amount",
+            };
+          }
+          const current = loadLlmConfig(paths.llmConfigPath);
+          const next = {
+            ...current,
+            budget: { ...current.budget, monthly_cap_usd: usd },
+          };
+          saveLlmConfig(paths.llmConfigPath, next);
+          return { status: "applied" };
+        } catch (err) {
+          return {
+            status: "failed",
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      },
+    ],
+  ]);
+  const controlPoller = new ControlDrainPoller(
+    controlChannel,
+    controlHandlers,
+  );
+  controlPoller.start();
 
   return {
     registry,
