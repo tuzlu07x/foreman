@@ -375,7 +375,7 @@ export function preferredUninstallCommand(
 const INSTALL_IDLE_TIMEOUT_MS = 90_000;
 const INSTALL_WATCHDOG_TICK_MS = 5_000;
 
-function runShell(
+export function runShell(
   command: string,
   onLine?: (line: string) => void,
 ): Promise<InstallResult> {
