@@ -50,6 +50,17 @@ export interface OAuthStep {
   /** Optional verify command (`codex auth status`). */
   verify: string | null;
   acquisition: SecretAcquisition | null;
+  /** #461 — `true` when this step is a hard prerequisite for the agent
+   *  to function (e.g. Hermes via-codex-oauth cannot route ANY request
+   *  to OpenAI until `codex login` is done). Wizard renders these in a
+   *  separate "must do" block on the Done screen, distinct from the
+   *  agent's own optional interactive_setup queue. */
+  mandatory: boolean;
+  /** Short human reason — explains *why* this step matters when the
+   *  link isn't obvious (e.g. the depends_on_oauth case where Hermes'
+   *  OAuth lives on the Codex agent). `null` for the legacy
+   *  interactive_setup queue where the agent is self-explanatory. */
+  reason: string | null;
 }
 
 export interface ResolverErrorRecord {
@@ -161,6 +172,23 @@ export function resolveRequiredSetup(
         command: cfg.interactiveSetup,
         verify: cfg.postSetupVerify,
         acquisition: cfg.secretAcquisition,
+        mandatory: false,
+        reason: null,
+      });
+    }
+
+    // #461 — Mandatory cross-agent OAuth dependency. Hermes' via-codex-oauth
+    // can't function until Codex is logged in — the user otherwise hits a
+    // silent "Provider authentication failed" on the first Telegram message.
+    if (cfg.dependsOnOauth) {
+      oauthSteps.push({
+        agentId: agent.id,
+        variantId: cfg.variantId,
+        command: cfg.dependsOnOauth.setupCommand,
+        verify: cfg.dependsOnOauth.verifyCommand,
+        acquisition: null,
+        mandatory: true,
+        reason: `${agent.id} routes ${foremanProvider} through ${cfg.dependsOnOauth.agent}'s OAuth — finish ${cfg.dependsOnOauth.agent} login or the agent can't reach ${foremanProvider}.`,
       });
     }
   }

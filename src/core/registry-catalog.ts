@@ -263,6 +263,20 @@ export const AgentEntrySchema = z
                *  e.g. `codex auth status`. Used by `foreman doctor`
                *  and the OAuth wrapper (Phase 4 + 5). */
               post_setup_verify: z.string().optional(),
+              /** #461 — When this variant rides on ANOTHER agent's
+               *  OAuth (e.g. Hermes via-codex-oauth borrows Codex's
+               *  ChatGPT subscription), declare the dependency here so
+               *  the wizard surfaces the mandatory external login step
+               *  with the right command and verify call. Without this
+               *  the picker would show "no extra key needed" and the
+               *  user would hit a silent auth failure at runtime. */
+              depends_on_oauth: z
+                .object({
+                  agent: z.string().min(1),
+                  setup_command: z.string().min(1),
+                  verify_command: z.string().min(1).optional(),
+                })
+                .optional(),
               /** #420 — Minimum agent version this variant applies to.
                *  Semver string (e.g. "2.0.0"). When set, the resolver
                *  detects the installed agent version and only picks

@@ -79,6 +79,10 @@ interface VariantStatusRow {
   requiredSecret: string | null;
   secretStatus: "present" | "missing" | "n/a";
   interactiveSetup: string | null;
+  /** #461 — Mandatory dependency on another agent's OAuth (e.g. Hermes
+   *  via-codex-oauth → `codex login`). Surfaced alongside the variant
+   *  label so users see the real prerequisite, not "no secret required". */
+  dependsOnOauthCommand: string | null;
 }
 
 function buildListRows(
@@ -113,6 +117,7 @@ function buildListRows(
         requiredSecret: reqSecret,
         secretStatus,
         interactiveSetup: variant.interactive_setup ?? null,
+        dependsOnOauthCommand: variant.depends_on_oauth?.setup_command ?? null,
       });
     }
   }
@@ -140,9 +145,11 @@ function renderListText(rows: VariantStatusRow[], agentName: string): string {
               ? green("✓ present")
               : orange("✗ missing")
           }`
-        : row.interactiveSetup
-          ? `needs \`${row.interactiveSetup}\` ${dim("(oauth)")}`
-          : dim("no secret required");
+        : row.dependsOnOauthCommand
+          ? `needs \`${row.dependsOnOauthCommand}\` ${dim("(external oauth)")}`
+          : row.interactiveSetup
+            ? `needs \`${row.interactiveSetup}\` ${dim("(oauth)")}`
+            : dim("no secret required");
       out += `    ${tag}${row.variantId.padEnd(20)} ${secret}\n`;
     }
     out += "\n";
