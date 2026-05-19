@@ -6,8 +6,11 @@ import { homedir } from "node:os";
 export interface InstallSpec {
   npm: string | null;
   brew: string | null;
-  /** URL of a `curl | bash` style installer (Hermes, OpenClaw). */
-  script?: string | null;
+  /** URL of a script installer. String form is treated as unix-only
+   *  (curl | bash). Object form (#369) lets registry entries declare
+   *  per-platform URLs — wizard picks the matching one and invokes
+   *  PowerShell for the windows URL. */
+  script?: string | ScriptUrls | null;
   /** Override the binary name to look for on PATH when it differs from the npm package. */
   binary?: string | null;
   /** Args appended via `bash -s -- <args>` so script installers run without
@@ -19,6 +22,28 @@ export interface InstallSpec {
    *  registered without forcing the user to invoke the agent's own
    *  onboarding wizard. */
   post_config_commands?: string[];
+}
+
+export interface ScriptUrls {
+  unix?: string;
+  windows?: string;
+}
+
+// #369 — Resolve a `script` field to a single URL for the running
+// platform. Legacy string form: unix-only; null on win32. Object form:
+// pick the matching key (unix for darwin/linux, windows for win32).
+// Exported so the wizard install log can detect "no installer for this
+// platform" before showing the install hint.
+export function resolveScriptUrl(
+  script: string | ScriptUrls | null | undefined,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if (!script) return null;
+  if (typeof script === "string") {
+    return platform === "win32" ? null : script;
+  }
+  if (platform === "win32") return script.windows ?? null;
+  return script.unix ?? null;
 }
 
 export interface InstallDetection {
@@ -274,7 +299,12 @@ export async function runUninstall(
 ): Promise<InstallResult> {
   const command = preferredUninstallCommand(options.install, options.detection);
   if (!command) {
-    const manual = options.install.script
+    const hasScript =
+      typeof options.install.script === "string" ||
+      (options.install.script !== null &&
+        options.install.script !== undefined &&
+        typeof options.install.script === "object");
+    const manual = hasScript
       ? `(no automated uninstall — re-run the installer with its --uninstall flag, or remove the binary at ${options.install.binary ?? "<binary>"} manually)`
       : "(no uninstall command in registry entry)";
     return { ok: false, exitCode: -1, manualCommand: manual };
@@ -282,10 +312,25 @@ export async function runUninstall(
   return runShell(command, options.onLine);
 }
 
-export function preferredInstallCommand(install: InstallSpec): string | null {
+export function preferredInstallCommand(
+  install: InstallSpec,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
   if (install.npm) return `npm install -g ${install.npm}`;
-  if (install.brew) return `brew install ${install.brew}`;
-  if (install.script) {
+  // Brew only runs on macOS — picking it on Linux would silently fail.
+  if (install.brew && platform === "darwin") {
+    return `brew install ${install.brew}`;
+  }
+  const scriptUrl = resolveScriptUrl(install.script, platform);
+  if (scriptUrl) {
+    if (platform === "win32") {
+      // #369 — Windows installer: PowerShell `iex (irm <URL>)` per
+      // Hermes' docs (strips BOMs, doesn't accept positional args).
+      // Non-interactive args ignored on this path — the PowerShell
+      // scriptblock-create form needed for arg-passing is too brittle
+      // for unattended Foreman runs; rely on the script's own defaults.
+      return `powershell -NoProfile -Command "iex (irm ${scriptUrl})"`;
+    }
     // #372 — Append non-interactive args via `bash -s --` so script
     // installers (Hermes) skip their post-install wizards. Without this,
     // Hermes opens /dev/tty for its Y/n prompt and deadlocks against
@@ -294,7 +339,7 @@ export function preferredInstallCommand(install: InstallSpec): string | null {
       (a) => a.length > 0,
     );
     const argsSuffix = args.length > 0 ? ` -s -- ${args.join(" ")}` : "";
-    return `curl -fsSL ${install.script} | bash${argsSuffix}`;
+    return `curl -fsSL ${scriptUrl} | bash${argsSuffix}`;
   }
   return null;
 }

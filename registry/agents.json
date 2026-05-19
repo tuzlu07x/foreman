@@ -9,7 +9,10 @@
       "install": {
         "npm": null,
         "brew": null,
-        "script": "https://hermes-agent.nousresearch.com/install.sh",
+        "script": {
+          "unix": "https://hermes-agent.nousresearch.com/install.sh",
+          "windows": "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1"
+        },
         "binary": "hermes",
         "non_interactive_args": ["--skip-setup"],
         "macos_launch_agent_disable": {
