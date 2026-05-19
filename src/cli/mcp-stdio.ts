@@ -7,7 +7,12 @@ import {
   ForemanCommandRouter,
   registerBuiltinCommands,
 } from "../core/foreman-command.js";
+import {
+  defaultLlmConfig,
+  loadLlmConfig,
+} from "../core/llm/config.js";
 import { MediatorService } from "../core/mediator.js";
+import { OrchestratorChat } from "../core/orchestrator-chat.js";
 import { PolicyEngine } from "../core/policy-engine.js";
 import { RegistryService } from "../core/registry.js";
 import { RiskScorer } from "../core/risk-scorer.js";
@@ -64,6 +69,9 @@ interface Services {
   /** Foreman's `<configDir>` — used by the stop handler to locate
    *  the pidfile written by `foreman start`. */
   configDir: string;
+  /** #432 — Foreman LLM orchestrator chat. Built when llm.yaml is
+   *  present + parseable; null otherwise (read-only verbs still work). */
+  orchestratorChat: OrchestratorChat | null;
 }
 
 function bootServices(): Services {
@@ -97,6 +105,24 @@ function bootServices(): Services {
   });
   const commandRouter = new ForemanCommandRouter();
   registerBuiltinCommands(commandRouter);
+  // #432 — Build the orchestrator chat service only when llm.yaml
+  // parses cleanly. A malformed config shouldn't crash MCP-stdio
+  // (read-only verbs must still work).
+  let orchestratorChat: OrchestratorChat | null = null;
+  try {
+    const llmConfig = existsSync(paths.llmConfigPath)
+      ? loadLlmConfig(paths.llmConfigPath)
+      : defaultLlmConfig();
+    orchestratorChat = new OrchestratorChat({
+      db,
+      config: llmConfig,
+      secretStore,
+      registry,
+      bus,
+    });
+  } catch {
+    orchestratorChat = null;
+  }
   return {
     registry,
     policy,
@@ -109,6 +135,7 @@ function bootServices(): Services {
     commandRouter,
     llmConfigPath: paths.llmConfigPath,
     configDir: paths.configDir,
+    orchestratorChat,
   };
 }
 
@@ -365,6 +392,7 @@ export async function handleMessage(
         configDir: services.configDir,
         sourceAgent,
         sourceUser,
+        orchestratorChat: services.orchestratorChat ?? undefined,
       });
       // #431 — Audit row per /foreman invocation. Persisted to
       // `audit_events` so the TUI Log page + `foreman log` CLI can
