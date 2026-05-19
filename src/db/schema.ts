@@ -123,6 +123,32 @@ export const auditEvents = sqliteTable("audit_events", {
   createdAt: integer("created_at").notNull(),
 });
 
+// #440 — Cross-process control channel for state-mutating /foreman
+// verbs. mcp-stdio inserts rows; `foreman start`'s drain loop picks
+// them up and dispatches to in-process handlers (daemon shutdown,
+// llm.yaml rewrite, etc).
+export const controlCommands = sqliteTable(
+  "control_commands",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    command: text("command").notNull(),
+    args: text("args").notNull(),
+    sourceAgent: text("source_agent").notNull(),
+    sourceUser: text("source_user"),
+    status: text("status", {
+      enum: ["pending", "applied", "failed", "rejected"],
+    })
+      .notNull()
+      .default("pending"),
+    error: text("error"),
+    createdAt: integer("created_at").notNull(),
+    appliedAt: integer("applied_at"),
+  },
+  (t) => ({
+    statusIdx: index("control_commands_status_idx").on(t.status, t.createdAt),
+  }),
+);
+
 export const secrets = sqliteTable("secrets", {
   name: text("name").primaryKey(),
   valueEncrypted: blob("value_encrypted", { mode: "buffer" }).notNull(),
@@ -275,6 +301,8 @@ export type LlmUsage = typeof llmUsage.$inferSelect;
 export type NewLlmUsage = typeof llmUsage.$inferInsert;
 export type ChatPrimary = typeof chatPrimary.$inferSelect;
 export type NewChatPrimary = typeof chatPrimary.$inferInsert;
+export type ControlCommand = typeof controlCommands.$inferSelect;
+export type NewControlCommand = typeof controlCommands.$inferInsert;
 
 // FTS5 virtual table and triggers live in a hand-written migration
 // (drizzle-kit cannot emit virtual tables). See:

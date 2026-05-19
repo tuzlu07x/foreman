@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ControlChannel, type OwnerStore } from "../../src/core/control-channel.js";
 import {
   EventBus,
   type ForemanEventMap,
@@ -12,9 +13,18 @@ import {
   registerBuiltinCommands,
   type ForemanCommandContext,
 } from "../../src/core/foreman-command.js";
-import { writeForemanPidfile } from "../../src/core/foreman-pidfile.js";
 import { RegistryService } from "../../src/core/registry.js";
 import { createInMemoryDb, type ForemanDb } from "../../src/db/client.js";
+
+function makeOwnerStore(secrets: Record<string, string>): OwnerStore {
+  return {
+    exists: (name: string): boolean => name in secrets,
+    get: (name: string): string => {
+      if (!(name in secrets)) throw new Error(`missing ${name}`);
+      return secrets[name]!;
+    },
+  };
+}
 
 describe("ForemanCommandRouter (#431)", () => {
   let db: ForemanDb;
@@ -174,7 +184,7 @@ describe("ForemanCommandRouter (#431)", () => {
       expect(result.text).toContain("$20.00");
     });
 
-    it("llm switch returns NOT_AVAILABLE pointing at the CLI", async () => {
+    it("llm switch returns NOT_AVAILABLE without a control channel wired", async () => {
       const result = await router.dispatch(
         "llm",
         ["switch", "openai", "gpt-4o"],
@@ -182,14 +192,14 @@ describe("ForemanCommandRouter (#431)", () => {
       );
       expect(result.ok).toBe(false);
       expect(result.errorCode).toBe("NOT_AVAILABLE");
-      expect(result.text).toContain("foreman llm switch");
+      expect(result.text).toContain("control channel");
     });
 
-    it("llm budget returns NOT_AVAILABLE pointing at the CLI", async () => {
+    it("llm budget returns NOT_AVAILABLE without a control channel wired", async () => {
       const result = await router.dispatch("llm", ["budget", "50"], ctx);
       expect(result.ok).toBe(false);
       expect(result.errorCode).toBe("NOT_AVAILABLE");
-      expect(result.text).toContain("foreman llm budget");
+      expect(result.text).toContain("control channel");
     });
 
     it("unknown llm subcommand returns UNKNOWN_SUBCOMMAND", async () => {
@@ -200,51 +210,155 @@ describe("ForemanCommandRouter (#431)", () => {
     });
   });
 
-  // #431 — `/foreman stop` sends SIGTERM to the PID recorded in
-  // `<configDir>/foreman.pid`. The handler is process-bridging: it
-  // runs in `mcp-stdio` but signals `foreman start`.
+  // #440 — `/foreman stop` enqueues a `stop` command on the control
+  // channel. The drain loop in `foreman start` picks it up + calls
+  // the shutdown sequence. Owner-gated.
   describe("stop", () => {
-    it("returns NOT_AVAILABLE when no pidfile exists", async () => {
+    it("returns NOT_AVAILABLE without a control channel wired", async () => {
       const result = await router.dispatch("stop", [], ctx);
       expect(result.ok).toBe(false);
       expect(result.errorCode).toBe("NOT_AVAILABLE");
-      expect(result.text.toLowerCase()).toContain("isn't running");
+      expect(result.text).toContain("control channel");
     });
 
-    it("returns NOT_AVAILABLE when pidfile points at a dead process", async () => {
-      // PID 1 belongs to init/systemd in real environments but we
-      // can't kill it; the pidfile-stale check uses kill(pid, 0)
-      // which will succeed there. Use a definitely-gone PID instead:
-      // 2^31 - 1, way out of normal ranges.
-      writeForemanPidfile(ctx.configDir);
-      // Overwrite with a bogus PID. writeForemanPidfile uses
-      // process.pid by default, so re-create the file directly.
-      writeFileSync(join(ctx.configDir, "foreman.pid"), "2147483647", "utf-8");
-      const result = await router.dispatch("stop", [], ctx);
+    it("returns NOT_AUTHORIZED when source_user doesn't match telegram-chat-id", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "owner123" });
+      const result = await router.dispatch("stop", [], {
+        ...ctx,
+        controlChannel: channel,
+        ownerStore: store,
+        sourceUser: "stranger999",
+      });
       expect(result.ok).toBe(false);
-      expect(result.errorCode).toBe("NOT_AVAILABLE");
+      expect(result.errorCode).toBe("NOT_AUTHORIZED");
+      expect(channel.pending()).toHaveLength(0);
     });
 
-    it("sends SIGTERM to the PID and reports success", async () => {
-      writeForemanPidfile(ctx.configDir);
-      // Mock process.kill so the test doesn't actually kill itself.
-      const killSpy = vi
-        .spyOn(process, "kill")
-        .mockImplementation(() => true);
-      try {
-        const result = await router.dispatch("stop", [], ctx);
-        expect(result.ok).toBe(true);
-        expect(result.text).toContain("Shutting down");
-        expect(result.text).toContain(String(process.pid));
-        // First call is the alive-check (kill(pid, 0)); second is SIGTERM.
-        const sigtermCall = killSpy.mock.calls.find(
-          (c) => c[1] === "SIGTERM",
-        );
-        expect(sigtermCall).toBeDefined();
-        expect(sigtermCall?.[0]).toBe(process.pid);
-      } finally {
-        killSpy.mockRestore();
-      }
+    it("returns NOT_AUTHORIZED when no source_user is supplied", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "owner123" });
+      const result = await router.dispatch("stop", [], {
+        ...ctx,
+        controlChannel: channel,
+        ownerStore: store,
+        // sourceUser intentionally omitted
+      });
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe("NOT_AUTHORIZED");
+    });
+
+    it("enqueues a stop row + returns the queued id on owner match", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "owner123" });
+      const result = await router.dispatch("stop", [], {
+        ...ctx,
+        controlChannel: channel,
+        ownerStore: store,
+        sourceUser: "owner123",
+      });
+      expect(result.ok).toBe(true);
+      expect(result.text).toContain("Shutdown queued");
+      expect(result.text).toMatch(/queued id=\d+/);
+      const rows = channel.pending();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.command).toBe("stop");
+    });
+  });
+
+  // #440 — `/foreman llm switch` + `/foreman llm budget` enqueue
+  // mutating commands the start-side drain handler picks up.
+  describe("llm switch / budget", () => {
+    it("llm switch validates the provider + model args", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "owner" });
+      const result = await router.dispatch("llm", ["switch"], {
+        ...ctx,
+        controlChannel: channel,
+        ownerStore: store,
+        sourceUser: "owner",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe("UNKNOWN_SUBCOMMAND");
+      expect(result.text).toContain("provider");
+    });
+
+    it("llm switch enqueues with provider + model args on success", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "owner" });
+      const result = await router.dispatch(
+        "llm",
+        ["switch", "openai", "gpt-4o-mini"],
+        {
+          ...ctx,
+          controlChannel: channel,
+          ownerStore: store,
+          sourceUser: "owner",
+        },
+      );
+      expect(result.ok).toBe(true);
+      const rows = channel.pending();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.command).toBe("llm-switch");
+      expect(JSON.parse(rows[0]!.args)).toEqual(["openai", "gpt-4o-mini"]);
+    });
+
+    it("llm budget rejects non-numeric or non-positive values", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "owner" });
+      const ctx2 = {
+        ...ctx,
+        controlChannel: channel,
+        ownerStore: store,
+        sourceUser: "owner",
+      };
+      expect(
+        (await router.dispatch("llm", ["budget"], ctx2)).errorCode,
+      ).toBe("UNKNOWN_SUBCOMMAND");
+      expect(
+        (await router.dispatch("llm", ["budget", "abc"], ctx2)).errorCode,
+      ).toBe("UNKNOWN_SUBCOMMAND");
+      expect(
+        (await router.dispatch("llm", ["budget", "-5"], ctx2)).errorCode,
+      ).toBe("UNKNOWN_SUBCOMMAND");
+      expect(
+        (await router.dispatch("llm", ["budget", "0"], ctx2)).errorCode,
+      ).toBe("UNKNOWN_SUBCOMMAND");
+      expect(channel.pending()).toHaveLength(0);
+    });
+
+    it("llm budget enqueues a llm-budget row with parsed amount on success", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "owner" });
+      const result = await router.dispatch("llm", ["budget", "25"], {
+        ...ctx,
+        controlChannel: channel,
+        ownerStore: store,
+        sourceUser: "owner",
+      });
+      expect(result.ok).toBe(true);
+      const rows = channel.pending();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.command).toBe("llm-budget");
+      expect(JSON.parse(rows[0]!.args)).toEqual(["25"]);
+    });
+
+    it("llm switch refuses non-owner", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "owner" });
+      const result = await router.dispatch(
+        "llm",
+        ["switch", "openai", "gpt-4o"],
+        {
+          ...ctx,
+          controlChannel: channel,
+          ownerStore: store,
+          sourceUser: "stranger",
+        },
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe("NOT_AUTHORIZED");
+      expect(channel.pending()).toHaveLength(0);
     });
   });
 
@@ -284,7 +398,9 @@ describe("ForemanCommandRouter (#431)", () => {
       const chat = makeStubChat();
       const result = await router.dispatch("report", ["me"], {
         ...ctx,
-        orchestratorChat: chat,
+        orchestratorChat: chat as unknown as NonNullable<
+          ForemanCommandContext["orchestratorChat"]
+        >,
       });
       expect(result.ok).toBe(true);
       expect(result.text).toBe("Stub LLM response");
@@ -296,7 +412,9 @@ describe("ForemanCommandRouter (#431)", () => {
       const chat = makeStubChat();
       await router.dispatch("report", [], {
         ...ctx,
-        orchestratorChat: chat,
+        orchestratorChat: chat as unknown as NonNullable<
+          ForemanCommandContext["orchestratorChat"]
+        >,
       });
       const call = chat.answer.mock.calls[0]?.[0];
       expect(typeof call.question).toBe("string");
@@ -308,7 +426,12 @@ describe("ForemanCommandRouter (#431)", () => {
       await router.dispatch(
         "report",
         ["how", "did", "hermes", "do", "today?"],
-        { ...ctx, orchestratorChat: chat },
+        {
+          ...ctx,
+          orchestratorChat: chat as unknown as NonNullable<
+            ForemanCommandContext["orchestratorChat"]
+          >,
+        },
       );
       const call = chat.answer.mock.calls[0]?.[0];
       expect(call.question).toBe("how did hermes do today?");
@@ -318,7 +441,9 @@ describe("ForemanCommandRouter (#431)", () => {
       const chat = makeStubChat();
       await router.dispatch("report", ["ne", "yapıyorsunuz"], {
         ...ctx,
-        orchestratorChat: chat,
+        orchestratorChat: chat as unknown as NonNullable<
+          ForemanCommandContext["orchestratorChat"]
+        >,
       });
       const call = chat.answer.mock.calls[0]?.[0];
       // Should pass through the user's input as-is, not the default.
@@ -329,7 +454,9 @@ describe("ForemanCommandRouter (#431)", () => {
       const chat = makeStubChat({ enabled: false });
       const result = await router.dispatch("report", ["me"], {
         ...ctx,
-        orchestratorChat: chat,
+        orchestratorChat: chat as unknown as NonNullable<
+          ForemanCommandContext["orchestratorChat"]
+        >,
       });
       expect(result.ok).toBe(false);
       expect(result.errorCode).toBe("NOT_AVAILABLE");
@@ -347,7 +474,12 @@ describe("ForemanCommandRouter (#431)", () => {
       const result = await router.dispatch(
         "what-is-happening-with-everything",
         ["right", "now"],
-        { ...ctx, orchestratorChat: chat },
+        {
+          ...ctx,
+          orchestratorChat: chat as unknown as NonNullable<
+            ForemanCommandContext["orchestratorChat"]
+          >,
+        },
       );
       expect(result.ok).toBe(true);
       expect(chat.answer).toHaveBeenCalledOnce();
@@ -361,7 +493,9 @@ describe("ForemanCommandRouter (#431)", () => {
       const chat = makeStubChat({ enabled: false });
       const result = await router.dispatch("nonsense-verb", [], {
         ...ctx,
-        orchestratorChat: chat,
+        orchestratorChat: chat as unknown as NonNullable<
+          ForemanCommandContext["orchestratorChat"]
+        >,
       });
       expect(result.ok).toBe(false);
       expect(result.errorCode).toBe("UNKNOWN_COMMAND");
@@ -377,7 +511,9 @@ describe("ForemanCommandRouter (#431)", () => {
       const chat = makeStubChat();
       await router.dispatch("openclaw", ["ne", "yapıyor"], {
         ...ctx,
-        orchestratorChat: chat,
+        orchestratorChat: chat as unknown as NonNullable<
+          ForemanCommandContext["orchestratorChat"]
+        >,
       });
       const call = chat.answer.mock.calls[0]?.[0];
       expect(call.focusAgentId).toBe("openclaw");
@@ -390,7 +526,9 @@ describe("ForemanCommandRouter (#431)", () => {
       });
       const result = await router.dispatch("report", ["me"], {
         ...ctx,
-        orchestratorChat: chat,
+        orchestratorChat: chat as unknown as NonNullable<
+          ForemanCommandContext["orchestratorChat"]
+        >,
       });
       expect(result.ok).toBe(false);
       expect(result.errorCode).toBe("NOT_AVAILABLE");
@@ -404,7 +542,9 @@ describe("ForemanCommandRouter (#431)", () => {
       });
       const result = await router.dispatch("report", ["me"], {
         ...ctx,
-        orchestratorChat: chat,
+        orchestratorChat: chat as unknown as NonNullable<
+          ForemanCommandContext["orchestratorChat"]
+        >,
       });
       expect(result.ok).toBe(false);
       expect(result.errorCode).toBe("NOT_AVAILABLE");
