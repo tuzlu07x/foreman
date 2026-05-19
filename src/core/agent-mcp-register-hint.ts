@@ -104,6 +104,68 @@ export function writeMcpWrapperScript(wrapper: McpRegisterHintWrapper): boolean 
   return true;
 }
 
+// =============================================================================
+// Auto-run MCP register command (#460)
+// =============================================================================
+//
+// Wraps the user-facing `<agent> mcp add foreman --command ...` command
+// with a `printf 'y\n' |` pipe so the interactive "Enable all N tools?
+// [Y/n]" prompt the agent shows gets auto-confirmed. Best-effort: when
+// the run fails (agent missing the flag, idle timeout, etc.) the caller
+// surfaces the manual fallback hint that already existed pre-#460.
+//
+// Idempotent on re-registration: agents typically warn but don't fail
+// when an MCP server name is already configured. We treat non-zero exit
+// codes as "fell through; print manual fallback" rather than hard fail.
+
+export interface AutoRegisterMcpOutcome {
+  ok: boolean;
+  command: string;
+  /** First useful line of agent output for log surfacing. */
+  firstOutputLine: string | null;
+  /** Filled when `ok === false`. */
+  error?: string;
+}
+
+export async function autoRegisterMcp(
+  command: string,
+  runShell: (
+    cmd: string,
+    onLine?: (line: string) => void,
+  ) => Promise<{ ok: boolean; exitCode: number; manualCommand?: string }>,
+  options: { onLine?: (line: string) => void } = {},
+): Promise<AutoRegisterMcpOutcome> {
+  // Pipe `y\n` into stdin so the agent's [Y/n] prompt auto-confirms.
+  // Wrapped in `bash -c` so the pipe is honored by runShell's `|` check.
+  const piped = `printf 'y\\n' | ${command}`;
+  let firstOutputLine: string | null = null;
+  const onLine = (line: string): void => {
+    if (firstOutputLine === null && line.trim().length > 0) {
+      firstOutputLine = line.trim();
+    }
+    options.onLine?.(line);
+  };
+  try {
+    const result = await runShell(piped, onLine);
+    if (result.ok) {
+      return { ok: true, command: piped, firstOutputLine };
+    }
+    return {
+      ok: false,
+      command: piped,
+      firstOutputLine,
+      error: `exit ${result.exitCode}`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      command: piped,
+      firstOutputLine,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 function substitute(
   template: string,
   agentId: string,

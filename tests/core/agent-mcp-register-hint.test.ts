@@ -1,9 +1,10 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEntry } from '../../src/core/registry-catalog.js'
 import {
+  autoRegisterMcp,
   buildMcpRegisterHint,
   writeMcpWrapperScript,
 } from '../../src/core/agent-mcp-register-hint.js'
@@ -224,5 +225,64 @@ describe('writeMcpWrapperScript', () => {
     expect(writeMcpWrapperScript({ path, content: 'v1\n' })).toBe(true)
     expect(writeMcpWrapperScript({ path, content: 'v2\n' })).toBe(true)
     expect(readFileSync(path, 'utf-8')).toBe('v2\n')
+  })
+})
+
+// #460 — autoRegisterMcp wraps the user-facing register command with a
+// piped "y\n" so the agent's "[Y/n]" prompt auto-confirms. Best-effort.
+describe('autoRegisterMcp (#460)', () => {
+  it('returns ok=true when runShell succeeds + pipes y\\n', async () => {
+    const runShell = vi.fn(async () => ({ ok: true, exitCode: 0 }))
+    const outcome = await autoRegisterMcp(
+      'hermes mcp add foreman --command /tmp/wrap.sh',
+      runShell as never,
+    )
+    expect(outcome.ok).toBe(true)
+    expect(outcome.command).toBe(
+      "printf 'y\\n' | hermes mcp add foreman --command /tmp/wrap.sh",
+    )
+    expect(runShell).toHaveBeenCalledOnce()
+  })
+
+  it('captures the first non-empty output line for logging', async () => {
+    const runShell = vi.fn(
+      async (
+        _cmd: string,
+        onLine?: (line: string) => void,
+      ): Promise<{ ok: boolean; exitCode: number }> => {
+        onLine?.('')
+        onLine?.('  ')
+        onLine?.('Connecting to foreman...')
+        onLine?.('Found 3 tool(s)')
+        return { ok: true, exitCode: 0 }
+      },
+    )
+    const outcome = await autoRegisterMcp(
+      'hermes mcp add foreman --command /tmp/x',
+      runShell as never,
+    )
+    expect(outcome.firstOutputLine).toBe('Connecting to foreman...')
+  })
+
+  it('returns ok=false with exit code when runShell fails', async () => {
+    const runShell = vi.fn(async () => ({ ok: false, exitCode: 1 }))
+    const outcome = await autoRegisterMcp(
+      'hermes mcp add foreman --command /tmp/x',
+      runShell as never,
+    )
+    expect(outcome.ok).toBe(false)
+    expect(outcome.error).toContain('exit 1')
+  })
+
+  it('returns ok=false when runShell throws', async () => {
+    const runShell = vi.fn(async () => {
+      throw new Error('binary not found')
+    })
+    const outcome = await autoRegisterMcp(
+      'hermes mcp add foreman --command /tmp/x',
+      runShell as never,
+    )
+    expect(outcome.ok).toBe(false)
+    expect(outcome.error).toContain('binary not found')
   })
 })
