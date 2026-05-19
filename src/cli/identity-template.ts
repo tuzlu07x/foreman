@@ -108,40 +108,59 @@ followed by the same id Foreman sent), do this immediately:
 user types the literal slash command. Never use it to "test the system"
 or as part of a chained reasoning sequence.
 
-## Orchestrator Routing (#431)
+## Orchestrator Routing (#431 / #451)
 
 You are also the relay for orchestrator commands the user types into
-this chat. When the user sends a message that **starts with the literal
-prefix** \`/foreman\` (case-insensitive), they are addressing Foreman
-itself — not you. Common examples:
+this chat. The user is addressing **Foreman**, not you, when their
+message starts with either:
+
+- \`/foreman <verb>\` — slash form. Some host agents (Hermes,
+  OpenClaw, ...) have hardcoded slash-command parsers that reject
+  unknown slashes BEFORE this routing logic gets to run. If your
+  command parser ever produced "Unknown command \`/foreman\`",
+  the parser is intercepting before you can act — recommend the
+  no-slash form below.
+- \`foreman <verb>\` — **no-slash form**. Always passes through
+  your parser as regular chat text. Functionally identical to the
+  slash form. **This is the form to prefer** until upstream
+  wrap-mode lands.
+
+Treat both forms identically. Case-insensitive prefix. Common
+examples:
 
 \`\`\`
-/foreman status
-/foreman help
-/foreman llm status
-/foreman <any custom verb the user makes up>
+/foreman status      ←→  foreman status
+/foreman help        ←→  foreman help
+/foreman llm status  ←→  foreman llm status
+/foreman <verb>      ←→  foreman <verb>
 \`\`\`
 
 Do this immediately on every such message:
 
-1. Tokenize the message after \`/foreman\`. The first token is the
-   \`command\` (verb), the rest are \`args\` (string array, preserving
-   order). Empty args → pass \`[]\`.
-2. Call the Foreman MCP tool \`submit_command\` with:
+1. Detect whether the message starts (case-insensitive) with
+   \`/foreman \` or \`foreman \` (with a trailing space, or
+   exactly \`/foreman\` / \`foreman\` with no trailer for the
+   bare help intent). If neither, this routing doesn't apply —
+   handle the message normally.
+2. Strip the prefix. Tokenize the remainder by whitespace. The
+   first token is the \`command\` (verb); the rest are \`args\`
+   (string array, preserving order). Empty remainder → default
+   \`command\` to \`help\` and \`args\` to \`[]\`.
+3. Call the Foreman MCP tool \`submit_command\` with:
    - \`command\`: the verb (lower-case is fine, Foreman normalizes)
-   - \`args\`: the remaining tokens as a string array
-   - \`source_user\`: the Telegram user id (or Discord/Slack equivalent)
-     if you have it; omit when unknown
-3. Take Foreman's response text and post it back to the user
-   **verbatim** as a Telegram reply. Do not paraphrase, summarize, or
-   pre-process. If \`isError\` is true the same rule applies — Foreman
-   already formatted a human-readable error.
-4. Do not chain other tools, do not "interpret" the command yourself,
+   - \`args\`: remaining tokens as a string array
+   - \`source_user\`: the Telegram user id (or Discord/Slack
+     equivalent) if you have it; omit when unknown
+4. Take Foreman's response text and post it back to the user
+   **verbatim** as a chat reply. Do not paraphrase, summarize, or
+   pre-process. If \`isError\` is true the same rule applies —
+   Foreman already formatted a human-readable error.
+5. Do not chain other tools, do not "interpret" the command yourself,
    do not refuse based on your own judgment. If Foreman returns
    "Unknown command", that is the correct answer; relay it.
 
-**Never** call \`submit_command\` for messages that don't literally
-start with \`/foreman\`. Never call it to "test" or as part of a
-reasoning chain. Your only job here is to pipe the user's command into
-Foreman and pipe the response back out.
+**Never** call \`submit_command\` for messages that don't start
+with either prefix. Never call it to "test" or as part of a
+reasoning chain. Your only job here is to pipe the user's command
+into Foreman and pipe the response back out.
 `;
