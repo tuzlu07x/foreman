@@ -199,6 +199,33 @@ describe("resolveRequiredSetup — bundled-registry scenarios", () => {
     expect(orKey).toBeUndefined();
   });
 
+  // #461 — Hermes via-codex-oauth piggybacks on Codex's ChatGPT login.
+  // Without a mandatory step the user finishes the wizard, sends the
+  // first Telegram message, and hits a silent provider-auth failure.
+  it("via-codex-oauth queues a MANDATORY codex login step (#461)", () => {
+    const res = resolveRequiredSetup({
+      agents: [pickAgent("hermes")],
+      agentProviders: { hermes: "openai" },
+      agentVariants: { hermes: "via-codex-oauth" },
+      secretStore: store,
+    });
+    const mandatory = res.oauthSteps.find((o) => o.mandatory);
+    expect(mandatory).toBeDefined();
+    expect(mandatory?.command).toBe("codex login");
+    expect(mandatory?.verify).toBe("codex auth status");
+    expect(mandatory?.agentId).toBe("hermes");
+    expect(mandatory?.reason?.toLowerCase()).toContain("codex");
+  });
+
+  it("default openrouter route does not queue any mandatory step (#461)", () => {
+    const res = resolveRequiredSetup({
+      agents: [pickAgent("hermes")],
+      agentProviders: { hermes: "openai" },
+      secretStore: store,
+    });
+    expect(res.oauthSteps.filter((o) => o.mandatory)).toHaveLength(0);
+  });
+
   it("agentVariants default behavior (omitted) still picks the registry preferred", () => {
     const res = resolveRequiredSetup({
       agents: [pickAgent("hermes")],
@@ -271,6 +298,8 @@ describe("isRequiredSetupComplete", () => {
           command: "codex login",
           verify: "codex auth status",
           acquisition: null,
+          mandatory: false,
+          reason: null,
         },
       ],
       errors: [],
