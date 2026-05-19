@@ -126,3 +126,45 @@ describe("formatElapsed (#459)", () => {
     expect(formatElapsed(192_000)).toBe("3m12s");
   });
 });
+
+// #audit-finding-12 — Spinner needs to show which agent is being
+// installed RIGHT NOW so a user with a 6-agent batch can see progress.
+// We extract it from the latest "▸ <Name>" banner the install loop emits.
+describe("classifyInstallLog currentAgentName (#audit-finding-12)", () => {
+  it("picks up the agent name from the latest ▸ banner", () => {
+    const result = classifyInstallLog([
+      "▸ Will install: hermes, codex",
+      "▸ Hermes",
+      "  ✓ already installed",
+      "▸ Codex",
+      "  installing…",
+    ]);
+    expect(result.currentAgentName).toBe("Codex");
+  });
+
+  it("returns null before any agent banner fires", () => {
+    const result = classifyInstallLog([
+      "▸ Will install: hermes, codex",
+      "Selected agents: hermes, codex",
+    ]);
+    expect(result.currentAgentName).toBeNull();
+  });
+
+  it("ignores 'Will install:' / 'Will remove:' / 'Selected' banners (not agent names)", () => {
+    const result = classifyInstallLog([
+      "▸ Will install: hermes",
+      "▸ Will remove: codex",
+      "▸ Selected agents",
+    ]);
+    expect(result.currentAgentName).toBeNull();
+  });
+
+  it("captures multi-word agent names (e.g. 'Claude Code')", () => {
+    const result = classifyInstallLog([
+      "▸ Will install: claude-code",
+      "▸ Claude Code",
+      "  installing…",
+    ]);
+    expect(result.currentAgentName).toBe("Claude Code");
+  });
+});
