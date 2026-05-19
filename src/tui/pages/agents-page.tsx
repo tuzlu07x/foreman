@@ -12,6 +12,13 @@ import { singleBorder, theme } from "../theme.js";
 import { EmptyState } from "../components/empty-state.js";
 import { PageHeader } from "../components/typography.js";
 
+export interface DaemonCrashInfo {
+  agentId: string;
+  exitCode: number;
+  stderrHint: string;
+  crashedAt: number;
+}
+
 export interface AgentsPageProps {
   selectedIdx: number;
   expanded: boolean;
@@ -20,6 +27,10 @@ export interface AgentsPageProps {
   llmDraft?: string | null;
   onLlmDraftChange?: (value: string) => void;
   onNoteSubmit?: (value: string) => void;
+  /** #379 — Crash rows lifted from app.tsx so this page reflects daemon
+   *  health alongside `agent.status` (which only tracks MCP register
+   *  state, not the daemon process). */
+  daemonCrashes?: DaemonCrashInfo[];
 }
 
 export function AgentsPage({
@@ -30,6 +41,7 @@ export function AgentsPage({
   llmDraft = null,
   onLlmDraftChange,
   onNoteSubmit,
+  daemonCrashes = [],
 }: AgentsPageProps): JSX.Element {
   const { registry, bus } = useDashboardServices();
   const [rows, setRows] = useState<RegisteredAgent[]>(() => registry.listAll());
@@ -54,6 +66,11 @@ export function AgentsPage({
   }, [registry, bus]);
 
   const safeSelected = Math.max(0, Math.min(selectedIdx, rows.length - 1));
+  const crashMap = useMemo(() => {
+    const map = new Map<string, DaemonCrashInfo>();
+    for (const c of daemonCrashes) map.set(c.agentId, c);
+    return map;
+  }, [daemonCrashes]);
 
   return (
     <Box
@@ -67,7 +84,8 @@ export function AgentsPage({
         title="Agents"
         right={
           `${rows.length} registered · ` +
-          `${rows.filter((r) => r.status === "active").length} active · ` +
+          `${rows.filter((r) => r.status === "active" && !crashMap.has(r.id)).length} active · ` +
+          `${crashMap.size} crashed · ` +
           `${rows.filter((r) => r.status === "disabled").length} disabled · ` +
           `${rows.filter((r) => r.status === "blocked").length} blocked`
         }
@@ -96,6 +114,7 @@ export function AgentsPage({
               llmDraft={llmDraft}
               onLlmDraftChange={onLlmDraftChange}
               onNoteSubmit={onNoteSubmit}
+              crash={crashMap.get(agent.id) ?? null}
             />
           ))
         )}
@@ -128,6 +147,7 @@ function AgentRow({
   llmDraft,
   onLlmDraftChange,
   onNoteSubmit,
+  crash,
 }: {
   agent: RegisteredAgent;
   selected: boolean;
@@ -137,22 +157,31 @@ function AgentRow({
   llmDraft: string | null;
   onLlmDraftChange?: (value: string) => void;
   onNoteSubmit?: (value: string) => void;
+  crash?: DaemonCrashInfo | null;
 }): JSX.Element {
   const isActive = agent.status === "active";
   const isBlocked = agent.status === "blocked";
   const isDisabled = agent.status === "disabled";
-  const dotColor = isBlocked
+  // #379 — Daemon crash trumps the registry status display. The DB still
+  // says "active" because the agent registered via MCP, but the gateway
+  // process exited; the row must reflect that.
+  const isCrashed = !!crash;
+  const dotColor = isCrashed
     ? theme.accent.danger
-    : isDisabled
-      ? theme.fg.muted
-      : isActive
-        ? theme.accent.success
-        : theme.fg.muted;
-  const dot = isBlocked
+    : isBlocked
+      ? theme.accent.danger
+      : isDisabled
+        ? theme.fg.muted
+        : isActive
+          ? theme.accent.success
+          : theme.fg.muted;
+  const dot = isCrashed
     ? theme.symbols.cross
-    : isActive
-      ? theme.symbols.activeDot
-      : theme.symbols.idleDot;
+    : isBlocked
+      ? theme.symbols.cross
+      : isActive
+        ? theme.symbols.activeDot
+        : theme.symbols.idleDot;
   const registryId =
     typeof agent.metadata?.registryId === "string"
       ? agent.metadata.registryId
@@ -175,12 +204,27 @@ function AgentRow({
         </Text>{" "}
         <Text color={theme.fg.muted}>
           ({agent.displayName}) · {agent.transport}
-          {isBlocked ? " · blocked" : ""}
+          {isCrashed ? "" : isBlocked ? " · blocked" : ""}
           {isDisabled ? " · disabled" : ""}
-          {" · last "}
-          {lastSeen}
+          {isCrashed ? "" : " · last "}
+          {isCrashed ? "" : lastSeen}
         </Text>
+        {isCrashed && crash ? (
+          <Text color={theme.accent.danger}>
+            {" · daemon crashed (exit "}
+            {crash.exitCode}
+            {")"}
+          </Text>
+        ) : null}
       </Text>
+      {isCrashed && crash && crash.stderrHint.length > 0 ? (
+        <Box marginLeft={4}>
+          <Text color={theme.fg.muted}>↳ </Text>
+          <Text color={theme.accent.danger}>
+            {crash.stderrHint.slice(0, 100)}
+          </Text>
+        </Box>
+      ) : null}
       {expanded && (
         <Box
           flexDirection="column"

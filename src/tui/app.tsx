@@ -960,6 +960,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           llmDraft={agentsLlmDraft}
           onLlmDraftChange={setAgentsLlmDraft}
           onNoteSubmit={onAgentSaveNote}
+          daemonCrashes={daemonCrashes}
         />
       ) : page === "providers" ? (
         <ProvidersPage onLeave={() => setPage("dashboard")} />
