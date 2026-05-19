@@ -59,7 +59,12 @@
                 "model.provider": "codex"
               },
               "interactive_setup": "hermes model",
-              "post_setup_verify": "hermes doctor"
+              "post_setup_verify": "hermes doctor",
+              "depends_on_oauth": {
+                "agent": "codex",
+                "setup_command": "codex login",
+                "verify_command": "codex auth status"
+              }
             }
           }
         },

@@ -122,6 +122,7 @@ describe("provider list — renderListText", () => {
         requiredSecret: "openrouter-key",
         secretStatus: "present" as const,
         interactiveSetup: null,
+        dependsOnOauthCommand: null,
       },
       {
         agentId: "hermes",
@@ -132,6 +133,7 @@ describe("provider list — renderListText", () => {
         requiredSecret: null,
         secretStatus: "n/a" as const,
         interactiveSetup: "hermes model",
+        dependsOnOauthCommand: "codex login",
       },
       {
         agentId: "hermes",
@@ -142,6 +144,7 @@ describe("provider list — renderListText", () => {
         requiredSecret: "anthropic-key",
         secretStatus: "missing" as const,
         interactiveSetup: null,
+        dependsOnOauthCommand: null,
       },
     ];
     const text = renderListText(rows, "Hermes");

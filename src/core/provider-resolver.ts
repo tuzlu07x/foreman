@@ -54,6 +54,18 @@ export interface ResolvedAgentProviderConfig {
   interactiveSetup: string | null;
   /** Command Foreman runs to verify OAuth completed (`codex auth status`). */
   postSetupVerify: string | null;
+  /** #461 — Mandatory OAuth dependency on ANOTHER agent (e.g. Hermes
+   *  via-codex-oauth piggybacks on Codex's ChatGPT session). The wizard
+   *  shows a label hint at variant-pick time and a mandatory step on
+   *  the Done screen so the user doesn't hit a silent provider-auth
+   *  failure at runtime. `null` when this variant carries its own auth. */
+  dependsOnOauth: ResolvedDependsOnOauth | null;
+}
+
+export interface ResolvedDependsOnOauth {
+  agent: string;
+  setupCommand: string;
+  verifyCommand: string | null;
 }
 
 export type ResolveError =
@@ -221,6 +233,13 @@ export function resolveAgentProviderConfig(
       secretAcquisition: variant.secret_acquisition ?? null,
       interactiveSetup: variant.interactive_setup ?? null,
       postSetupVerify: variant.post_setup_verify ?? null,
+      dependsOnOauth: variant.depends_on_oauth
+        ? {
+            agent: variant.depends_on_oauth.agent,
+            setupCommand: variant.depends_on_oauth.setup_command,
+            verifyCommand: variant.depends_on_oauth.verify_command ?? null,
+          }
+        : null,
     },
   };
 }
