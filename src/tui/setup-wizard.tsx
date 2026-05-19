@@ -1016,6 +1016,9 @@ export function SetupWizard({
 
       // ----- picker phase -----
       if (foremanLlmPhase === "picker") {
+        // #370 — Disabled cloud rows are rendered but skipped here so
+        // ↑↓ nav cycles only the actionable rows; Enter on a disabled
+        // row is a no-op (the warning hint is rendered separately).
         const visible: ForemanLlmChoice[] = [];
         if (configured.has("anthropic")) visible.push("anthropic");
         if (configured.has("openai")) visible.push("openai");
@@ -1929,32 +1932,38 @@ export function SetupWizard({
     );
 
     if (foremanLlmPhase === "picker") {
-      // Universal picker — cloud rows surface only when user configured
-      // them in Step 1; ollama / preset / skip are always available.
-      const cloudRows: { value: ForemanLlmChoice; label: string; sub: string }[] = [];
-      if (configured.has("anthropic")) {
-        cloudRows.push({
+      // #370 — Universal picker. All cloud rows surface regardless of
+      // Step 1 configuration; rows without a configured key render
+      // dimmed + are skipped by ↑↓ nav (no-op on Enter with hint).
+      // ollama / preset / skip are always available.
+      const allRows: {
+        value: ForemanLlmChoice;
+        label: string;
+        sub: string;
+        disabled?: boolean;
+        disabledReason?: string;
+      }[] = [
+        {
           value: "anthropic",
           label: "Anthropic — Claude Haiku",
           sub: "cloud · ~$2/mo at default budget",
-        });
-      }
-      if (configured.has("openai")) {
-        cloudRows.push({
+          disabled: !configured.has("anthropic"),
+          disabledReason: "needs Anthropic key in Step 1 — Esc to go back",
+        },
+        {
           value: "openai",
           label: "OpenAI — gpt-4o-mini",
           sub: "cloud · ~$1/mo at default budget",
-        });
-      }
-      if (configured.has("gemini")) {
-        cloudRows.push({
+          disabled: !configured.has("openai"),
+          disabledReason: "needs OpenAI key in Step 1 — Esc to go back",
+        },
+        {
           value: "gemini",
           label: "Google Gemini — Gemini Flash",
           sub: "cloud · free tier available",
-        });
-      }
-      const allRows: { value: ForemanLlmChoice; label: string; sub: string }[] = [
-        ...cloudRows,
+          disabled: !configured.has("gemini"),
+          disabledReason: "needs Gemini key in Step 1 — Esc to go back",
+        },
         {
           value: "ollama",
           label: "Local — Ollama on this machine",
@@ -1967,7 +1976,7 @@ export function SetupWizard({
         {
           value: "preset",
           label: "Custom — OpenAI-compatible",
-          sub: "DeepSeek, Qwen, OpenRouter, Together, Groq",
+          sub: "open-source hosts + closed clouds (xAI, Cohere, Mistral, Perplexity)",
         },
         {
           value: "skip",
@@ -1975,8 +1984,15 @@ export function SetupWizard({
           sub: "no LLM calls, free, slightly less smart",
         },
       ];
-      const currentCursor: ForemanLlmChoice =
-        (foremanLlmDraft as ForemanLlmChoice | null) ?? allRows[0]?.value ?? "skip";
+      const enabledRows = allRows.filter((r) => !r.disabled);
+      const cursorFromDraft = foremanLlmDraft as ForemanLlmChoice | null;
+      const cursorRow =
+        (cursorFromDraft && allRows.find((r) => r.value === cursorFromDraft && !r.disabled)) ??
+        enabledRows[0] ?? allRows[0];
+      const currentCursor: ForemanLlmChoice = cursorRow?.value ?? "skip";
+      const focusedDisabledHint = allRows.find(
+        (r) => r.value === currentCursor && r.disabled,
+      )?.disabledReason;
       return (
         <Box flexDirection="column" gap={1} paddingY={1}>
           <WizardProgress
@@ -1993,20 +2009,34 @@ export function SetupWizard({
           <Box flexDirection="column">
             {allRows.map((row) => {
               const selected = row.value === currentCursor;
+              const disabledColor = row.disabled ? theme.fg.muted : undefined;
               return (
                 <Box key={row.value} flexDirection="row">
                   <Text
-                    color={selected ? theme.accent.primary : undefined}
-                    bold={selected}
+                    color={
+                      selected
+                        ? theme.accent.primary
+                        : disabledColor
+                    }
+                    bold={selected && !row.disabled}
+                    dimColor={row.disabled}
                   >
-                    {selected ? "❯ ✓ " : "    "}
+                    {selected ? "❯ " : "  "}
+                    {row.disabled ? "✗ " : "✓ "}
                     {row.label}
                   </Text>
-                  <Text color={theme.fg.muted}>{"  "}{row.sub}</Text>
+                  <Text color={theme.fg.muted} dimColor={row.disabled}>
+                    {"  "}{row.sub}
+                  </Text>
                 </Box>
               );
             })}
           </Box>
+          {focusedDisabledHint ? (
+            <Text color={theme.accent.warning}>
+              {focusedDisabledHint}
+            </Text>
+          ) : null}
           <Text color={theme.fg.muted}>
             [↑↓] move · [Enter] or [Space] confirms · [Esc] back to providers
           </Text>
@@ -2217,6 +2247,31 @@ export function SetupWizard({
 
     if (foremanLlmPhase === "preset-pick") {
       const cursor = presetDraft ?? llmPresetDoc.presets[0]?.id ?? "deepseek";
+      // #370 — Group by category so closed-cloud presets (xAI / Cohere
+      // / Mistral / Perplexity) appear under their own divider. Presets
+      // without a category fall back to open-source for compat with old
+      // registries.
+      const openSource = llmPresetDoc.presets.filter(
+        (p) => (p.category ?? "open-source") === "open-source",
+      );
+      const closedCloud = llmPresetDoc.presets.filter(
+        (p) => p.category === "closed-cloud",
+      );
+      const renderRow = (preset: LlmPreset): JSX.Element => {
+        const selected = preset.id === cursor;
+        return (
+          <Box key={preset.id} flexDirection="row">
+            <Text
+              color={selected ? theme.accent.primary : undefined}
+              bold={selected}
+            >
+              {selected ? "❯ ✓ " : "    "}
+              {preset.name.padEnd(24, " ")}
+            </Text>
+            <Text color={theme.fg.muted}>{preset.cost_hint}</Text>
+          </Box>
+        );
+      };
       return (
         <Box flexDirection="column" gap={1} paddingY={1}>
           <WizardProgress
@@ -2229,23 +2284,22 @@ export function SetupWizard({
             All speak the OpenAI /v1/chat/completions shape — pick a preset, paste your API key on the next screen.
           </Text>
           <Box flexDirection="column">
-            {llmPresetDoc.presets.map((preset) => {
-              const selected = preset.id === cursor;
-              return (
-                <Box key={preset.id} flexDirection="row">
-                  <Text
-                    color={selected ? theme.accent.primary : undefined}
-                    bold={selected}
-                  >
-                    {selected ? "❯ ✓ " : "    "}
-                    {preset.name.padEnd(24, " ")}
-                  </Text>
-                  <Text color={theme.fg.muted}>
-                    {preset.cost_hint}
-                  </Text>
-                </Box>
-              );
-            })}
+            {openSource.length > 0 ? (
+              <>
+                <Text color={theme.accent.primary} bold>
+                  Open-source / multi-model hosts:
+                </Text>
+                {openSource.map(renderRow)}
+              </>
+            ) : null}
+            {closedCloud.length > 0 ? (
+              <Box flexDirection="column" marginTop={1}>
+                <Text color={theme.accent.primary} bold>
+                  Closed-source clouds:
+                </Text>
+                {closedCloud.map(renderRow)}
+              </Box>
+            ) : null}
           </Box>
           <Text color={theme.fg.muted}>
             [↑↓] move · [Enter] or [Space] confirms · [Esc] back to the picker
