@@ -2363,24 +2363,28 @@ export function SetupWizard({
         disabled?: boolean;
         disabledReason?: string;
       }[] = [
+        // #456 — Drop hardcoded model names from labels. The live model
+        // picker (#399) is the source of truth — showing "Claude Haiku"
+        // here misleads users who then pick a different model in the
+        // next step. Labels show provider + cost hint only.
         {
           value: "anthropic",
-          label: "Anthropic — Claude Haiku",
-          sub: "cloud · ~$2/mo at default budget",
+          label: "Anthropic",
+          sub: "cloud · ~$2/mo at default budget · model picked next",
           disabled: !configured.has("anthropic"),
           disabledReason: "needs Anthropic key in Step 1 — Esc to go back",
         },
         {
           value: "openai",
-          label: "OpenAI — gpt-4o-mini",
-          sub: "cloud · ~$1/mo at default budget",
+          label: "OpenAI",
+          sub: "cloud · ~$1/mo at default budget · model picked next",
           disabled: !configured.has("openai"),
           disabledReason: "needs OpenAI key in Step 1 — Esc to go back",
         },
         {
           value: "gemini",
-          label: "Google Gemini — Gemini Flash",
-          sub: "cloud · free tier available",
+          label: "Google Gemini",
+          sub: "cloud · free tier available · model picked next",
           disabled: !configured.has("gemini"),
           disabledReason: "needs Gemini key in Step 1 — Esc to go back",
         },
