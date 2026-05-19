@@ -25,6 +25,12 @@ export const LlmPresetSchema = z
     where_to_get: z.string().url(),
     cost_hint: z.string().min(1),
     description: z.string().min(1),
+    /** #370 — Grouping in the preset picker. "open-source" =
+     *  open-weights / multi-model hosts (DeepSeek, Qwen, OpenRouter…).
+     *  "closed-cloud" = proprietary clouds that ship OpenAI-compat
+     *  endpoints (xAI, Cohere, Mistral, Perplexity). Defaults to
+     *  open-source so existing registries don't break. */
+    category: z.enum(["open-source", "closed-cloud"]).optional(),
   })
   .strict();
 
