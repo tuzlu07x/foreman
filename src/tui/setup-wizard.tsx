@@ -249,6 +249,19 @@ export interface WizardServices {
    *  ForemanVoice + PatternDetectionService read from this on startup. */
   voiceConfigPath: string;
   launchEditor: (path: string) => Promise<unknown>;
+  /** #468 — When the Done screen's [y] hotkey is pressed, the wizard
+   *  exits and hands off these OAuth/interactive_setup commands to the
+   *  outer CLI for inline browser-flow execution. The CLI spawns them
+   *  with inherited stdio so the user's browser actually opens. */
+  requestOauthRun?: (steps: WizardOauthRunStep[]) => void;
+}
+
+export interface WizardOauthRunStep {
+  agentId: string;
+  command: string;
+  verify: string | null;
+  mandatory: boolean;
+  reason: string | null;
 }
 
 export interface SetupWizardProps {
@@ -2015,6 +2028,23 @@ export function SetupWizard({
       }
       if (input === "l") {
         setDonePhase("log");
+        return;
+      }
+      // #468 — Hand off the queued OAuth/interactive_setup commands to
+      // the outer CLI which runs them with inherited stdio so the
+      // browser-OAuth flow actually works. Exit cleanly afterwards;
+      // re-running `foreman doctor` confirms the final state.
+      if (input === "y" && requiredSetupResolution.oauthSteps.length > 0) {
+        const steps: WizardOauthRunStep[] =
+          requiredSetupResolution.oauthSteps.map((s) => ({
+            agentId: s.agentId,
+            command: s.command,
+            verify: s.verify,
+            mandatory: s.mandatory,
+            reason: s.reason,
+          }));
+        services.requestOauthRun?.(steps);
+        exit();
         return;
       }
       if (input === "q") {
@@ -4101,6 +4131,14 @@ export function SetupWizard({
         <Text color={theme.fg.muted}>
           {"  "}[Enter] Launch Foreman TUI
         </Text>
+        {requiredSetupResolution.oauthSteps.length > 0 ? (
+          <Text color={theme.accent.warning}>
+            {"  "}[y]     Run OAuth setup now (opens browser){" "}
+            {requiredSetupResolution.oauthSteps.some((o) => o.mandatory)
+              ? "— recommended"
+              : ""}
+          </Text>
+        ) : null}
         <Text color={theme.fg.muted}>{"  "}[d]     Run foreman doctor</Text>
         <Text color={theme.fg.muted}>
           {"  "}[p]     Review policy file

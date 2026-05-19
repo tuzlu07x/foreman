@@ -44,7 +44,8 @@ import {
   markSetupSkipped,
   saveSetupState,
 } from "../tui/setup-state.js";
-import { SetupWizard } from "../tui/setup-wizard.js";
+import { SetupWizard, type WizardOauthRunStep } from "../tui/setup-wizard.js";
+import { runOauthFlows } from "./run-oauth-flow.js";
 import { SecretStore, SecretNotFoundError } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { recordUsageAndCheckBudget } from "../core/llm/budget.js";
@@ -900,6 +901,10 @@ async function runOnboardingWizard(): Promise<void> {
   const registry = new RegistryService(db, bus);
   const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
   const chatPrimary = new ChatPrimaryService(db, { bus });
+  // #468 — Auto-spawn OAuth flow queue. See setup.ts for the same wiring;
+  // the wizard's [y] hotkey hands its OAuth steps here and we run them
+  // post-unmount so interactive stdio reaches the child cleanly.
+  const oauthQueue: WizardOauthRunStep[] = [];
   const instance = render(
     React.createElement(SetupWizard, {
       initialState: loadSetupState() ?? freshState(),
@@ -913,11 +918,17 @@ async function runOnboardingWizard(): Promise<void> {
         notifyConfigPath: paths.notifyConfigPath,
         voiceConfigPath: paths.voiceConfigPath,
         launchEditor,
+        requestOauthRun: (steps) => {
+          oauthQueue.push(...steps);
+        },
       },
     }),
     { exitOnCtrlC: false },
   );
   await instance.waitUntilExit();
+  if (oauthQueue.length > 0) {
+    runOauthFlows(oauthQueue);
+  }
   closeDb();
 }
 
