@@ -19,9 +19,10 @@ import {
   loadSetupState,
   resetSetupState,
 } from "../tui/setup-state.js";
-import { SetupWizard } from "../tui/setup-wizard.js";
+import { SetupWizard, type WizardOauthRunStep } from "../tui/setup-wizard.js";
 import { getForemanPaths } from "../utils/config.js";
 import { red } from "./colors.js";
+import { runOauthFlows } from "./run-oauth-flow.js";
 
 interface SetupOptions {
   resume?: boolean;
@@ -80,6 +81,10 @@ export const setupCommand = new Command("setup")
     const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
     const chatPrimary = new ChatPrimaryService(db, { bus });
 
+    // #468 — Wizard's [y] hotkey hands its OAuth queue here; we run the
+    // commands AFTER Ink unmounts so spawnSync's inherited stdio gets
+    // the bare terminal (browser flows + interactive prompts work).
+    const oauthQueue: WizardOauthRunStep[] = [];
     const instance = render(
       React.createElement(SetupWizard, {
         initialState,
@@ -93,6 +98,9 @@ export const setupCommand = new Command("setup")
           notifyConfigPath: paths.notifyConfigPath,
           voiceConfigPath: paths.voiceConfigPath,
           launchEditor,
+          requestOauthRun: (steps) => {
+            oauthQueue.push(...steps);
+          },
         },
       }),
       { exitOnCtrlC: false },
@@ -105,6 +113,9 @@ export const setupCommand = new Command("setup")
     process.once("SIGTERM", shutdown);
 
     await instance.waitUntilExit();
+    if (oauthQueue.length > 0) {
+      runOauthFlows(oauthQueue);
+    }
     closeDb();
   });
 
