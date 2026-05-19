@@ -44,7 +44,12 @@ function makeServices(
     commandRouter: {
       dispatch: vi.fn(async () => commandResult),
     },
+    audit: {
+      logEvent: vi.fn(),
+      logRequest: vi.fn(),
+    },
     llmConfigPath: "/tmp/test-llm.yaml",
+    configDir: "/tmp/test-config",
   } as unknown as McpStdioServices;
 }
 
@@ -428,6 +433,70 @@ describe("mcp-stdio handleMessage", () => {
         "echo",
         ["one", "two", "three"],
         expect.any(Object),
+      );
+    });
+
+    it("writes an audit row per invocation (foreman:command event)", async () => {
+      const services = makeServices(
+        "allowed",
+        "policy:7",
+        undefined,
+        { ok: true },
+        { ok: true, text: "ok" },
+      );
+      await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 26,
+        method: "tools/call",
+        params: {
+          name: "submit_command",
+          arguments: {
+            command: "status",
+            args: [],
+            source_user: "42",
+          },
+        },
+      } as JSONRPCMessage);
+      expect(services.audit.logEvent).toHaveBeenCalledWith(
+        "foreman:command",
+        expect.objectContaining({
+          command: "status",
+          args: [],
+          sourceAgent: "hermes",
+          sourceUser: "42",
+          ok: true,
+        }),
+      );
+    });
+
+    it("audit row records failures with the error code", async () => {
+      const services = makeServices(
+        "allowed",
+        "policy:7",
+        undefined,
+        { ok: true },
+        {
+          ok: false,
+          text: "Unknown command",
+          errorCode: "UNKNOWN_COMMAND",
+        },
+      );
+      await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 27,
+        method: "tools/call",
+        params: {
+          name: "submit_command",
+          arguments: { command: "supernova", args: [] },
+        },
+      } as JSONRPCMessage);
+      expect(services.audit.logEvent).toHaveBeenCalledWith(
+        "foreman:command",
+        expect.objectContaining({
+          command: "supernova",
+          ok: false,
+          errorCode: "UNKNOWN_COMMAND",
+        }),
       );
     });
   });
