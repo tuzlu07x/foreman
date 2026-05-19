@@ -476,6 +476,47 @@ export function computeSingleCompatProviderSeeds(
   return out;
 }
 
+/**
+ * #audit-finding-6 — Map ModelDiscoveryError's raw HTTP wording into an
+ * actionable hint the user can act on without leaving the wizard. Auth
+ * failures (401/403) point back at Step 1 because the key is the most
+ * likely cause; rate limits and 5xx say "try again later" rather than
+ * sending the user on a key-rotation chase.
+ */
+export function classifyModelDiscoveryError(
+  rawMessage: string,
+  provider: string,
+): string {
+  const statusMatch = rawMessage.match(/^HTTP (\d{3})/);
+  const status = statusMatch ? Number(statusMatch[1]) : null;
+  if (status === 401 || status === 403) {
+    return (
+      `${provider} rejected the API key (HTTP ${status}). Press [Esc] to go ` +
+      `back to Step 1 (Providers) and rotate ${provider}-key, or skip to use the ` +
+      `registry default model.`
+    );
+  }
+  if (status === 429) {
+    return (
+      `${provider} is rate-limiting model discovery (HTTP 429). Wait a minute ` +
+      `and retry, or skip to use the registry default model.`
+    );
+  }
+  if (status && status >= 500) {
+    return (
+      `${provider} returned a server error (HTTP ${status}). This is usually ` +
+      `transient — retry in a moment, or skip to use the registry default.`
+    );
+  }
+  if (/abort|timeout|network|fetch failed/i.test(rawMessage)) {
+    return (
+      `Couldn't reach ${provider} to list models — check your internet ` +
+      `connection, or skip to use the registry default model.`
+    );
+  }
+  return rawMessage;
+}
+
 export interface AgentConfigSubmitInput {
   currentIdx: number;
   totalPrompts: number;
@@ -1328,13 +1369,16 @@ export function SetupWizard({
         }
         setAgentModelOptions(models);
       } catch (err) {
-        const msg =
+        const rawMsg =
           err instanceof ModelDiscoveryError
             ? err.message
             : err instanceof Error
               ? err.message
               : String(err);
-        setAgentModelError(msg);
+        // #audit-finding-6 — Translate raw HTTP errors into actionable
+        // hints. The bare "HTTP 401 from …" was leaving users guessing
+        // whether to fix their key, switch providers, or wait.
+        setAgentModelError(classifyModelDiscoveryError(rawMsg, provider));
         setAgentModelOptions([]);
       }
     })();
@@ -2224,7 +2268,14 @@ export function SetupWizard({
           Welcome to Foreman
         </Text>
         <Text color={theme.fg.muted}>
-          Foreman is the single pane of glass for your AI agent setup.
+          Foreman wires multiple AI agents (Hermes, Codex, Claude Code…)
+          into a Telegram bot you control. It routes messages between
+          agents, guards their tool calls, and gives you a single audit
+          trail.
+        </Text>
+        <Text color={theme.fg.muted}>
+          You'll paste LLM provider keys, pick agents to install, and
+          optionally set up Foreman's own AI brain for smarter routing.
         </Text>
         <Box marginTop={1} flexDirection="column">
           <Text color={theme.fg.default}>
@@ -2559,7 +2610,8 @@ export function SetupWizard({
           <Text color={theme.fg.muted}>
             Foreman uses an LLM to verify risky agent calls and write daily
             summaries. Pick where Foreman should run its own LLM. (Different
-            from the per-agent picker in Step 3.)
+            from the per-agent picker in Step 3 — costs below are Foreman's
+            own usage, NOT what your agents will spend.)
           </Text>
           <Box flexDirection="column">
             {allRows.map((row) => {
@@ -4211,6 +4263,29 @@ export function SetupWizard({
           ) : null}
         </Box>
       )}
+      {/* #audit-finding-15 — Agents that registered but whose Foreman
+          MCP registration failed are functional for chat but can't call
+          Foreman tools. Without surfacing the failure on Done the user
+          assumes everything's wired and only sees the gap when an agent
+          tries (and fails) to invoke a Foreman MCP tool. */}
+      {installSummary && installSummary.mcpRegisterFailed.length > 0 && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold color={theme.accent.warning}>
+            ⚠ Foreman MCP registration failed for these agents:
+          </Text>
+          {installSummary.mcpRegisterFailed.map((f) => (
+            <Box key={f.agentId} flexDirection="column" marginLeft={2}>
+              <Text color={theme.accent.warning}>✗ {f.agentId}</Text>
+              <Text color={theme.fg.muted}>{"    "}{f.reason}</Text>
+              <Text color={theme.fg.muted}>{"    "}retry: {f.command}</Text>
+            </Box>
+          ))}
+          <Text color={theme.fg.muted}>
+            These agents will run but can't call Foreman tools until the
+            command above succeeds.
+          </Text>
+        </Box>
+      )}
       {installSummary && installSummary.registered.length > 0 && (
         <LaunchCommands agentIds={installSummary.registered} />
       )}
@@ -4363,6 +4438,13 @@ export interface InstallStepSummary {
   identitySkipped: { agentId: string; reason: string }[];
   failed: string[];
   removed: string[];
+  /** #audit-finding-15 — Agents whose Foreman MCP registration failed
+   *  during install (auto-run command refused, wrapper write blocked,
+   *  Hermes' `hermes mcp add` errored). The agent runs but its MCP
+   *  client can't reach Foreman — silent degradation. Done screen
+   *  surfaces these with the manual fallback command so the user can
+   *  re-run after fixing the underlying issue. */
+  mcpRegisterFailed: { agentId: string; command: string; reason: string }[];
 }
 
 export type AgentInstallStage = "install" | "config-inject" | "register";
@@ -4404,6 +4486,7 @@ export async function runInstallStep(
     identitySkipped: [],
     failed: [],
     removed: [],
+    mcpRegisterFailed: [],
   };
   const { doc } = loadActiveRegistry();
   // #373 — load provider catalog once so checkSecrets can filter
@@ -4791,12 +4874,25 @@ export async function runInstallStep(
             if (registerHint.verify) {
               log(`    verify with: ${registerHint.verify}`);
             }
+            // #audit-finding-15 — Capture the failure on the summary so
+            // the Done screen surfaces it. Agent still runs; without
+            // MCP it just can't call Foreman tools.
+            summary.mcpRegisterFailed.push({
+              agentId: id,
+              command: registerHint.command,
+              reason: autoOutcome.error ?? "auto-register failed",
+            });
           }
         } else {
           // Wrapper write failed — still print the manual fallback.
           log(`  ℹ ${entry.name} needs one extra step to route through Foreman:`);
           if (registerHint.note) log(`     ${registerHint.note}`);
           log(`     $ ${registerHint.command}`);
+          summary.mcpRegisterFailed.push({
+            agentId: id,
+            command: registerHint.command,
+            reason: "wrapper script write failed",
+          });
         }
       }
       if (entry.identity_path) {
