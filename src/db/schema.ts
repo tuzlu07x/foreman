@@ -178,7 +178,7 @@ export const notifications = sqliteTable(
     id: text("id").primaryKey(),
     requestId: text("request_id"),
     level: text("level", {
-      enum: ["critical", "warning", "info", "summary", "budget_alert"],
+      enum: ["critical", "warning", "info", "summary", "budget_alert", "risk_deny"],
     }).notNull(),
     channel: text("channel").notNull(),
     body: text("body").notNull(),
