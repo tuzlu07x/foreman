@@ -117,6 +117,41 @@ import { singleBorder, theme } from "./theme.js";
 
 const DEFAULT_AGENTS = ["hermes", "claude-code"];
 
+// #448 — Compute a sliding window around the cursor for picker
+// render blocks where the list can be longer than the visible
+// region. Keeps the cursor inside [start, start+size-1] so down-
+// arrow past the bottom slides the window down, not off-screen.
+// Returns hidden counts so the render can show "N more above /
+// below" hints. Window size kept at 12 to match the existing
+// density of the model-pick picker.
+export interface PickerViewport<T> {
+  visible: T[];
+  start: number;
+  topHidden: number;
+  bottomHidden: number;
+}
+
+export function computePickerViewport<T>(
+  items: T[],
+  cursorIdx: number,
+  size: number,
+): PickerViewport<T> {
+  const total = items.length;
+  if (total <= size) {
+    return { visible: items, start: 0, topHidden: 0, bottomHidden: 0 };
+  }
+  const half = Math.floor(size / 2);
+  let start = Math.max(0, cursorIdx - half);
+  if (start + size > total) start = total - size;
+  if (start < 0) start = 0;
+  return {
+    visible: items.slice(start, start + size),
+    start,
+    topHidden: start,
+    bottomHidden: total - (start + size),
+  };
+}
+
 export interface WelcomeStep {
   number: number;
   name: string;
@@ -2444,25 +2479,51 @@ export function SetupWizard({
             Pick which one Foreman should use for verification + smart
             summaries.
           </Text>
-          <Box flexDirection="column">
-            {cloudModelOptions.map((row) => {
-              const selected = row.id === cursor;
-              return (
-                <Box key={row.id} flexDirection="row">
-                  <Text
-                    color={selected ? theme.accent.primary : undefined}
-                    bold={selected}
-                  >
-                    {selected ? "❯ ✓ " : "    "}
-                    {row.label}
+          {(() => {
+            // #448 — Same windowed render the agent model picker uses
+            // so the cursor follows past the 12-row viewport instead
+            // of moving invisibly through the rest of the list.
+            const cursorIdxCm = Math.max(
+              0,
+              cloudModelOptions.findIndex((m) => m.id === cursor),
+            );
+            const vpCm = computePickerViewport(
+              cloudModelOptions,
+              cursorIdxCm,
+              12,
+            );
+            return (
+              <Box flexDirection="column">
+                {vpCm.topHidden > 0 ? (
+                  <Text color={theme.fg.muted}>
+                    {"    "}↑ {vpCm.topHidden} more above
                   </Text>
-                  {row.label !== row.id ? (
-                    <Text color={theme.fg.muted}>{"  "}({row.id})</Text>
-                  ) : null}
-                </Box>
-              );
-            })}
-          </Box>
+                ) : null}
+                {vpCm.visible.map((row) => {
+                  const selected = row.id === cursor;
+                  return (
+                    <Box key={row.id} flexDirection="row">
+                      <Text
+                        color={selected ? theme.accent.primary : undefined}
+                        bold={selected}
+                      >
+                        {selected ? "❯ ✓ " : "    "}
+                        {row.label}
+                      </Text>
+                      {row.label !== row.id ? (
+                        <Text color={theme.fg.muted}>{"  "}({row.id})</Text>
+                      ) : null}
+                    </Box>
+                  );
+                })}
+                {vpCm.bottomHidden > 0 ? (
+                  <Text color={theme.fg.muted}>
+                    {"    "}↓ {vpCm.bottomHidden} more below
+                  </Text>
+                ) : null}
+              </Box>
+            );
+          })()}
           <Text color={theme.fg.muted}>
             [↑↓] move · [Enter] or [Space] confirms · [Esc] back to picker
           </Text>
@@ -3011,27 +3072,47 @@ export function SetupWizard({
             Which {providerLabel} model should {agent.name} use? Skipping
             keeps the registry default.
           </Text>
-          <Box flexDirection="column">
-            {agentModelOptions.slice(0, 12).map((model) => {
-              const isSelected = model.id === cursor;
-              return (
-                <Text
-                  key={model.id}
-                  color={isSelected ? theme.accent.primary : undefined}
-                  bold={isSelected}
-                >
-                  {isSelected ? "❯ ✓ " : "    "}
-                  {model.id}
-                </Text>
-              );
-            })}
-            {agentModelOptions.length > 12 ? (
-              <Text color={theme.fg.muted}>
-                {"    "}… and {agentModelOptions.length - 12} more (scroll up to
-                pick)
-              </Text>
-            ) : null}
-          </Box>
+          {(() => {
+            // #448 — Windowed render so the cursor stays visible past
+            // row 12. Without this, ↑↓ moves through the full list but
+            // only the first 12 ever render.
+            const cursorIdx = Math.max(
+              0,
+              agentModelOptions.findIndex((m) => m.id === cursor),
+            );
+            const vp = computePickerViewport(
+              agentModelOptions,
+              cursorIdx,
+              12,
+            );
+            return (
+              <Box flexDirection="column">
+                {vp.topHidden > 0 ? (
+                  <Text color={theme.fg.muted}>
+                    {"    "}↑ {vp.topHidden} more above
+                  </Text>
+                ) : null}
+                {vp.visible.map((model) => {
+                  const isSelected = model.id === cursor;
+                  return (
+                    <Text
+                      key={model.id}
+                      color={isSelected ? theme.accent.primary : undefined}
+                      bold={isSelected}
+                    >
+                      {isSelected ? "❯ ✓ " : "    "}
+                      {model.id}
+                    </Text>
+                  );
+                })}
+                {vp.bottomHidden > 0 ? (
+                  <Text color={theme.fg.muted}>
+                    {"    "}↓ {vp.bottomHidden} more below
+                  </Text>
+                ) : null}
+              </Box>
+            );
+          })()}
           <Text color={theme.fg.muted}>
             [↑↓] move · [Enter] confirm · [s] skip · [Esc] back
           </Text>
