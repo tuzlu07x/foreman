@@ -8,6 +8,12 @@ export const STEPS = [
   "foreman-llm",
   "agents",
   "services",
+  // #426 — Primary chat agent per messaging channel. Runs after
+  // services so we know which channels are in play, before
+  // required-setup so the projector knows which agent gets the
+  // channel's secrets. Auto-skipped when there's no conflict
+  // (<=1 chat-capable agent OR no messaging service).
+  "chat-primary",
   // #408 / #411 Phase 3 — per-agent provider mapping resolution.
   // Runs AFTER agent + service picks (needs both to compute which
   // secrets are required) and BEFORE install (so missing keys are

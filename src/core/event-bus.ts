@@ -112,6 +112,17 @@ export interface ForemanEventMap {
      *  which agent's chat the user typed `/approve` into. */
     routedBy?: string;
   };
+  /** #426 — Primary chat agent switched for a messaging channel.
+   *  Fired by `ChatPrimaryService.set/unset`. TUI Settings + CLI
+   *  `chat status` listen so the display refreshes without re-querying. */
+  "chat-primary:changed": {
+    channel: string;
+    /** New primary agent id, or null when the row was deleted. */
+    agentId: string | null;
+    /** Previous primary, or null when no row existed before. */
+    previousAgentId: string | null;
+    setAt: number;
+  };
   "agent:message": {
     agentId: string;
     message: unknown;

@@ -96,6 +96,15 @@ export const AgentEntrySchema = z
      * callers read as `entry.optional_services ?? []`. */
     optional_services: z.array(z.string()).optional(),
     mcp_compatible: z.boolean(),
+    /** #426 — Whether this agent polls a messaging channel (Telegram /
+     *  Discord / Slack) and competes for the bot's single getUpdates
+     *  consumer slot. Drives the wizard's "primary chat agent" picker:
+     *  when N>1 chat_capable agents are selected together with a
+     *  messaging service, the wizard prompts the user to pick which
+     *  one is primary. Only that one gets the channel's secrets
+     *  projected. Optional; defaults to false (= headless / code-only
+     *  agent like Codex). */
+    chat_capable: z.boolean().optional(),
     /** MCP config block shape (#385). `flat` writes `{<mcp_servers_key>:
      *  {foreman: ...}}` (Claude Code / Hermes / Codex). `nested` writes
      *  `{mcp: {enabled: true, servers: {foreman: ...}}}` (OpenClaw).

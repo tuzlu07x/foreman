@@ -13,6 +13,7 @@ import {
   UnsupportedConfigFormatError,
 } from "../core/agent-config-injector.js";
 import { projectSecretsForAgent } from "../core/agent-secrets-projector.js";
+import { ChatPrimaryService } from "../core/chat-primary.js";
 import { applyForemanSoul } from "../core/foreman-soul.js";
 import {
   detectInstall,
@@ -177,6 +178,7 @@ export async function runAgentAddScripted(
         providersSelected: options.providersSelected ?? [],
         servicesSelected: options.servicesSelected ?? [],
         secretStore: store,
+        chatPrimary: new ChatPrimaryService(deps.db),
       });
       for (const f of projection.files) {
         const tag = f.replacedStale ? "⟳" : "✓";
