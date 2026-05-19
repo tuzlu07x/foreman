@@ -163,3 +163,37 @@ describe("DEFAULT_FOREMAN_SOUL — approval routing (#406)", () => {
     );
   });
 });
+
+// #431 — Orchestrator routing section. Mirrors the approval-routing
+// rules but for `/foreman <verb>` commands; the agent relays them via
+// the `submit_command` MCP tool.
+describe("DEFAULT_FOREMAN_SOUL — orchestrator routing (#431)", () => {
+  it("contains the Orchestrator Routing section header", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toContain("## Orchestrator Routing");
+  });
+
+  it("documents the /foreman prefix the user types", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toContain("/foreman");
+    expect(DEFAULT_FOREMAN_SOUL).toContain("/foreman status");
+    expect(DEFAULT_FOREMAN_SOUL).toContain("/foreman help");
+  });
+
+  it("references the submit_command MCP tool by exact name", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toContain("`submit_command`");
+  });
+
+  it("explains the tokenization: first word = command, rest = args", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/first token is the[\s\S]*command/i);
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/args[\s\S]*string array/i);
+  });
+
+  it("requires verbatim relay of Foreman's response back to the user", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/verbatim/i);
+  });
+
+  it("forbids unsolicited submit_command calls", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(
+      /Never[\s\S]*call[\s\S]*submit_command[\s\S]*for messages that don't[\s\S]*\/foreman/i,
+    );
+  });
+});
