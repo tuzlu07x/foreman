@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "_comment": "OpenAI-compatible preset endpoints (#367). All hit the standard /v1/chat/completions shape — Foreman's existing openai-compatible provider transport reuses them. Refresh quarterly as endpoints change.",
+  "_comment": "OpenAI-compatible preset endpoints (#367). All hit the standard /v1/chat/completions shape — Foreman's existing openai-compatible provider transport reuses them. Refresh quarterly as endpoints change. #370 added closed-cloud category.",
   "presets": [
     {
       "id": "deepseek",
@@ -11,7 +11,8 @@
       "alt_models": ["deepseek-reasoner"],
       "where_to_get": "https://platform.deepseek.com/api_keys",
       "cost_hint": "$0.14/MTok input — cheapest cloud option",
-      "description": "DeepSeek V3 (chat) and R1 (reasoner) via official API"
+      "description": "DeepSeek V3 (chat) and R1 (reasoner) via official API",
+      "category": "open-source"
     },
     {
       "id": "qwen-dashscope",
@@ -22,7 +23,8 @@
       "alt_models": ["qwen-turbo", "qwen-max", "qwen2.5-72b-instruct"],
       "where_to_get": "https://dashscope.console.aliyun.com/apiKey",
       "cost_hint": "pay-per-token, generous free tier",
-      "description": "Alibaba's Qwen 2.5 family via DashScope OpenAI-compat endpoint"
+      "description": "Alibaba's Qwen 2.5 family via DashScope OpenAI-compat endpoint",
+      "category": "open-source"
     },
     {
       "id": "openrouter",
@@ -38,7 +40,8 @@
       ],
       "where_to_get": "https://openrouter.ai/keys",
       "cost_hint": "many providers, one key — varies by model",
-      "description": "Single API to ~200 models from Anthropic, OpenAI, Google, Meta, DeepSeek, …"
+      "description": "Single API to ~200 models from Anthropic, OpenAI, Google, Meta, DeepSeek, …",
+      "category": "open-source"
     },
     {
       "id": "together",
@@ -53,7 +56,8 @@
       ],
       "where_to_get": "https://api.together.xyz/settings/api-keys",
       "cost_hint": "open-weights models hosted, $0.20–$5/MTok",
-      "description": "Hosted open-weights models — Llama, Qwen, Mistral, DeepSeek"
+      "description": "Hosted open-weights models — Llama, Qwen, Mistral, DeepSeek",
+      "category": "open-source"
     },
     {
       "id": "groq",
@@ -68,7 +72,56 @@
       ],
       "where_to_get": "https://console.groq.com/keys",
       "cost_hint": "fastest inference — LPU hardware",
-      "description": "Specialised LPU silicon — very fast token throughput on Llama + Mixtral + Gemma"
+      "description": "Specialised LPU silicon — very fast token throughput on Llama + Mixtral + Gemma",
+      "category": "open-source"
+    },
+    {
+      "id": "xai",
+      "name": "xAI — Grok",
+      "endpoint": "https://api.x.ai/v1",
+      "key_secret_name": "xai-api-key",
+      "default_model": "grok-2-1212",
+      "alt_models": ["grok-beta", "grok-2-vision-1212"],
+      "where_to_get": "https://console.x.ai/",
+      "cost_hint": "$5/MTok input — frontier reasoning",
+      "description": "xAI's Grok family — closed-source, OpenAI-compatible API",
+      "category": "closed-cloud"
+    },
+    {
+      "id": "cohere",
+      "name": "Cohere — command-r+",
+      "endpoint": "https://api.cohere.com/compatibility/v1",
+      "key_secret_name": "cohere-api-key",
+      "default_model": "command-r-plus",
+      "alt_models": ["command-r", "command-r-08-2024"],
+      "where_to_get": "https://dashboard.cohere.com/api-keys",
+      "cost_hint": "$2.50/MTok input — enterprise RAG focus",
+      "description": "Cohere's command-r family via the OpenAI-compatibility endpoint",
+      "category": "closed-cloud"
+    },
+    {
+      "id": "mistral",
+      "name": "Mistral — La Plateforme",
+      "endpoint": "https://api.mistral.ai/v1",
+      "key_secret_name": "mistral-api-key",
+      "default_model": "mistral-large-latest",
+      "alt_models": ["mistral-small-latest", "open-mistral-nemo", "codestral-latest"],
+      "where_to_get": "https://console.mistral.ai/api-keys/",
+      "cost_hint": "$2/MTok input — European cloud",
+      "description": "Mistral's hosted closed + open models — La Plateforme API",
+      "category": "closed-cloud"
+    },
+    {
+      "id": "perplexity",
+      "name": "Perplexity",
+      "endpoint": "https://api.perplexity.ai",
+      "key_secret_name": "perplexity-api-key",
+      "default_model": "sonar",
+      "alt_models": ["sonar-pro", "sonar-reasoning", "sonar-reasoning-pro"],
+      "where_to_get": "https://www.perplexity.ai/settings/api",
+      "cost_hint": "$5/MTok input — RAG-backed sonar models",
+      "description": "Perplexity's Sonar models — RAG-backed search + reasoning, closed-source",
+      "category": "closed-cloud"
     }
   ]
 }

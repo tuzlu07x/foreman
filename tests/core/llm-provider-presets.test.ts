@@ -56,3 +56,51 @@ describe("findPreset", () => {
     expect(findPreset(doc, "nonexistent")).toBeNull();
   });
 });
+
+// #370 — closed-cloud presets exist alongside open-source ones, tagged
+// with a `category` field so the wizard can group them under separate
+// headers. Adding new closed providers (Bedrock, Azure, Vertex …) is a
+// pure registry edit.
+describe("closed-cloud presets (#370)", () => {
+  it("includes xAI / Cohere / Mistral / Perplexity as closed-cloud", () => {
+    _resetLlmPresetsCache();
+    const doc = loadLlmPresets();
+    const closed = doc.presets.filter((p) => p.category === "closed-cloud");
+    const ids = closed.map((p) => p.id);
+    expect(ids).toEqual(
+      expect.arrayContaining(["xai", "cohere", "mistral", "perplexity"]),
+    );
+  });
+
+  it("tags the original five providers as open-source", () => {
+    _resetLlmPresetsCache();
+    const doc = loadLlmPresets();
+    const openSource = doc.presets.filter(
+      (p) => p.category === "open-source",
+    );
+    const ids = openSource.map((p) => p.id);
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        "deepseek",
+        "qwen-dashscope",
+        "openrouter",
+        "together",
+        "groq",
+      ]),
+    );
+  });
+
+  it("every closed-cloud preset has the required fields populated", () => {
+    _resetLlmPresetsCache();
+    const doc = loadLlmPresets();
+    const closed = doc.presets.filter((p) => p.category === "closed-cloud");
+    expect(closed.length).toBeGreaterThanOrEqual(4);
+    for (const p of closed) {
+      expect(p.endpoint).toMatch(/^https?:\/\//);
+      expect(p.key_secret_name).toMatch(/-api-key$/);
+      expect(p.default_model.length).toBeGreaterThan(0);
+      expect(p.where_to_get).toMatch(/^https?:\/\//);
+      expect(p.cost_hint.length).toBeGreaterThan(0);
+    }
+  });
+});
