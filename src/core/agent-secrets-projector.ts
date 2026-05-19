@@ -168,12 +168,16 @@ export function projectSecretsForAgent(
 
   // -----------------------------------------------------------------------
   // 1) env_vars → dotenv OR json env block
-  //    Skipped when the resolver path won — resolver already wrote envs.
+  //    Per-entry gate (#425): when the resolver wins, skip ONLY the
+  //    entries that have `if_provider` set — the resolver already wrote
+  //    those. Entries with `if_service` (Telegram bot tokens, allowed
+  //    users, etc.) MUST still fire — the resolver never touches them.
   // -----------------------------------------------------------------------
   const envPairs: Record<string, string> = {}
   const envSecretNames: string[] = []
-  if (projection.env_vars && !resolverWonProviderWrites) {
+  if (projection.env_vars) {
     for (const [varName, spec] of Object.entries(projection.env_vars)) {
+      if (resolverWonProviderWrites && spec.if_provider) continue
       if (!filterMatches(spec, ctx)) continue
       const value = safeGet(ctx.secretStore, spec.from_secret, result.skipped)
       if (value === null) continue
@@ -236,6 +240,12 @@ export function projectSecretsForAgent(
 
   // -----------------------------------------------------------------------
   // 3) toml_writes → flat key=value
+  //    When the resolver won, it carries the agent's provider-related TOML
+  //    writes (Codex `preferred_auth_method`, ZeroClaw `default_provider`).
+  //    Legacy `toml_writes` block today has no `if_service` filter — every
+  //    entry is provider-implicit — so the whole block stays gated. If a
+  //    future agent adds a service-gated TOML write, refactor to per-entry
+  //    gate (mirror the env_vars #425 pattern).
   // -----------------------------------------------------------------------
   if (
     projection.toml_writes &&
