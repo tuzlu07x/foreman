@@ -916,7 +916,7 @@ describe('writeSecurityBootstrap (#396)', () => {
     )
     const out = writeSecurityBootstrap(path, 'json', {
       ownerAllowlist: {
-        key: 'commands.ownerAllowFrom',
+        keys: ['commands.ownerAllowFrom'],
         values: ['telegram:42'],
       },
     })
@@ -934,7 +934,7 @@ describe('writeSecurityBootstrap (#396)', () => {
     )
     const out = writeSecurityBootstrap(path, 'json', {
       ownerAllowlist: {
-        key: 'commands.ownerAllowFrom',
+        keys: ['commands.ownerAllowFrom'],
         values: ['telegram:42'],
       },
     })
@@ -946,7 +946,7 @@ describe('writeSecurityBootstrap (#396)', () => {
     const out = writeSecurityBootstrap(path, 'json', {
       authToken: { key: 'gateway.auth.token', generate: () => 'tk' },
       ownerAllowlist: {
-        key: 'commands.ownerAllowFrom',
+        keys: ['commands.ownerAllowFrom'],
         values: ['telegram:1'],
       },
     })
@@ -1484,5 +1484,121 @@ describe('projectSecretsForAgent — resolver path (#408 phase 2)', () => {
       chatPrimary: fakePrimary,
     })
     expect(result.files).toHaveLength(1)
+  })
+
+  // #427 — Same regression class as #425, but in config_overrides. The
+  // section used to be gated as a whole by `!resolverWonProviderWrites`,
+  // which silently dropped `if_service` writes (e.g. OpenClaw's
+  // `channels.telegram.dmPolicy`) when the resolver path won. Per-entry
+  // gate now keeps service-tied writes firing on the resolver path.
+  it('preserves if_service config_overrides when resolver path wins (#427)', () => {
+    store.add('openrouter-key', 'sk-or-test')
+    const openclawShape: AgentEntry = {
+      id: 'openclaw',
+      name: 'OpenClaw',
+      tagline: 't',
+      homepage: 'https://example.com',
+      install: { npm: null, brew: null },
+      config_paths: [`${tmp}/openclaw.json`],
+      required_secrets: [],
+      optional_secrets: [],
+      mcp_compatible: true,
+      supported_versions: '*',
+      min_foreman_version: '0.1.2',
+      provider_mapping: {
+        openai: {
+          preferred: 'direct',
+          variants: {
+            direct: {
+              label: 'OpenAI direct',
+              writes: {
+                'agents.defaults.model.primary': 'openai/gpt-4o-mini',
+              },
+              env_vars: { OPENAI_API_KEY: '${secret:openai-key}' },
+              required_secret: 'openai-key',
+            },
+          },
+        },
+      },
+      secret_projection: {
+        config_overrides: {
+          path: `${tmp}/openclaw.json`,
+          format: 'json',
+          writes: [
+            // Provider-gated: resolver should own this. Use a distinct
+            // marker key so the test can verify the legacy entry is
+            // skipped when resolver wins (vs. firing redundantly).
+            {
+              if_provider: 'openai',
+              set: { 'legacy.marker': 'fired' },
+            },
+            // Service-gated: resolver NEVER touches this. Before #427
+            // this was silently dropped on the resolver path.
+            {
+              if_service: 'telegram',
+              set: { 'channels.telegram.dmPolicy': 'allowlist' },
+            },
+          ],
+        },
+      },
+    } as unknown as AgentEntry
+    store.add('openai-key', 'sk-oa')
+    const result = projectSecretsForAgent(openclawShape, {
+      providersSelected: ['openai'],
+      servicesSelected: ['telegram'],
+      llmProvider: 'openai',
+      secretStore: store,
+      home: tmp,
+    })
+    expect(result.files.length).toBeGreaterThan(0)
+    const parsed = JSON.parse(readFileSync(`${tmp}/openclaw.json`, 'utf-8'))
+    // Service-side write survived the gate (#427 — the actual fix).
+    expect(parsed.channels.telegram.dmPolicy).toBe('allowlist')
+    // Provider-gated legacy entries did NOT fire — resolver owns those
+    // writes on this path. The legacy marker should NOT appear.
+    expect(parsed.legacy?.marker).toBeUndefined()
+  })
+
+  // #427 — owner_allowlist.key as string[] projects the same value array
+  // to multiple dot-paths. OpenClaw needs both `commands.ownerAllowFrom`
+  // AND `channels.telegram.allowFrom` populated so its dmPolicy=allowlist
+  // validation passes.
+  it('writes the same allowlist to multiple keys when key is an array (#427)', () => {
+    store.add('telegram-chat-id', '8263464163')
+    const entry: AgentEntry = {
+      id: 'openclaw',
+      name: 'OpenClaw',
+      tagline: 't',
+      homepage: 'https://example.com',
+      install: { npm: null, brew: null },
+      config_paths: [],
+      required_secrets: [],
+      optional_secrets: [],
+      mcp_compatible: true,
+      supported_versions: '*',
+      min_foreman_version: '0.1.2',
+      secret_projection: {
+        security_bootstrap: {
+          path: `${tmp}/openclaw.json`,
+          format: 'json',
+          owner_allowlist: {
+            key: ['commands.ownerAllowFrom', 'channels.telegram.allowFrom'],
+            from_secret: 'telegram-chat-id',
+            item_template: 'telegram:{value}',
+            if_service: 'telegram',
+          },
+        },
+      },
+    } as unknown as AgentEntry
+    const result = projectSecretsForAgent(entry, {
+      providersSelected: [],
+      servicesSelected: ['telegram'],
+      secretStore: store,
+      home: tmp,
+    })
+    expect(result.files.length).toBe(1)
+    const parsed = JSON.parse(readFileSync(`${tmp}/openclaw.json`, 'utf-8'))
+    expect(parsed.commands.ownerAllowFrom).toEqual(['telegram:8263464163'])
+    expect(parsed.channels.telegram.allowFrom).toEqual(['telegram:8263464163'])
   })
 })
