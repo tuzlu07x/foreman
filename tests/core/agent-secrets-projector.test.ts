@@ -1179,6 +1179,44 @@ describe('projectSecretsForAgent — resolver path (#408 phase 2)', () => {
     expect(envContent).toContain('OPENROUTER_API_KEY=sk-or-test-123')
   })
 
+  // #434 — Per-agent modelVersion override. When ctx.modelVersion is
+  // supplied, the resolver substitutes it into ${model} tokens instead
+  // of falling back to the variant's hardcoded default.
+  it('uses ctx.modelVersion to substitute into the variant writes (#434)', () => {
+    store.add('openrouter-key', 'sk-or-test-123')
+    const result = projectSecretsForAgent(hermesWithMapping(), {
+      providersSelected: ['openai'],
+      servicesSelected: [],
+      llmProvider: 'openai',
+      modelVersion: 'gpt-5-mini',
+      secretStore: store,
+      home: tmp,
+    })
+    const yamlFile = result.files.find((f) => f.path.endsWith('hermes.yaml'))
+    expect(yamlFile).toBeDefined()
+    const yamlContent = parseYaml(readFileSync(`${tmp}/hermes.yaml`, 'utf-8')) as {
+      model: { default: string; provider: string }
+    }
+    // ${model} → "gpt-5-mini" instead of "gpt-4o-mini" (the registry default).
+    expect(yamlContent.model.default).toBe('openai/gpt-5-mini')
+  })
+
+  it('falls back to the variant default when ctx.modelVersion is omitted', () => {
+    store.add('openrouter-key', 'sk-or-test-123')
+    const result = projectSecretsForAgent(hermesWithMapping(), {
+      providersSelected: ['openai'],
+      servicesSelected: [],
+      llmProvider: 'openai',
+      // modelVersion intentionally omitted
+      secretStore: store,
+      home: tmp,
+    })
+    const yamlContent = parseYaml(readFileSync(`${tmp}/hermes.yaml`, 'utf-8')) as {
+      model: { default: string; provider: string }
+    }
+    expect(yamlContent.model.default).toBe('openai/gpt-4o-mini')
+  })
+
   it('returns provider_mapping skip reason when required secret is missing', () => {
     const result = projectSecretsForAgent(hermesWithMapping(), {
       providersSelected: ['openai'],

@@ -50,6 +50,10 @@ export interface ProjectionContext {
    *  `model.provider: openai` when the user picked openai. Optional;
    *  when omitted, no per-agent override fires. */
   llmProvider?: string
+  /** #434 — Per-agent specific model id (e.g. claude-opus-4-7). When
+   *  set, the resolver substitutes this for `${model}` in variant
+   *  writes; when omitted, falls back to `deriveDefaultModelId(provider)`. */
+  modelVersion?: string
   /** Source of truth for secret values. */
   secretStore: SecretStore
   /** Override $HOME (mostly for tests). */
@@ -148,9 +152,10 @@ export function projectSecretsForAgent(
     const resolved = resolveAgentProviderConfig({
       agent: entry,
       foremanProvider: ctx.llmProvider,
-      // Phase 2 hardcoded default — Phase 3 wizard / PR #405 picker
-      // will pass through the user's actual choice.
-      modelId: deriveDefaultModelId(ctx.llmProvider),
+      // #434 — Per-agent modelVersion wins over the hardcoded default
+      // when set. Falls back to deriveDefaultModelId so existing
+      // agents keep their variant defaults.
+      modelId: ctx.modelVersion ?? deriveDefaultModelId(ctx.llmProvider),
       secretLookup: lookup,
     })
     if (resolved.ok) {

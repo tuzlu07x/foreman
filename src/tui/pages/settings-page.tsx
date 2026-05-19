@@ -295,8 +295,14 @@ function ProviderMappingTile(): JSX.Element | null {
       ) : null}
       <Box marginLeft={2} marginTop={1}>
         <Text color={theme.fg.muted}>
-          Switch via CLI:{" "}
+          Switch provider:{" "}
           <Text bold>foreman provider switch &lt;agent&gt; &lt;provider&gt;</Text>
+        </Text>
+      </Box>
+      <Box marginLeft={2}>
+        <Text color={theme.fg.muted}>
+          Pin model version:{" "}
+          <Text bold>foreman provider model &lt;agent&gt; &lt;model&gt;</Text>
         </Text>
       </Box>
     </Box>

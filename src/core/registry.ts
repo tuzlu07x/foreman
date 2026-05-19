@@ -26,6 +26,10 @@ export interface AgentManifest {
    *  for Hermes/openai). NULL → defaults to the registry's
    *  `provider_mapping[llmProvider].preferred` at resolve time. */
   providerVariant?: string;
+  /** #434 — Specific model id chosen for this agent (e.g.
+   *  claude-opus-4-7, gpt-5-mini). NULL → projector uses the
+   *  variant's hardcoded default from registry/agents.json. */
+  modelVersion?: string;
   /** Free-text describing what the agent is for; surfaces in audit + approval. */
   responsibilityNote?: string;
 }
@@ -41,6 +45,7 @@ export interface RegisteredAgent {
   metadata: Record<string, unknown> | null;
   llmProvider: string | null;
   providerVariant: string | null;
+  modelVersion: string | null;
   responsibilityNote: string | null;
 }
 
@@ -86,6 +91,7 @@ export class RegistryService {
         metadata: manifest.metadata ? JSON.stringify(manifest.metadata) : null,
         llmProvider: manifest.llmProvider ?? null,
         providerVariant: manifest.providerVariant ?? null,
+        modelVersion: manifest.modelVersion ?? null,
         responsibilityNote: manifest.responsibilityNote ?? null,
       })
       .run();
@@ -265,6 +271,24 @@ export class RegistryService {
     });
   }
 
+  // #434 — Set the per-agent model version override. NULL means
+  // "use the variant's default model from registry/agents.json".
+  setModelVersion(agentId: string, modelVersion: string | null): void {
+    const existing = this.get(agentId);
+    if (!existing) throw new AgentNotFoundError(agentId);
+    this.db
+      .update(agents)
+      .set({ modelVersion })
+      .where(eq(agents.id, agentId))
+      .run();
+    this.bus.emit("agent:config-updated", {
+      agentId,
+      llmProvider: existing.llmProvider,
+      responsibilityNote: existing.responsibilityNote,
+      updatedAt: Date.now(),
+    });
+  }
+
   setResponsibilityNote(agentId: string, note: string | null): void {
     const existing = this.get(agentId);
     if (!existing) throw new AgentNotFoundError(agentId);
@@ -302,6 +326,7 @@ function toRegisteredAgent(row: typeof agents.$inferSelect): RegisteredAgent {
       : null,
     llmProvider: row.llmProvider,
     providerVariant: row.providerVariant,
+    modelVersion: row.modelVersion,
     responsibilityNote: row.responsibilityNote,
   };
 }
