@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyAgentConfigSubmit,
   buildAgentConfigPromptList,
+  computeSingleCompatProviderSeeds,
 } from "../../src/tui/setup-wizard.js";
 import type { AgentEntry } from "../../src/core/registry-catalog.js";
 
@@ -291,5 +292,116 @@ describe("applyAgentConfigSubmit", () => {
     });
     expect(result.nextPhase).toBe("confirm");
     expect(result.nextIdx).toBe(1);
+  });
+});
+
+// #471 — Single-compat agents (Codex/openai-only, Claude Code/anthropic-only)
+// never hit the llm-choice picker, so wizard state has no llmProvider for
+// them by default — and the wizard's downstream stages used to silently
+// register them with `llm_provider:null`. Helper seeds the implicit choice
+// up front so identity push / required-setup / projection all see a real
+// provider.
+describe("computeSingleCompatProviderSeeds (#471)", () => {
+  const codex = {
+    id: "codex",
+    name: "Codex",
+    tagline: "tag",
+    homepage: "https://example.com/",
+    install: { npm: null, brew: null },
+    config_paths: [],
+    required_secrets: [],
+    optional_secrets: [],
+    llm_compat: ["openai"],
+    mcp_compatible: true,
+    supported_versions: "*",
+    min_foreman_version: "0.1.0",
+  } as unknown as AgentEntry;
+  const claudeCode = {
+    ...codex,
+    id: "claude-code",
+    llm_compat: ["anthropic"],
+  } as unknown as AgentEntry;
+  const hermes = {
+    ...codex,
+    id: "hermes",
+    llm_compat: ["anthropic", "openai"],
+  } as unknown as AgentEntry;
+  const generic = {
+    ...codex,
+    id: "generic-mcp",
+    llm_compat: [],
+  } as unknown as AgentEntry;
+  const catalog: AgentEntry[] = [codex, claudeCode, hermes, generic];
+
+  it("seeds the only compat for an agent missing llmProvider", () => {
+    const result = computeSingleCompatProviderSeeds(
+      [{ agentId: "codex", kind: "variant-pick" }],
+      {},
+      catalog,
+    );
+    expect(result).toEqual({ codex: "openai" });
+  });
+
+  it("does NOT seed when cfg.llmProvider is already set", () => {
+    const result = computeSingleCompatProviderSeeds(
+      [{ agentId: "codex", kind: "variant-pick" }],
+      { codex: { llmProvider: "openai" } },
+      catalog,
+    );
+    expect(result).toEqual({});
+  });
+
+  it("does NOT seed multi-compat agents (user must pick via llm-choice)", () => {
+    const result = computeSingleCompatProviderSeeds(
+      [{ agentId: "hermes", kind: "llm-choice" }],
+      {},
+      catalog,
+    );
+    expect(result).toEqual({});
+  });
+
+  it("does NOT seed zero-compat agents (no constraint to imply a default)", () => {
+    const result = computeSingleCompatProviderSeeds(
+      [{ agentId: "generic-mcp", kind: "responsibility-note" }],
+      {},
+      catalog,
+    );
+    expect(result).toEqual({});
+  });
+
+  it("dedupes seeds when an agent appears in multiple prompts", () => {
+    const result = computeSingleCompatProviderSeeds(
+      [
+        { agentId: "codex", kind: "variant-pick" },
+        { agentId: "codex", kind: "model-pick" },
+        { agentId: "codex", kind: "responsibility-note" },
+      ],
+      {},
+      catalog,
+    );
+    expect(result).toEqual({ codex: "openai" });
+  });
+
+  it("handles mixed selections in one pass — multi-agent setup wizard runs", () => {
+    const result = computeSingleCompatProviderSeeds(
+      [
+        { agentId: "hermes", kind: "llm-choice" },
+        { agentId: "hermes", kind: "variant-pick" },
+        { agentId: "codex", kind: "variant-pick" },
+        { agentId: "claude-code", kind: "model-pick" },
+      ],
+      {},
+      catalog,
+    );
+    expect(result).toEqual({ codex: "openai", "claude-code": "anthropic" });
+  });
+
+  it("returns {} when the agent isn't in the catalog (defensive)", () => {
+    const result = computeSingleCompatProviderSeeds(
+      [{ agentId: "ghost", kind: "model-pick" }],
+      {},
+      catalog,
+    );
+    expect(result).toEqual({});
   });
 });
