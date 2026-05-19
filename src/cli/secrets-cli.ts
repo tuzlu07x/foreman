@@ -362,6 +362,7 @@ secretsCommand
         secretStore: store,
         chatPrimary: new ChatPrimaryService(db),
         llmProvider: agent.llmProvider ?? undefined,
+        providerVariant: agent.providerVariant ?? undefined,
         modelVersion: agent.modelVersion ?? undefined,
       });
       if (result.files.length === 0 && result.skipped.length === 0) {
