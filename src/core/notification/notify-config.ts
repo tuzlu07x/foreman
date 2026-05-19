@@ -60,6 +60,13 @@ export const NotifyConfigSchema = z
          *  which routes APPROVAL requests; this routes after-the-fact alerts
          *  for things the user never had a chance to see. */
         risk_deny: RouteSchema.optional(),
+        /** #435 — Periodic "what did the agents do in the last 24h" LLM
+         *  narration. Distinct from `summary` (which is the C9 daily
+         *  digest). Off by default: leave channels empty or omit the
+         *  route entirely. Enable with e.g.
+         *  `activity_summary: { channels: ['telegram'], schedule: 'daily 20:00' }`.
+         *  Requires `features.orchestrator_chat: true` in llm.yaml. */
+        activity_summary: RouteSchema.optional(),
       })
       .default({}),
   })

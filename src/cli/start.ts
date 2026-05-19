@@ -13,6 +13,8 @@ import { AuditLogger } from "../core/audit.js";
 import { bus } from "../core/event-bus.js";
 import { MediatorService } from "../core/mediator.js";
 import { PolicyEngine } from "../core/policy-engine.js";
+import { buildAgentActivityDigest } from "../core/agent-activity-summary.js";
+import { buildActivityPrompt } from "../core/agent-activity-prompt.js";
 import { deliverWriteDirective } from "../core/agent-write.js";
 import { ChatPrimaryService } from "../core/chat-primary.js";
 import {
@@ -31,7 +33,7 @@ import { SessionManager } from "../core/session.js";
 import { checkAgentUpdates } from "../core/agent-update-check.js";
 import { loadActiveRegistry } from "../core/registry-catalog.js";
 import { checkForUpdate } from "../core/update-check.js";
-import { closeDb, getDb, getSqlite } from "../db/client.js";
+import { closeDb, getDb, getSqlite, type ForemanDb } from "../db/client.js";
 import { loadOrCreateMasterKey } from "../identity/keypair.js";
 import { App } from "../tui/app.js";
 import type { BootInfo } from "../tui/boot-info.js";
@@ -45,6 +47,7 @@ import {
 import { SetupWizard } from "../tui/setup-wizard.js";
 import { SecretStore, SecretNotFoundError } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
+import { recordUsageAndCheckBudget } from "../core/llm/budget.js";
 import { isFeatureEnabled, loadLlmConfig } from "../core/llm/config.js";
 import {
   buildLlmClient,
@@ -274,6 +277,24 @@ export function startForeman(
     }
   }
 
+  // #435 — Activity summary daily trigger. Off-by-default — fires only
+  // when notify.yaml configures `routing.activity_summary` with at
+  // least one channel + a parseable `daily HH:MM` schedule AND
+  // `features.orchestrator_chat` is enabled in llm.yaml. Reuses
+  // ForemanVoice.sendProactive for the actual delivery so quiet-hours
+  // + throttle policies apply.
+  let activitySummaryScheduler: DailyScheduler | null = null;
+  if (notificationSetup && voice) {
+    activitySummaryScheduler = setupActivitySummaryScheduler({
+      db,
+      registry,
+      secretStore,
+      llmConfigPath: paths.llmConfigPath,
+      notifyConfigPath: paths.notifyConfigPath,
+      voice,
+    });
+  }
+
   const bootInfo: BootInfo = {
     publicKey,
     policyRules: policy.list().length,
@@ -374,6 +395,7 @@ export function startForeman(
     approvalBridge.stop();
     controlPoller.stop();
     if (dailyScheduler) dailyScheduler.stop();
+    if (activitySummaryScheduler) activitySummaryScheduler.stop();
     if (patternDetector) patternDetector.stop();
     if (voice) voice.dispose();
     if (notificationBridge) {
@@ -728,6 +750,96 @@ function setupNotificationBridge(args: {
   }
 
   return { bridge, scheduler, service };
+}
+
+// =============================================================================
+// #435 — Activity summary daily scheduler
+// =============================================================================
+//
+// Off-by-default cousin of the existing daily-digest scheduler. Reads
+// notify.yaml `routing.activity_summary` for the schedule + channels.
+// On fire: build the digest, narrate via Foreman LLM (orchestrator_chat
+// feature flag must be on), ship via ForemanVoice.sendProactive so
+// quiet-hours + throttle apply.
+
+function setupActivitySummaryScheduler(args: {
+  db: ForemanDb;
+  registry: RegistryService;
+  secretStore: SecretStore;
+  llmConfigPath: string;
+  notifyConfigPath: string;
+  voice: ForemanVoice;
+}): DailyScheduler | null {
+  let notifyConfig;
+  try {
+    notifyConfig = existsSync(args.notifyConfigPath)
+      ? loadNotifyConfig(args.notifyConfigPath)
+      : null;
+  } catch {
+    return null;
+  }
+  const route = notifyConfig?.routing.activity_summary;
+  if (!route || route.channels.length === 0 || !route.schedule) {
+    return null;
+  }
+  const parsed = parseSchedule(route.schedule);
+  if (!parsed) return null;
+
+  const scheduler = new DailyScheduler(parsed, async () => {
+    let llmConfig;
+    try {
+      llmConfig = existsSync(args.llmConfigPath)
+        ? loadLlmConfig(args.llmConfigPath)
+        : null;
+    } catch {
+      return;
+    }
+    if (!llmConfig || !isFeatureEnabled(llmConfig, "orchestrator_chat")) {
+      // Daily summary requires the LLM narration path — silently no-op
+      // when disabled instead of pinging the user with a blank digest.
+      return;
+    }
+    const digest = buildAgentActivityDigest(args.db, args.registry, {
+      windowMinutes: 24 * 60,
+    });
+    let client;
+    try {
+      client = buildLlmClient(llmConfig, args.secretStore);
+    } catch {
+      return;
+    }
+    const prompt = buildActivityPrompt({ digest });
+    try {
+      const resp = await client.call(prompt, {
+        feature: "orchestrator_chat",
+        maxTokens: 350,
+        temperature: 0.3,
+      });
+      recordUsageAndCheckBudget(args.db, llmConfig, {
+        provider: client.providerId,
+        model: client.model,
+        feature: "orchestrator_chat",
+        inputTokens: resp.inputTokens,
+        outputTokens: resp.outputTokens,
+        costUsd: resp.costUsd,
+        durationMs: resp.durationMs,
+        cacheHit: resp.cacheHit,
+      });
+      const text = resp.text.trim();
+      if (text.length === 0) return;
+      await args.voice.sendProactive({
+        type: "daily_summary",
+        urgency: "info",
+        title: "Foreman daily activity",
+        body: text,
+        actions: [],
+      });
+    } catch {
+      /* best-effort — failure logged via the LLM debug channel */
+    }
+  });
+  scheduler.start();
+  return scheduler;
 }
 
 // Returns true when the user appears to be a first-time user: no foreman home

@@ -156,6 +156,12 @@ export class AuditLogger {
       ),
       this.bus.on('policy:changed', (e) => this.logEvent('policy_changed', e)),
       this.bus.on('session:halted', (e) => this.logEvent('session_halted', e)),
+      // #435 — Persist crash events so the activity digest can list
+      // crashes in the last N minutes. Bus-only emission would lose
+      // them once the TUI clears its in-memory banner.
+      this.bus.on('agent:daemon-crashed', (e) =>
+        this.logEvent('agent_daemon_crashed', e),
+      ),
     )
   }
 }

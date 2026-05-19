@@ -210,6 +210,27 @@ describe('AuditLogger', () => {
     ])
   })
 
+  // #435 — Agent daemon crashes now persist as audit_events so the
+  // activity digest can list them later. Was bus-only before.
+  it('logs agent:daemon-crashed to audit_events (#435)', () => {
+    bus.emit('agent:daemon-crashed', {
+      agentId: 'openclaw',
+      pid: 1234,
+      exitCode: 1,
+      stderr: 'Invalid config',
+      crashedAt: Date.now(),
+    })
+    audit.flush()
+    const row = db
+      .select()
+      .from(auditEvents)
+      .all()
+      .find((r) => r.eventType === 'agent_daemon_crashed')
+    expect(row).toBeDefined()
+    const parsed = JSON.parse(row!.payload) as { agentId: string }
+    expect(parsed.agentId).toBe('openclaw')
+  })
+
   it('dispose() unsubscribes — later events are not captured', () => {
     audit.dispose()
     emitDecided(bus, 'r-after-dispose')
