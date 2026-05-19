@@ -929,6 +929,15 @@ export function SetupWizard({
     null,
   );
 
+  // #457 — When the preferred variant needs no extra credentials, the
+  // variant picker auto-skips and records the choice here so the
+  // required-setup screen can flash a "Foreman picked the X route — switch
+  // later with `foreman provider switch ...`" notice. Map: agentId → variant
+  // label.
+  const [autoPickedVariants, setAutoPickedVariants] = useState<
+    Record<string, { variantId: string; label: string }>
+  >({});
+
   // #408 / #411 Phase 3 — required-setup step state.
   // The wizard precomputes a `RequiredSetupResolution` (which agents need
   // which secrets, which OAuth flows queue up). User can paste missing
@@ -1119,6 +1128,37 @@ export function SetupWizard({
       setAgentConfigIdx(next.nextIdx);
       setAgentsPhase(next.nextPhase);
       return;
+    }
+    // #457 — Multi-variant case but the preferred route is no-credential
+    // (e.g. Codex/oauth). Skip the picker so the user doesn't have to
+    // confirm the obvious; the required-setup screen flashes a
+    // "Foreman picked: <label>" notice so they know what happened.
+    if (providerMapping && !cfg?.providerVariant) {
+      const preferredId = providerMapping.preferred;
+      const preferredVariant = providerMapping.variants[preferredId];
+      if (preferredVariant && !preferredVariant.required_secret) {
+        setAgentConfigs((prev) => ({
+          ...prev,
+          [prompt.agentId]: {
+            ...(prev[prompt.agentId] ?? {}),
+            providerVariant: preferredId,
+          },
+        }));
+        setAutoPickedVariants((prev) => ({
+          ...prev,
+          [prompt.agentId]: {
+            variantId: preferredId,
+            label: preferredVariant.label,
+          },
+        }));
+        const next = applyAgentConfigSubmit({
+          currentIdx: agentConfigIdx,
+          totalPrompts: agentConfigPrompts.length,
+        });
+        setAgentConfigIdx(next.nextIdx);
+        setAgentsPhase(next.nextPhase);
+        return;
+      }
     }
     // Seed the cursor to preferred variant.
     if (!agentVariantDraft && providerMapping) {
@@ -3556,6 +3596,25 @@ export function SetupWizard({
           Foreman analyzed your agent + provider picks. Below is everything
           needed before install can proceed.
         </Text>
+        {/* #457 — When the preferred provider variant needs no extra
+            credentials (e.g. Codex/oauth), the variant picker auto-skipped
+            and we record the choice here so the user sees what was picked
+            on their behalf + how to change it later. */}
+        {Object.keys(autoPickedVariants).length > 0 ? (
+          <Box flexDirection="column">
+            <Text bold>Auto-picked variants ({Object.keys(autoPickedVariants).length})</Text>
+            {Object.entries(autoPickedVariants).map(([agentId, info]) => (
+              <Box key={agentId} flexDirection="column">
+                <Text color={theme.accent.primary}>
+                  {"  "}✓ {agentId}: {info.label}
+                </Text>
+                <Text color={theme.fg.muted}>
+                  {`     change later: foreman provider switch ${agentId} <provider> --variant <id>`}
+                </Text>
+              </Box>
+            ))}
+          </Box>
+        ) : null}
         {totalErrors > 0 ? (
           <Box flexDirection="column">
             <Text color={theme.accent.warning} bold>
