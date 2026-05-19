@@ -92,13 +92,14 @@ describe("ForemanCommandRouter (#431)", () => {
   });
 
   describe("help", () => {
-    it("lists every registered verb (help / status / stop / report / llm)", async () => {
+    it("lists every registered verb (help / status / stop / write / report / llm)", async () => {
       const result = await router.dispatch("help", [], ctx);
       expect(result.ok).toBe(true);
       // Built-ins must all appear.
       expect(result.text).toContain("help");
       expect(result.text).toContain("status");
       expect(result.text).toContain("stop");
+      expect(result.text).toContain("write");
       expect(result.text).toContain("report");
       expect(result.text).toContain("llm");
     });
@@ -359,6 +360,113 @@ describe("ForemanCommandRouter (#431)", () => {
       expect(result.ok).toBe(false);
       expect(result.errorCode).toBe("NOT_AUTHORIZED");
       expect(channel.pending()).toHaveLength(0);
+    });
+  });
+
+  // #433 — `/foreman write <agent> <message>` enqueues a write
+  // directive. Owner-gated like other mutating verbs. Validates the
+  // agent is registered before enqueueing.
+  describe("write", () => {
+    beforeEach(() => {
+      registry.register({
+        id: "openclaw",
+        displayName: "OpenClaw",
+        transport: "stdio",
+      });
+    });
+
+    it("requires both agent + message args", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "owner" });
+      const ctxOk = {
+        ...ctx,
+        controlChannel: channel,
+        ownerStore: store,
+        sourceUser: "owner",
+      };
+      expect((await router.dispatch("write", [], ctxOk)).errorCode).toBe(
+        "UNKNOWN_SUBCOMMAND",
+      );
+      expect(
+        (await router.dispatch("write", ["openclaw"], ctxOk)).errorCode,
+      ).toBe("UNKNOWN_SUBCOMMAND");
+      expect(channel.pending()).toHaveLength(0);
+    });
+
+    it("rejects an unknown agent id (before owner check or enqueue)", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "owner" });
+      const result = await router.dispatch(
+        "write",
+        ["ghost-agent", "hello"],
+        {
+          ...ctx,
+          controlChannel: channel,
+          ownerStore: store,
+          sourceUser: "owner",
+        },
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe("UNKNOWN_SUBCOMMAND");
+      expect(result.text).toContain("ghost-agent");
+      expect(channel.pending()).toHaveLength(0);
+    });
+
+    it("refuses non-owner senders", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "owner" });
+      const result = await router.dispatch(
+        "write",
+        ["openclaw", "msg"],
+        {
+          ...ctx,
+          controlChannel: channel,
+          ownerStore: store,
+          sourceUser: "stranger",
+        },
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe("NOT_AUTHORIZED");
+      expect(channel.pending()).toHaveLength(0);
+    });
+
+    it("enqueues with [agentId, joined message] args on success", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "owner" });
+      const result = await router.dispatch(
+        "write",
+        ["openclaw", "pause", "task", "Y"],
+        {
+          ...ctx,
+          controlChannel: channel,
+          ownerStore: store,
+          sourceUser: "owner",
+        },
+      );
+      expect(result.ok).toBe(true);
+      expect(result.text).toContain("openclaw");
+      const rows = channel.pending();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.command).toBe("write");
+      expect(JSON.parse(rows[0]!.args)).toEqual(["openclaw", "pause task Y"]);
+    });
+
+    it("lower-cases the agent id token (case-insensitive lookup)", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "owner" });
+      const result = await router.dispatch(
+        "write",
+        ["OpenClaw", "hi"],
+        {
+          ...ctx,
+          controlChannel: channel,
+          ownerStore: store,
+          sourceUser: "owner",
+        },
+      );
+      expect(result.ok).toBe(true);
+      const rows = channel.pending();
+      expect(JSON.parse(rows[0]!.args)).toEqual(["openclaw", "hi"]);
     });
   });
 
