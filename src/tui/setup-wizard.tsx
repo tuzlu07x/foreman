@@ -4071,7 +4071,9 @@ export function SetupWizard({
                   {`  ${spinnerChar} `}
                 </Text>
                 <Text color={theme.fg.muted}>
-                  {`installing… ${formatElapsed(elapsedMs)}  `}
+                  {classified.currentAgentName
+                    ? `installing ${classified.currentAgentName}… ${formatElapsed(elapsedMs)}  `
+                    : `installing… ${formatElapsed(elapsedMs)}  `}
                 </Text>
                 <Text color={theme.fg.muted}>
                   {classified.lastMilestone ?? "preparing"}
