@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { DbApprovalService, type ApprovalService } from "../core/approval.js";
 import { AuditLogger } from "../core/audit.js";
+import { ControlChannel } from "../core/control-channel.js";
 import { bus } from "../core/event-bus.js";
 import {
   ForemanCommandRouter,
@@ -72,6 +73,9 @@ interface Services {
   /** #432 — Foreman LLM orchestrator chat. Built when llm.yaml is
    *  present + parseable; null otherwise (read-only verbs still work). */
   orchestratorChat: OrchestratorChat | null;
+  /** #440 — Cross-process control queue. mcp-stdio is the writer
+   *  side; the reader (foreman start) drains pending rows. */
+  controlChannel: ControlChannel;
 }
 
 function bootServices(): Services {
@@ -123,6 +127,7 @@ function bootServices(): Services {
   } catch {
     orchestratorChat = null;
   }
+  const controlChannel = new ControlChannel(db);
   return {
     registry,
     policy,
@@ -136,6 +141,7 @@ function bootServices(): Services {
     llmConfigPath: paths.llmConfigPath,
     configDir: paths.configDir,
     orchestratorChat,
+    controlChannel,
   };
 }
 
@@ -393,6 +399,8 @@ export async function handleMessage(
         sourceAgent,
         sourceUser,
         orchestratorChat: services.orchestratorChat ?? undefined,
+        controlChannel: services.controlChannel,
+        ownerStore: services.secretStore,
       });
       // #431 — Audit row per /foreman invocation. Persisted to
       // `audit_events` so the TUI Log page + `foreman log` CLI can

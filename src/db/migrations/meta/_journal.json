@@ -99,6 +99,13 @@
       "when": 1780800000000,
       "tag": "0013_chat_primary",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1781000000000,
+      "tag": "0014_control_commands",
+      "breakpoints": true
     }
   ]
 }
