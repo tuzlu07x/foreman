@@ -21,8 +21,23 @@ export const AgentEntrySchema = z
       .object({
         npm: z.string().nullable(),
         brew: z.string().nullable(),
-        /** URL of a `curl | bash` style installer (Hermes, OpenClaw). */
-        script: z.string().url().nullable().optional(),
+        /** URL of a script installer (Hermes, OpenClaw). String form is
+         *  treated as unix-only (curl | bash). #369 — object form lets
+         *  the registry declare separate URLs per platform; the wizard
+         *  picks the matching one at install time. Windows URLs are
+         *  invoked via `powershell -Command "iex (irm <URL>)"`. */
+        script: z
+          .union([
+            z.string().url(),
+            z
+              .object({
+                unix: z.string().url().optional(),
+                windows: z.string().url().optional(),
+              })
+              .strict(),
+          ])
+          .nullable()
+          .optional(),
         /** Override the binary name when it differs from the npm package basename. */
         binary: z.string().nullable().optional(),
         /** Args appended to script-based installers via `bash -s -- <args>` so

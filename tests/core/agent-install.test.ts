@@ -14,6 +14,7 @@ import {
   isBrewManagedPath,
   preferredInstallCommand,
   preferredUninstallCommand,
+  resolveScriptUrl,
   runPostConfigCommands,
 } from "../../src/core/agent-install.js";
 
@@ -27,9 +28,12 @@ describe("preferredInstallCommand", () => {
     ).toBe("npm install -g hermes-agent");
   });
 
-  it("falls back to brew when npm is null", () => {
+  it("falls back to brew when npm is null (darwin)", () => {
     expect(
-      preferredInstallCommand({ npm: null, brew: "openclaw/tap/openclaw" }),
+      preferredInstallCommand(
+        { npm: null, brew: "openclaw/tap/openclaw" },
+        "darwin",
+      ),
     ).toBe("brew install openclaw/tap/openclaw");
   });
 
@@ -119,6 +123,139 @@ describe("preferredInstallCommand", () => {
         "curl -fsSL https://example.com/install.sh | bash -s -- --skip-setup --quiet",
       );
     });
+  });
+
+  // #369 — platform-aware install command picker. String script form is
+  // unix-only; object form lets registries declare per-platform URLs.
+  // Windows runs the script via PowerShell `iex (irm <URL>)`.
+  describe("platform-aware (#369)", () => {
+    it("legacy string script returns curl on darwin", () => {
+      expect(
+        preferredInstallCommand(
+          { npm: null, brew: null, script: "https://example.com/u.sh" },
+          "darwin",
+        ),
+      ).toBe("curl -fsSL https://example.com/u.sh | bash");
+    });
+
+    it("legacy string script returns null on win32 (treated as unix-only)", () => {
+      expect(
+        preferredInstallCommand(
+          { npm: null, brew: null, script: "https://example.com/u.sh" },
+          "win32",
+        ),
+      ).toBeNull();
+    });
+
+    it("object script picks unix on darwin/linux", () => {
+      const install = {
+        npm: null,
+        brew: null,
+        script: {
+          unix: "https://example.com/u.sh",
+          windows: "https://example.com/w.ps1",
+        },
+      };
+      expect(preferredInstallCommand(install, "darwin")).toBe(
+        "curl -fsSL https://example.com/u.sh | bash",
+      );
+      expect(preferredInstallCommand(install, "linux")).toBe(
+        "curl -fsSL https://example.com/u.sh | bash",
+      );
+    });
+
+    it("object script picks windows on win32 via PowerShell iex(irm)", () => {
+      const install = {
+        npm: null,
+        brew: null,
+        script: {
+          unix: "https://example.com/u.sh",
+          windows: "https://example.com/w.ps1",
+        },
+      };
+      expect(preferredInstallCommand(install, "win32")).toBe(
+        'powershell -NoProfile -Command "iex (irm https://example.com/w.ps1)"',
+      );
+    });
+
+    it("brew is skipped on linux even when set (only macOS)", () => {
+      expect(
+        preferredInstallCommand(
+          { npm: null, brew: "openclaw/tap/openclaw", script: null },
+          "linux",
+        ),
+      ).toBeNull();
+    });
+
+    it("npm wins across all platforms when set", () => {
+      const install = { npm: "openclaw", brew: null, script: null };
+      expect(preferredInstallCommand(install, "darwin")).toBe(
+        "npm install -g openclaw",
+      );
+      expect(preferredInstallCommand(install, "linux")).toBe(
+        "npm install -g openclaw",
+      );
+      expect(preferredInstallCommand(install, "win32")).toBe(
+        "npm install -g openclaw",
+      );
+    });
+
+    it("object script with unix-only is null on win32", () => {
+      expect(
+        preferredInstallCommand(
+          {
+            npm: null,
+            brew: null,
+            script: { unix: "https://example.com/u.sh" },
+          },
+          "win32",
+        ),
+      ).toBeNull();
+    });
+
+    it("Windows installer ignores non_interactive_args (PowerShell scriptblock form is brittle)", () => {
+      expect(
+        preferredInstallCommand(
+          {
+            npm: null,
+            brew: null,
+            script: { windows: "https://example.com/w.ps1" },
+            non_interactive_args: ["--skip-setup"],
+          },
+          "win32",
+        ),
+      ).toBe('powershell -NoProfile -Command "iex (irm https://example.com/w.ps1)"');
+    });
+  });
+});
+
+describe("resolveScriptUrl (#369)", () => {
+  it("returns null for null/undefined", () => {
+    expect(resolveScriptUrl(null, "darwin")).toBeNull();
+    expect(resolveScriptUrl(undefined, "darwin")).toBeNull();
+  });
+
+  it("string is unix-only", () => {
+    expect(resolveScriptUrl("https://x.com/i.sh", "darwin")).toBe(
+      "https://x.com/i.sh",
+    );
+    expect(resolveScriptUrl("https://x.com/i.sh", "linux")).toBe(
+      "https://x.com/i.sh",
+    );
+    expect(resolveScriptUrl("https://x.com/i.sh", "win32")).toBeNull();
+  });
+
+  it("object picks the right key per platform", () => {
+    const s = { unix: "https://x.com/i.sh", windows: "https://x.com/i.ps1" };
+    expect(resolveScriptUrl(s, "darwin")).toBe("https://x.com/i.sh");
+    expect(resolveScriptUrl(s, "win32")).toBe("https://x.com/i.ps1");
+  });
+
+  it("missing key returns null", () => {
+    expect(resolveScriptUrl({ unix: "https://x.com/i.sh" }, "win32")).toBeNull();
+    expect(
+      resolveScriptUrl({ windows: "https://x.com/i.ps1" }, "darwin"),
+    ).toBeNull();
   });
 });
 

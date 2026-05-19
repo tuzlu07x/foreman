@@ -30,6 +30,7 @@ import { WizardProgress } from "./components/wizard-progress.js";
 import {
   detectInstall,
   disableManagedLaunchAgent,
+  preferredInstallCommand,
   preferredUninstallCommand,
   runInstall,
   runPostConfigCommands,
@@ -3450,6 +3451,8 @@ export async function runInstallStep(
         if (result.ok) log(`  ✓ ${entry.name} uninstalled`);
         else log(`  ⚠ uninstall failed (exit ${result.exitCode}); run manually: ${result.manualCommand}`);
       } else if (entry.install.script) {
+        // Script-based installers don't carry an uninstall command; the
+        // user has to clean up the binary themselves regardless of shape.
         log(
           `  ⚠ ${entry.name} was installed via a script — remove the ${entry.install.binary ?? id} binary manually.`,
         );
@@ -3478,14 +3481,26 @@ export async function runInstallStep(
         log(`  ✓ already installed at ${detection.path}`);
         break;
       }
-      const installCmd = entry.install.npm
-        ? `npm install -g ${entry.install.npm}`
-        : entry.install.brew
-          ? `brew install ${entry.install.brew}`
-          : entry.install.script
-            ? `curl -fsSL ${entry.install.script} | bash`
-            : null;
-      if (!installCmd) break;
+      // #369 — Delegate command construction to the platform-aware
+      // picker so Windows users get the PowerShell form and so the
+      // wizard log doesn't render `[object Object]` when `script` is
+      // an object.
+      const installCmd = preferredInstallCommand(entry.install);
+      if (!installCmd) {
+        // No installer available for this platform — log a manual hint
+        // before bailing so the user knows what to do next (WSL2,
+        // download page, etc).
+        if (process.platform === "win32" && entry.install.script) {
+          log(
+            `  ⚠ ${entry.name} has no native Windows installer. Run inside WSL2 or install from ${entry.homepage}.`,
+          );
+        } else {
+          log(
+            `  ⚠ ${entry.name} has no automated installer for this platform — install manually from ${entry.homepage}.`,
+          );
+        }
+        break;
+      }
       log(`  installing (${installCmd})…`);
       const result = await runInstall({
         install: entry.install,
