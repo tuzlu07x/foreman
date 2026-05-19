@@ -17,6 +17,10 @@ function makeServices(
     ok: boolean;
     error?: string;
   } = { ok: true },
+  commandResult: { ok: boolean; text: string; errorCode?: string } = {
+    ok: true,
+    text: "stub-router-response",
+  },
 ): McpStdioServices {
   const result: MediatorOutput = {
     requestId: "r1",
@@ -37,6 +41,10 @@ function makeServices(
     approval: {
       submitFromAgent: vi.fn(async () => submitApprovalResult),
     },
+    commandRouter: {
+      dispatch: vi.fn(async () => commandResult),
+    },
+    llmConfigPath: "/tmp/test-llm.yaml",
   } as unknown as McpStdioServices;
 }
 
@@ -278,6 +286,149 @@ describe("mcp-stdio handleMessage", () => {
       };
       expect(out.result.isError).toBe(true);
       expect(out.result.content[0]?.text).toContain("missing-id");
+    });
+  });
+
+  // #431 — Agent-routed orchestrator command. User types `/foreman <verb>`
+  // in the agent's chat; agent calls submit_command; Foreman dispatches
+  // via the command router; agent posts the response back.
+  describe("submit_command tool (#431)", () => {
+    it("advertises submit_command on tools/list", async () => {
+      const out = (await handleMessage(makeServices("allowed"), "hermes", {
+        jsonrpc: "2.0",
+        id: 20,
+        method: "tools/list",
+      } as JSONRPCMessage)) as unknown as {
+        result: { tools: { name: string }[] };
+      };
+      const names = out.result.tools.map((t) => t.name);
+      expect(names).toContain("submit_command");
+    });
+
+    it("forwards command + args + sourceAgent to commandRouter.dispatch", async () => {
+      const services = makeServices(
+        "allowed",
+        "policy:7",
+        undefined,
+        { ok: true },
+        { ok: true, text: "Foreman v0.1.x — 2 agents registered" },
+      );
+      const out = (await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 21,
+        method: "tools/call",
+        params: {
+          name: "submit_command",
+          arguments: {
+            command: "status",
+            args: [],
+            source_user: "12345",
+          },
+        },
+      } as JSONRPCMessage)) as unknown as {
+        result: { content: { text: string }[]; isError?: boolean };
+      };
+      expect(services.commandRouter.dispatch).toHaveBeenCalledWith(
+        "status",
+        [],
+        expect.objectContaining({
+          sourceAgent: "hermes",
+          sourceUser: "12345",
+        }),
+      );
+      expect(out.result.content[0]?.text).toContain("Foreman");
+      expect(out.result.isError).toBeFalsy();
+    });
+
+    it("preserves nested args (e.g. `/foreman llm status` → args=['status'])", async () => {
+      const services = makeServices(
+        "allowed",
+        "policy:7",
+        undefined,
+        { ok: true },
+        { ok: true, text: "llm response" },
+      );
+      await handleMessage(services, "openclaw", {
+        jsonrpc: "2.0",
+        id: 22,
+        method: "tools/call",
+        params: {
+          name: "submit_command",
+          arguments: { command: "llm", args: ["status"] },
+        },
+      } as JSONRPCMessage);
+      expect(services.commandRouter.dispatch).toHaveBeenCalledWith(
+        "llm",
+        ["status"],
+        expect.objectContaining({ sourceAgent: "openclaw" }),
+      );
+    });
+
+    it("returns isError true when the router reports ok=false", async () => {
+      const services = makeServices(
+        "allowed",
+        "policy:7",
+        undefined,
+        { ok: true },
+        {
+          ok: false,
+          text: 'Unknown command "supernova".',
+          errorCode: "UNKNOWN_COMMAND",
+        },
+      );
+      const out = (await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 23,
+        method: "tools/call",
+        params: {
+          name: "submit_command",
+          arguments: { command: "supernova", args: [] },
+        },
+      } as JSONRPCMessage)) as unknown as {
+        result: { content: { text: string }[]; isError: boolean };
+      };
+      expect(out.result.isError).toBe(true);
+      expect(out.result.content[0]?.text).toContain("supernova");
+    });
+
+    it("rejects submit_command without a command arg", async () => {
+      const out = (await handleMessage(makeServices("allowed"), "hermes", {
+        jsonrpc: "2.0",
+        id: 24,
+        method: "tools/call",
+        params: { name: "submit_command", arguments: {} },
+      } as JSONRPCMessage)) as unknown as {
+        error: { code: number; message: string };
+      };
+      expect(out.error.code).toBe(-32602);
+      expect(out.error.message).toMatch(/command/);
+    });
+
+    it("filters non-string entries out of args (defensive)", async () => {
+      const services = makeServices(
+        "allowed",
+        "policy:7",
+        undefined,
+        { ok: true },
+        { ok: true, text: "ok" },
+      );
+      await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 25,
+        method: "tools/call",
+        params: {
+          name: "submit_command",
+          arguments: {
+            command: "echo",
+            args: ["one", 42, "two", null, "three"] as unknown[],
+          },
+        },
+      } as JSONRPCMessage);
+      expect(services.commandRouter.dispatch).toHaveBeenCalledWith(
+        "echo",
+        ["one", "two", "three"],
+        expect.any(Object),
+      );
     });
   });
 });

@@ -3,6 +3,10 @@ import { Command } from "commander";
 import { DbApprovalService, type ApprovalService } from "../core/approval.js";
 import { AuditLogger } from "../core/audit.js";
 import { bus } from "../core/event-bus.js";
+import {
+  ForemanCommandRouter,
+  registerBuiltinCommands,
+} from "../core/foreman-command.js";
 import { MediatorService } from "../core/mediator.js";
 import { PolicyEngine } from "../core/policy-engine.js";
 import { RegistryService } from "../core/registry.js";
@@ -52,6 +56,11 @@ interface Services {
   sessionManager: SessionManager;
   audit: AuditLogger;
   secretStore: SecretStore;
+  /** #431 — Routes `/foreman <cmd>` text the agent relays via the
+   *  `submit_command` MCP tool. */
+  commandRouter: ForemanCommandRouter;
+  /** Path to llm.yaml — needed by the LLM-status command handler. */
+  llmConfigPath: string;
 }
 
 function bootServices(): Services {
@@ -83,6 +92,8 @@ function bootServices(): Services {
     bus,
     secretStore,
   });
+  const commandRouter = new ForemanCommandRouter();
+  registerBuiltinCommands(commandRouter);
   return {
     registry,
     policy,
@@ -92,6 +103,8 @@ function bootServices(): Services {
     sessionManager,
     audit,
     secretStore,
+    commandRouter,
+    llmConfigPath: paths.llmConfigPath,
   };
 }
 
@@ -201,6 +214,38 @@ export async function handleMessage(
             },
           },
         },
+        {
+          // #431 — Agent-routed orchestrator command relay. User types
+          // `/foreman <verb> [args]` in the agent's chat; the agent's
+          // getUpdates consumer parses + calls this tool. Foreman runs
+          // a built-in handler and returns text the agent posts back.
+          // See SOUL.md "Orchestrator Routing" section for the rules.
+          name: "submit_command",
+          description:
+            "Submit a /foreman orchestrator command relayed from the user's chat. Call this when a user message in your chat is `/foreman <verb> [args...]` (e.g. `/foreman status`, `/foreman help`, `/foreman llm status`). Pass the verb as `command`, the rest of the message tokens as `args` (string array). Do NOT call on your own initiative — only when the user types the literal `/foreman ...` command. The returned text is the response to post back to the user verbatim.",
+          inputSchema: {
+            type: "object",
+            required: ["command"],
+            properties: {
+              command: {
+                type: "string",
+                description:
+                  "The first word after `/foreman` (e.g. 'status', 'help', 'llm'). Case-insensitive.",
+              },
+              args: {
+                type: "array",
+                items: { type: "string" },
+                description:
+                  "Remaining tokens after the verb, in order. Pass [] when none. For `/foreman llm status` this is [\"status\"].",
+              },
+              source_user: {
+                type: "string",
+                description:
+                  "Optional — the messaging-platform user id (Telegram numeric id, Discord snowflake, …) for audit traceability.",
+              },
+            },
+          },
+        },
       ],
     });
   }
@@ -287,6 +332,38 @@ export async function handleMessage(
           { type: "text", text: result.error ?? "submit_approval failed" },
         ],
         isError: true,
+      });
+    }
+
+    if (toolName === "submit_command") {
+      // #431 — Agent-routed orchestrator command. Same routing shape as
+      // submit_approval: agent's chat consumer relays `/foreman <verb>`
+      // text via this tool, we dispatch + return the reply for the
+      // agent to post back.
+      const args = params?.arguments ?? {};
+      const command = typeof args.command === "string" ? args.command.trim() : "";
+      const argList = Array.isArray(args.args)
+        ? args.args.filter((a): a is string => typeof a === "string")
+        : [];
+      const sourceUser =
+        typeof args.source_user === "string" ? args.source_user : undefined;
+      if (!command) {
+        return replyError(
+          id,
+          -32602,
+          "submit_command requires args.command (string)",
+        );
+      }
+      const result = await services.commandRouter.dispatch(command, argList, {
+        db: getDb(),
+        registry: services.registry,
+        llmConfigPath: services.llmConfigPath,
+        sourceAgent,
+        sourceUser,
+      });
+      return reply(id, {
+        content: [{ type: "text", text: result.text }],
+        isError: !result.ok,
       });
     }
 
