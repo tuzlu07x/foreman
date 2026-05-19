@@ -16,6 +16,7 @@ import {
   preferredUninstallCommand,
   resolveScriptUrl,
   runPostConfigCommands,
+  smokeTestBinary,
 } from "../../src/core/agent-install.js";
 
 describe("preferredInstallCommand", () => {
@@ -478,6 +479,120 @@ describe("detectInstall", () => {
     expect(result.found).toBe(true);
     expect(result.source).toBe("PATH");
     expect(result.path).toBe(join(pathBin, "hermes"));
+  });
+
+  // #458 — Hermes installs a 4-line bash shim at ~/.local/bin/hermes that
+  // exec's into a hardcoded venv. Wiping ~/.hermes leaves the shim alive
+  // but broken; without smoke-testing the wizard sees "found:true" and
+  // skips reinstall, then the daemon crashes on first boot.
+  it("smokeTest catches a broken shim (exit 127, missing exec target)", () => {
+    const fakeHome = join(tmpDir, "home");
+    const localBin = join(fakeHome, ".local", "bin");
+    mkdirSync(localBin, { recursive: true });
+    const binPath = join(localBin, "hermes");
+    writeFileSync(
+      binPath,
+      "#!/bin/bash\nexec /nonexistent/path/to/missing/python \"$@\"\n",
+    );
+    chmodSync(binPath, 0o755);
+    const result = detectInstall(
+      { npm: null, brew: null, binary: "hermes" },
+      { PATH: "/empty/dir", HOME: fakeHome },
+      { smokeTest: true },
+    );
+    expect(result.found).toBe(false);
+    expect(result.brokenAt).toBe(binPath);
+    expect(result.brokenReason).toBeDefined();
+    expect(result.brokenReason?.toLowerCase()).toContain("no such file");
+  });
+
+  it("smokeTest leaves a healthy shim untouched (exit 0)", () => {
+    const fakeHome = join(tmpDir, "home");
+    const localBin = join(fakeHome, ".local", "bin");
+    mkdirSync(localBin, { recursive: true });
+    const binPath = join(localBin, "hermes");
+    writeFileSync(binPath, "#!/bin/sh\necho hermes 1.2.3\n");
+    chmodSync(binPath, 0o755);
+    const result = detectInstall(
+      { npm: null, brew: null, binary: "hermes" },
+      { PATH: "/empty/dir", HOME: fakeHome },
+      { smokeTest: true },
+    );
+    expect(result.found).toBe(true);
+    expect(result.brokenAt).toBeUndefined();
+  });
+
+  it("smokeTest defaults to OFF — existing callers keep current behaviour", () => {
+    // Make a broken shim then call detectInstall WITHOUT smokeTest — the
+    // result should still be `found: true` (preserves backwards compat
+    // for callers that only need a path, e.g. uninstall flows).
+    const fakeHome = join(tmpDir, "home");
+    const localBin = join(fakeHome, ".local", "bin");
+    mkdirSync(localBin, { recursive: true });
+    const binPath = join(localBin, "hermes");
+    writeFileSync(
+      binPath,
+      "#!/bin/bash\nexec /definitely/not/there \"$@\"\n",
+    );
+    chmodSync(binPath, 0o755);
+    const result = detectInstall(
+      { npm: null, brew: null, binary: "hermes" },
+      { PATH: "/empty/dir", HOME: fakeHome },
+    );
+    expect(result.found).toBe(true);
+    expect(result.brokenAt).toBeUndefined();
+  });
+});
+
+describe("smokeTestBinary (#458)", () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "foreman-smoke-"));
+  });
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns ok:true when the binary exits 0", () => {
+    const binPath = join(tmpDir, "good");
+    writeFileSync(binPath, "#!/bin/sh\necho 1.0.0\n");
+    chmodSync(binPath, 0o755);
+    expect(smokeTestBinary(binPath)).toEqual({ ok: true });
+  });
+
+  it("returns ok:true for non-zero exit with legible output (CLIs that reject --version)", () => {
+    const binPath = join(tmpDir, "noisy");
+    writeFileSync(
+      binPath,
+      "#!/bin/sh\necho 'unknown flag: --version' >&2\nexit 2\n",
+    );
+    chmodSync(binPath, 0o755);
+    expect(smokeTestBinary(binPath)).toEqual({ ok: true });
+  });
+
+  it("returns ok:false when exec target is missing (broken shim)", () => {
+    const binPath = join(tmpDir, "broken");
+    writeFileSync(
+      binPath,
+      "#!/bin/bash\nexec /definitely/missing/python \"$@\"\n",
+    );
+    chmodSync(binPath, 0o755);
+    const result = smokeTestBinary(binPath);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason.toLowerCase()).toContain("no such file");
+    }
+  });
+
+  it("returns ok:false when binary exits non-zero with no output", () => {
+    const binPath = join(tmpDir, "silent");
+    writeFileSync(binPath, "#!/bin/sh\nexit 1\n");
+    chmodSync(binPath, 0o755);
+    const result = smokeTestBinary(binPath);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/exited 1/);
+    }
   });
 });
 

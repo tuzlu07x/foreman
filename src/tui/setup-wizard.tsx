@@ -4081,10 +4081,19 @@ export async function runInstallStep(
     // input via onFailure (#177); register always runs at the end.
     let skipThisAgent = false;
     while (true) {
-      const detection = detectInstall(entry.install);
+      // #458 — Smoke-test the discovered binary so broken shims (the
+      // wiped-venv crash QA hit) trigger a reinstall instead of being
+      // logged as "already installed".
+      const detection = detectInstall(entry.install, process.env, {
+        smokeTest: true,
+      });
       if (detection.found) {
         log(`  ✓ already installed at ${detection.path}`);
         break;
+      }
+      if (detection.brokenAt) {
+        log(`  ⚠ found broken binary at ${detection.brokenAt} — reinstalling`);
+        log(`    ${detection.brokenReason ?? "(no diagnostic)"}`);
       }
       // #369 — Delegate command construction to the platform-aware
       // picker so Windows users get the PowerShell form and so the
