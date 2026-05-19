@@ -361,6 +361,8 @@ secretsCommand
         servicesSelected,
         secretStore: store,
         chatPrimary: new ChatPrimaryService(db),
+        llmProvider: agent.llmProvider ?? undefined,
+        modelVersion: agent.modelVersion ?? undefined,
       });
       if (result.files.length === 0 && result.skipped.length === 0) {
         console.log(orange("note: ") + "nothing to re-project (no matching secrets in store)");

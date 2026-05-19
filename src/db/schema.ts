@@ -27,6 +27,10 @@ export const agents = sqliteTable("agents", {
   // for Hermes/openai, "oauth" for Codex/openai, "native" for OpenClaw/openai).
   // NULL falls back to the registry's `provider_mapping[llmProvider].preferred`.
   providerVariant: text("provider_variant"),
+  // #434 — Specific model id chosen per-agent (e.g. claude-opus-4-7 for
+  // Hermes, claude-haiku-4-5 for OpenClaw). NULL means the projector
+  // uses the variant's default model from registry/agents.json.
+  modelVersion: text("model_version"),
   responsibilityNote: text("responsibility_note"),
 });
 
