@@ -1,6 +1,10 @@
 import { existsSync } from "node:fs";
 import type { ForemanDb } from "../db/client.js";
-import { readForemanPid } from "./foreman-pidfile.js";
+import {
+  ControlChannel,
+  isOwner,
+  type OwnerStore,
+} from "./control-channel.js";
 import { getBudgetStatus } from "./llm/budget.js";
 import {
   defaultLlmConfig,
@@ -32,9 +36,16 @@ export interface ForemanCommandContext {
   /** Path to `llm.yaml` so handlers can read the current Foreman LLM
    *  config + budget without hardcoding the location. */
   llmConfigPath: string;
-  /** Foreman's `<configDir>` — used by the stop handler to locate the
-   *  pidfile written by `foreman start`. */
+  /** Foreman's `<configDir>` — useful for handlers that need to read
+   *  or write sibling files (notify.yaml, foreman.pid, …). */
   configDir: string;
+  /** #440 — Cross-process queue for state-mutating verbs. Optional so
+   *  read-only verbs (status, help, llm status) still dispatch even
+   *  when the channel hasn't been wired (e.g. in unit tests). */
+  controlChannel?: ControlChannel;
+  /** #440 — Secret store used by `isOwner` to gate mutating verbs.
+   *  When omitted, every mutating verb is rejected (safe default). */
+  ownerStore?: OwnerStore;
   /** Agent id that routed the user's command (mirrors `submit_approval`
    *  pattern). Used for the audit log + future per-agent gating. */
   sourceAgent: string;
@@ -314,31 +325,49 @@ function stopHandler(
   _args: string[],
   ctx: ForemanCommandContext,
 ): ForemanCommandResult {
-  const pid = readForemanPid(ctx.configDir);
-  if (pid === null) {
+  return enqueueMutating(ctx, "stop", [], {
+    successText:
+      "Shutdown queued. Foreman start will exit + agent daemons SIGTERM within ~2s.",
+  });
+}
+
+// #440 — Shared scaffolding for every state-mutating verb. Verifies
+// the control channel is wired + the user is the owner, enqueues the
+// command, and returns a uniform "queued" reply that includes the row
+// id (handy for cross-referencing the audit log).
+function enqueueMutating(
+  ctx: ForemanCommandContext,
+  command: string,
+  args: string[],
+  opts: { successText: string },
+): ForemanCommandResult {
+  if (!ctx.controlChannel) {
     return {
       ok: false,
       text:
-        "Foreman start isn't running (no pidfile or stale PID). " +
-        "If you think it is, check `ps aux | grep foreman` on the host.",
+        `\`/foreman ${command}\` needs the cross-process control channel — not wired in this process. ` +
+        `Run the command on the Foreman host CLI instead.`,
       errorCode: "NOT_AVAILABLE",
     };
   }
-  try {
-    process.kill(pid, "SIGTERM");
-  } catch (err) {
+  if (!ctx.ownerStore || !isOwner(ctx.ownerStore, { sourceUser: ctx.sourceUser })) {
     return {
       ok: false,
       text:
-        `Failed to signal Foreman PID ${pid}: ${err instanceof Error ? err.message : String(err)}`,
-      errorCode: "NOT_AVAILABLE",
+        `\`/foreman ${command}\` is owner-only. ` +
+        `Foreman couldn't verify your identity — make sure your Telegram user id is the one in \`telegram-chat-id\`.`,
+      errorCode: "NOT_AUTHORIZED",
     };
   }
+  const enq = ctx.controlChannel.enqueue({
+    command,
+    args,
+    sourceAgent: ctx.sourceAgent,
+    sourceUser: ctx.sourceUser,
+  });
   return {
     ok: true,
-    text:
-      `Shutting down Foreman (PID ${pid}). ` +
-      `Agent daemons will receive SIGTERM and exit within ~5s.`,
+    text: `${opts.successText} (queued id=${enq.id})`,
   };
 }
 
@@ -348,19 +377,46 @@ function llmSubrouterHandler(
 ): ForemanCommandResult {
   const sub = (args[0] ?? "status").toLowerCase();
   if (sub === "status") return llmStatusHandler(args.slice(1), ctx);
-  if (sub === "switch" || sub === "budget") {
-    return {
-      ok: false,
-      text:
-        `\`/foreman llm ${sub}\` requires cross-process control — coming in a follow-up release. ` +
-        `For now, run \`foreman llm ${sub} ...\` from the CLI on the Foreman host.`,
-      errorCode: "NOT_AVAILABLE",
-    };
+  if (sub === "switch") {
+    // Expected shape: `/foreman llm switch <provider> <model>`.
+    // We forward exactly the user-supplied tokens; the start.ts drain
+    // handler is the source of truth for validation (provider id,
+    // model name, secret presence).
+    const providerArg = args[1];
+    const modelArg = args[2];
+    if (!providerArg || !modelArg) {
+      return {
+        ok: false,
+        text:
+          "Usage: `/foreman llm switch <provider> <model>`. " +
+          "Example: `/foreman llm switch openai gpt-4o-mini`.",
+        errorCode: "UNKNOWN_SUBCOMMAND",
+      };
+    }
+    return enqueueMutating(ctx, "llm-switch", [providerArg, modelArg], {
+      successText: `Will switch Foreman LLM to ${providerArg}/${modelArg}.`,
+    });
+  }
+  if (sub === "budget") {
+    const usdArg = args[1];
+    const parsed = usdArg ? Number.parseFloat(usdArg) : Number.NaN;
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return {
+        ok: false,
+        text:
+          "Usage: `/foreman llm budget <USD>`. " +
+          "Example: `/foreman llm budget 25` sets the monthly cap to $25.",
+        errorCode: "UNKNOWN_SUBCOMMAND",
+      };
+    }
+    return enqueueMutating(ctx, "llm-budget", [String(parsed)], {
+      successText: `Will set Foreman LLM monthly cap to $${parsed.toFixed(2)}.`,
+    });
   }
   return {
     ok: false,
     text:
-      `Unknown llm subcommand "${sub}". Available: \`/foreman llm status\`.`,
+      `Unknown llm subcommand "${sub}". Available: status, switch, budget.`,
     errorCode: "UNKNOWN_SUBCOMMAND",
   };
 }
