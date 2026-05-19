@@ -321,19 +321,34 @@ export function projectSecretsForAgent(
   // used. Hermes' template defaults to OpenRouter; if the user picked
   // openai we now write `model.provider: openai` + `model.default:
   // gpt-4o-mini` directly into ~/.hermes/config.yaml.
-  if (projection.config_overrides && !resolverWonProviderWrites) {
+  if (projection.config_overrides) {
     const { path: rawPath, format, writes } = projection.config_overrides
     const path = expand(rawPath)
     const merged: Record<string, string | boolean | number | null> = {}
     for (const w of writes) {
-      // if_provider matches per-agent llmProvider OR (legacy fallback)
-      // global providersSelected — keep both for tests + back-compat.
+      // #427 — Per-entry gate. The section used to be gated as a whole
+      // by `!resolverWonProviderWrites`, which silently dropped every
+      // `if_service` write (e.g. OpenClaw's `channels.telegram.dmPolicy`)
+      // when the resolver path won. Same bug class as #425. Now: skip
+      // ONLY provider-gated entries when the resolver owns provider
+      // writes; service-gated writes (and chat-primary-gated ones) fire
+      // regardless.
+      if (resolverWonProviderWrites && w.if_provider) continue
       if (w.if_provider) {
         const matchesAgent = ctx.llmProvider === w.if_provider
         const matchesGlobal = ctx.providersSelected.includes(w.if_provider)
         if (!matchesAgent && !matchesGlobal) continue
       }
       if (w.if_service && !ctx.servicesSelected.includes(w.if_service)) {
+        continue
+      }
+      // #426 — Skip channel-tied writes when this agent isn't the
+      // configured primary for that channel.
+      if (
+        w.if_service &&
+        ctx.chatPrimary &&
+        !ctx.chatPrimary.isPrimary(w.if_service, entry.id)
+      ) {
         continue
       }
       for (const [dot, value] of Object.entries(w.set)) {
@@ -381,7 +396,7 @@ export function projectSecretsForAgent(
               encodeRandomBytes(sb.auth_token!.bytes, sb.auth_token!.encoding),
           }
         : undefined
-      let ownerList: { key: string; values: string[] } | undefined
+      let ownerList: { keys: string[]; values: string[] } | undefined
       const secretsUsed: string[] = []
       if (sb.owner_allowlist) {
         const allowlistService = sb.owner_allowlist.if_service
@@ -403,8 +418,14 @@ export function projectSecretsForAgent(
             result.skipped,
           )
           if (value !== null) {
+            // #427 — `key` may be a single dot-path or an array of paths.
+            // OpenClaw needs the same array projected to two slots so its
+            // dmPolicy=allowlist validation passes.
+            const keys = Array.isArray(sb.owner_allowlist.key)
+              ? sb.owner_allowlist.key
+              : [sb.owner_allowlist.key]
             ownerList = {
-              key: sb.owner_allowlist.key,
+              keys,
               values: [
                 sb.owner_allowlist.item_template.replace(/\{value\}/g, value),
               ],
@@ -853,7 +874,7 @@ export function writeSecurityBootstrap(
   format: 'yaml' | 'json',
   options: {
     authToken?: { key: string; generate: () => string }
-    ownerAllowlist?: { key: string; values: string[] }
+    ownerAllowlist?: { keys: string[]; values: string[] }
   },
 ): WriteOutcome {
   const exists = existsSync(path)
@@ -882,11 +903,17 @@ export function writeSecurityBootstrap(
     // else: preserve existing — no write, no stale flag.
   }
   if (options.ownerAllowlist) {
-    const prev = readDotPath(root, options.ownerAllowlist.key)
     const next = options.ownerAllowlist.values
-    if (!Array.isArray(prev) || !arraysEqualShallow(prev, next)) {
-      if (prev !== undefined) replacedStale = true
-      writeDotPath(root, options.ownerAllowlist.key, next)
+    // #427 — Project the same allowlist to every configured key. OpenClaw
+    // needs both `commands.ownerAllowFrom` (command authorization) AND
+    // `channels.telegram.allowFrom` (DM access — required when dmPolicy
+    // is "allowlist") to point at the same user list.
+    for (const key of options.ownerAllowlist.keys) {
+      const prev = readDotPath(root, key)
+      if (!Array.isArray(prev) || !arraysEqualShallow(prev, next)) {
+        if (prev !== undefined) replacedStale = true
+        writeDotPath(root, key, next)
+      }
     }
   }
   const serialized =
