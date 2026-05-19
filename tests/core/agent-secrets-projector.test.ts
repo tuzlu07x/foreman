@@ -1321,4 +1321,74 @@ describe('projectSecretsForAgent — resolver path (#408 phase 2)', () => {
     expect(typeof parsed.gateway.auth.token).toBe('string')
     expect(parsed.commands.ownerAllowFrom).toEqual(['telegram:999'])
   })
+
+  // #425 — Regression: PR #415 gated the env_vars block at the section
+  // level, which silently dropped `if_service` env vars (Hermes' Telegram
+  // bot token + allowed users) whenever the resolver won. The gate must
+  // be per-entry: skip ONLY entries with `if_provider`, keep `if_service`
+  // entries so platforms still come up.
+  it('preserves if_service env_vars when resolver path wins (#425 regression)', () => {
+    store.add('openrouter-key', 'sk-or-test')
+    store.add('telegram-bot-token', 'tg-bot-123')
+    store.add('telegram-chat-id', '8263464163')
+    const hermesShape: AgentEntry = {
+      id: 'hermes',
+      name: 'Hermes',
+      tagline: 't',
+      homepage: 'https://example.com',
+      install: { npm: null, brew: null },
+      config_paths: [`${tmp}/hermes.yaml`],
+      required_secrets: [],
+      optional_secrets: [],
+      mcp_compatible: true,
+      supported_versions: '*',
+      min_foreman_version: '0.1.2',
+      provider_mapping: {
+        openai: {
+          preferred: 'via-openrouter',
+          variants: {
+            'via-openrouter': {
+              label: 'OpenAI via OpenRouter',
+              writes: {
+                'model.default': 'openai/${model}',
+                'model.provider': 'openrouter',
+              },
+              env_vars: { OPENROUTER_API_KEY: '${secret:openrouter-key}' },
+              required_secret: 'openrouter-key',
+            },
+          },
+        },
+      },
+      secret_projection: {
+        env_file: `${tmp}/.env`,
+        env_vars: {
+          // Provider-gated: resolver should handle these — skip in legacy path.
+          ANTHROPIC_API_KEY: { from_secret: 'anthropic-key', if_provider: 'anthropic' },
+          OPENAI_API_KEY: { from_secret: 'openai-key', if_provider: 'openai' },
+          // Service-gated: resolver NEVER touches these. They must survive
+          // even when the resolver wins — otherwise Telegram platform
+          // never initializes (the original #425 symptom).
+          TELEGRAM_BOT_TOKEN: { from_secret: 'telegram-bot-token', if_service: 'telegram' },
+          TELEGRAM_ALLOWED_USERS: { from_secret: 'telegram-chat-id', if_service: 'telegram' },
+        },
+      },
+    } as unknown as AgentEntry
+    const result = projectSecretsForAgent(hermesShape, {
+      providersSelected: ['openai'],
+      servicesSelected: ['telegram'],
+      llmProvider: 'openai',
+      secretStore: store,
+      home: tmp,
+    })
+    expect(result.files.length).toBeGreaterThan(0)
+    const env = readFileSync(`${tmp}/.env`, 'utf-8')
+    // Resolver-side (provider) env is present
+    expect(env).toContain('OPENROUTER_API_KEY=sk-or-test')
+    // Service-side env survived the gate (#425 — the actual fix being tested)
+    expect(env).toContain('TELEGRAM_BOT_TOKEN=tg-bot-123')
+    expect(env).toContain('TELEGRAM_ALLOWED_USERS=8263464163')
+    // Provider-gated legacy entries did NOT also fire — resolver owns those
+    expect(env).not.toContain('OPENAI_API_KEY=')
+    expect(env).not.toContain('ANTHROPIC_API_KEY=')
+  })
 })
