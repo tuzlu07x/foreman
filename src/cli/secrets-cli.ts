@@ -4,6 +4,7 @@ import {
   projectSecretsForAgent,
   type WrittenFile,
 } from "../core/agent-secrets-projector.js";
+import { ChatPrimaryService } from "../core/chat-primary.js";
 import { EventBus, type ForemanEventMap } from "../core/event-bus.js";
 import {
   findDuplicateSlots,
@@ -359,6 +360,7 @@ secretsCommand
         providersSelected,
         servicesSelected,
         secretStore: store,
+        chatPrimary: new ChatPrimaryService(db),
       });
       if (result.files.length === 0 && result.skipped.length === 0) {
         console.log(orange("note: ") + "nothing to re-project (no matching secrets in store)");
@@ -472,6 +474,7 @@ function fanoutRotation(
       providersSelected: extractProviderHints(entry.secret_projection, secretName),
       servicesSelected: extractServiceHints(entry.secret_projection, secretName),
       secretStore: store,
+      chatPrimary: new ChatPrimaryService(db),
     };
     let projection: ReturnType<typeof projectSecretsForAgent>;
     try {

@@ -257,17 +257,20 @@ describe("setup-state", () => {
   // platforms the user wired up), then required-setup resolves per-agent
   // secrets, then install runs.
   describe("required-setup step (#411)", () => {
-    it("STEPS array includes 'required-setup' between 'services' and 'install'", () => {
+    it("STEPS array includes 'required-setup' between 'chat-primary' and 'install'", () => {
       expect(STEPS).toContain("required-setup");
       const servicesIdx = STEPS.indexOf("services");
+      const chatPrimaryIdx = STEPS.indexOf("chat-primary");
       const requiredIdx = STEPS.indexOf("required-setup");
       const installIdx = STEPS.indexOf("install");
       expect(servicesIdx).toBeGreaterThanOrEqual(0);
-      expect(requiredIdx).toBe(servicesIdx + 1);
+      // #426 inserts chat-primary between services and required-setup.
+      expect(chatPrimaryIdx).toBe(servicesIdx + 1);
+      expect(requiredIdx).toBe(chatPrimaryIdx + 1);
       expect(installIdx).toBe(requiredIdx + 1);
     });
 
-    it("nextStep advances welcome → providers → foreman-llm → agents → services → required-setup → install", () => {
+    it("nextStep advances welcome → providers → foreman-llm → agents → services → chat-primary → required-setup → install", () => {
       let s = freshState();
       const order = [
         "welcome",
@@ -275,6 +278,7 @@ describe("setup-state", () => {
         "foreman-llm",
         "agents",
         "services",
+        "chat-primary",
         "required-setup",
         "install",
       ];
@@ -285,7 +289,7 @@ describe("setup-state", () => {
       expect(nextStep(s)).toBe("done");
     });
 
-    it("markUncompleted on 'services' drops everything from 'services' onward (including required-setup)", () => {
+    it("markUncompleted on 'services' drops everything from 'services' onward (including chat-primary + required-setup)", () => {
       let s = freshState();
       for (const step of [
         "welcome",
@@ -293,6 +297,7 @@ describe("setup-state", () => {
         "foreman-llm",
         "agents",
         "services",
+        "chat-primary",
         "required-setup",
       ]) {
         s = markCompleted(s, step as (typeof STEPS)[number]);

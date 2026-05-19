@@ -243,6 +243,16 @@ export const notificationMessages = sqliteTable(
   }),
 );
 
+// #426 — Primary chat agent per messaging channel. Exactly one agent
+// can hold the primary slot per channel; the projector skips messaging-
+// channel writes for non-primary agents so two chat-capable agents
+// can coexist without polling-collision.
+export const chatPrimary = sqliteTable("chat_primary", {
+  channel: text("channel").primaryKey(),
+  agentId: text("agent_id").notNull(),
+  setAt: integer("set_at").notNull(),
+});
+
 export type Agent = typeof agents.$inferSelect;
 export type NewAgent = typeof agents.$inferInsert;
 export type Policy = typeof policies.$inferSelect;
@@ -263,6 +273,8 @@ export type NotificationMessage = typeof notificationMessages.$inferSelect;
 export type NewNotificationMessage = typeof notificationMessages.$inferInsert;
 export type LlmUsage = typeof llmUsage.$inferSelect;
 export type NewLlmUsage = typeof llmUsage.$inferInsert;
+export type ChatPrimary = typeof chatPrimary.$inferSelect;
+export type NewChatPrimary = typeof chatPrimary.$inferInsert;
 
 // FTS5 virtual table and triggers live in a hand-written migration
 // (drizzle-kit cannot emit virtual tables). See:

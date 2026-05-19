@@ -54,6 +54,14 @@ export interface ProjectionContext {
   secretStore: SecretStore
   /** Override $HOME (mostly for tests). */
   home?: string
+  /** #426 — Primary chat agent per channel. When set + an entry has
+   *  `if_service: telegram` (or another messaging channel), the
+   *  projector writes the secret only if the agent being projected is
+   *  the configured primary for that channel. When omitted: legacy
+   *  behavior (every selected agent gets the channel's secrets). */
+  chatPrimary?: {
+    isPrimary(channel: string, agentId: string): boolean
+  }
 }
 
 export interface WrittenFile {
@@ -178,7 +186,7 @@ export function projectSecretsForAgent(
   if (projection.env_vars) {
     for (const [varName, spec] of Object.entries(projection.env_vars)) {
       if (resolverWonProviderWrites && spec.if_provider) continue
-      if (!filterMatches(spec, ctx)) continue
+      if (!filterMatches(spec, ctx, entry.id)) continue
       const value = safeGet(ctx.secretStore, spec.from_secret, result.skipped)
       if (value === null) continue
       envPairs[varName] = value
@@ -216,7 +224,7 @@ export function projectSecretsForAgent(
     const path = expand(projection.json_channels.path)
     const pairs: { dotPath: string; value: string; secret: string }[] = []
     for (const [, spec] of Object.entries(projection.json_channels.channels)) {
-      if (!filterMatches(spec, ctx)) continue
+      if (!filterMatches(spec, ctx, entry.id)) continue
       const value = safeGet(ctx.secretStore, spec.from_secret, result.skipped)
       if (value === null) continue
       pairs.push({ dotPath: spec.path, value, secret: spec.from_secret })
@@ -287,7 +295,7 @@ export function projectSecretsForAgent(
   // 4) auth_json → flat JSON map (Codex's auth.json)
   // -----------------------------------------------------------------------
   if (projection.auth_json && !resolverWonProviderWrites) {
-    if (filterMatches(projection.auth_json, ctx)) {
+    if (filterMatches(projection.auth_json, ctx, entry.id)) {
       const value = safeGet(
         ctx.secretStore,
         projection.auth_json.from_secret,
@@ -376,10 +384,19 @@ export function projectSecretsForAgent(
       let ownerList: { key: string; values: string[] } | undefined
       const secretsUsed: string[] = []
       if (sb.owner_allowlist) {
+        const allowlistService = sb.owner_allowlist.if_service
         const matchesService =
-          !sb.owner_allowlist.if_service ||
-          ctx.servicesSelected.includes(sb.owner_allowlist.if_service)
-        if (matchesService) {
+          !allowlistService ||
+          ctx.servicesSelected.includes(allowlistService)
+        // #426 — Primary chat agent gate also covers the owner allowlist.
+        // If a non-primary agent ran this projection, skip ownerAllowFrom
+        // — only the agent that actually polls the channel gets to own
+        // the allowlist.
+        const primaryOk =
+          !allowlistService ||
+          !ctx.chatPrimary ||
+          ctx.chatPrimary.isPrimary(allowlistService, entry.id)
+        if (matchesService && primaryOk) {
           const value = safeGet(
             ctx.secretStore,
             sb.owner_allowlist.from_secret,
@@ -534,12 +551,21 @@ function applyResolverWrites(
 function filterMatches(
   spec: { if_provider?: string; if_service?: string },
   ctx: ProjectionContext,
+  agentId: string,
 ): boolean {
   if (spec.if_provider && !ctx.providersSelected.includes(spec.if_provider)) {
     return false
   }
-  if (spec.if_service && !ctx.servicesSelected.includes(spec.if_service)) {
-    return false
+  if (spec.if_service) {
+    if (!ctx.servicesSelected.includes(spec.if_service)) return false
+    // #426 — Primary chat agent gate. When a primary is configured for
+    // this service AND the current agent isn't it, drop the write.
+    // ChatPrimaryService.isPrimary returns true when no primary is set
+    // (legacy / un-picked state), so this is a no-op until the wizard or
+    // CLI configures a primary explicitly.
+    if (ctx.chatPrimary && !ctx.chatPrimary.isPrimary(spec.if_service, agentId)) {
+      return false
+    }
   }
   return true
 }
