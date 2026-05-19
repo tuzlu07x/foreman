@@ -27,6 +27,7 @@ import {
   formatConflictWarning,
 } from "../core/agent-provider-conflict.js";
 import { WizardProgress } from "./components/wizard-progress.js";
+import { classifyInstallLog } from "./install-log-classify.js";
 import {
   detectInstall,
   disableManagedLaunchAgent,
@@ -118,6 +119,30 @@ import {
 import { singleBorder, theme } from "./theme.js";
 
 const DEFAULT_AGENTS = ["hermes", "claude-code"];
+
+// #459 — Braille spinner frames used by the install step. 10-frame rotation
+// at 80ms = 8 frames/sec — matches the snappy boot-mascot vibe.
+const BRAILLE_SPINNER_FRAMES = [
+  "⠋",
+  "⠙",
+  "⠹",
+  "⠸",
+  "⠼",
+  "⠴",
+  "⠦",
+  "⠧",
+  "⠇",
+  "⠏",
+] as const;
+
+export function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const totalSec = Math.floor(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  if (m === 0) return `${s}s`;
+  return `${m}m${String(s).padStart(2, "0")}s`;
+}
 
 // #448 — Compute a sliding window around the cursor for picker
 // render blocks where the list can be longer than the visible
@@ -1253,6 +1278,20 @@ export function SetupWizard({
     useState<InstallStepSummary | null>(null);
   const [pendingFailure, setPendingFailure] =
     useState<AgentInstallFailure | null>(null);
+  // #459 — Install UX. The render path collapses raw upstream installer
+  // output into a single spinner + milestone line; this state powers the
+  // spinner animation and elapsed-time display. `installStartedAt` is set
+  // when the install actually fires, not at component mount, so the timer
+  // matches what the user sees.
+  const [installStartedAt, setInstallStartedAt] = useState<number | null>(null);
+  const [spinnerFrame, setSpinnerFrame] = useState(0);
+  useEffect(() => {
+    if (!installRunning || installSummary || !installStartedAt) return;
+    const interval = setInterval(() => {
+      setSpinnerFrame((f) => f + 1);
+    }, 80);
+    return () => clearInterval(interval);
+  }, [installRunning, installSummary, installStartedAt]);
   const [manualFixOpen, setManualFixOpen] = useState(false);
   const failureResolverRef = useRef<
     ((resolution: FailureResolution) => void) | null
@@ -3733,6 +3772,7 @@ export function SetupWizard({
   if (currentStep === "install") {
     if (!installRunning) {
       setInstallRunning(true);
+      setInstallStartedAt(Date.now());
       const { toAdd, toRemove } = computeAgentDiff(
         agentsSelected,
         initialRegistered,
@@ -3774,6 +3814,17 @@ export function SetupWizard({
         advance("install");
       });
     }
+    // #459 — Render path. Split the streamed log into Foreman's own
+    // headline markers (✓/✗/⚠/▸) + a single rotating milestone line
+    // sourced from the upstream installer chatter. On error
+    // (pendingFailure) we flip back to verbose so the user can see the
+    // actual failure context. Full log stays available via the Done
+    // screen's [l] hotkey.
+    const classified = classifyInstallLog(installLog);
+    const verboseMode = pendingFailure !== null;
+    const spinnerChar =
+      BRAILLE_SPINNER_FRAMES[spinnerFrame % BRAILLE_SPINNER_FRAMES.length]!;
+    const elapsedMs = installStartedAt ? Date.now() - installStartedAt : 0;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <WizardProgress
@@ -3782,20 +3833,57 @@ export function SetupWizard({
           label="Install + configure"
           phase={installRunning ? "running" : "ready"}
         />
-        {installLog.map((line, i) => {
-          const isError = line.trimStart().startsWith("✗");
-          const isWarning = line.trimStart().startsWith("⚠");
-          const color = isError
-            ? theme.accent.danger
-            : isWarning
-              ? theme.accent.warning
-              : undefined;
-          return (
-            <Text key={i} color={color}>
-              {line}
-            </Text>
-          );
-        })}
+        {verboseMode ? (
+          installLog.map((line, i) => {
+            const isError = line.trimStart().startsWith("✗");
+            const isWarning = line.trimStart().startsWith("⚠");
+            const color = isError
+              ? theme.accent.danger
+              : isWarning
+                ? theme.accent.warning
+                : undefined;
+            return (
+              <Text key={i} color={color}>
+                {line}
+              </Text>
+            );
+          })
+        ) : (
+          <Box flexDirection="column">
+            {classified.headlines.map((line, i) => {
+              const isError = line.trimStart().startsWith("✗");
+              const isWarning = line.trimStart().startsWith("⚠");
+              const color = isError
+                ? theme.accent.danger
+                : isWarning
+                  ? theme.accent.warning
+                  : undefined;
+              return (
+                <Text key={i} color={color}>
+                  {line}
+                </Text>
+              );
+            })}
+            {installRunning && !installSummary ? (
+              <Box flexDirection="row">
+                <Text color={theme.accent.primary} bold>
+                  {`  ${spinnerChar} `}
+                </Text>
+                <Text color={theme.fg.muted}>
+                  {`installing… ${formatElapsed(elapsedMs)}  `}
+                </Text>
+                <Text color={theme.fg.muted}>
+                  {classified.lastMilestone ?? "preparing"}
+                </Text>
+              </Box>
+            ) : null}
+            {classified.verboseLineCount > 0 ? (
+              <Text color={theme.fg.muted}>
+                {`  (${classified.verboseLineCount} verbose line${classified.verboseLineCount === 1 ? "" : "s"} collapsed — press [l] later for full log)`}
+              </Text>
+            ) : null}
+          </Box>
+        )}
         {pendingFailure && !manualFixOpen && (
           <Box
             flexDirection="column"
