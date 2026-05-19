@@ -193,7 +193,22 @@ describe("DEFAULT_FOREMAN_SOUL — orchestrator routing (#431)", () => {
 
   it("forbids unsolicited submit_command calls", () => {
     expect(DEFAULT_FOREMAN_SOUL).toMatch(
-      /Never[\s\S]*call[\s\S]*submit_command[\s\S]*for messages that don't[\s\S]*\/foreman/i,
+      /Never[\s\S]*call[\s\S]*submit_command[\s\S]*for messages that don't[\s\S]*prefix/i,
     );
+  });
+
+  // #451 — Hermes / OpenClaw filter unknown slash commands at the
+  // parser level before the LLM sees the message. The no-slash
+  // alias works around this until wrap mode (#445) lands.
+  it("documents the no-slash alias as the preferred form (#451)", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toContain("foreman status");
+    expect(DEFAULT_FOREMAN_SOUL).toContain("no-slash form");
+    // Equivalence table with both forms shown side by side.
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/\/foreman status[\s\S]*foreman status/);
+  });
+
+  it("instructs the agent to detect both prefix forms (#451)", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/\/foreman[\s\S]*or[\s\S]*foreman /i);
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/case-insensitive/i);
   });
 });
