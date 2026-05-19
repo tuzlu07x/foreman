@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyAgentConfigSubmit,
   buildAgentConfigPromptList,
-  findSiblingCredHint,
+  computeSingleCompatProviderSeeds,
 } from "../../src/tui/setup-wizard.js";
 import type { AgentEntry } from "../../src/core/registry-catalog.js";
 
@@ -295,81 +295,113 @@ describe("applyAgentConfigSubmit", () => {
   });
 });
 
-// #469 — Cross-variant credential hint. When the user highlights an
-// OAuth / no-key variant in the variant picker, surface a note if a
-// SIBLING variant's required_secret is already stored. Prevents the
-// "I pasted my OpenAI key, why isn't anything using it?" footgun.
-describe("findSiblingCredHint (#469)", () => {
-  const hermesOpenai = {
-    variants: {
-      "via-openrouter": {
-        label: "OpenAI via OpenRouter",
-        required_secret: "openrouter-key",
-      },
-      "via-codex-oauth": {
-        label: "OpenAI via Codex OAuth",
-        required_secret: null,
-      },
-    },
-  };
+// #471 — Single-compat agents (Codex/openai-only, Claude Code/anthropic-only)
+// never hit the llm-choice picker, so wizard state has no llmProvider for
+// them by default — and the wizard's downstream stages used to silently
+// register them with `llm_provider:null`. Helper seeds the implicit choice
+// up front so identity push / required-setup / projection all see a real
+// provider.
+describe("computeSingleCompatProviderSeeds (#471)", () => {
+  const codex = {
+    id: "codex",
+    name: "Codex",
+    tagline: "tag",
+    homepage: "https://example.com/",
+    install: { npm: null, brew: null },
+    config_paths: [],
+    required_secrets: [],
+    optional_secrets: [],
+    llm_compat: ["openai"],
+    mcp_compatible: true,
+    supported_versions: "*",
+    min_foreman_version: "0.1.0",
+  } as unknown as AgentEntry;
+  const claudeCode = {
+    ...codex,
+    id: "claude-code",
+    llm_compat: ["anthropic"],
+  } as unknown as AgentEntry;
+  const hermes = {
+    ...codex,
+    id: "hermes",
+    llm_compat: ["anthropic", "openai"],
+  } as unknown as AgentEntry;
+  const generic = {
+    ...codex,
+    id: "generic-mcp",
+    llm_compat: [],
+  } as unknown as AgentEntry;
+  const catalog: AgentEntry[] = [codex, claudeCode, hermes, generic];
 
-  it("surfaces a hint when sibling needs a stored secret", () => {
-    const result = findSiblingCredHint(
-      hermesOpenai,
-      "via-codex-oauth",
-      new Set(["openrouter-key"]),
+  it("seeds the only compat for an agent missing llmProvider", () => {
+    const result = computeSingleCompatProviderSeeds(
+      [{ agentId: "codex", kind: "variant-pick" }],
+      {},
+      catalog,
     );
-    expect(result).not.toBeNull();
-    expect(result).toContain("openrouter-key");
-    expect(result).toContain("OpenAI via OpenRouter");
+    expect(result).toEqual({ codex: "openai" });
   });
 
-  it("returns null when no sibling's secret is stored", () => {
-    const result = findSiblingCredHint(
-      hermesOpenai,
-      "via-codex-oauth",
-      new Set(["anthropic-key"]),
+  it("does NOT seed when cfg.llmProvider is already set", () => {
+    const result = computeSingleCompatProviderSeeds(
+      [{ agentId: "codex", kind: "variant-pick" }],
+      { codex: { llmProvider: "openai" } },
+      catalog,
     );
-    expect(result).toBeNull();
+    expect(result).toEqual({});
   });
 
-  it("returns null when called on the secret-needing variant itself", () => {
-    // User is on via-openrouter (which uses openrouter-key) — sibling
-    // check should not flag itself.
-    const result = findSiblingCredHint(
-      hermesOpenai,
-      "via-openrouter",
-      new Set(["openrouter-key"]),
+  it("does NOT seed multi-compat agents (user must pick via llm-choice)", () => {
+    const result = computeSingleCompatProviderSeeds(
+      [{ agentId: "hermes", kind: "llm-choice" }],
+      {},
+      catalog,
     );
-    expect(result).toBeNull();
+    expect(result).toEqual({});
   });
 
-  it("ignores siblings that also have null required_secret", () => {
-    const allOauth = {
-      variants: {
-        "oauth-a": { label: "A", required_secret: null },
-        "oauth-b": { label: "B", required_secret: null },
-      },
-    };
-    expect(findSiblingCredHint(allOauth, "oauth-a", new Set())).toBeNull();
+  it("does NOT seed zero-compat agents (no constraint to imply a default)", () => {
+    const result = computeSingleCompatProviderSeeds(
+      [{ agentId: "generic-mcp", kind: "responsibility-note" }],
+      {},
+      catalog,
+    );
+    expect(result).toEqual({});
   });
 
-  it("picks the FIRST matching sibling when multiple credentials are stored", () => {
-    const mapping = {
-      variants: {
-        "via-x": { label: "Route X", required_secret: "x-key" },
-        "via-y": { label: "Route Y", required_secret: "y-key" },
-        "via-oauth": { label: "OAuth", required_secret: null },
-      },
-    };
-    const result = findSiblingCredHint(
-      mapping,
-      "via-oauth",
-      new Set(["x-key", "y-key"]),
+  it("dedupes seeds when an agent appears in multiple prompts", () => {
+    const result = computeSingleCompatProviderSeeds(
+      [
+        { agentId: "codex", kind: "variant-pick" },
+        { agentId: "codex", kind: "model-pick" },
+        { agentId: "codex", kind: "responsibility-note" },
+      ],
+      {},
+      catalog,
     );
-    // Both stored; helper returns the first hit. Either is acceptable but
-    // we want a deterministic, non-empty answer.
-    expect(result).not.toBeNull();
-    expect(result).toMatch(/(x-key|y-key)/);
+    expect(result).toEqual({ codex: "openai" });
+  });
+
+  it("handles mixed selections in one pass — multi-agent setup wizard runs", () => {
+    const result = computeSingleCompatProviderSeeds(
+      [
+        { agentId: "hermes", kind: "llm-choice" },
+        { agentId: "hermes", kind: "variant-pick" },
+        { agentId: "codex", kind: "variant-pick" },
+        { agentId: "claude-code", kind: "model-pick" },
+      ],
+      {},
+      catalog,
+    );
+    expect(result).toEqual({ codex: "openai", "claude-code": "anthropic" });
+  });
+
+  it("returns {} when the agent isn't in the catalog (defensive)", () => {
+    const result = computeSingleCompatProviderSeeds(
+      [{ agentId: "ghost", kind: "model-pick" }],
+      {},
+      catalog,
+    );
+    expect(result).toEqual({});
   });
 });
