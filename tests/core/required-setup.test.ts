@@ -154,6 +154,22 @@ describe("resolveRequiredSetup — bundled-registry scenarios", () => {
     expect(res.secrets[0]?.status).toBe("skipped");
   });
 
+  // #449 — Resolver should carry the variant's `secret_acquisition.note`
+  // through to the required-setup picker so the wizard can render it
+  // inline (the user sees "Hermes routes OpenAI calls through
+  // OpenRouter..." instead of guessing why an unrelated key is asked).
+  it("Hermes/openai surfaces the OpenRouter explanation note (#449)", () => {
+    const res = resolveRequiredSetup({
+      agents: [pickAgent("hermes")],
+      agentProviders: { hermes: "openai" },
+      secretStore: store,
+    });
+    const orKey = res.secrets.find((s) => s.slotName === "openrouter-key");
+    expect(orKey?.acquisition?.note).toBeDefined();
+    expect(orKey?.acquisition?.note?.toLowerCase()).toContain("openrouter");
+    expect(orKey?.acquisition?.note?.toLowerCase()).toContain("openai");
+  });
+
   it("modelOverrides feed into resolver — picker (#405) integration point", () => {
     const res = resolveRequiredSetup({
       agents: [pickAgent("hermes")],

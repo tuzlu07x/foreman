@@ -3288,13 +3288,25 @@ export function SetupWizard({
                     </Text>
                   </Box>
                   {focused && s.acquisition ? (
-                    <Text color={theme.fg.muted}>
-                      {"     "}
-                      {s.acquisition.name}
-                      {s.acquisition.url
-                        ? `  ·  ${s.acquisition.url}`
-                        : ""}
-                    </Text>
+                    <>
+                      <Text color={theme.fg.muted}>
+                        {"     "}
+                        {s.acquisition.name}
+                        {s.acquisition.url
+                          ? `  ·  ${s.acquisition.url}`
+                          : ""}
+                      </Text>
+                      {/* #449 — Show the acquisition.note inline so the
+                          user understands WHY this secret is being asked
+                          for (e.g. "Hermes routes OpenAI calls through
+                          OpenRouter — there's no native OpenAI provider..."). */}
+                      {s.acquisition.note ? (
+                        <Text color={theme.accent.warning}>
+                          {"     "}
+                          {s.acquisition.note}
+                        </Text>
+                      ) : null}
+                    </>
                   ) : null}
                 </Box>
               );
