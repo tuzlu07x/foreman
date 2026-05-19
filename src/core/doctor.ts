@@ -753,29 +753,34 @@ export function checkProviderMapping(): CheckResult {
         anyFail = true;
         continue;
       }
+      // #434 — Append the per-agent model version when set; falls back
+      // to "(variant default)" tag when null so the user can tell at a
+      // glance which agents are pinned vs. inheriting.
+      const modelTag = row.modelVersion
+        ? ` · model=${row.modelVersion}`
+        : " · model=(variant default)";
       if (variant.required_secret) {
         const present = secretStore.exists(variant.required_secret);
         if (present) {
           lines.push(
-            `  ✓ ${row.id} — ${provider}/${variantId} (${variant.required_secret} present)`,
+            `  ✓ ${row.id} — ${provider}/${variantId}${modelTag} (${variant.required_secret} present)`,
           );
         } else {
           lines.push(
-            `  ✗ ${row.id} — ${provider}/${variantId} requires '${variant.required_secret}' (missing)`,
+            `  ✗ ${row.id} — ${provider}/${variantId}${modelTag} requires '${variant.required_secret}' (missing)`,
           );
           remediations.push(`foreman secrets add ${variant.required_secret}`);
           anyFail = true;
         }
       } else if (variant.interactive_setup) {
-        // OAuth variants: we can't verify OAuth status from here without
-        // running `post_setup_verify`. Report as ⚠ — user should know
-        // they may still need to complete the flow.
         lines.push(
-          `  ⚠ ${row.id} — ${provider}/${variantId} uses OAuth (run \`${variant.interactive_setup}\` if not done)`,
+          `  ⚠ ${row.id} — ${provider}/${variantId}${modelTag} uses OAuth (run \`${variant.interactive_setup}\` if not done)`,
         );
         anyWarn = true;
       } else {
-        lines.push(`  ✓ ${row.id} — ${provider}/${variantId} (no auth needed)`);
+        lines.push(
+          `  ✓ ${row.id} — ${provider}/${variantId}${modelTag} (no auth needed)`,
+        );
       }
     }
     if (lines.length === 0) {

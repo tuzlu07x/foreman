@@ -292,7 +292,14 @@ export type ForemanLlmChoice =
   | "preset"
   | "skip";
 
-export type AgentConfigPromptKind = "llm-choice" | "responsibility-note";
+// #434 — `model-pick` inserts a step between llm-choice + responsibility-
+// note: after the user picks the provider, we fetch the live model list
+// for that provider's key and let them pick a specific version (e.g.
+// gpt-5-mini, claude-opus-4-7). Skipping falls back to the variant default.
+export type AgentConfigPromptKind =
+  | "llm-choice"
+  | "model-pick"
+  | "responsibility-note";
 
 export interface AgentConfigPrompt {
   agentId: string;
@@ -334,6 +341,14 @@ export function buildAgentConfigPromptList(
     // are a 1-keystroke confirm — that's the right cost.
     if (compat.length > 1 && choosable.length >= 1) {
       prompts.push({ agentId: id, kind: "llm-choice" });
+    }
+    // #434 — Every agent with a chooseable provider also gets a
+    // model-pick prompt. Single-provider agents (Claude Code,
+    // Codex on api-key, ZeroClaw) still get one — the picker uses
+    // the single available provider implicitly. Discovery happens
+    // at render time; the prompt structure stays cheap to compute.
+    if (choosable.length >= 1) {
+      prompts.push({ agentId: id, kind: "model-pick" });
     }
     prompts.push({ agentId: id, kind: "responsibility-note" });
   }
@@ -844,6 +859,17 @@ export function SetupWizard({
   const [presetDraft, setPresetDraft] = useState<string | null>(null);
   const [presetKeyDraft, setPresetKeyDraft] = useState<string>("");
 
+  // #434 — Per-agent model picker state. `agentModelOptions` is the
+  // live-discovered model list for the active prompt's provider;
+  // `agentModelDraft` is the highlighted choice. Both reset when the
+  // prompt index changes (effect below). Loading = options===null,
+  // error = options===[] + error set.
+  const [agentModelOptions, setAgentModelOptions] = useState<
+    DiscoveredModel[] | null
+  >(null);
+  const [agentModelError, setAgentModelError] = useState<string | null>(null);
+  const [agentModelDraft, setAgentModelDraft] = useState<string | null>(null);
+
   // #408 / #411 Phase 3 — required-setup step state.
   // The wizard precomputes a `RequiredSetupResolution` (which agents need
   // which secrets, which OAuth flows queue up). User can paste missing
@@ -985,6 +1011,79 @@ export function SetupWizard({
       advance("chat-primary");
     }
   }, [currentStep, chatPrimaryChannelsNeeded.length]);
+
+  // #434 — Whenever we land on a model-pick prompt, kick off model
+  // discovery for the active agent's picked provider. Stale state
+  // (from a previous prompt) is wiped so the user sees "loading"
+  // instead of last agent's list.
+  useEffect(() => {
+    if (currentStep !== "agents") return;
+    if (agentsPhase !== "per-agent-config") return;
+    const prompt = agentConfigPrompts[agentConfigIdx];
+    if (!prompt || prompt.kind !== "model-pick") return;
+    // #434 — Provider resolution priority:
+    //   1. The user's per-agent llm-choice if it ran.
+    //   2. The sole compat entry for single-provider agents (no
+    //      llm-choice would have been shown).
+    //   3. None → auto-skip below.
+    const userPicked = agentConfigs[prompt.agentId]?.llmProvider;
+    const agentEntry = agentCatalog.find((a) => a.id === prompt.agentId);
+    const compat = agentEntry?.llm_compat ?? [];
+    const provider = userPicked ?? (compat.length === 1 ? compat[0] : undefined);
+    if (!provider || (provider !== "openai" && provider !== "anthropic" && provider !== "gemini")) {
+      // Skip discovery for providers without a live /v1/models endpoint
+      // (Ollama, openai_compatible). The user can't pick a version
+      // through this UI; auto-advance to responsibility-note.
+      const result = applyAgentConfigSubmit({
+        currentIdx: agentConfigIdx,
+        totalPrompts: agentConfigPrompts.length,
+      });
+      setAgentConfigIdx(result.nextIdx);
+      setAgentsPhase(result.nextPhase);
+      return;
+    }
+    setAgentModelOptions(null);
+    setAgentModelError(null);
+    setAgentModelDraft(null);
+    void (async (): Promise<void> => {
+      const keySecret = `${provider}-key`;
+      try {
+        const apiKey = services.secretStore.exists(keySecret)
+          ? services.secretStore.get(keySecret)
+          : null;
+        if (!apiKey) {
+          setAgentModelError(
+            `No ${provider}-key in the secret store — skip to use the registry default.`,
+          );
+          setAgentModelOptions([]);
+          return;
+        }
+        const models = await discoverModels(provider, { apiKey });
+        if (models.length === 0) {
+          setAgentModelError(
+            `${provider} returned no chat-capable models — skip to use the registry default.`,
+          );
+        }
+        setAgentModelOptions(models);
+      } catch (err) {
+        const msg =
+          err instanceof ModelDiscoveryError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : String(err);
+        setAgentModelError(msg);
+        setAgentModelOptions([]);
+      }
+    })();
+  }, [
+    currentStep,
+    agentsPhase,
+    agentConfigIdx,
+    agentConfigPrompts,
+    agentConfigs,
+    services.secretStore,
+  ]);
 
   const [installLog, setInstallLog] = useState<string[]>([]);
   const [installRunning, setInstallRunning] = useState(false);
@@ -1307,6 +1406,100 @@ export function SetupWizard({
         if (key.escape) {
           setForemanLlmPhase("preset-pick");
           setPresetKeyDraft("");
+          return;
+        }
+      }
+    }
+
+    // #434 — Per-agent model picker key handling. Shows up between
+    // llm-choice and responsibility-note. ↑↓ moves cursor through the
+    // discovered models, Enter commits, [s] skips (uses variant default).
+    if (
+      currentStep === "agents" &&
+      agentsPhase === "per-agent-config"
+    ) {
+      const prompt = agentConfigPrompts[agentConfigIdx];
+      if (prompt && prompt.kind === "model-pick") {
+        // Loading: only Esc/s actionable.
+        if (agentModelOptions === null) {
+          if (key.escape || input === "s" || input === "S") {
+            // Skip → advance without storing modelVersion (= variant default).
+            const result = applyAgentConfigSubmit({
+              currentIdx: agentConfigIdx,
+              totalPrompts: agentConfigPrompts.length,
+            });
+            setAgentConfigIdx(result.nextIdx);
+            setAgentsPhase(result.nextPhase);
+            return;
+          }
+          return;
+        }
+        // Error / empty list: only [s]kip or [Enter] (accepted as skip)
+        // advances. Esc goes back to the llm-choice for the same agent.
+        if (agentModelOptions.length === 0) {
+          if (key.escape) {
+            // Step back to llm-choice for THIS agent (it's the prompt
+            // immediately before model-pick in the list).
+            setAgentConfigIdx(Math.max(0, agentConfigIdx - 1));
+            return;
+          }
+          if (key.return || input === "s" || input === "S") {
+            const result = applyAgentConfigSubmit({
+              currentIdx: agentConfigIdx,
+              totalPrompts: agentConfigPrompts.length,
+            });
+            setAgentConfigIdx(result.nextIdx);
+            setAgentsPhase(result.nextPhase);
+            return;
+          }
+          return;
+        }
+        // Picker active.
+        const cursor = agentModelDraft ?? agentModelOptions[0]?.id ?? null;
+        const idx = agentModelOptions.findIndex((m) => m.id === cursor);
+        const safeIdx = idx < 0 ? 0 : idx;
+        if (key.upArrow) {
+          const len = agentModelOptions.length;
+          setAgentModelDraft(
+            agentModelOptions[(safeIdx - 1 + len) % len]?.id ?? null,
+          );
+          return;
+        }
+        if (key.downArrow) {
+          const len = agentModelOptions.length;
+          setAgentModelDraft(agentModelOptions[(safeIdx + 1) % len]?.id ?? null);
+          return;
+        }
+        if (key.escape) {
+          setAgentConfigIdx(Math.max(0, agentConfigIdx - 1));
+          return;
+        }
+        if (input === "s" || input === "S") {
+          // Skip → no modelVersion stored; variant default applies.
+          const result = applyAgentConfigSubmit({
+            currentIdx: agentConfigIdx,
+            totalPrompts: agentConfigPrompts.length,
+          });
+          setAgentConfigIdx(result.nextIdx);
+          setAgentsPhase(result.nextPhase);
+          return;
+        }
+        if (key.return || input === " ") {
+          if (cursor) {
+            setAgentConfigs((prev) => {
+              const existing = prev[prompt.agentId] ?? {};
+              return {
+                ...prev,
+                [prompt.agentId]: { ...existing, modelVersion: cursor },
+              };
+            });
+          }
+          const result = applyAgentConfigSubmit({
+            currentIdx: agentConfigIdx,
+            totalPrompts: agentConfigPrompts.length,
+          });
+          setAgentConfigIdx(result.nextIdx);
+          setAgentsPhase(result.nextPhase);
           return;
         }
       }
@@ -2533,6 +2726,92 @@ export function SetupWizard({
         </Box>
       );
     }
+    // #434 — Model-pick phase. Loading / error / picker tri-state, mirrors
+    // the foreman-llm cloud-model phase (#399).
+    if (prompt.kind === "model-pick") {
+      const provider = agentConfigs[prompt.agentId]?.llmProvider ?? "";
+      const providerLabel =
+        provider === "openai"
+          ? "OpenAI"
+          : provider === "anthropic"
+            ? "Anthropic"
+            : provider === "gemini"
+              ? "Google Gemini"
+              : provider;
+      if (agentModelOptions === null) {
+        return (
+          <Box flexDirection="column" gap={1} paddingY={1}>
+            <WizardProgress
+              current={2}
+              total={4}
+              label="Agents"
+              phase={`${agent.name} ${progress} · fetching ${providerLabel} models`}
+            />
+            <Text color={theme.fg.muted}>Talking to {providerLabel}…</Text>
+            <Text color={theme.fg.muted}>
+              [s] skip (use the registry default) · [Esc] cancel
+            </Text>
+          </Box>
+        );
+      }
+      if (agentModelOptions.length === 0) {
+        return (
+          <Box flexDirection="column" gap={1} paddingY={1}>
+            <WizardProgress
+              current={2}
+              total={4}
+              label="Agents"
+              phase={`${agent.name} ${progress} · model discovery failed`}
+            />
+            <Text color={theme.accent.warning}>
+              ⚠ {agentModelError ?? `Could not fetch ${providerLabel} models.`}
+            </Text>
+            <Text color={theme.fg.muted}>
+              [Enter] / [s] skip to use the registry default · [Esc] go back
+            </Text>
+          </Box>
+        );
+      }
+      const cursor = agentModelDraft ?? agentModelOptions[0]?.id ?? null;
+      return (
+        <Box flexDirection="column" gap={1} paddingY={1}>
+          <WizardProgress
+            current={2}
+            total={4}
+            label="Agents"
+            phase={`${agent.name} ${progress} · pick a ${providerLabel} model`}
+          />
+          <Text color={theme.fg.muted}>
+            Which {providerLabel} model should {agent.name} use? Skipping
+            keeps the registry default.
+          </Text>
+          <Box flexDirection="column">
+            {agentModelOptions.slice(0, 12).map((model) => {
+              const isSelected = model.id === cursor;
+              return (
+                <Text
+                  key={model.id}
+                  color={isSelected ? theme.accent.primary : undefined}
+                  bold={isSelected}
+                >
+                  {isSelected ? "❯ ✓ " : "    "}
+                  {model.id}
+                </Text>
+              );
+            })}
+            {agentModelOptions.length > 12 ? (
+              <Text color={theme.fg.muted}>
+                {"    "}… and {agentModelOptions.length - 12} more (scroll up to
+                pick)
+              </Text>
+            ) : null}
+          </Box>
+          <Text color={theme.fg.muted}>
+            [↑↓] move · [Enter] confirm · [s] skip · [Esc] back
+          </Text>
+        </Box>
+      );
+    }
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <WizardProgress
@@ -3364,6 +3643,9 @@ export function countPolicyRules(policyPath: string): number {
 
 export interface AgentConfig {
   llmProvider?: string;
+  /** #434 — Specific model id chosen for this agent (e.g.
+   *  claude-opus-4-7). Optional; falls back to the variant default. */
+  modelVersion?: string;
   responsibilityNote?: string;
 }
 
@@ -3619,6 +3901,9 @@ export async function runInstallStep(
         // #389 — per-agent llmProvider so config_overrides' if_provider
         // resolves to the user's per-agent pick (not the global Step 1 set).
         llmProvider: agentConfigs[id]?.llmProvider,
+        // #434 — per-agent specific model id chosen in the wizard's
+        // model-pick phase; falls back to the variant default when omitted.
+        modelVersion: agentConfigs[id]?.modelVersion,
         secretStore: services.secretStore,
         // #426 — Skip channel-tied writes for agents that aren't the
         // primary for a messaging channel.
