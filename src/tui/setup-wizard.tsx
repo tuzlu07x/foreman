@@ -445,6 +445,37 @@ export function buildAgentConfigPromptList(
   return prompts;
 }
 
+/**
+ * #471 — For each agent currently in the per-agent-config queue, return
+ * the implicit llmProvider when (a) cfg.llmProvider isn't already set AND
+ * (b) the agent has exactly one compatible provider. Returns `{}` when
+ * there's nothing to seed — the caller can short-circuit the setState.
+ *
+ * Single-compat agents (Codex/openai-only, Claude Code/anthropic-only) used
+ * to register with `llm_provider: NULL` because the llm-choice picker
+ * skipped them and no other phase persisted the implicit choice. The
+ * resolver then dropped them out of required-setup, identity pushes
+ * silently failed, and the Done screen showed misleading "X of N agents".
+ */
+export function computeSingleCompatProviderSeeds(
+  prompts: AgentConfigPrompt[],
+  agentConfigs: Record<string, { llmProvider?: string } | undefined>,
+  agentCatalog: AgentEntry[],
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  const seen = new Set<string>();
+  for (const prompt of prompts) {
+    if (seen.has(prompt.agentId)) continue;
+    seen.add(prompt.agentId);
+    if (agentConfigs[prompt.agentId]?.llmProvider) continue;
+    const agentEntry = agentCatalog.find((a) => a.id === prompt.agentId);
+    const compat = agentEntry?.llm_compat ?? [];
+    if (compat.length !== 1) continue;
+    out[prompt.agentId] = compat[0]!;
+  }
+  return out;
+}
+
 export interface AgentConfigSubmitInput {
   currentIdx: number;
   totalPrompts: number;
@@ -1122,6 +1153,37 @@ export function SetupWizard({
       advance("chat-primary");
     }
   }, [currentStep, chatPrimaryChannelsNeeded.length]);
+
+  // #471 — Single-compat agents (Codex/openai-only, Claude Code/anthropic-only)
+  // never show the llm-choice picker (#355 only fires it for compat.length > 1),
+  // and the variant-pick auto-skip used compat[0] LOCALLY without persisting.
+  // Result: agent registered with llm_provider:null → resolver skips it
+  // → identity push fails → "1 of 2 agents pushed" + broken downstream auth.
+  // Seed llmProvider here, BEFORE any picker phase reads it, so every agent
+  // in the per-agent-config flow has a provider stamped from the start.
+  useEffect(() => {
+    if (currentStep !== "agents") return;
+    if (agentsPhase !== "per-agent-config") return;
+    const updates = computeSingleCompatProviderSeeds(
+      agentConfigPrompts,
+      agentConfigs,
+      agentCatalog,
+    );
+    if (Object.keys(updates).length === 0) return;
+    setAgentConfigs((prev) => {
+      const next = { ...prev };
+      for (const [id, llmProvider] of Object.entries(updates)) {
+        next[id] = { ...(next[id] ?? {}), llmProvider };
+      }
+      return next;
+    });
+  }, [
+    currentStep,
+    agentsPhase,
+    agentConfigPrompts,
+    agentConfigs,
+    agentCatalog,
+  ]);
 
   // #450 — Whenever we land on a variant-pick prompt, auto-skip when
   // the picked provider's mapping has only one variant. Also seeds
@@ -4066,6 +4128,30 @@ export function SetupWizard({
               : ""}
             .
           </Text>
+          {/* #472 — Name the agents whose identity push failed + the
+              underlying reason. Previously the count masked which agent
+              broke, so the user had no path forward when the Telegram
+              flow later said "Provider authentication failed". */}
+          {installSummary.identitySkipped.length > 0 ? (
+            <Box flexDirection="column" marginTop={1}>
+              <Text color={theme.accent.warning} bold>
+                ⚠ Identity push failed for these agents:
+              </Text>
+              {installSummary.identitySkipped.map((s) => (
+                <Box key={s.agentId} flexDirection="column" marginLeft={2}>
+                  <Text color={theme.accent.warning}>
+                    ✗ {s.agentId}
+                  </Text>
+                  <Text color={theme.fg.muted}>
+                    {"    "}{s.reason}
+                  </Text>
+                  <Text color={theme.fg.muted}>
+                    {"    "}retry: foreman doctor — diagnoses + suggests fix
+                  </Text>
+                </Box>
+              ))}
+            </Box>
+          ) : null}
         </Box>
       )}
       {installSummary && installSummary.registered.length > 0 && (
@@ -4467,12 +4553,18 @@ export async function runInstallStep(
     // agent's own env/config files so it launches without a separate setup
     // step. Best-effort: any failure is a warning, not an install abort.
     try {
+      // #471 — Mirror the register-time fallback so projection sees the
+      // resolved provider for single-compat agents.
+      const projCompat = entry.llm_compat ?? [];
+      const projProvider =
+        agentConfigs[id]?.llmProvider ??
+        (projCompat.length === 1 ? projCompat[0] : undefined);
       const projection = projectSecretsForAgent(entry, {
         providersSelected: projectionCtx.providersSelected,
         servicesSelected: projectionCtx.servicesSelected,
         // #389 — per-agent llmProvider so config_overrides' if_provider
         // resolves to the user's per-agent pick (not the global Step 1 set).
-        llmProvider: agentConfigs[id]?.llmProvider,
+        llmProvider: projProvider,
         // #450 — per-agent variant override (e.g. Codex OAuth instead
         // of OpenRouter for Hermes/openai).
         providerVariant: agentConfigs[id]?.providerVariant,
@@ -4578,18 +4670,25 @@ export async function runInstallStep(
     }
     try {
       const cfg = agentConfigs[id];
+      // #471 — Belt-and-braces fallback: if cfg.llmProvider somehow leaked
+      // through unset (e.g. a wizard phase regression) AND the agent has
+      // exactly one compatible provider, pick that one. Prevents the silent
+      // null-provider state that caused the round-3 "1 of 2 agents" bug.
+      const compat = entry.llm_compat ?? [];
+      const resolvedProvider =
+        cfg?.llmProvider ?? (compat.length === 1 ? compat[0] : undefined);
       registerAgent({
         agentId: id,
         entry,
         registry: services.registry,
-        llmProvider: cfg?.llmProvider,
+        llmProvider: resolvedProvider,
         providerVariant: cfg?.providerVariant,
         modelVersion: cfg?.modelVersion,
         responsibilityNote: cfg?.responsibilityNote,
       });
       summary.registered.push(id);
       log(`  ✓ registered as "${id}"`);
-      if (cfg?.llmProvider) log(`    LLM provider: ${cfg.llmProvider}`);
+      if (resolvedProvider) log(`    LLM provider: ${resolvedProvider}`);
       if (cfg?.providerVariant) log(`    Provider variant: ${cfg.providerVariant}`);
       if (cfg?.modelVersion) log(`    Model: ${cfg.modelVersion}`);
       if (cfg?.responsibilityNote)
