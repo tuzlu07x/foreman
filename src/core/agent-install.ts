@@ -56,6 +56,12 @@ export interface InstallDetection {
   /** Formula name to feed `brew uninstall` when source=brew-managed.
    *  Defaults to the binary basename. */
   formula?: string;
+  /** #458 — Smoke-test caught a binary on disk that exists but can't
+   *  actually run (e.g. Hermes shim whose venv was wiped). `found` is
+   *  `false` so the wizard reinstalls, but we keep the path + reason so
+   *  the log can say "found broken binary at <path>; reinstalling". */
+  brokenAt?: string;
+  brokenReason?: string;
 }
 
 // Brew puts its binaries in well-known prefixes. We treat these as
@@ -71,15 +77,40 @@ export function isBrewManagedPath(binPath: string): boolean {
   return BREW_BIN_PREFIXES.some((prefix) => binPath.startsWith(prefix));
 }
 
+export interface DetectInstallOptions {
+  /** #458 — Run a short subprocess against the discovered binary to make
+   *  sure it actually executes (e.g. Hermes' shim points at a venv that
+   *  no longer exists after a wipe). When the smoke-test fails, the
+   *  detection returns `found: false` with `brokenAt` set so the install
+   *  loop reinstalls instead of skipping. Default OFF — only callers
+   *  that route into an install/reinstall decision should enable it.
+   *  Uninstall flows want the disk path either way. */
+  smokeTest?: boolean;
+  /** Smoke-test timeout in ms (default 3000). */
+  smokeTestTimeoutMs?: number;
+}
+
 // Synchronously detects whether the agent is already on the system. We deliberately
 // keep this dependency-free: just walk PATH for the binary name (npm package basename),
 // then fall back to checking npm's global prefix.
 export function detectInstall(
   install: InstallSpec,
   env: NodeJS.ProcessEnv = process.env,
+  options: DetectInstallOptions = {},
 ): InstallDetection {
   const binCandidates = candidateBinaries(install);
   if (binCandidates.length === 0) return { found: false };
+
+  const wrap = (det: InstallDetection): InstallDetection => {
+    if (!options.smokeTest || !det.found || !det.path) return det;
+    const health = smokeTestBinary(det.path, options.smokeTestTimeoutMs);
+    if (health.ok) return det;
+    return {
+      found: false,
+      brokenAt: det.path,
+      brokenReason: health.reason,
+    };
+  };
 
   for (const bin of binCandidates) {
     const onPath = whichOnPath(bin, env);
@@ -90,14 +121,14 @@ export function detectInstall(
       // defaults to the binary basename (matches in 99% of cases — OpenClaw,
       // ZeroClaw, etc).
       if (isBrewManagedPath(onPath)) {
-        return {
+        return wrap({
           found: true,
           path: onPath,
           source: "brew-managed",
           formula: bin,
-        };
+        });
       }
-      return { found: true, path: onPath, source: "PATH" };
+      return wrap({ found: true, path: onPath, source: "PATH" });
     }
   }
 
@@ -107,7 +138,7 @@ export function detectInstall(
       for (const bin of binCandidates) {
         const candidate = `${npmPrefix}/bin/${bin}`;
         if (existsSync(candidate)) {
-          return { found: true, path: candidate, source: "npm-global" };
+          return wrap({ found: true, path: candidate, source: "npm-global" });
         }
       }
     }
@@ -128,12 +159,83 @@ export function detectInstall(
     for (const dir of userDirs) {
       const candidate = `${dir}/${bin}`;
       if (existsSync(candidate)) {
-        return { found: true, path: candidate, source: "user-dirs" };
+        return wrap({ found: true, path: candidate, source: "user-dirs" });
       }
     }
   }
 
   return { found: false };
+}
+
+/**
+ * #458 — Smoke-test a discovered binary by running it with `--version` and
+ * a short timeout. Catches broken shims (Hermes' bash wrapper exec'ing
+ * into a missing venv → exit 127), permission-stripped binaries, and
+ * hung processes. Cheap (~50ms) on healthy installs.
+ *
+ * Heuristic for "broken":
+ *   - Subprocess timed out
+ *   - Exit code != 0 AND stderr/stdout mentions the classic shim-rot signals
+ *     ("No such file or directory", "command not found", "Exec format error",
+ *     "Permission denied")
+ *   - Exit code != 0 AND combined output is empty (something is wrong but
+ *     the binary refused to even greet us)
+ * Everything else (incl. exit != 0 with legible help-style output) is
+ * treated as healthy — many CLIs don't accept --version and that's fine.
+ */
+export function smokeTestBinary(
+  binaryPath: string,
+  timeoutMs = 3000,
+): { ok: true } | { ok: false; reason: string } {
+  try {
+    execFileSync(binaryPath, ["--version"], {
+      timeout: timeoutMs,
+      stdio: "pipe",
+      encoding: "utf8",
+    });
+    return { ok: true };
+  } catch (raw) {
+    const err = raw as {
+      status?: number | null;
+      signal?: NodeJS.Signals | null;
+      stderr?: string | Buffer;
+      stdout?: string | Buffer;
+      code?: string;
+    };
+    if (err.signal === "SIGTERM" || err.code === "ETIMEDOUT") {
+      return {
+        ok: false,
+        reason: `binary at ${binaryPath} did not respond within ${timeoutMs}ms (hung or wedged)`,
+      };
+    }
+    const stderr =
+      typeof err.stderr === "string"
+        ? err.stderr
+        : (err.stderr ?? Buffer.alloc(0)).toString("utf8");
+    const stdout =
+      typeof err.stdout === "string"
+        ? err.stdout
+        : (err.stdout ?? Buffer.alloc(0)).toString("utf8");
+    const combined = `${stderr}\n${stdout}`;
+    if (
+      /no such file or directory|command not found|exec format error|permission denied/i.test(
+        combined,
+      )
+    ) {
+      const snippet = combined.trim().split("\n")[0]?.slice(0, 200) ?? "";
+      return {
+        ok: false,
+        reason: `binary at ${binaryPath} appears broken: ${snippet}`,
+      };
+    }
+    if (combined.trim().length === 0 && (err.status ?? 0) !== 0) {
+      return {
+        ok: false,
+        reason: `binary at ${binaryPath} exited ${err.status} with no output`,
+      };
+    }
+    return { ok: true };
+  }
 }
 
 export interface InstallResult {
