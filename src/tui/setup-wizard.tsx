@@ -34,10 +34,12 @@ import {
   preferredUninstallCommand,
   runInstall,
   runPostConfigCommands,
+  runShell,
   runUninstall,
 } from "../core/agent-install.js";
 import { buildMcpSnippet } from "../core/agent-mcp-snippet.js";
 import {
+  autoRegisterMcp,
   buildMcpRegisterHint,
   writeMcpWrapperScript,
 } from "../core/agent-mcp-register-hint.js";
@@ -4346,29 +4348,52 @@ export async function runInstallStep(
       if (cfg?.responsibilityNote)
         log(`    Responsibility: ${cfg.responsibilityNote}`);
       // Some agents (Hermes) keep their own MCP server registry CLI-side
-      // and don't read the YAML block we injected. Surface the extra step
-      // here so the user sees it in the right context (#298).
+      // and don't read the YAML block we injected. #460 — auto-runs the
+      // CLI command via `printf 'y\n' | <cmd>` so the user doesn't have
+      // to do it manually. Falls back to the manual hint when the run
+      // fails (binary missing, prompt won't pipe, etc).
       const registerHint = buildMcpRegisterHint(id, entry);
       if (registerHint) {
-        log(`  ℹ ${entry.name} needs one extra step to route through Foreman:`);
-        if (registerHint.note) log(`     ${registerHint.note}`);
         // #346 — write the wrapper script for agents (Hermes) that can't
-        // accept multi-token --args. The command above already points at
-        // wrapper.path via {wrapper_path} substitution.
+        // accept multi-token --args.
+        let wrapperOk = true;
         if (registerHint.wrapper) {
           try {
             const wrote = writeMcpWrapperScript(registerHint.wrapper);
             log(
-              `     ${wrote ? "✓ wrote" : "✓ wrapper present"} ${registerHint.wrapper.path}`,
+              `  ${wrote ? "✓ wrote" : "✓ wrapper present"} ${registerHint.wrapper.path}`,
             );
           } catch (err) {
+            wrapperOk = false;
             const reason = err instanceof Error ? err.message : String(err);
-            log(`     ⚠ wrapper write failed: ${reason}`);
+            log(`  ⚠ wrapper write failed: ${reason}`);
           }
         }
-        log(`     $ ${registerHint.command}`);
-        if (registerHint.verify) {
-          log(`     verify with: ${registerHint.verify}`);
+        // Only attempt auto-run when the wrapper is in place (or no
+        // wrapper required).
+        if (wrapperOk) {
+          const autoOutcome = await autoRegisterMcp(registerHint.command, runShell);
+          if (autoOutcome.ok) {
+            log(`  ✓ registered Foreman MCP with ${entry.name}`);
+            if (autoOutcome.firstOutputLine) {
+              log(`    ${autoOutcome.firstOutputLine}`);
+            }
+            if (registerHint.verify) {
+              log(`    verify: ${registerHint.verify}`);
+            }
+          } else {
+            log(`  ⚠ auto-register failed (${autoOutcome.error}) — run manually:`);
+            if (registerHint.note) log(`    ${registerHint.note}`);
+            log(`    $ ${registerHint.command}`);
+            if (registerHint.verify) {
+              log(`    verify with: ${registerHint.verify}`);
+            }
+          }
+        } else {
+          // Wrapper write failed — still print the manual fallback.
+          log(`  ℹ ${entry.name} needs one extra step to route through Foreman:`);
+          if (registerHint.note) log(`     ${registerHint.note}`);
+          log(`     $ ${registerHint.command}`);
         }
       }
       if (entry.identity_path) {
