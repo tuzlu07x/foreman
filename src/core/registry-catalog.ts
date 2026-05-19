@@ -416,8 +416,13 @@ export const AgentEntrySchema = z
              *  array on every run (deterministic given the same input). */
             owner_allowlist: z
               .object({
-                /** Dot-path to the array field. */
-                key: z.string().min(1),
+                /** Dot-path(s) to write the allowlist array to. Accepts a
+                 *  single key or an array — used when the same allowlist
+                 *  needs to populate multiple slots (#427 — OpenClaw
+                 *  needs both `commands.ownerAllowFrom` AND
+                 *  `channels.telegram.allowFrom` so its
+                 *  `dmPolicy: "allowlist"` validation passes). */
+                key: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]),
                 /** Secret to read the raw chat id from. */
                 from_secret: z.string().min(1),
                 /** Template applied to the secret value. `{value}` is

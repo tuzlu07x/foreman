@@ -328,6 +328,12 @@
               "set": {
                 "agents.defaults.model.primary": "google/gemini-2.0-flash"
               }
+            },
+            {
+              "if_service": "telegram",
+              "set": {
+                "channels.telegram.dmPolicy": "allowlist"
+              }
             }
           ]
         },
@@ -340,7 +346,10 @@
             "encoding": "hex"
           },
           "owner_allowlist": {
-            "key": "commands.ownerAllowFrom",
+            "key": [
+              "commands.ownerAllowFrom",
+              "channels.telegram.allowFrom"
+            ],
             "from_secret": "telegram-chat-id",
             "item_template": "telegram:{value}",
             "if_service": "telegram"
