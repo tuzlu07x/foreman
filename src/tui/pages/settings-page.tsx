@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { useEffect, useState } from "react";
 import { Box, Text } from "ink";
 import {
   featureSplit,
@@ -7,6 +8,8 @@ import {
   type FeatureSplit,
 } from "../../core/llm/budget.js";
 import { loadLlmConfig, type LlmConfig } from "../../core/llm/config.js";
+import { ChatPrimaryService } from "../../core/chat-primary.js";
+import { bus } from "../../core/event-bus.js";
 import { checkProviderMapping } from "../../core/doctor.js";
 import { getDb } from "../../db/client.js";
 import { getForemanPaths } from "../../utils/config.js";
@@ -104,6 +107,8 @@ export function SettingsPage({
       {llmSnapshot ? <LlmTile snapshot={llmSnapshot} /> : null}
 
       <ProviderMappingTile />
+
+      <ChatPrimaryTile />
 
       {notice && (
         <Box marginTop={1}>
@@ -292,6 +297,66 @@ function ProviderMappingTile(): JSX.Element | null {
         <Text color={theme.fg.muted}>
           Switch via CLI:{" "}
           <Text bold>foreman provider switch &lt;agent&gt; &lt;provider&gt;</Text>
+        </Text>
+      </Box>
+    </Box>
+  );
+}
+
+// =============================================================================
+// Primary chat agent tile (#426)
+// =============================================================================
+//
+// Read-only view of which agent owns each messaging channel. Subscribes
+// to `chat-primary:changed` so the tile refreshes the instant the user
+// switches a primary via CLI in another terminal.
+
+const CHAT_CHANNELS = ["telegram", "discord", "slack"];
+
+function ChatPrimaryTile(): JSX.Element | null {
+  const [rows, setRows] = useState<{ channel: string; agentId: string }[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    const read = (): void => {
+      try {
+        const svc = new ChatPrimaryService(getDb());
+        setRows(
+          svc.list().map((r) => ({ channel: r.channel, agentId: r.agentId })),
+        );
+      } catch {
+        setRows([]);
+      } finally {
+        setLoaded(true);
+      }
+    };
+    read();
+    const off = bus.on("chat-primary:changed", read);
+    return off;
+  }, []);
+
+  if (!loaded) return null;
+
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text bold>Primary chat agent</Text>
+      {CHAT_CHANNELS.map((ch) => {
+        const row = rows.find((r) => r.channel === ch);
+        return (
+          <Box key={ch} marginLeft={2}>
+            <Text color={theme.fg.muted}>{ch.padEnd(9)}</Text>
+            {row ? (
+              <Text color={theme.accent.success}>● {row.agentId}</Text>
+            ) : (
+              <Text color={theme.fg.muted}>○ (unset — all agents receive secrets)</Text>
+            )}
+          </Box>
+        );
+      })}
+      <Box marginLeft={2} marginTop={1}>
+        <Text color={theme.fg.muted}>
+          Switch via CLI:{" "}
+          <Text bold>foreman chat set-primary &lt;channel&gt; &lt;agent&gt;</Text>
         </Text>
       </Box>
     </Box>

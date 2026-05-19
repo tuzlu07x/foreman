@@ -81,6 +81,7 @@ import {
   resolveRequiredSetup,
   type RequiredSetupResolution,
 } from "../core/required-setup.js";
+import { ChatPrimaryService } from "../core/chat-primary.js";
 import { openInBrowser } from "../utils/browser-open.js";
 import {
   canRunModel,
@@ -171,6 +172,11 @@ export interface WizardServices {
   db: ForemanDb;
   secretStore: SecretStore;
   registry: RegistryService;
+  /** #426 — Primary chat agent per messaging channel. Wizard's
+   *  chat-primary step writes here; the projector reads it via the
+   *  ProjectionContext. Wizard caller is responsible for instantiating
+   *  + passing this; defaults to a no-op service when omitted (legacy). */
+  chatPrimary?: ChatPrimaryService;
   policyPath: string;
   /** Path to llm.yaml — wizard writes here after providers step (#289). */
   llmConfigPath: string;
@@ -940,6 +946,45 @@ export function SetupWizard({
   const [servicesSkipped, setServicesSkipped] = useState<string[]>([]);
   const [servicesWarning, setServicesWarning] = useState<string | null>(null);
 
+  // #426 — Primary chat agent picker state. `chatPrimaryChannelsNeeded`
+  // lists messaging channels (telegram/discord/slack) where 2+ selected
+  // chat_capable agents both support the same channel — those are the
+  // collisions the wizard must resolve. Empty → step auto-skipped.
+  const chatPrimaryChannelsNeeded = useMemo<
+    Array<{ channel: string; candidates: AgentEntry[] }>
+  >(() => {
+    const messagingChannels = ["telegram", "discord", "slack"];
+    const out: Array<{ channel: string; candidates: AgentEntry[] }> = [];
+    for (const ch of messagingChannels) {
+      if (!servicesSelected.includes(ch)) continue;
+      const cands = agentCatalog.filter(
+        (a) =>
+          agentsSelected.includes(a.id) &&
+          a.chat_capable === true &&
+          (a.optional_services ?? []).includes(ch),
+      );
+      if (cands.length >= 2) out.push({ channel: ch, candidates: cands });
+    }
+    return out;
+  }, [servicesSelected, agentsSelected, agentCatalog]);
+  const [chatPrimaryChannelIdx, setChatPrimaryChannelIdx] = useState(0);
+  const [chatPrimaryCursor, setChatPrimaryCursor] = useState(0);
+  const [chatPrimaryDrafts, setChatPrimaryDrafts] = useState<
+    Record<string, string>
+  >({});
+
+  // Auto-advance past chat-primary when there's no collision to resolve
+  // (zero or one chat_capable agent, or no messaging channel). Without
+  // this, the wizard would land on a blank picker.
+  useEffect(() => {
+    if (
+      currentStep === "chat-primary" &&
+      chatPrimaryChannelsNeeded.length === 0
+    ) {
+      advance("chat-primary");
+    }
+  }, [currentStep, chatPrimaryChannelsNeeded.length]);
+
   const [installLog, setInstallLog] = useState<string[]>([]);
   const [installRunning, setInstallRunning] = useState(false);
   const [installSummary, setInstallSummary] =
@@ -1361,7 +1406,17 @@ export function SetupWizard({
       }
       // ---- picker phase ----
       if (key.escape) {
-        // Back to services summary so user can change picks.
+        // Step back. If chat-primary had a collision to resolve, that's
+        // the single step before us; otherwise jump past it to services
+        // (chat-primary's auto-advance effect re-fires immediately).
+        if (chatPrimaryChannelsNeeded.length > 0) {
+          uncomplete("chat-primary");
+          setChatPrimaryChannelIdx(
+            Math.max(0, chatPrimaryChannelsNeeded.length - 1),
+          );
+          setChatPrimaryCursor(0);
+          return;
+        }
         uncomplete("services");
         setServicesPhase("summary");
         return;
@@ -1428,6 +1483,55 @@ export function SetupWizard({
         if (isRequiredSetupComplete(requiredSetupResolution)) {
           advance("required-setup");
         }
+        return;
+      }
+      return;
+    }
+
+    // #426 — Primary chat agent picker.
+    if (currentStep === "chat-primary") {
+      const ch = chatPrimaryChannelsNeeded[chatPrimaryChannelIdx];
+      if (!ch) return;
+      if (key.upArrow) {
+        setChatPrimaryCursor(
+          (c) => (c - 1 + ch.candidates.length) % ch.candidates.length,
+        );
+        return;
+      }
+      if (key.downArrow) {
+        setChatPrimaryCursor((c) => (c + 1) % ch.candidates.length);
+        return;
+      }
+      if (key.return || input === " ") {
+        const picked = ch.candidates[chatPrimaryCursor];
+        if (!picked) return;
+        const nextDrafts = {
+          ...chatPrimaryDrafts,
+          [ch.channel]: picked.id,
+        };
+        setChatPrimaryDrafts(nextDrafts);
+        if (chatPrimaryChannelIdx + 1 < chatPrimaryChannelsNeeded.length) {
+          setChatPrimaryChannelIdx((i) => i + 1);
+          setChatPrimaryCursor(0);
+          return;
+        }
+        // Last channel — persist all picks and advance.
+        if (services.chatPrimary) {
+          for (const [channel, agentId] of Object.entries(nextDrafts)) {
+            services.chatPrimary.set(channel, agentId);
+          }
+        }
+        advance("chat-primary");
+        return;
+      }
+      if (key.escape) {
+        if (chatPrimaryChannelIdx > 0) {
+          setChatPrimaryChannelIdx((i) => i - 1);
+          setChatPrimaryCursor(0);
+          return;
+        }
+        uncomplete("services");
+        setServicesPhase("summary");
         return;
       }
       return;
@@ -2692,6 +2796,57 @@ export function SetupWizard({
     );
   }
 
+  // ---------------- Primary chat agent (#426) ----------------
+  // Only renders when 2+ chat_capable selected agents share a messaging
+  // channel; otherwise the useEffect above advance()s past this step.
+  if (currentStep === "chat-primary") {
+    const ch = chatPrimaryChannelsNeeded[chatPrimaryChannelIdx];
+    if (!ch) {
+      return <Text color={theme.fg.muted}>…</Text>;
+    }
+    const channelLabel =
+      ch.channel.charAt(0).toUpperCase() + ch.channel.slice(1);
+    return (
+      <Box flexDirection="column" gap={1} paddingY={1}>
+        <WizardProgress
+          current={4}
+          total={5}
+          label={`Primary ${channelLabel} agent`}
+          phase={`${chatPrimaryChannelIdx + 1} of ${chatPrimaryChannelsNeeded.length}`}
+        />
+        <Text color={theme.fg.muted}>
+          {ch.candidates.length} of your selected agents can talk on{" "}
+          {channelLabel}. Only one can hold the bot session at a time —
+          pick which one is your default. The others stay installed but
+          won't receive {channelLabel} secrets until you switch them in
+          (Settings → Chat Primary, or `foreman chat set-primary`).
+        </Text>
+        <Box flexDirection="column">
+          {ch.candidates.map((agent, idx) => {
+            const focused = idx === chatPrimaryCursor;
+            return (
+              <Box key={agent.id} flexDirection="row">
+                <Text
+                  color={focused ? theme.accent.primary : undefined}
+                  bold={focused}
+                >
+                  {focused ? "❯ " : "  "}
+                </Text>
+                <Text bold={focused}>{agent.name}</Text>
+                <Text color={theme.fg.muted}>
+                  {"  "}·  {agent.id}
+                </Text>
+              </Box>
+            );
+          })}
+        </Box>
+        <Text color={theme.fg.muted}>
+          [↑↓] move · [Enter] confirm · [Esc] back
+        </Text>
+      </Box>
+    );
+  }
+
   // ---------------- Required setup (#408 / #411 Phase 3) ----------------
   if (currentStep === "required-setup") {
     const res = requiredSetupResolution;
@@ -3396,6 +3551,9 @@ export async function runInstallStep(
         // resolves to the user's per-agent pick (not the global Step 1 set).
         llmProvider: agentConfigs[id]?.llmProvider,
         secretStore: services.secretStore,
+        // #426 — Skip channel-tied writes for agents that aren't the
+        // primary for a messaging channel.
+        chatPrimary: services.chatPrimary,
       });
       for (const f of projection.files) {
         const tag = f.replacedStale ? "⟳ rotated" : f.created ? "✓ wrote" : "✓ updated";

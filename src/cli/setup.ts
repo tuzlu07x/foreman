@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { render } from "ink";
 import React from "react";
+import { ChatPrimaryService } from "../core/chat-primary.js";
 import { bus } from "../core/event-bus.js";
 import {
   loadActiveRegistry,
@@ -77,6 +78,7 @@ export const setupCommand = new Command("setup")
     const db = getDb();
     const registry = new RegistryService(db, bus);
     const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
+    const chatPrimary = new ChatPrimaryService(db, { bus });
 
     const instance = render(
       React.createElement(SetupWizard, {
@@ -85,6 +87,7 @@ export const setupCommand = new Command("setup")
           db,
           secretStore,
           registry,
+          chatPrimary,
           policyPath: paths.policyPath,
           llmConfigPath: paths.llmConfigPath,
           notifyConfigPath: paths.notifyConfigPath,
