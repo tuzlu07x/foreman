@@ -82,13 +82,14 @@ describe("ForemanCommandRouter (#431)", () => {
   });
 
   describe("help", () => {
-    it("lists every registered verb (help / status / stop / llm)", async () => {
+    it("lists every registered verb (help / status / stop / report / llm)", async () => {
       const result = await router.dispatch("help", [], ctx);
       expect(result.ok).toBe(true);
       // Built-ins must all appear.
       expect(result.text).toContain("help");
       expect(result.text).toContain("status");
       expect(result.text).toContain("stop");
+      expect(result.text).toContain("report");
       expect(result.text).toContain("llm");
     });
 
@@ -244,6 +245,170 @@ describe("ForemanCommandRouter (#431)", () => {
       } finally {
         killSpy.mockRestore();
       }
+    });
+  });
+
+  // #432 — orchestrator chat dispatch paths. The router itself doesn't
+  // call the LLM — it delegates to ctx.orchestratorChat. These tests
+  // wire a stub chat and assert routing behavior + fallback messages.
+  describe("orchestrator chat dispatch", () => {
+    function makeStubChat(args: {
+      enabled?: boolean;
+      outcome?: Parameters<
+        NonNullable<ForemanCommandContext["orchestratorChat"]>["answer"]
+      > extends []
+        ? never
+        : Awaited<
+            ReturnType<
+              NonNullable<ForemanCommandContext["orchestratorChat"]>["answer"]
+            >
+          >;
+    } = {}): {
+      isEnabled: () => boolean;
+      answer: ReturnType<typeof vi.fn>;
+    } {
+      return {
+        isEnabled: () => args.enabled ?? true,
+        answer: vi.fn().mockResolvedValue(
+          args.outcome ?? {
+            status: "ok",
+            text: "Stub LLM response",
+            costUsd: 0.0005,
+            durationMs: 120,
+          },
+        ),
+      };
+    }
+
+    it("/foreman report me invokes chat.answer with default question", async () => {
+      const chat = makeStubChat();
+      const result = await router.dispatch("report", ["me"], {
+        ...ctx,
+        orchestratorChat: chat,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.text).toBe("Stub LLM response");
+      const call = chat.answer.mock.calls[0]?.[0];
+      expect(call.question.toLowerCase()).toContain("agents");
+    });
+
+    it("/foreman report (no args) uses default question too", async () => {
+      const chat = makeStubChat();
+      await router.dispatch("report", [], {
+        ...ctx,
+        orchestratorChat: chat,
+      });
+      const call = chat.answer.mock.calls[0]?.[0];
+      expect(typeof call.question).toBe("string");
+      expect(call.question.length).toBeGreaterThan(0);
+    });
+
+    it("/foreman report <free text> sends the text verbatim", async () => {
+      const chat = makeStubChat();
+      await router.dispatch(
+        "report",
+        ["how", "did", "hermes", "do", "today?"],
+        { ...ctx, orchestratorChat: chat },
+      );
+      const call = chat.answer.mock.calls[0]?.[0];
+      expect(call.question).toBe("how did hermes do today?");
+    });
+
+    it("/foreman report Turkish hint switches the default question language", async () => {
+      const chat = makeStubChat();
+      await router.dispatch("report", ["ne", "yapıyorsunuz"], {
+        ...ctx,
+        orchestratorChat: chat,
+      });
+      const call = chat.answer.mock.calls[0]?.[0];
+      // Should pass through the user's input as-is, not the default.
+      expect(call.question).toBe("ne yapıyorsunuz");
+    });
+
+    it("/foreman report when chat is disabled returns NOT_AVAILABLE", async () => {
+      const chat = makeStubChat({ enabled: false });
+      const result = await router.dispatch("report", ["me"], {
+        ...ctx,
+        orchestratorChat: chat,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe("NOT_AVAILABLE");
+      expect(chat.answer).not.toHaveBeenCalled();
+    });
+
+    it("/foreman report without orchestratorChat in ctx returns NOT_AVAILABLE", async () => {
+      const result = await router.dispatch("report", ["me"], ctx);
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe("NOT_AVAILABLE");
+    });
+
+    it("unknown verb falls through to LLM when orchestratorChat is enabled", async () => {
+      const chat = makeStubChat();
+      const result = await router.dispatch(
+        "what-is-happening-with-everything",
+        ["right", "now"],
+        { ...ctx, orchestratorChat: chat },
+      );
+      expect(result.ok).toBe(true);
+      expect(chat.answer).toHaveBeenCalledOnce();
+      const call = chat.answer.mock.calls[0]?.[0];
+      expect(call.question).toBe(
+        "what-is-happening-with-everything right now",
+      );
+    });
+
+    it("unknown verb returns UNKNOWN_COMMAND when chat is disabled", async () => {
+      const chat = makeStubChat({ enabled: false });
+      const result = await router.dispatch("nonsense-verb", [], {
+        ...ctx,
+        orchestratorChat: chat,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe("UNKNOWN_COMMAND");
+      expect(chat.answer).not.toHaveBeenCalled();
+    });
+
+    it("focus-agent dispatch: first token matching a registered agent sets focusAgentId", async () => {
+      registry.register({
+        id: "openclaw",
+        displayName: "OpenClaw",
+        transport: "stdio",
+      });
+      const chat = makeStubChat();
+      await router.dispatch("openclaw", ["ne", "yapıyor"], {
+        ...ctx,
+        orchestratorChat: chat,
+      });
+      const call = chat.answer.mock.calls[0]?.[0];
+      expect(call.focusAgentId).toBe("openclaw");
+      expect(call.question).toBe("openclaw ne yapıyor");
+    });
+
+    it("budget_exceeded outcome surfaces as NOT_AVAILABLE with spend / cap", async () => {
+      const chat = makeStubChat({
+        outcome: { status: "budget_exceeded", spentUsd: 6.2, capUsd: 5 },
+      });
+      const result = await router.dispatch("report", ["me"], {
+        ...ctx,
+        orchestratorChat: chat,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe("NOT_AVAILABLE");
+      expect(result.text).toContain("$6.20");
+      expect(result.text).toContain("$5.00");
+    });
+
+    it("failed outcome surfaces the reason", async () => {
+      const chat = makeStubChat({
+        outcome: { status: "failed", reason: "network timeout" },
+      });
+      const result = await router.dispatch("report", ["me"], {
+        ...ctx,
+        orchestratorChat: chat,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe("NOT_AVAILABLE");
+      expect(result.text).toContain("network timeout");
     });
   });
 });

@@ -25,6 +25,11 @@ const FeaturesSchema = z
     verification: z.boolean().default(false),
     smart_report: z.boolean().default(false),
     policy_suggestions: z.boolean().default(false),
+    /** #432 — Orchestrator-chat feature. When on, `/foreman report me`,
+     *  `/foreman <agent> ne yapıyor`, and free-form `/foreman <text>`
+     *  go through Foreman's LLM to produce natural-language replies.
+     *  Off by default so users opt in to the budget consumption. */
+    orchestrator_chat: z.boolean().default(false),
   })
   .strict()
 
@@ -66,6 +71,7 @@ export const LlmConfigSchema = z
       verification: false,
       smart_report: false,
       policy_suggestions: false,
+      orchestrator_chat: false,
     }),
     budget: BudgetSchema.default({
       monthly_cap_usd: 5,
