@@ -120,6 +120,14 @@ export const AgentEntrySchema = z
      *  projected. Optional; defaults to false (= headless / code-only
      *  agent like Codex). */
     chat_capable: z.boolean().optional(),
+    /** #433 — Directory the agent watches for inbound directives from
+     *  Foreman. When set, `/foreman write <agent> "msg"` writes a
+     *  file at `<inbound_dir>/<ulid>.txt` in addition to the
+     *  user-facing Telegram post. Agents that don't watch this dir
+     *  (Hermes / OpenClaw today) only get the Telegram path — the
+     *  file write is future-proofing for agents that opt in later.
+     *  Path supports `~` expansion. */
+    inbound_dir: z.string().min(1).optional(),
     /** MCP config block shape (#385). `flat` writes `{<mcp_servers_key>:
      *  {foreman: ...}}` (Claude Code / Hermes / Codex). `nested` writes
      *  `{mcp: {enabled: true, servers: {foreman: ...}}}` (OpenClaw).
