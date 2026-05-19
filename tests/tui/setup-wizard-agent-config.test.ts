@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyAgentConfigSubmit,
   buildAgentConfigPromptList,
+  classifyModelDiscoveryError,
   computeSingleCompatProviderSeeds,
 } from "../../src/tui/setup-wizard.js";
 import type { AgentEntry } from "../../src/core/registry-catalog.js";
@@ -403,5 +404,52 @@ describe("computeSingleCompatProviderSeeds (#471)", () => {
       catalog,
     );
     expect(result).toEqual({});
+  });
+});
+
+// #audit-finding-6 — Map raw HTTP errors from model discovery into
+// actionable hints. Auth failures send the user back to Step 1;
+// transient errors invite a retry; offline says "check connection".
+describe("classifyModelDiscoveryError (#audit-finding-6)", () => {
+  it("maps 401 to a 'go back to Step 1' hint", () => {
+    const result = classifyModelDiscoveryError(
+      "HTTP 401 from https://api.openai.com/v1/models: invalid key",
+      "openai",
+    );
+    expect(result).toMatch(/openai rejected the API key/);
+    expect(result).toMatch(/Step 1/);
+    expect(result).toMatch(/rotate openai-key/);
+  });
+
+  it("maps 403 the same way as 401 (both are auth failures)", () => {
+    const result = classifyModelDiscoveryError(
+      "HTTP 403 from somewhere",
+      "anthropic",
+    );
+    expect(result).toMatch(/anthropic rejected the API key/);
+    expect(result).toMatch(/HTTP 403/);
+  });
+
+  it("maps 429 to a rate-limit hint", () => {
+    const result = classifyModelDiscoveryError("HTTP 429 from x", "gemini");
+    expect(result).toMatch(/rate-limiting/);
+    expect(result).toMatch(/Wait a minute/);
+  });
+
+  it("maps 5xx to a transient-error retry hint", () => {
+    const result = classifyModelDiscoveryError("HTTP 503 from x", "openai");
+    expect(result).toMatch(/server error/);
+    expect(result).toMatch(/transient/);
+  });
+
+  it("maps network/timeout phrases to a connectivity hint", () => {
+    const result = classifyModelDiscoveryError("fetch failed", "openai");
+    expect(result).toMatch(/Couldn't reach openai/);
+    expect(result).toMatch(/internet connection/);
+  });
+
+  it("passes through unknown messages unchanged", () => {
+    const raw = "some bespoke error we didn't classify";
+    expect(classifyModelDiscoveryError(raw, "openai")).toBe(raw);
   });
 });
