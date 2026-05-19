@@ -28,6 +28,11 @@ export interface ClassifiedInstallLog {
   /** Count of raw upstream lines collapsed into the spinner status —
    *  surfaced as `(N hidden — press [l] later for full log)`. */
   verboseLineCount: number;
+  /** #audit-finding-12 — Name of the agent currently being installed,
+   *  extracted from the latest `▸ <Name>` headline. `null` until the
+   *  install loop emits the first agent banner. Shown next to the
+   *  spinner so the user knows the wizard hasn't hung. */
+  currentAgentName: string | null;
 }
 
 const HEADLINE_PREFIXES = ["▸", "✓", "✗", "⚠", "✦", "▰", "◦", "⟳"];
@@ -36,18 +41,33 @@ export function classifyInstallLog(lines: string[]): ClassifiedInstallLog {
   const headlines: string[] = [];
   let lastMilestone: string | null = null;
   let verboseLineCount = 0;
+  let currentAgentName: string | null = null;
   for (const line of lines) {
     const trimmed = line.trimStart();
     if (trimmed.length === 0) continue;
     if (HEADLINE_PREFIXES.some((p) => trimmed.startsWith(p))) {
       headlines.push(line);
+      // The install loop emits `▸ <Agent Name>` as the banner for each
+      // agent's install block. When a new banner appears that's the
+      // current agent until the next one fires.
+      const banner = trimmed.match(/^▸\s+(.+?)$/);
+      if (banner && banner[1] && !looksLikeAction(banner[1])) {
+        currentAgentName = banner[1].trim();
+      }
       continue;
     }
     verboseLineCount++;
     const milestone = extractMilestone(trimmed);
     if (milestone) lastMilestone = milestone;
   }
-  return { headlines, lastMilestone, verboseLineCount };
+  return { headlines, lastMilestone, verboseLineCount, currentAgentName };
+}
+
+// `▸ Will install: ...` is a banner the wizard uses BEFORE the install
+// loop starts. We don't want it captured as an agent name. The install
+// loop's per-agent banner is always just `▸ <Name>`.
+function looksLikeAction(s: string): boolean {
+  return /^(Will install:|Will remove:|Selected|No changes)/i.test(s);
 }
 
 /**
