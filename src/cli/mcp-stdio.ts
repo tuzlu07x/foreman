@@ -61,6 +61,9 @@ interface Services {
   commandRouter: ForemanCommandRouter;
   /** Path to llm.yaml — needed by the LLM-status command handler. */
   llmConfigPath: string;
+  /** Foreman's `<configDir>` — used by the stop handler to locate
+   *  the pidfile written by `foreman start`. */
+  configDir: string;
 }
 
 function bootServices(): Services {
@@ -105,6 +108,7 @@ function bootServices(): Services {
     secretStore,
     commandRouter,
     llmConfigPath: paths.llmConfigPath,
+    configDir: paths.configDir,
   };
 }
 
@@ -358,8 +362,20 @@ export async function handleMessage(
         db: getDb(),
         registry: services.registry,
         llmConfigPath: services.llmConfigPath,
+        configDir: services.configDir,
         sourceAgent,
         sourceUser,
+      });
+      // #431 — Audit row per /foreman invocation. Persisted to
+      // `audit_events` so the TUI Log page + `foreman log` CLI can
+      // surface every orchestrator-routed command.
+      services.audit.logEvent("foreman:command", {
+        command,
+        args: argList,
+        sourceAgent,
+        sourceUser: sourceUser ?? null,
+        ok: result.ok,
+        errorCode: result.errorCode ?? null,
       });
       return reply(id, {
         content: [{ type: "text", text: result.text }],
