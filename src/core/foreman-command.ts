@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import type { ForemanDb } from "../db/client.js";
+import { readForemanPid } from "./foreman-pidfile.js";
 import { getBudgetStatus } from "./llm/budget.js";
 import {
   defaultLlmConfig,
@@ -31,12 +32,33 @@ export interface ForemanCommandContext {
   /** Path to `llm.yaml` so handlers can read the current Foreman LLM
    *  config + budget without hardcoding the location. */
   llmConfigPath: string;
+  /** Foreman's `<configDir>` — used by the stop handler to locate the
+   *  pidfile written by `foreman start`. */
+  configDir: string;
   /** Agent id that routed the user's command (mirrors `submit_approval`
    *  pattern). Used for the audit log + future per-agent gating. */
   sourceAgent: string;
   /** Optional user identifier from the messaging platform (Telegram
    *  numeric user id, Discord snowflake, …) for audit traceability. */
   sourceUser?: string;
+  /** #432 — Foreman's own LLM, gated on `features.orchestrator_chat`.
+   *  When provided + enabled, `/foreman report me`, `/foreman <agent>
+   *  ne yapıyor`, and unknown free-form verbs go through the LLM.
+   *  Optional so the router stays usable without LLM credentials
+   *  (read-only verbs still work). */
+  orchestratorChat?: {
+    isEnabled(): boolean;
+    answer(input: {
+      question: string;
+      focusAgentId?: string;
+    }): Promise<
+      | { status: "ok"; text: string; costUsd: number; durationMs: number }
+      | { status: "disabled"; reason: string }
+      | { status: "budget_exceeded"; spentUsd: number; capUsd: number }
+      | { status: "failed"; reason: string }
+      | { status: "empty_response" }
+    >;
+  };
 }
 
 export interface ForemanCommandResult {
@@ -80,16 +102,78 @@ export class ForemanCommandRouter {
     ctx: ForemanCommandContext,
   ): Promise<ForemanCommandResult> {
     const handler = this.handlers.get(command.toLowerCase());
-    if (!handler) {
-      return {
-        ok: false,
-        text:
-          `Unknown command "${command}". Try \`/foreman help\` for the list.`,
-        errorCode: "UNKNOWN_COMMAND",
-      };
+    if (handler) {
+      return await handler(args, ctx);
     }
-    return await handler(args, ctx);
+    // #432 — Free-form fallback. When the verb isn't registered but
+    // Foreman LLM orchestrator chat is enabled, treat the whole input
+    // (`<command> <args...>`) as a natural-language question. Agent id
+    // detection: if the first token matches a registered agent, focus
+    // the snapshot on it (`/foreman openclaw ne yapıyor`).
+    if (ctx.orchestratorChat?.isEnabled()) {
+      const question = [command, ...args].join(" ").trim();
+      const maybeAgent = ctx.registry.get(command.toLowerCase());
+      const focusAgentId = maybeAgent ? maybeAgent.id : undefined;
+      const outcome = await ctx.orchestratorChat.answer({
+        question,
+        focusAgentId,
+      });
+      return renderChatOutcome(outcome);
+    }
+    return {
+      ok: false,
+      text:
+        `Unknown command "${command}". Try \`/foreman help\` for the list. ` +
+        `(Enable \`features.orchestrator_chat\` in llm.yaml to make Foreman handle free-form questions.)`,
+      errorCode: "UNKNOWN_COMMAND",
+    };
   }
+}
+
+// Translates the chat service's outcome variants into a uniform
+// ForemanCommandResult. `disabled` / `budget_exceeded` / `failed` /
+// `empty_response` are surfaced as `ok: false` so the agent's relay can
+// flag them with `isError: true` to its LLM consumer.
+function renderChatOutcome(
+  outcome:
+    | { status: "ok"; text: string; costUsd: number; durationMs: number }
+    | { status: "disabled"; reason: string }
+    | { status: "budget_exceeded"; spentUsd: number; capUsd: number }
+    | { status: "failed"; reason: string }
+    | { status: "empty_response" },
+): ForemanCommandResult {
+  if (outcome.status === "ok") {
+    return { ok: true, text: outcome.text };
+  }
+  if (outcome.status === "disabled") {
+    return {
+      ok: false,
+      text: outcome.reason,
+      errorCode: "NOT_AVAILABLE",
+    };
+  }
+  if (outcome.status === "budget_exceeded") {
+    return {
+      ok: false,
+      text:
+        `Foreman LLM budget exceeded: $${outcome.spentUsd.toFixed(2)} / $${outcome.capUsd.toFixed(2)}. ` +
+        `Try again next billing window or bump the cap with \`foreman llm budget --set N\` on the host.`,
+      errorCode: "NOT_AVAILABLE",
+    };
+  }
+  if (outcome.status === "empty_response") {
+    return {
+      ok: false,
+      text:
+        "Foreman's LLM returned an empty response. Re-run the command — if it keeps happening, check `foreman llm budget` + the provider's status page.",
+      errorCode: "NOT_AVAILABLE",
+    };
+  }
+  return {
+    ok: false,
+    text: `Foreman LLM call failed: ${outcome.reason}`,
+    errorCode: "NOT_AVAILABLE",
+  };
 }
 
 // =============================================================================
@@ -108,10 +192,78 @@ export function registerBuiltinCommands(router: ForemanCommandRouter): void {
     "One-line summary — registered agents, runtime status, Foreman build version.",
   );
   router.register(
+    "stop",
+    stopHandler,
+    "Gracefully shut down `foreman start` + every agent daemon it owns.",
+  );
+  router.register(
+    "report",
+    reportHandler,
+    "LLM narration of recent agent activity. Try `/foreman report me`.",
+  );
+  router.register(
     "llm",
     llmSubrouterHandler,
     "Inspect / manage Foreman's own LLM. Try `/foreman llm status`.",
   );
+}
+
+const REPORT_DEFAULT_QUESTION_EN =
+  "What have my agents been doing? Give me a quick status report.";
+const REPORT_DEFAULT_QUESTION_TR =
+  "Agent'lar ne yapıyor şu an? Kısa bir durum raporu ver.";
+
+function reportHandler(
+  args: string[],
+  ctx: ForemanCommandContext,
+): Promise<ForemanCommandResult> | ForemanCommandResult {
+  if (!ctx.orchestratorChat) {
+    return {
+      ok: false,
+      text:
+        "Orchestrator chat isn't wired in this process — `/foreman report` needs Foreman LLM. " +
+        "Run `foreman llm enable orchestrator_chat` on the host.",
+      errorCode: "NOT_AVAILABLE",
+    };
+  }
+  if (!ctx.orchestratorChat.isEnabled()) {
+    return {
+      ok: false,
+      text:
+        "Foreman LLM orchestrator chat is off. " +
+        "Enable it via `foreman llm enable orchestrator_chat` on the host.",
+      errorCode: "NOT_AVAILABLE",
+    };
+  }
+  // `/foreman report me` / `/foreman report` / `/foreman report --tr` all
+  // map to the default question. Anything else is treated as the question.
+  const trailing = args.join(" ").trim();
+  const isMeOrEmpty =
+    trailing.length === 0 ||
+    trailing.toLowerCase() === "me" ||
+    trailing.toLowerCase() === "ben";
+  const language = detectLanguageFromArgs(args);
+  const question = isMeOrEmpty
+    ? language === "tr"
+      ? REPORT_DEFAULT_QUESTION_TR
+      : REPORT_DEFAULT_QUESTION_EN
+    : trailing;
+  return ctx.orchestratorChat
+    .answer({ question })
+    .then(renderChatOutcome);
+}
+
+function detectLanguageFromArgs(args: string[]): "en" | "tr" {
+  const joined = args.join(" ").toLowerCase();
+  if (
+    joined.includes("ne yap") ||
+    joined.includes("ne ol") ||
+    joined.includes("napı") ||
+    joined.includes("durum")
+  ) {
+    return "tr";
+  }
+  return "en";
 }
 
 function buildHelpReply(router: ForemanCommandRouter): ForemanCommandResult {
@@ -156,6 +308,38 @@ function statusHandler(
     if (agents.length > 10) lines.push(`  … and ${agents.length - 10} more`);
   }
   return { ok: true, text: lines.join("\n") };
+}
+
+function stopHandler(
+  _args: string[],
+  ctx: ForemanCommandContext,
+): ForemanCommandResult {
+  const pid = readForemanPid(ctx.configDir);
+  if (pid === null) {
+    return {
+      ok: false,
+      text:
+        "Foreman start isn't running (no pidfile or stale PID). " +
+        "If you think it is, check `ps aux | grep foreman` on the host.",
+      errorCode: "NOT_AVAILABLE",
+    };
+  }
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch (err) {
+    return {
+      ok: false,
+      text:
+        `Failed to signal Foreman PID ${pid}: ${err instanceof Error ? err.message : String(err)}`,
+      errorCode: "NOT_AVAILABLE",
+    };
+  }
+  return {
+    ok: true,
+    text:
+      `Shutting down Foreman (PID ${pid}). ` +
+      `Agent daemons will receive SIGTERM and exit within ~5s.`,
+  };
 }
 
 function llmSubrouterHandler(
