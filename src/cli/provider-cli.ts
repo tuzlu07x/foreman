@@ -260,6 +260,63 @@ const providerSwitchCommand = new Command("switch")
     process.exit(exit);
   });
 
+// #434 — Pin a specific model version for an agent. The projector
+// substitutes this into `${model}` tokens in the variant's writes;
+// when omitted, the registry's variant default applies.
+const providerModelCommand = new Command("model")
+  .description(
+    "Pin a specific model version for an agent (e.g. claude-opus-4-7). Pass --clear to revert to the variant default.",
+  )
+  .argument("<agent>", "agent id (e.g. hermes)")
+  .argument("[model]", "model id (e.g. claude-opus-4-7, gpt-4o-mini). Omit when using --clear.")
+  .option("--clear", "remove any pinned model; the projector will use the variant default")
+  .action(
+    (agentId: string, model: string | undefined, options: { clear?: boolean }) => {
+      const exit = applyModelPin(agentId, model, options);
+      process.exit(exit);
+    },
+  );
+
+export function applyModelPin(
+  agentId: string,
+  model: string | undefined,
+  options: { clear?: boolean },
+): 0 | 1 | 2 {
+  if (!options.clear && (!model || model.trim().length === 0)) {
+    console.error(
+      red("error: ") +
+        "specify a model id or pass --clear to remove the pin",
+    );
+    return 2;
+  }
+  const db = getDb();
+  try {
+    const registry = new RegistryService(db, new EventBus<ForemanEventMap>());
+    const agent = registry.get(agentId);
+    if (!agent) {
+      console.error(red("error: ") + `agent "${agentId}" not registered`);
+      return 1;
+    }
+    const next = options.clear ? null : (model ?? "").trim();
+    registry.setModelVersion(agentId, next);
+    if (options.clear) {
+      console.log(
+        `${green("✓")} cleared model pin for ${agentId} — projector will use the variant default`,
+      );
+    } else {
+      console.log(`${green("✓")} pinned ${agentId} to ${next}`);
+      console.log(
+        dim(
+          `  Re-run \`foreman start\` (or \`foreman secrets repush ${agentId}\`) to apply.`,
+        ),
+      );
+    }
+    return 0;
+  } finally {
+    closeDb();
+  }
+}
+
 // =============================================================================
 // Helpers
 // =============================================================================
@@ -279,7 +336,8 @@ export const providerCommand = new Command("provider")
     "Inspect or change an agent's provider variant (per-agent provider mapping)",
   )
   .addCommand(providerListCommand)
-  .addCommand(providerSwitchCommand);
+  .addCommand(providerSwitchCommand)
+  .addCommand(providerModelCommand);
 
 // Re-export for tests
 export {
@@ -288,3 +346,7 @@ export {
   renderListText,
   applySwitch,
 };
+
+// EventBus import only used inside the pinModel handler — kept inline
+// to avoid the unused-import warning when the new command is tree-shaken.
+import { EventBus, type ForemanEventMap } from "../core/event-bus.js";

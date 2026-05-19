@@ -30,17 +30,19 @@ describe("buildAgentConfigPromptList", () => {
   const noField = agent({ id: "legacy" });
   const catalog: AgentEntry[] = [claudeCode, hermes, codex, generic, noField];
 
-  it("emits only a note prompt for single-provider agents", () => {
+  it("emits model-pick + note for single-provider agents (#434)", () => {
     const prompts = buildAgentConfigPromptList(catalog, ["claude-code"]);
     expect(prompts).toEqual([
+      { agentId: "claude-code", kind: "model-pick" },
       { agentId: "claude-code", kind: "responsibility-note" },
     ]);
   });
 
-  it("emits LLM choice then note for multi-provider agents", () => {
+  it("emits llm-choice, model-pick, then note for multi-provider agents (#434)", () => {
     const prompts = buildAgentConfigPromptList(catalog, ["hermes"]);
     expect(prompts).toEqual([
       { agentId: "hermes", kind: "llm-choice" },
+      { agentId: "hermes", kind: "model-pick" },
       { agentId: "hermes", kind: "responsibility-note" },
     ]);
   });
@@ -59,16 +61,19 @@ describe("buildAgentConfigPromptList", () => {
     ]);
   });
 
-  it("flattens mixed selections in selection order", () => {
+  it("flattens mixed selections in selection order (#434 adds model-pick per agent)", () => {
     const prompts = buildAgentConfigPromptList(catalog, [
       "claude-code",
       "hermes",
       "codex",
     ]);
     expect(prompts).toEqual([
+      { agentId: "claude-code", kind: "model-pick" },
       { agentId: "claude-code", kind: "responsibility-note" },
       { agentId: "hermes", kind: "llm-choice" },
+      { agentId: "hermes", kind: "model-pick" },
       { agentId: "hermes", kind: "responsibility-note" },
+      { agentId: "codex", kind: "model-pick" },
       { agentId: "codex", kind: "responsibility-note" },
     ]);
   });
@@ -79,6 +84,7 @@ describe("buildAgentConfigPromptList", () => {
       "claude-code",
     ]);
     expect(prompts).toEqual([
+      { agentId: "claude-code", kind: "model-pick" },
       { agentId: "claude-code", kind: "responsibility-note" },
     ]);
   });
@@ -91,7 +97,8 @@ describe("buildAgentConfigPromptList", () => {
   describe("with configuredProviderIds gating", () => {
     it("keeps llm-choice for multi-compat agent even when only one is configured (#355)", () => {
       // Hermes compat = [anthropic, openai], user has only anthropic — still
-      // show picker so user can visually confirm.
+      // show picker so user can visually confirm. model-pick follows since
+      // at least one provider is configured (#434).
       const prompts = buildAgentConfigPromptList(
         catalog,
         ["hermes"],
@@ -99,6 +106,7 @@ describe("buildAgentConfigPromptList", () => {
       );
       expect(prompts).toEqual([
         { agentId: "hermes", kind: "llm-choice" },
+        { agentId: "hermes", kind: "model-pick" },
         { agentId: "hermes", kind: "responsibility-note" },
       ]);
     });
@@ -111,11 +119,12 @@ describe("buildAgentConfigPromptList", () => {
       );
       expect(prompts).toEqual([
         { agentId: "hermes", kind: "llm-choice" },
+        { agentId: "hermes", kind: "model-pick" },
         { agentId: "hermes", kind: "responsibility-note" },
       ]);
     });
 
-    it("skips llm-choice when zero compatible LLMs are configured", () => {
+    it("skips llm-choice + model-pick when zero compatible LLMs are configured", () => {
       // needs-llm state — no point showing a 0-option picker.
       const prompts = buildAgentConfigPromptList(catalog, ["hermes"], ["gemini"]);
       expect(prompts).toEqual([
@@ -123,15 +132,17 @@ describe("buildAgentConfigPromptList", () => {
       ]);
     });
 
-    it("ignores configured providers that are NOT in agent compat", () => {
+    it("ignores configured providers that are NOT in agent compat (#434 still emits model-pick)", () => {
       // Codex (compat=[openai]) — user has anthropic+openai, but only
-      // openai counts for codex. Compat length is 1 → no llm-choice anyway.
+      // openai counts for codex. Compat length is 1 → no llm-choice, but
+      // model-pick still fires since the sole compat is configured.
       const prompts = buildAgentConfigPromptList(
         catalog,
         ["codex"],
         ["anthropic", "openai"],
       );
       expect(prompts).toEqual([
+        { agentId: "codex", kind: "model-pick" },
         { agentId: "codex", kind: "responsibility-note" },
       ]);
     });
@@ -140,19 +151,21 @@ describe("buildAgentConfigPromptList", () => {
       const prompts = buildAgentConfigPromptList(catalog, ["hermes"]);
       expect(prompts).toEqual([
         { agentId: "hermes", kind: "llm-choice" },
+        { agentId: "hermes", kind: "model-pick" },
         { agentId: "hermes", kind: "responsibility-note" },
       ]);
     });
 
-    it("never shows llm-choice for single-compat agents regardless of configured set (#355)", () => {
-      // Claude Code is anthropic-only — no choice ever, even if user has
-      // anthropic + openai configured.
+    it("never shows llm-choice for single-compat agents but model-pick still fires (#434)", () => {
+      // Claude Code is anthropic-only — no llm-choice ever; model-pick
+      // appears because at least one configured compat exists.
       const prompts = buildAgentConfigPromptList(
         catalog,
         ["claude-code"],
         ["anthropic", "openai"],
       );
       expect(prompts).toEqual([
+        { agentId: "claude-code", kind: "model-pick" },
         { agentId: "claude-code", kind: "responsibility-note" },
       ]);
     });

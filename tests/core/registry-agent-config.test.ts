@@ -179,4 +179,54 @@ describe("RegistryService — per-agent config (llmProvider + responsibilityNote
       ).toThrow(AgentNotFoundError);
     });
   });
+
+  // #434 — Per-agent model version override. NULL means "use the
+  // variant's hardcoded default from registry/agents.json".
+  describe("setModelVersion", () => {
+    it("defaults to NULL on a fresh register", () => {
+      const { agent } = registry.register({
+        id: "hermes",
+        displayName: "Hermes",
+        transport: "stdio",
+      });
+      expect(agent.modelVersion).toBeNull();
+    });
+
+    it("persists the pin when set", () => {
+      registry.register({
+        id: "hermes",
+        displayName: "Hermes",
+        transport: "stdio",
+      });
+      registry.setModelVersion("hermes", "claude-opus-4-7");
+      expect(registry.get("hermes")?.modelVersion).toBe("claude-opus-4-7");
+    });
+
+    it("clears the pin when set to null", () => {
+      registry.register({
+        id: "hermes",
+        displayName: "Hermes",
+        transport: "stdio",
+      });
+      registry.setModelVersion("hermes", "claude-opus-4-7");
+      registry.setModelVersion("hermes", null);
+      expect(registry.get("hermes")?.modelVersion).toBeNull();
+    });
+
+    it("respects the optional manifest field at register time", () => {
+      const { agent } = registry.register({
+        id: "openclaw",
+        displayName: "OpenClaw",
+        transport: "stdio",
+        modelVersion: "gpt-4o-mini",
+      });
+      expect(agent.modelVersion).toBe("gpt-4o-mini");
+    });
+
+    it("throws AgentNotFoundError for an unknown id", () => {
+      expect(() => registry.setModelVersion("ghost", "x")).toThrow(
+        AgentNotFoundError,
+      );
+    });
+  });
 });
