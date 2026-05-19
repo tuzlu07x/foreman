@@ -208,6 +208,11 @@ export function registerBuiltinCommands(router: ForemanCommandRouter): void {
     "Gracefully shut down `foreman start` + every agent daemon it owns.",
   );
   router.register(
+    "write",
+    writeHandler,
+    "Send a directive to an agent. Usage: `/foreman write <agent> <message>`.",
+  );
+  router.register(
     "report",
     reportHandler,
     "LLM narration of recent agent activity. Try `/foreman report me`.",
@@ -328,6 +333,39 @@ function stopHandler(
   return enqueueMutating(ctx, "stop", [], {
     successText:
       "Shutdown queued. Foreman start will exit + agent daemons SIGTERM within ~2s.",
+  });
+}
+
+// #433 — `/foreman write <agent> <message...>`. Owner-gated, queued
+// for the start-side drain handler to deliver via Telegram + optional
+// inbound_dir file write. Returns the queued id; user sees the
+// formatted Foreman → <agent> post in their chat ~1.5s later.
+function writeHandler(
+  args: string[],
+  ctx: ForemanCommandContext,
+): ForemanCommandResult {
+  const targetAgent = args[0]?.toLowerCase().trim();
+  const message = args.slice(1).join(" ").trim();
+  if (!targetAgent || !message) {
+    return {
+      ok: false,
+      text:
+        "Usage: `/foreman write <agent> <message>`. " +
+        "Example: `/foreman write openclaw pause your current task and focus on Y`.",
+      errorCode: "UNKNOWN_SUBCOMMAND",
+    };
+  }
+  const target = ctx.registry.get(targetAgent);
+  if (!target) {
+    return {
+      ok: false,
+      text:
+        `Unknown agent "${targetAgent}". Run \`/foreman status\` for the list of registered agents.`,
+      errorCode: "UNKNOWN_SUBCOMMAND",
+    };
+  }
+  return enqueueMutating(ctx, "write", [targetAgent, message], {
+    successText: `Directive queued for ${targetAgent}.`,
   });
 }
 

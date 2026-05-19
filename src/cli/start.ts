@@ -13,6 +13,7 @@ import { AuditLogger } from "../core/audit.js";
 import { bus } from "../core/event-bus.js";
 import { MediatorService } from "../core/mediator.js";
 import { PolicyEngine } from "../core/policy-engine.js";
+import { deliverWriteDirective } from "../core/agent-write.js";
 import { ChatPrimaryService } from "../core/chat-primary.js";
 import {
   ControlChannel,
@@ -468,6 +469,59 @@ export function startForeman(
             budget: { ...current.budget, monthly_cap_usd: usd },
           };
           saveLlmConfig(paths.llmConfigPath, next);
+          return { status: "applied" };
+        } catch (err) {
+          return {
+            status: "failed",
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      },
+    ],
+    [
+      "write",
+      async (row) => {
+        // #433 — `/foreman write <agent> <message>`. Delivery is
+        // hybrid: always a visible Telegram post (so the human sees
+        // it + can manually forward), plus an optional inbound_dir
+        // file when the agent declares one. The user-side reply
+        // ("Directive queued for openclaw") already went out via
+        // mcp-stdio; this loop just executes the side-effects.
+        try {
+          const [agentId, message] = JSON.parse(row.args) as string[];
+          if (!agentId || !message) {
+            return {
+              status: "rejected",
+              error: "write requires [agentId, message] args",
+            };
+          }
+          if (!registry.get(agentId)) {
+            return {
+              status: "rejected",
+              error: `unknown agent "${agentId}"`,
+            };
+          }
+          const registryDoc = loadActiveRegistry();
+          const entry = registryDoc.doc.agents.find((a) => a.id === agentId);
+          const inboundDir = entry?.inbound_dir;
+          const telegramBotToken = secretStore.exists("telegram-bot-token")
+            ? secretStore.get("telegram-bot-token")
+            : undefined;
+          const telegramChatId = secretStore.exists("telegram-chat-id")
+            ? secretStore.get("telegram-chat-id")
+            : undefined;
+          const outcome = await deliverWriteDirective(
+            {
+              agentId,
+              message,
+              sourceUser: row.sourceUser ?? undefined,
+              inboundDir,
+            },
+            { telegramBotToken, telegramChatId },
+          );
+          if (outcome.status === "failed") {
+            return { status: "failed", error: outcome.error };
+          }
           return { status: "applied" };
         } catch (err) {
           return {
