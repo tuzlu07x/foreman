@@ -445,6 +445,39 @@ export function buildAgentConfigPromptList(
   return prompts;
 }
 
+/**
+ * #469 — When the user highlights an OAuth / no-key variant in the
+ * variant picker, scan SIBLING variants in the same provider mapping.
+ * If any sibling's `required_secret` is already in the secret store,
+ * return a one-line note like "You have openrouter-key — picking
+ * 'OpenAI via OpenRouter' would skip the codex login step." When no
+ * sibling matches a stored secret, returns null.
+ *
+ * Prevents the silent footgun where users paste a key in Step 1, pick
+ * an unrelated OAuth route here, and end up debugging why the key
+ * isn't doing anything.
+ */
+export function findSiblingCredHint(
+  providerMapping: {
+    variants: Record<
+      string,
+      { label: string; required_secret?: string | null | undefined }
+    >;
+  },
+  currentVariantId: string,
+  storedSecrets: Set<string>,
+): string | null {
+  for (const [vid, variant] of Object.entries(providerMapping.variants)) {
+    if (vid === currentVariantId) continue;
+    const sibSecret = variant.required_secret;
+    if (!sibSecret) continue;
+    if (storedSecrets.has(sibSecret)) {
+      return `You have ${sibSecret} stored — picking "${variant.label}" would use that key directly (no OAuth setup needed).`;
+    }
+  }
+  return null;
+}
+
 export interface AgentConfigSubmitInput {
   currentIdx: number;
   totalPrompts: number;
@@ -3101,6 +3134,23 @@ export function SetupWizard({
                   ? `requires ${v.depends_on_oauth.agent} OAuth (run \`${v.depends_on_oauth.setup_command}\` first)`
                   : "no extra key needed";
               const acq = v.secret_acquisition?.note;
+              // #469 — Cross-variant credential check. When the
+              // highlighted variant needs OAuth / no key, but the user
+              // already pasted a key that a SIBLING variant uses, flash
+              // a note so they understand which route their key actually
+              // wires up. Prevents the "I pasted my OpenAI key, why is
+              // Hermes still failing?" rabbit hole.
+              const storedSecrets = new Set(
+                services.secretStore.list().map((s) => s.name),
+              );
+              const siblingHint =
+                isSelected && !v.required_secret
+                  ? findSiblingCredHint(
+                      providerMapping!,
+                      vid,
+                      storedSecrets,
+                    )
+                  : null;
               return (
                 <Box flexDirection="column" key={vid}>
                   <Text
@@ -3121,6 +3171,12 @@ export function SetupWizard({
                     <Text color={theme.fg.muted}>
                       {"      "}
                       {acq.slice(0, 220)}
+                    </Text>
+                  ) : null}
+                  {siblingHint ? (
+                    <Text color={theme.accent.warning}>
+                      {"      ⓘ "}
+                      {siblingHint}
                     </Text>
                   ) : null}
                 </Box>
@@ -3316,9 +3372,16 @@ export function SetupWizard({
           </Text>
         )}
         {nothingSelected ? (
-          <Text color={theme.accent.warning}>
-            ⚠ No agents selected — skip this step? (y/n)
-          </Text>
+          <Box flexDirection="column">
+            <Text color={theme.accent.warning} bold>
+              ⚠ You must pick at least one agent
+            </Text>
+            <Text color={theme.fg.muted}>
+              Foreman orchestrates AI agents — with none installed there's
+              nothing to route, no Telegram replies, no policy enforcement.
+              Hit [Esc] to go back and Space-toggle at least one agent.
+            </Text>
+          </Box>
         ) : noChanges ? (
           <Text color={theme.fg.muted}>
             (no changes — every selection is already registered)
@@ -3331,6 +3394,13 @@ export function SetupWizard({
         </Text>
         <ConfirmInput
           onConfirm={() => {
+            if (nothingSelected) {
+              // #audit-finding-2 — Block the advance instead of warn+skip.
+              // Previously [y] confirmed past zero-agent state and the user
+              // landed on the Done screen with nothing wired.
+              setAgentsPhase("picker");
+              return;
+            }
             setAgentsPhase("running");
             advance("agents");
           }}
@@ -3502,6 +3572,13 @@ export function SetupWizard({
   if (currentStep === "services" && servicesPhase === "summary") {
     const savedCount = servicesSaved.length;
     const skippedCount = servicesSkipped.length;
+    // #audit-finding-9 — Telegram is the primary delivery channel; if
+    // the user picked it but skipped its tokens, agents have no way to
+    // reach the user post-install. Flag this loudly so they don't
+    // discover the broken flow only when nothing arrives in their chat.
+    const telegramSkippedWithoutSave =
+      servicesSelected.includes("telegram") &&
+      !servicesSaved.some((n) => n.startsWith("telegram-"));
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <WizardProgress current={3} total={4} label="Services" phase="summary" />
@@ -3535,6 +3612,19 @@ export function SetupWizard({
             ))}
           </Box>
         )}
+        {telegramSkippedWithoutSave ? (
+          <Box flexDirection="column">
+            <Text color={theme.accent.warning} bold>
+              ⚠ Telegram selected but token + chat id are empty
+            </Text>
+            <Text color={theme.fg.muted}>
+              Agents won't be able to deliver replies until you paste
+              telegram-bot-token + telegram-chat-id. Hit [Esc] to go
+              back, or continue and add them later via:{" "}
+              <Text bold>foreman secrets add telegram-bot-token</Text>.
+            </Text>
+          </Box>
+        ) : null}
         <Text>Continue to install? (y/n)</Text>
         <ConfirmInput
           onConfirm={() => {

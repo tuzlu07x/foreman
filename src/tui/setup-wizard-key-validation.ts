@@ -46,6 +46,11 @@ export interface ValidateKeyPasteResult {
   warning: string | null;
 }
 
+// #audit-finding-10 — Real API keys are >=20 chars (OpenAI sk-proj-* is
+// ~50, Anthropic sk-ant-api03-* is ~108, Gemini is ~39). Anything shorter
+// is almost certainly a paste truncation or a "just the prefix" typo.
+const MIN_LIKELY_KEY_LENGTH = 20;
+
 /**
  * Pure check — does this pasted value look like the right kind of key for
  * the configured provider? Returns ok=true for opt-outs (`key_prefix:
@@ -53,7 +58,8 @@ export interface ValidateKeyPasteResult {
  * known prefix at all (probably just a typo, not a cross-provider paste).
  *
  * Returns ok=false ONLY when we're confident the user pasted a key
- * belonging to a different provider.
+ * belonging to a different provider OR the value is so short it can't
+ * be a real key.
  *
  * Prefix ambiguity note: OpenAI's "sk-" is a sub-prefix of Anthropic's
  * "sk-ant-". A value starting "sk-ant-..." matches BOTH prefixes. We
@@ -64,30 +70,50 @@ export function validateKeyPaste(
   input: ValidateKeyPasteInput,
 ): ValidateKeyPasteResult {
   const expected = input.provider.key_prefix;
-  if (!expected) return { ok: true, warning: null };
   if (input.value.length === 0) return { ok: true, warning: null };
 
   const detected = detectProviderByPrefix(input.value);
 
-  // What's the human-readable provider name our `expected` prefix belongs
-  // to? (Used to decide "is the detected provider the same as the
-  // configured one".)
+  // Cross-provider detection has higher diagnostic value than length —
+  // a 12-char Gemini key pasted into the Anthropic slot is more useful
+  // to flag as "wrong provider" than "too short". Run it first.
+  if (expected) {
+    const expectedProviderName =
+      KNOWN_PREFIXES.find((p) => p.prefix === expected)?.provider ??
+      input.provider.name;
+
+    if (detected && detected.provider !== expectedProviderName) {
+      return {
+        ok: false,
+        warning:
+          `this looks like a ${detected.provider} key (starts with "${detected.prefix}"), ` +
+          `but you're saving it as ${input.provider.name} (expects "${expected}"). ` +
+          `Saved anyway — fix with \`foreman secrets rotate ${input.provider.secret_name ?? input.provider.id + "-key"}\` if it was a paste error.`,
+      };
+    }
+  }
+
+  // #audit-finding-10 — Truncation guard. Real keys are >= 20 chars; a
+  // shorter value with no cross-provider mismatch is almost certainly a
+  // paste truncation or a "just the prefix" typo. Applies to opt-out
+  // providers too — they don't get arbitrary 5-char values either.
+  if (input.value.length < MIN_LIKELY_KEY_LENGTH) {
+    return {
+      ok: false,
+      warning:
+        `that's only ${input.value.length} characters — real ${input.provider.name} keys are usually 30+. ` +
+        `Looks like a paste truncation. Saved anyway — rotate via secrets page if needed.`,
+    };
+  }
+
+  if (!expected) return { ok: true, warning: null };
+
   const expectedProviderName =
     KNOWN_PREFIXES.find((p) => p.prefix === expected)?.provider ??
     input.provider.name;
 
   if (detected && detected.provider === expectedProviderName) {
     return { ok: true, warning: null };
-  }
-
-  if (detected) {
-    return {
-      ok: false,
-      warning:
-        `this looks like a ${detected.provider} key (starts with "${detected.prefix}"), ` +
-        `but you're saving it as ${input.provider.name} (expects "${expected}"). ` +
-        `Saved anyway — fix with \`foreman secrets rotate ${input.provider.secret_name ?? input.provider.id + "-key"}\` if it was a paste error.`,
-    };
   }
 
   // Doesn't match any known prefix → could be a typo, could be a private

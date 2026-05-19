@@ -68,11 +68,12 @@ const CUSTOM = entry({
 })
 
 describe('validateKeyPaste — happy path (prefix matches)', () => {
+  // Lengths chosen to clear the #audit-finding-10 min-length guard (20+).
   it.each([
-    [ANTHROPIC, 'sk-ant-api03-abc123def456'],
-    [OPENAI, 'sk-proj-xyz789'],
-    [OPENAI, 'sk-old-format-abc'],
-    [GEMINI, 'AIzaSyDxxxxxxxxxxxxx'],
+    [ANTHROPIC, 'sk-ant-api03-abcdef0123456789xyz'],
+    [OPENAI, 'sk-proj-xyz789abcdef1234567890'],
+    [OPENAI, 'sk-old-format-abcdef1234567890'],
+    [GEMINI, 'AIzaSyDxxxxxxxxxxxxxxxxxxxxxxx'],
   ])('%s accepts %s', (provider, value) => {
     const result = validateKeyPaste({ provider, value })
     expect(result.ok).toBe(true)
@@ -84,14 +85,19 @@ describe('validateKeyPaste — opt-outs', () => {
   it('returns ok=true for providers with null key_prefix (ollama)', () => {
     const result = validateKeyPaste({
       provider: OLLAMA,
-      value: 'literally-anything',
+      // Realistic length — opt-out providers still reject obvious
+      // truncations per the audit-finding-10 guard.
+      value: 'literally-anything-23chars-long',
     })
     expect(result.ok).toBe(true)
     expect(result.warning).toBe(null)
   })
 
   it('returns ok=true for custom (openai-compatible) — opt-out', () => {
-    const result = validateKeyPaste({ provider: CUSTOM, value: 'sk-ant-fake' })
+    const result = validateKeyPaste({
+      provider: CUSTOM,
+      value: 'sk-ant-fake-but-realistic-length-123',
+    })
     expect(result.ok).toBe(true)
   })
 
@@ -159,10 +165,46 @@ describe('validateKeyPaste — unknown prefix (no specific provider match)', () 
   it('warning is non-cross-provider (mentions only expected prefix)', () => {
     const result = validateKeyPaste({
       provider: GEMINI,
-      value: 'totally-bogus-format',
+      // 30 chars — clears the min-length guard so the prefix-mismatch
+      // branch is the one we exercise.
+      value: 'totally-bogus-format-abcd1234',
     })
     expect(result.ok).toBe(false)
     expect(result.warning).not.toMatch(/looks like/)
     expect(result.warning).toMatch(/AIza/)
+  })
+})
+
+// #audit-finding-10 — Reject pasted values shorter than what a real
+// API key could plausibly be. Catches typos and paste truncations
+// that prefix-only validation lets through.
+describe('validateKeyPaste — truncation guard', () => {
+  it('flags too-short values even when the prefix matches', () => {
+    const result = validateKeyPaste({ provider: OPENAI, value: 'sk-' })
+    expect(result.ok).toBe(false)
+    expect(result.warning).toMatch(/characters/)
+  })
+
+  it('flags too-short values for opt-out providers too', () => {
+    // ollama has key_prefix:null but a 3-char "value" is still a
+    // truncation, not a real bring-your-own-endpoint password.
+    const result = validateKeyPaste({ provider: OLLAMA, value: 'x' })
+    expect(result.ok).toBe(false)
+    expect(result.warning).toMatch(/characters/)
+  })
+
+  it('lets long-enough opt-out values pass through', () => {
+    const result = validateKeyPaste({
+      provider: OLLAMA,
+      value: 'my-private-endpoint-secret-12345',
+    })
+    expect(result.ok).toBe(true)
+    expect(result.warning).toBeNull()
+  })
+
+  it('keeps empty input on the skip path (no truncation warning)', () => {
+    const result = validateKeyPaste({ provider: OPENAI, value: '' })
+    expect(result.ok).toBe(true)
+    expect(result.warning).toBeNull()
   })
 })
