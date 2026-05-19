@@ -79,9 +79,19 @@ export async function runAgentAddScripted(
     throw err;
   }
 
-  const detection = detectInstall(entry.install);
+  const detection = detectInstall(entry.install, process.env, {
+    smokeTest: true,
+  });
   const manualInstallCmd = preferredInstallCommand(entry.install);
   if (!detection.found) {
+    if (detection.brokenAt) {
+      log(
+        orange(
+          `⚠ found broken binary at ${detection.brokenAt} — will reinstall`,
+        ),
+      );
+      if (detection.brokenReason) log(dim(`  ${detection.brokenReason}`));
+    }
     if (options.autoInstall && manualInstallCmd) {
       // --auto-install IS the user's consent — runInstall handles all three
       // transports (npm, brew, curl script) since PR #107.
@@ -312,10 +322,19 @@ export async function runAgentAddInteractive(deps: AddDeps): Promise<number> {
   const idAnswer = await promptLine(`Agent id (default: ${defaultId}): `);
   const agentId = idAnswer.trim() === "" ? defaultId : idAnswer.trim();
 
-  const detection = detectInstall(entry.install);
+  const detection = detectInstall(entry.install, process.env, {
+    smokeTest: true,
+  });
   const installCmd = preferredInstallCommand(entry.install);
   let autoInstall = false;
   if (!detection.found && installCmd) {
+    if (detection.brokenAt) {
+      log(
+        orange(
+          `⚠ found broken binary at ${detection.brokenAt} (${detection.brokenReason ?? "no diagnostic"})`,
+        ),
+      );
+    }
     log(
       red("✗") +
         ` ${entry.name} is not installed. ` +
