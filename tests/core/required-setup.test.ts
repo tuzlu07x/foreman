@@ -167,6 +167,34 @@ describe("resolveRequiredSetup — bundled-registry scenarios", () => {
     // is plumbed without throwing.
     expect(res.errors).toEqual([]);
   });
+
+  // #450 — agentVariants override the registry's `preferred` variant
+  // per agent. The required-secret bucket changes accordingly: e.g.
+  // picking via-codex-oauth for Hermes/openai means no openrouter-key.
+  it("agentVariants picks via-codex-oauth → no openrouter-key required (#450)", () => {
+    const res = resolveRequiredSetup({
+      agents: [pickAgent("hermes")],
+      agentProviders: { hermes: "openai" },
+      agentVariants: { hermes: "via-codex-oauth" },
+      secretStore: store,
+    });
+    expect(res.errors).toEqual([]);
+    const orKey = res.secrets.find((s) => s.slotName === "openrouter-key");
+    expect(orKey).toBeUndefined();
+  });
+
+  it("agentVariants default behavior (omitted) still picks the registry preferred", () => {
+    const res = resolveRequiredSetup({
+      agents: [pickAgent("hermes")],
+      agentProviders: { hermes: "openai" },
+      // agentVariants intentionally omitted
+      secretStore: store,
+    });
+    expect(res.errors).toEqual([]);
+    const orKey = res.secrets.find((s) => s.slotName === "openrouter-key");
+    expect(orKey).toBeDefined();
+    expect(orKey?.status).toBe("missing");
+  });
 });
 
 describe("isRequiredSetupComplete", () => {

@@ -296,8 +296,13 @@ export type ForemanLlmChoice =
 // note: after the user picks the provider, we fetch the live model list
 // for that provider's key and let them pick a specific version (e.g.
 // gpt-5-mini, claude-opus-4-7). Skipping falls back to the variant default.
+// #450 — `variant-pick` inserts a step between llm-choice + model-pick
+// when the agent has multiple variants for the chosen provider (e.g.
+// Hermes/openai: via-openrouter vs via-codex-oauth). Runtime auto-skips
+// when only one variant exists.
 export type AgentConfigPromptKind =
   | "llm-choice"
+  | "variant-pick"
   | "model-pick"
   | "responsibility-note";
 
@@ -341,6 +346,16 @@ export function buildAgentConfigPromptList(
     // are a 1-keystroke confirm — that's the right cost.
     if (compat.length > 1 && choosable.length >= 1) {
       prompts.push({ agentId: id, kind: "llm-choice" });
+    }
+    // #450 — Variant pick. Agent's provider_mapping may declare
+    // multiple ways to reach a single provider (e.g. Hermes/openai:
+    // via-openrouter vs via-codex-oauth). When the picked provider
+    // has >1 variants we need to ask the user. Runtime auto-skips
+    // when single-variant; we emit the prompt unconditionally for
+    // any agent with provider_mapping so the picked-provider check
+    // can happen with the chosen llmProvider in hand.
+    if (a.provider_mapping && choosable.length >= 1) {
+      prompts.push({ agentId: id, kind: "variant-pick" });
     }
     // #434 — Every agent with a chooseable provider also gets a
     // model-pick prompt. Single-provider agents (Claude Code,
@@ -870,6 +885,13 @@ export function SetupWizard({
   const [agentModelError, setAgentModelError] = useState<string | null>(null);
   const [agentModelDraft, setAgentModelDraft] = useState<string | null>(null);
 
+  // #450 — Per-agent variant picker draft. Holds the highlighted
+  // variant id for the active model-pick prompt; persisted into
+  // agentConfigs[id].providerVariant on commit.
+  const [agentVariantDraft, setAgentVariantDraft] = useState<string | null>(
+    null,
+  );
+
   // #408 / #411 Phase 3 — required-setup step state.
   // The wizard precomputes a `RequiredSetupResolution` (which agents need
   // which secrets, which OAuth flows queue up). User can paste missing
@@ -945,15 +967,20 @@ export function SetupWizard({
       agentsSelected.includes(a.id),
     );
     const agentProviders: Record<string, string> = {};
+    const agentVariants: Record<string, string> = {};
     for (const agent of selectedEntries) {
       const cfg = agentConfigs[agent.id];
       if (cfg?.llmProvider) {
         agentProviders[agent.id] = cfg.llmProvider;
       }
+      if (cfg?.providerVariant) {
+        agentVariants[agent.id] = cfg.providerVariant;
+      }
     }
     return resolveRequiredSetup({
       agents: selectedEntries,
       agentProviders,
+      agentVariants,
       secretStore: services.secretStore,
       sessionOverrides: requiredSetupOverrides,
     });
@@ -1011,6 +1038,64 @@ export function SetupWizard({
       advance("chat-primary");
     }
   }, [currentStep, chatPrimaryChannelsNeeded.length]);
+
+  // #450 — Whenever we land on a variant-pick prompt, auto-skip when
+  // the picked provider's mapping has only one variant. Also seeds
+  // the picker cursor to the registry's `preferred` so the user can
+  // Enter to accept the default.
+  useEffect(() => {
+    if (currentStep !== "agents") return;
+    if (agentsPhase !== "per-agent-config") return;
+    const prompt = agentConfigPrompts[agentConfigIdx];
+    if (!prompt || prompt.kind !== "variant-pick") return;
+    const cfg = agentConfigs[prompt.agentId];
+    const provider = cfg?.llmProvider;
+    const agentEntry = agentCatalog.find((a) => a.id === prompt.agentId);
+    // Resolve effective provider: user pick first, else compat[0] for
+    // single-provider agents.
+    const compat = agentEntry?.llm_compat ?? [];
+    const effectiveProvider =
+      provider ?? (compat.length === 1 ? compat[0] : undefined);
+    if (!effectiveProvider || !agentEntry?.provider_mapping) {
+      const next = applyAgentConfigSubmit({
+        currentIdx: agentConfigIdx,
+        totalPrompts: agentConfigPrompts.length,
+      });
+      setAgentConfigIdx(next.nextIdx);
+      setAgentsPhase(next.nextPhase);
+      return;
+    }
+    const providerMapping = agentEntry.provider_mapping[effectiveProvider];
+    const variants = providerMapping ? Object.keys(providerMapping.variants) : [];
+    if (variants.length <= 1) {
+      // Single variant → no choice to make; auto-pick + advance.
+      if (variants.length === 1 && !cfg?.providerVariant) {
+        setAgentConfigs((prev) => ({
+          ...prev,
+          [prompt.agentId]: { ...(prev[prompt.agentId] ?? {}), providerVariant: variants[0]! },
+        }));
+      }
+      const next = applyAgentConfigSubmit({
+        currentIdx: agentConfigIdx,
+        totalPrompts: agentConfigPrompts.length,
+      });
+      setAgentConfigIdx(next.nextIdx);
+      setAgentsPhase(next.nextPhase);
+      return;
+    }
+    // Seed the cursor to preferred variant.
+    if (!agentVariantDraft && providerMapping) {
+      setAgentVariantDraft(providerMapping.preferred);
+    }
+  }, [
+    currentStep,
+    agentsPhase,
+    agentConfigIdx,
+    agentConfigPrompts,
+    agentConfigs,
+    agentCatalog,
+    agentVariantDraft,
+  ]);
 
   // #434 — Whenever we land on a model-pick prompt, kick off model
   // discovery for the active agent's picked provider. Stale state
@@ -1414,6 +1499,70 @@ export function SetupWizard({
     // #434 — Per-agent model picker key handling. Shows up between
     // llm-choice and responsibility-note. ↑↓ moves cursor through the
     // discovered models, Enter commits, [s] skips (uses variant default).
+    // #450 — Variant picker handler. Lists variants of the picked
+    // provider's mapping (e.g. Hermes/openai: via-openrouter vs
+    // via-codex-oauth). Auto-skip happens in the useEffect when
+    // single-variant; this handler only runs when multi-variant.
+    if (
+      currentStep === "agents" &&
+      agentsPhase === "per-agent-config"
+    ) {
+      const prompt = agentConfigPrompts[agentConfigIdx];
+      if (prompt && prompt.kind === "variant-pick") {
+        const cfg = agentConfigs[prompt.agentId];
+        const provider = cfg?.llmProvider;
+        const agentEntry = agentCatalog.find((a) => a.id === prompt.agentId);
+        const compat = agentEntry?.llm_compat ?? [];
+        const effectiveProvider =
+          provider ?? (compat.length === 1 ? compat[0] : undefined);
+        if (!effectiveProvider || !agentEntry?.provider_mapping) return;
+        const providerMapping = agentEntry.provider_mapping[effectiveProvider];
+        if (!providerMapping) return;
+        const variantIds = Object.keys(providerMapping.variants);
+        if (variantIds.length <= 1) return;
+        const cursor = agentVariantDraft ?? providerMapping.preferred;
+        const idx = Math.max(0, variantIds.indexOf(cursor));
+        if (key.upArrow) {
+          setAgentVariantDraft(
+            variantIds[(idx - 1 + variantIds.length) % variantIds.length] ??
+              null,
+          );
+          return;
+        }
+        if (key.downArrow) {
+          setAgentVariantDraft(
+            variantIds[(idx + 1) % variantIds.length] ?? null,
+          );
+          return;
+        }
+        if (key.escape) {
+          // Step back to llm-choice for this agent.
+          setAgentConfigIdx(Math.max(0, agentConfigIdx - 1));
+          setAgentVariantDraft(null);
+          return;
+        }
+        if (key.return || input === " ") {
+          const chosen = cursor;
+          setAgentConfigs((prev) => ({
+            ...prev,
+            [prompt.agentId]: {
+              ...(prev[prompt.agentId] ?? {}),
+              providerVariant: chosen,
+            },
+          }));
+          setAgentVariantDraft(null);
+          const result = applyAgentConfigSubmit({
+            currentIdx: agentConfigIdx,
+            totalPrompts: agentConfigPrompts.length,
+          });
+          setAgentConfigIdx(result.nextIdx);
+          setAgentsPhase(result.nextPhase);
+          return;
+        }
+        return;
+      }
+    }
+
     if (
       currentStep === "agents" &&
       agentsPhase === "per-agent-config"
@@ -2726,6 +2875,83 @@ export function SetupWizard({
         </Box>
       );
     }
+    // #450 — Variant pick phase. Shows when the picked provider's
+    // mapping has multiple variants (e.g. Hermes/openai: OpenRouter
+    // route vs Codex OAuth route). Auto-skips otherwise via useEffect.
+    if (prompt.kind === "variant-pick") {
+      const cfg = agentConfigs[prompt.agentId];
+      const compat = agent.llm_compat ?? [];
+      const effectiveProvider =
+        cfg?.llmProvider ?? (compat.length === 1 ? compat[0] : undefined);
+      const providerMapping =
+        effectiveProvider && agent.provider_mapping
+          ? agent.provider_mapping[effectiveProvider]
+          : undefined;
+      const variantIds = providerMapping
+        ? Object.keys(providerMapping.variants)
+        : [];
+      const cursor = agentVariantDraft ?? providerMapping?.preferred ?? variantIds[0];
+      const providerLabel =
+        effectiveProvider === "openai"
+          ? "OpenAI"
+          : effectiveProvider === "anthropic"
+            ? "Anthropic"
+            : effectiveProvider === "gemini"
+              ? "Google Gemini"
+              : effectiveProvider ?? "(unknown)";
+      return (
+        <Box flexDirection="column" gap={1} paddingY={1}>
+          <WizardProgress
+            current={2}
+            total={4}
+            label="Agents"
+            phase={`${agent.name} ${progress} · how to reach ${providerLabel}`}
+          />
+          <Text color={theme.fg.muted}>
+            {agent.name} can reach {providerLabel} more than one way. Pick the
+            route that matches the credentials you already have — Foreman will
+            ask only for the secret that route needs.
+          </Text>
+          <Box flexDirection="column">
+            {variantIds.map((vid) => {
+              const v = providerMapping!.variants[vid]!;
+              const isSelected = vid === cursor;
+              const reqHint = v.required_secret
+                ? `needs ${v.required_secret}`
+                : "no extra key needed";
+              const acq = v.secret_acquisition?.note;
+              return (
+                <Box flexDirection="column" key={vid}>
+                  <Text
+                    color={isSelected ? theme.accent.primary : undefined}
+                    bold={isSelected}
+                  >
+                    {isSelected ? "❯ ✓ " : "    "}
+                    {v.label}
+                  </Text>
+                  <Text color={theme.fg.muted}>
+                    {"      "}
+                    {reqHint}
+                    {vid === providerMapping!.preferred
+                      ? "  · default"
+                      : ""}
+                  </Text>
+                  {isSelected && acq ? (
+                    <Text color={theme.fg.muted}>
+                      {"      "}
+                      {acq.slice(0, 220)}
+                    </Text>
+                  ) : null}
+                </Box>
+              );
+            })}
+          </Box>
+          <Text color={theme.fg.muted}>
+            [↑↓] move · [Enter] confirm · [Esc] back to provider choice
+          </Text>
+        </Box>
+      );
+    }
     // #434 — Model-pick phase. Loading / error / picker tri-state, mirrors
     // the foreman-llm cloud-model phase (#399).
     if (prompt.kind === "model-pick") {
@@ -3643,6 +3869,10 @@ export function countPolicyRules(policyPath: string): number {
 
 export interface AgentConfig {
   llmProvider?: string;
+  /** #450 — Variant id within the chosen llmProvider's mapping
+   *  (e.g. "via-openrouter" or "via-codex-oauth" for Hermes/openai).
+   *  Optional; falls back to the registry's `preferred` when unset. */
+  providerVariant?: string;
   /** #434 — Specific model id chosen for this agent (e.g.
    *  claude-opus-4-7). Optional; falls back to the variant default. */
   modelVersion?: string;
@@ -3901,6 +4131,9 @@ export async function runInstallStep(
         // #389 — per-agent llmProvider so config_overrides' if_provider
         // resolves to the user's per-agent pick (not the global Step 1 set).
         llmProvider: agentConfigs[id]?.llmProvider,
+        // #450 — per-agent variant override (e.g. Codex OAuth instead
+        // of OpenRouter for Hermes/openai).
+        providerVariant: agentConfigs[id]?.providerVariant,
         // #434 — per-agent specific model id chosen in the wizard's
         // model-pick phase; falls back to the variant default when omitted.
         modelVersion: agentConfigs[id]?.modelVersion,
@@ -4008,11 +4241,15 @@ export async function runInstallStep(
         entry,
         registry: services.registry,
         llmProvider: cfg?.llmProvider,
+        providerVariant: cfg?.providerVariant,
+        modelVersion: cfg?.modelVersion,
         responsibilityNote: cfg?.responsibilityNote,
       });
       summary.registered.push(id);
       log(`  ✓ registered as "${id}"`);
       if (cfg?.llmProvider) log(`    LLM provider: ${cfg.llmProvider}`);
+      if (cfg?.providerVariant) log(`    Provider variant: ${cfg.providerVariant}`);
+      if (cfg?.modelVersion) log(`    Model: ${cfg.modelVersion}`);
       if (cfg?.responsibilityNote)
         log(`    Responsibility: ${cfg.responsibilityNote}`);
       // Some agents (Hermes) keep their own MCP server registry CLI-side

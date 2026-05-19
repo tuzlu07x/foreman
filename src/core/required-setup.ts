@@ -70,6 +70,10 @@ export interface ResolveRequiredSetupOptions {
   /** Map of agentId → Foreman-level provider id the user picked for
    *  that agent. Agents not in this map are skipped (no provider chosen). */
   agentProviders: Record<string, string>;
+  /** #450 — Map of agentId → variant id the user picked. When unset
+   *  for an agent, resolver uses the registry's `preferred` variant
+   *  for that provider. */
+  agentVariants?: Record<string, string>;
   /** Used to check which secret slots are already populated. */
   secretStore: SecretStore;
   /** Optional model-id override per Foreman provider. Used by the live
@@ -107,6 +111,7 @@ export function resolveRequiredSetup(
       agent,
       foremanProvider,
       modelId,
+      variantOverride: opts.agentVariants?.[agent.id],
     });
     if (!resolved.ok) {
       // Resolver-level errors (no_mapping, unsupported_provider, etc.).
