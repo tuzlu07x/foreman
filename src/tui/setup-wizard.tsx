@@ -2979,9 +2979,14 @@ export function SetupWizard({
             {variantIds.map((vid) => {
               const v = providerMapping!.variants[vid]!;
               const isSelected = vid === cursor;
+              // #461 — Variants that piggyback on another agent's OAuth
+              // must say so. Showing "no extra key needed" used to send
+              // users straight into a silent provider-auth failure.
               const reqHint = v.required_secret
                 ? `needs ${v.required_secret}`
-                : "no extra key needed";
+                : v.depends_on_oauth
+                  ? `requires ${v.depends_on_oauth.agent} OAuth (run \`${v.depends_on_oauth.setup_command}\` first)`
+                  : "no extra key needed";
               const acq = v.secret_acquisition?.note;
               return (
                 <Box flexDirection="column" key={vid}>
@@ -3631,9 +3636,16 @@ export function SetupWizard({
               These you'll run manually AFTER setup completes:
             </Text>
             {res.oauthSteps.map((o) => (
-              <Text key={`${o.agentId}-${o.command}`} color={theme.fg.muted}>
-                {"  "}• {o.agentId}: <Text bold>{o.command}</Text>
-              </Text>
+              <Box key={`${o.agentId}-${o.command}`} flexDirection="column">
+                <Text color={o.mandatory ? theme.accent.warning : theme.fg.muted}>
+                  {"  "}
+                  {o.mandatory ? "⚠ MUST: " : "• "}
+                  {o.agentId}: <Text bold>{o.command}</Text>
+                </Text>
+                {o.mandatory && o.reason ? (
+                  <Text color={theme.fg.muted}>{"     "}{o.reason}</Text>
+                ) : null}
+              </Box>
             ))}
           </Box>
         ) : null}
@@ -3881,19 +3893,56 @@ export function SetupWizard({
       {/* #408 / #411 Phase 3 — surface queued OAuth flows that the user
           accepted to run manually. Without this hint the wizard would
           leave Codex / Claude Code in an un-authenticated state and the
-          user wouldn't know which command to run. */}
-      {requiredSetupResolution.oauthSteps.length > 0 && (
+          user wouldn't know which command to run. #461 splits mandatory
+          cross-agent OAuth dependencies into a separate must-do block;
+          skipping those leaves the agent unable to talk to its provider
+          (silent failure on first message). */}
+      {requiredSetupResolution.oauthSteps.filter((o) => o.mandatory).length > 0 && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold color={theme.accent.warning}>
+            ⚠ Mandatory — these MUST run before the agent can reach its
+            provider
+          </Text>
+          {requiredSetupResolution.oauthSteps
+            .filter((o) => o.mandatory)
+            .map((o) => (
+              <Box
+                key={`${o.agentId}-${o.command}`}
+                flexDirection="column"
+                marginLeft={2}
+              >
+                <Box flexDirection="row">
+                  <Text color={theme.accent.warning}>▸ {o.command}</Text>
+                  <Text color={theme.fg.muted}>
+                    {"  "}({o.agentId}
+                    {o.verify ? ` · verify: ${o.verify}` : ""})
+                  </Text>
+                </Box>
+                {o.reason ? (
+                  <Text color={theme.fg.muted}>{"  "}{o.reason}</Text>
+                ) : null}
+              </Box>
+            ))}
+        </Box>
+      )}
+      {requiredSetupResolution.oauthSteps.filter((o) => !o.mandatory).length > 0 && (
         <Box flexDirection="column" marginTop={1}>
           <Text bold>Run these to finish OAuth setup</Text>
-          {requiredSetupResolution.oauthSteps.map((o) => (
-            <Box key={`${o.agentId}-${o.command}`} flexDirection="row" marginLeft={2}>
-              <Text color={theme.accent.primary}>▸ {o.command}</Text>
-              <Text color={theme.fg.muted}>
-                {"  "}({o.agentId}
-                {o.verify ? ` · verify: ${o.verify}` : ""})
-              </Text>
-            </Box>
-          ))}
+          {requiredSetupResolution.oauthSteps
+            .filter((o) => !o.mandatory)
+            .map((o) => (
+              <Box
+                key={`${o.agentId}-${o.command}`}
+                flexDirection="row"
+                marginLeft={2}
+              >
+                <Text color={theme.accent.primary}>▸ {o.command}</Text>
+                <Text color={theme.fg.muted}>
+                  {"  "}({o.agentId}
+                  {o.verify ? ` · verify: ${o.verify}` : ""})
+                </Text>
+              </Box>
+            ))}
         </Box>
       )}
       <Box flexDirection="column" marginTop={1}>

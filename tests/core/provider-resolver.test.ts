@@ -58,6 +58,13 @@ describe("resolveAgentProviderConfig — happy paths", () => {
     expect(result.config.interactiveSetup).toBe("hermes model");
     expect(result.config.postSetupVerify).toBe("hermes doctor");
     expect(result.config.requiredSecret).toBeNull();
+    // #461 — variant rides on Codex's OAuth; resolver must surface that
+    // so the wizard renders the right label + mandatory Done-screen step.
+    expect(result.config.dependsOnOauth).toEqual({
+      agent: "codex",
+      setupCommand: "codex login",
+      verifyCommand: "codex auth status",
+    });
   });
 
   it("OpenClaw + openai resolves to native slash-form model", () => {
