@@ -55,16 +55,18 @@ describe("resolveAgentProviderConfig — happy paths", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.config.variantId).toBe("via-codex-oauth");
-    expect(result.config.interactiveSetup).toBe("hermes model");
-    expect(result.config.postSetupVerify).toBe("hermes doctor");
+    // QA round 6: Hermes manages its OWN Codex OAuth via `hermes login
+    // --provider openai-codex` (not Codex CLI's auth.json). The variant
+    // is the SOLE auth path, so #471's mandatory promotion fires on
+    // this interactive_setup alone — no depends_on_oauth.
+    expect(result.config.interactiveSetup).toBe(
+      "hermes login --provider openai-codex",
+    );
+    expect(result.config.postSetupVerify).toBe(
+      "hermes auth status openai-codex",
+    );
     expect(result.config.requiredSecret).toBeNull();
-    // #461 — variant rides on Codex's OAuth; resolver must surface that
-    // so the wizard renders the right label + mandatory Done-screen step.
-    expect(result.config.dependsOnOauth).toEqual({
-      agent: "codex",
-      setupCommand: "codex login",
-      verifyCommand: "codex login status",
-    });
+    expect(result.config.dependsOnOauth).toBeNull();
   });
 
   it("OpenClaw + openai resolves to native slash-form model", () => {
