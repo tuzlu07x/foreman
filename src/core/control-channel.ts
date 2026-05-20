@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import type { ForemanDb } from "../db/client.js";
 import {
   controlCommands,
@@ -111,6 +111,21 @@ export class ControlChannel {
       .set({ status: "rejected", appliedAt: Date.now(), error })
       .where(eq(controlCommands.id, id))
       .run();
+  }
+
+  /** Most-recent rows first — backs `/foreman activity` so users can
+   *  see what directives have been issued and their status without
+   *  needing the Foreman LLM. */
+  recent(limit = 10): ControlCommand[] {
+    return this.db
+      .select()
+      .from(controlCommands)
+      // Tiebreak by id desc — rows enqueued in the same millisecond
+      // otherwise come back in undefined order, which makes the
+      // newest-first contract user-visibly flaky.
+      .orderBy(desc(controlCommands.createdAt), desc(controlCommands.id))
+      .limit(limit)
+      .all();
   }
 
   /** Get a single row by id — used by tests + the synchronous drain
