@@ -415,11 +415,33 @@ function enqueueMutating(
     };
   }
   if (!ctx.ownerStore || !isOwner(ctx.ownerStore, { sourceUser: ctx.sourceUser })) {
+    // QA round 10: distinguish "no source_user was sent" (agent's LLM
+    // forgot to include it on the MCP call — common, intermittent) from
+    // "source_user sent but doesn't match telegram-chat-id" (real
+    // unauthorized). The first case used to render the same "make
+    // sure your Telegram user id is in telegram-chat-id" message,
+    // which confused users whose id WAS configured correctly.
+    const missingSourceUser =
+      !ctx.sourceUser || ctx.sourceUser.trim().length === 0;
+    if (missingSourceUser) {
+      return {
+        ok: false,
+        text:
+          `\`foreman ${command}\` needs your Telegram user id to verify ` +
+          `ownership, but the agent didn't pass it. This happens when the ` +
+          `agent's LLM forgets to include \`source_user\` on the MCP call. ` +
+          `Try the same command again — most agents include it on retry. ` +
+          `If it keeps failing, run \`foreman doctor\` on the host machine.`,
+        errorCode: "NOT_AUTHORIZED",
+      };
+    }
     return {
       ok: false,
       text:
-        `\`/foreman ${command}\` is owner-only. ` +
-        `Foreman couldn't verify your identity — make sure your Telegram user id is the one in \`telegram-chat-id\`.`,
+        `\`foreman ${command}\` is owner-only. Your Telegram user id ` +
+        `(${ctx.sourceUser}) doesn't match the configured \`telegram-chat-id\`. ` +
+        `Fix: run \`foreman secrets rotate telegram-chat-id\` and paste your ` +
+        `current user id, or contact the host owner.`,
       errorCode: "NOT_AUTHORIZED",
     };
   }
