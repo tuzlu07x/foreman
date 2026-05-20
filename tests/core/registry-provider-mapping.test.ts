@@ -181,8 +181,16 @@ describe("Bundled registry — each shipped agent's provider_mapping (#408 phase
     const oauth =
       hermes?.provider_mapping?.openai?.variants["via-codex-oauth"];
     expect(oauth).toBeDefined();
-    expect(oauth?.required_secret).toBeUndefined();
-    expect(oauth?.interactive_setup).toBe("hermes model");
+    // QA round 6: this variant explicitly sets required_secret: null
+    // (not undefined) because the picker auto-skip logic + secret
+    // checks key on `required_secret === null` semantics.
+    expect(oauth?.required_secret).toBeNull();
+    // Hermes runs its OWN OAuth for the OpenAI-Codex provider; it does
+    // NOT read Codex CLI's auth.json. The interactive_setup IS the auth.
+    expect(oauth?.interactive_setup).toBe(
+      "hermes login --provider openai-codex",
+    );
+    expect(oauth?.writes?.["model.provider"]).toBe("openai-codex");
   });
 
   it("Hermes anthropic + gemini variants use native provider strings", () => {
