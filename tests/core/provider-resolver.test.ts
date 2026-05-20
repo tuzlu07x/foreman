@@ -63,7 +63,7 @@ describe("resolveAgentProviderConfig — happy paths", () => {
     expect(result.config.dependsOnOauth).toEqual({
       agent: "codex",
       setupCommand: "codex login",
-      verifyCommand: "codex auth status",
+      verifyCommand: "codex login status",
     });
   });
 
@@ -95,7 +95,7 @@ describe("resolveAgentProviderConfig — happy paths", () => {
     if (!result.ok) return;
     expect(result.config.variantId).toBe("oauth");
     expect(result.config.interactiveSetup).toBe("codex login");
-    expect(result.config.postSetupVerify).toBe("codex auth status");
+    expect(result.config.postSetupVerify).toBe("codex login status");
     expect(result.config.requiredSecret).toBeNull();
     expect(result.config.tomlWrites[0]?.value).toBe("chatgpt");
   });

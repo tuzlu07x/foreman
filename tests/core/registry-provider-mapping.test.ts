@@ -49,7 +49,7 @@ describe("AgentEntrySchema — provider_mapping (#408 phase 1)", () => {
               label: "OpenAI via Codex OAuth",
               writes: { "model.provider": "codex" },
               interactive_setup: "codex login",
-              post_setup_verify: "codex auth status",
+              post_setup_verify: "codex login status",
               required_secret: null,
             },
           },
@@ -216,7 +216,7 @@ describe("Bundled registry — each shipped agent's provider_mapping (#408 phase
     expect(codex?.provider_mapping?.openai?.preferred).toBe("oauth");
     const oauth = codex?.provider_mapping?.openai?.variants.oauth;
     expect(oauth?.interactive_setup).toBe("codex login");
-    expect(oauth?.post_setup_verify).toBe("codex auth status");
+    expect(oauth?.post_setup_verify).toBe("codex login status");
     expect(oauth?.required_secret).toBeNull();
   });
 
