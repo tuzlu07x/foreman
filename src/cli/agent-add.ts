@@ -264,7 +264,24 @@ export async function runAgentAddScripted(
     handlePrivateKey(result.privateKey, options.keyOut, log);
     if (entry.identity_path) {
       try {
-        const soulResult = applyForemanSoul(entry, getForemanPaths().soulPath);
+        // QA round 13: pass responsibility + peer agents so the multi-
+        // agent SOUL.md gets the right context. Falls back gracefully
+        // when no peers are registered yet (e.g. first agent install).
+        const thisAgent = deps.registry.get(agentId);
+        const peers = deps.registry
+          .list()
+          .filter((a) => a.id !== agentId)
+          .map((a) => ({
+            id: a.id,
+            displayName: a.displayName,
+            responsibilityNote: a.responsibilityNote,
+          }));
+        const soulResult = applyForemanSoul({
+          entry,
+          soulPath: getForemanPaths().soulPath,
+          responsibilityNote: thisAgent?.responsibilityNote ?? null,
+          peers,
+        });
         if (soulResult?.changed) {
           log(green("✓") + ` wrote Foreman identity to ${soulResult.path}`);
         } else if (soulResult) {

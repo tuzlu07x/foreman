@@ -4994,10 +4994,26 @@ export async function runInstallStep(
       }
       if (entry.identity_path) {
         try {
-          const soulResult = applyForemanSoul(
+          // QA round 13: hand applyForemanSoul the agent's responsibility
+          // note + sibling agent map so {responsibility} and
+          // {peer_agents_block} substitution gets concrete data instead
+          // of generic fallbacks. Registry already has all agents
+          // registered by this point in the install loop.
+          const thisRegistered = services.registry.get(id);
+          const peers = services.registry
+            .list()
+            .filter((a) => a.id !== id)
+            .map((a) => ({
+              id: a.id,
+              displayName: a.displayName,
+              responsibilityNote: a.responsibilityNote,
+            }));
+          const soulResult = applyForemanSoul({
             entry,
-            getForemanPaths().soulPath,
-          );
+            soulPath: getForemanPaths().soulPath,
+            responsibilityNote: thisRegistered?.responsibilityNote ?? null,
+            peers,
+          });
           // QA round 5: applyForemanSoul returns `changed: false` when
           // the agent's identity file already matches the source.
           // That's NOT a failure — the identity IS in place. We used
