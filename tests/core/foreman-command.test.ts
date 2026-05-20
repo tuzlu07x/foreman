@@ -242,25 +242,28 @@ describe("ForemanCommandRouter (#431)", () => {
       expect(channel.pending()).toHaveLength(0);
     });
 
-    it("returns NOT_AUTHORIZED with a different (LLM-forgot) message when source_user is absent", async () => {
+    it("falls back to telegram-chat-id when source_user is absent (QA round 13)", async () => {
+      // The agent's LLM intermittently forgets to pass source_user on
+      // the MCP call. Rather than reject the legit owner on those
+      // turns, Foreman now falls back to the configured
+      // telegram-chat-id. Safe for 1:1 chats (only the owner DMs the
+      // bot anyway). Group chats are not yet supported in v0.1.
       const channel = new ControlChannel(db);
       const store = makeOwnerStore({ "telegram-chat-id": "owner123" });
       const result = await router.dispatch("stop", [], {
         ...ctx,
         controlChannel: channel,
         ownerStore: store,
-        // sourceUser intentionally omitted
+        // sourceUser intentionally omitted — fallback should kick in
       });
-      expect(result.ok).toBe(false);
-      expect(result.errorCode).toBe("NOT_AUTHORIZED");
-      // Distinct text from the mismatch case — points at the agent
-      // forgetting to relay source_user, with a "try again" remediation.
-      expect(result.text).toMatch(/didn't pass it|forgets to include/);
-      expect(result.text).toMatch(/Try the same command again/);
-      expect(result.text).not.toMatch(/doesn't match/);
+      expect(result.ok).toBe(true);
+      expect(channel.pending()).toHaveLength(1);
+      // The enqueued row carries the resolved owner id so the drain
+      // handler sees a consistent value.
+      expect(channel.pending()[0]?.sourceUser).toBe("owner123");
     });
 
-    it("treats empty-string source_user the same as missing", async () => {
+    it("falls back identically when source_user is empty string (QA round 13)", async () => {
       const channel = new ControlChannel(db);
       const store = makeOwnerStore({ "telegram-chat-id": "owner123" });
       const result = await router.dispatch("stop", [], {
@@ -269,8 +272,24 @@ describe("ForemanCommandRouter (#431)", () => {
         ownerStore: store,
         sourceUser: "",
       });
+      expect(result.ok).toBe(true);
+      expect(channel.pending()).toHaveLength(1);
+    });
+
+    it("rejects when source_user is absent AND no telegram-chat-id is configured", async () => {
+      // No fallback available → user gets a clear "configure
+      // telegram-chat-id" hint, not the old "agent forgot" message.
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({}); // empty — no telegram-chat-id
+      const result = await router.dispatch("stop", [], {
+        ...ctx,
+        controlChannel: channel,
+        ownerStore: store,
+      });
+      expect(result.ok).toBe(false);
       expect(result.errorCode).toBe("NOT_AUTHORIZED");
-      expect(result.text).toMatch(/didn't pass it|forgets to include/);
+      expect(result.text).toMatch(/didn't pass it/);
+      expect(result.text).toMatch(/secrets add telegram-chat-id/);
     });
 
     it("enqueues a stop row + returns the queued id on owner match", async () => {

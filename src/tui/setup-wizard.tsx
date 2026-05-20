@@ -5054,6 +5054,44 @@ export async function runInstallStep(
     log("(no agent changes — selection matches current registration)");
   }
 
+  // QA round 13 — peer-list propagation. During the install loop, each
+  // agent's SOUL.md is written with peers = "agents registered SO FAR",
+  // which means the FIRST agent installed sees zero peers (it's the only
+  // one registered at that moment). Now that all toAdd agents are
+  // registered, walk the registry once more and re-apply the soul for
+  // every agent with an identity_path. This is idempotent (changed:false
+  // when the file already matches), so subsequent runs are no-ops.
+  if (toAdd.length > 0) {
+    log("");
+    log("▸ Refreshing peer awareness across all agents");
+    const registered = services.registry.list();
+    const allPeers = registered.map((a) => ({
+      id: a.id,
+      displayName: a.displayName,
+      responsibilityNote: a.responsibilityNote,
+    }));
+    for (const reg of registered) {
+      const entry = safeFind(doc, reg.id);
+      if (!entry?.identity_path) continue;
+      try {
+        const peers = allPeers.filter((p) => p.id !== reg.id);
+        const r = applyForemanSoul({
+          entry,
+          soulPath: getForemanPaths().soulPath,
+          responsibilityNote: reg.responsibilityNote,
+          peers,
+        });
+        if (r?.changed) {
+          log(`  ✓ ${reg.id} — peer list refreshed`);
+        }
+      } catch (err) {
+        log(
+          `  ⚠ ${reg.id} — peer refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
   return summary;
 }
 
