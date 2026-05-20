@@ -59,12 +59,12 @@
                 "model.provider": "openai-codex",
                 "model.base_url": ""
               },
-              "interactive_setup": "hermes login --provider openai-codex",
+              "interactive_setup": "hermes auth add openai-codex --type oauth",
               "post_setup_verify": "hermes auth status openai-codex",
               "required_secret": null,
               "secret_acquisition": {
                 "name": "Hermes' OpenAI Codex OAuth session",
-                "note": "Hermes manages its OWN Codex OAuth credentials (separate from the Codex CLI's auth.json). Run `hermes login --provider openai-codex` and complete the browser flow — Foreman auto-runs this on Done."
+                "note": "Hermes manages its OWN Codex OAuth credentials (separate from the Codex CLI's auth.json). Run `hermes auth add openai-codex --type oauth` and complete the browser flow — Foreman auto-runs this on Done."
               }
             }
           }
