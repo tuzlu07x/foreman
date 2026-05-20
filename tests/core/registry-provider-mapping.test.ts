@@ -188,7 +188,7 @@ describe("Bundled registry — each shipped agent's provider_mapping (#408 phase
     // Hermes runs its OWN OAuth for the OpenAI-Codex provider; it does
     // NOT read Codex CLI's auth.json. The interactive_setup IS the auth.
     expect(oauth?.interactive_setup).toBe(
-      "hermes login --provider openai-codex",
+      "hermes auth add openai-codex --type oauth",
     );
     expect(oauth?.writes?.["model.provider"]).toBe("openai-codex");
   });

@@ -60,7 +60,7 @@ describe("resolveAgentProviderConfig — happy paths", () => {
     // is the SOLE auth path, so #471's mandatory promotion fires on
     // this interactive_setup alone — no depends_on_oauth.
     expect(result.config.interactiveSetup).toBe(
-      "hermes login --provider openai-codex",
+      "hermes auth add openai-codex --type oauth",
     );
     expect(result.config.postSetupVerify).toBe(
       "hermes auth status openai-codex",

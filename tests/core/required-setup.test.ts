@@ -208,7 +208,7 @@ describe("resolveRequiredSetup — bundled-registry scenarios", () => {
   // QA round 6: Hermes' via-codex-oauth was originally modeled as
   // piggybacking on Codex CLI's auth.json (depends_on_oauth → codex login).
   // That was wrong — Hermes runs its OWN OpenAI-Codex OAuth flow via
-  // `hermes login --provider openai-codex` and reads its own token store
+  // `hermes auth add openai-codex --type oauth` and reads its own token store
   // (NOT Codex CLI's). Mandatory step is the interactive_setup itself,
   // promoted by the sole-auth-path rule from earlier round.
   it("via-codex-oauth queues a MANDATORY hermes login step (sole-auth-path)", () => {
@@ -221,7 +221,7 @@ describe("resolveRequiredSetup — bundled-registry scenarios", () => {
     const mandatory = res.oauthSteps.find((o) => o.mandatory);
     expect(mandatory).toBeDefined();
     expect(mandatory?.command).toBe(
-      "hermes login --provider openai-codex",
+      "hermes auth add openai-codex --type oauth",
     );
     expect(mandatory?.verify).toBe("hermes auth status openai-codex");
     expect(mandatory?.agentId).toBe("hermes");
