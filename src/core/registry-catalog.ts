@@ -157,6 +157,17 @@ export const AgentEntrySchema = z
      *  longer than others. Only honored when `task_command_template`
      *  is also set. */
     task_timeout_seconds: z.number().int().positive().optional(),
+    /** Env vars to STRIP from process.env before spawning this agent
+     *  (QA round 15 finding). Background: when claude-code is set up
+     *  via OAuth, the CLI still prefers `ANTHROPIC_API_KEY` from the
+     *  environment over the OAuth tokens. If a stale / invalid env var
+     *  is set anywhere in the user's shell, the spawn fails with
+     *  "Invalid API key" even though OAuth login succeeded. Same trap
+     *  for codex w/ `OPENAI_API_KEY`. Listing the vars here lets the
+     *  spawn engine remove them deterministically, forcing the agent
+     *  to use its own auth path. Only honored when
+     *  `task_command_template` is set. */
+    task_env_strip: z.array(z.string().min(1)).optional(),
     /** MCP config block shape (#385). `flat` writes `{<mcp_servers_key>:
      *  {foreman: ...}}` (Claude Code / Hermes / Codex). `nested` writes
      *  `{mcp: {enabled: true, servers: {foreman: ...}}}` (OpenClaw).
