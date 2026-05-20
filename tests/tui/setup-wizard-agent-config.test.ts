@@ -4,6 +4,7 @@ import {
   buildAgentConfigPromptList,
   classifyModelDiscoveryError,
   computeSingleCompatProviderSeeds,
+  findSiblingCredHint,
 } from "../../src/tui/setup-wizard.js";
 import type { AgentEntry } from "../../src/core/registry-catalog.js";
 
@@ -451,5 +452,80 @@ describe("classifyModelDiscoveryError (#audit-finding-6)", () => {
   it("passes through unknown messages unchanged", () => {
     const raw = "some bespoke error we didn't classify";
     expect(classifyModelDiscoveryError(raw, "openai")).toBe(raw);
+  });
+});
+
+// #469 — Cross-variant credential hint. When the user highlights an
+// OAuth / no-key variant in the variant picker, surface a note if a
+// SIBLING variant's required_secret is already stored. Prevents the
+// "I pasted my OpenAI key, why isn't anything using it?" footgun.
+describe("findSiblingCredHint (#469)", () => {
+  const hermesOpenai = {
+    variants: {
+      "via-openrouter": {
+        label: "OpenAI via OpenRouter",
+        required_secret: "openrouter-key",
+      },
+      "via-codex-oauth": {
+        label: "OpenAI via Codex OAuth",
+        required_secret: null,
+      },
+    },
+  };
+
+  it("surfaces a hint when sibling needs a stored secret", () => {
+    const result = findSiblingCredHint(
+      hermesOpenai,
+      "via-codex-oauth",
+      new Set(["openrouter-key"]),
+    );
+    expect(result).not.toBeNull();
+    expect(result).toContain("openrouter-key");
+    expect(result).toContain("OpenAI via OpenRouter");
+  });
+
+  it("returns null when no sibling's secret is stored", () => {
+    const result = findSiblingCredHint(
+      hermesOpenai,
+      "via-codex-oauth",
+      new Set(["anthropic-key"]),
+    );
+    expect(result).toBeNull();
+  });
+
+  it("returns null when called on the secret-needing variant itself", () => {
+    const result = findSiblingCredHint(
+      hermesOpenai,
+      "via-openrouter",
+      new Set(["openrouter-key"]),
+    );
+    expect(result).toBeNull();
+  });
+
+  it("ignores siblings that also have null required_secret", () => {
+    const allOauth = {
+      variants: {
+        "oauth-a": { label: "A", required_secret: null },
+        "oauth-b": { label: "B", required_secret: null },
+      },
+    };
+    expect(findSiblingCredHint(allOauth, "oauth-a", new Set())).toBeNull();
+  });
+
+  it("picks the FIRST matching sibling when multiple credentials are stored", () => {
+    const mapping = {
+      variants: {
+        "via-x": { label: "Route X", required_secret: "x-key" },
+        "via-y": { label: "Route Y", required_secret: "y-key" },
+        "via-oauth": { label: "OAuth", required_secret: null },
+      },
+    };
+    const result = findSiblingCredHint(
+      mapping,
+      "via-oauth",
+      new Set(["x-key", "y-key"]),
+    );
+    expect(result).not.toBeNull();
+    expect(result).toMatch(/(x-key|y-key)/);
   });
 });
