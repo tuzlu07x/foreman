@@ -128,6 +128,32 @@ export const AgentEntrySchema = z
      *  file write is future-proofing for agents that opt in later.
      *  Path supports `~` expansion. */
     inbound_dir: z.string().min(1).optional(),
+    /** Non-interactive task command template (PR B of multi-agent
+     *  orchestration epic). When set, Foreman can spawn the agent as
+     *  a subprocess to execute a task — used by `foreman write <agent>
+     *  <task>` to actually invoke the agent rather than just queue a
+     *  directive. Generic across any agent that exposes a "run one
+     *  task and exit" CLI mode (`codex exec`, `claude --print`, etc.).
+     *
+     *  The string is interpreted as a shell command with `${task}`
+     *  substituted to the user-provided task text. Examples:
+     *    "codex exec \"${task}\""
+     *    "claude --print \"${task}\""
+     *
+     *  Quoting note: substitution happens before shell parsing, so
+     *  task text must be quoted in the template. The spawn engine
+     *  (PR C) handles task-content escaping safely. Optional —
+     *  daemon-style agents (Hermes) leave it unset; they receive
+     *  tasks through their own channel (Telegram message, inbound_dir
+     *  watch, etc.). */
+    task_command_template: z.string().min(1).optional(),
+    /** Soft timeout for non-interactive task execution in seconds.
+     *  Default 300s (5 min) — generous enough for most code-gen tasks,
+     *  short enough to bail on a wedged subprocess. Configurable per
+     *  agent since some agents (researchers, doc generators) may take
+     *  longer than others. Only honored when `task_command_template`
+     *  is also set. */
+    task_timeout_seconds: z.number().int().positive().optional(),
     /** MCP config block shape (#385). `flat` writes `{<mcp_servers_key>:
      *  {foreman: ...}}` (Claude Code / Hermes / Codex). `nested` writes
      *  `{mcp: {enabled: true, servers: {foreman: ...}}}` (OpenClaw).
