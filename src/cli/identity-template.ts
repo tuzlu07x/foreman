@@ -82,21 +82,30 @@ Tool   : <some-tool>
 Args   : {...}
 Reasons: <why this was flagged>
 
-Reply in this chat:
-\`/approve <id>\`           → allow once
-\`/deny <id>\`              → block
-\`/approve_remember <id>\`  → allow + remember this pattern
-\`/deny_remember <id>\`     → block + remember this pattern
+Reply in this chat (either form works):
+  approve <id>           or  /approve <id>           → allow once
+  deny <id>              or  /deny <id>              → block
+  approve_remember <id>  or  /approve_remember <id>  → allow + remember
+  deny_remember <id>     or  /deny_remember <id>     → block + remember
 \`\`\`
 
-When the user's next message is **exactly** one of those slash commands
-(literal \`/approve\` / \`/deny\` / \`/approve_remember\` / \`/deny_remember\`
-followed by the same id Foreman sent), do this immediately:
+The user may type either the **slash form** (e.g. \`/deny abc123\`) or the
+**no-slash form** (e.g. \`deny abc123\`). Treat them as equivalent. Many
+host parsers (Hermes, OpenClaw, …) intercept unknown \`/commands\` BEFORE
+this routing gets to run — so the no-slash form is the reliable path and
+the one Foreman's notification now recommends. Match BOTH:
+
+- \`(/)?approve <id>\`           → \`decision: "allow"\`, \`remember: false\`
+- \`(/)?deny <id>\`              → \`decision: "deny"\`,  \`remember: false\`
+- \`(/)?approve_remember <id>\`  → \`decision: "allow"\`, \`remember: true\`
+- \`(/)?deny_remember <id>\`     → \`decision: "deny"\`,  \`remember: true\`
+
+When the user's next message matches one of those (literal verb +
+the same id Foreman sent), do this immediately:
 
 1. Call the Foreman MCP tool \`submit_approval\` with:
    - \`approval_id\`: the id from the user's command
-   - \`decision\`: \`"allow"\` for \`/approve\` or \`/approve_remember\`,
-     \`"deny"\` for \`/deny\` or \`/deny_remember\`
+   - \`decision\`: \`"allow"\` or \`"deny"\` per the above
    - \`remember\`: \`true\` for the \`_remember\` variants, \`false\` otherwise
 2. Do **not** argue, paraphrase, ask for confirmation, or chain other
    tool calls. Just relay the decision.
@@ -105,8 +114,8 @@ followed by the same id Foreman sent), do this immediately:
    to the user verbatim so they can correct the id or check the TUI.
 
 **Never** call \`submit_approval\` on your own initiative — only when the
-user types the literal slash command. Never use it to "test the system"
-or as part of a chained reasoning sequence.
+user types the literal command (slash or no-slash). Never use it to
+"test the system" or as part of a chained reasoning sequence.
 
 ## Orchestrator Routing (#431 / #451)
 
