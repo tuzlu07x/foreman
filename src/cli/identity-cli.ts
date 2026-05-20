@@ -109,7 +109,22 @@ function pushToAgents(soulPath: string): void {
         continue;
       }
       try {
-        const result = applyForemanSoul(entry, soulPath);
+        // QA round 13: forward registry context so the multi-agent
+        // SOUL.md gets responsibility + peer info, not the generic
+        // fallback. registry.list() is already loaded above.
+        const peers = registered
+          .filter((a) => a.id !== agent.id)
+          .map((a) => ({
+            id: a.id,
+            displayName: a.displayName,
+            responsibilityNote: a.responsibilityNote,
+          }));
+        const result = applyForemanSoul({
+          entry,
+          soulPath,
+          responsibilityNote: agent.responsibilityNote,
+          peers,
+        });
         if (result?.changed) {
           console.log(`  ${green("✓")} ${entry.name} ${dim(result.path)}`);
           wrote += 1;
