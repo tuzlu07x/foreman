@@ -63,7 +63,7 @@
               "depends_on_oauth": {
                 "agent": "codex",
                 "setup_command": "codex login",
-                "verify_command": "codex auth status"
+                "verify_command": "codex login status"
               }
             }
           }
@@ -401,7 +401,7 @@
                 }
               ],
               "interactive_setup": "codex login",
-              "post_setup_verify": "codex auth status",
+              "post_setup_verify": "codex login status",
               "required_secret": null,
               "secret_acquisition": {
                 "name": "ChatGPT account login",

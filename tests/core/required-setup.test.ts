@@ -76,7 +76,7 @@ describe("resolveRequiredSetup — bundled-registry scenarios", () => {
     expect(res.secrets).toEqual([]);
     expect(res.oauthSteps).toHaveLength(1);
     expect(res.oauthSteps[0]?.command).toBe("codex login");
-    expect(res.oauthSteps[0]?.verify).toBe("codex auth status");
+    expect(res.oauthSteps[0]?.verify).toBe("codex login status");
     expect(res.oauthSteps[0]?.agentId).toBe("codex");
     // QA round 4 — when required_secret is null AND interactive_setup
     // is set, the interactive_setup IS the sole auth path so it MUST
@@ -218,7 +218,7 @@ describe("resolveRequiredSetup — bundled-registry scenarios", () => {
     const mandatory = res.oauthSteps.find((o) => o.mandatory);
     expect(mandatory).toBeDefined();
     expect(mandatory?.command).toBe("codex login");
-    expect(mandatory?.verify).toBe("codex auth status");
+    expect(mandatory?.verify).toBe("codex login status");
     expect(mandatory?.agentId).toBe("hermes");
     expect(mandatory?.reason?.toLowerCase()).toContain("codex");
   });
@@ -302,7 +302,7 @@ describe("isRequiredSetupComplete", () => {
           agentId: "codex",
           variantId: "oauth",
           command: "codex login",
-          verify: "codex auth status",
+          verify: "codex login status",
           acquisition: null,
           mandatory: false,
           reason: null,
