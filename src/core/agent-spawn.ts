@@ -1,4 +1,5 @@
-import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
+import type { Readable } from "node:stream";
 import { parse as parseShell } from "shell-quote";
 import type { AgentEntry } from "./registry-catalog.js";
 
@@ -63,8 +64,12 @@ export type SpawnLike = (
     env?: NodeJS.ProcessEnv;
     shell: false;
     detached?: boolean;
+    /** Optional stdio override — defaults to ['ignore','pipe','pipe']
+     *  in the engine so the child can't block on parent stdin (QA
+     *  round 15: `claude --print` waits 3s on stdin otherwise). */
+    stdio?: ["ignore" | "pipe", "pipe", "pipe"];
   },
-) => ChildProcessWithoutNullStreams;
+) => ChildProcess;
 
 export type SpawnAgentTaskOutcome =
   | {
@@ -150,7 +155,14 @@ export async function spawnAgentTask(
     FOREMAN_SPAWN_DEPTH: String(currentDepth + 1),
     FOREMAN_SPAWNED_BY: options.entry.id,
   };
-  let child: ChildProcessWithoutNullStreams;
+  // QA round 15 — strip env vars listed in `task_env_strip` so an
+  // invalid/stale value (e.g. `ANTHROPIC_API_KEY` from an old shell)
+  // doesn't override the agent's OAuth credentials. The agent's
+  // registry entry decides which keys; the spawn engine just executes.
+  for (const key of options.entry.task_env_strip ?? []) {
+    delete childEnv[key];
+  }
+  let child: ChildProcess;
   try {
     child = spawnFn(command, args, {
       cwd: options.cwd,
@@ -162,6 +174,11 @@ export async function spawnAgentTask(
       // top-level shell. Without this, scripts that fork helpers leak
       // orphan processes when timeout hits.
       detached: true,
+      // QA round 15 — `claude --print` (and similar CLIs) wait up to 3s
+      // for stdin data before proceeding. The parent isn't writing
+      // anything, so close the child's stdin upfront. /dev/null on
+      // POSIX = closed pipe → child gets immediate EOF and runs.
+      stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (err) {
     return {
@@ -213,10 +230,16 @@ export function buildArgvFromTemplate(
 }
 
 function runChild(
-  child: ChildProcessWithoutNullStreams,
+  child: ChildProcess,
   timeoutMs: number,
   onLine?: (stream: "stdout" | "stderr", line: string) => void,
 ): Promise<SpawnAgentTaskOutcome> {
+  // With stdio: ['ignore', 'pipe', 'pipe'] both child.stdout and
+  // child.stderr are non-null Readables — narrow the types once here
+  // so downstream handlers don't need null-checks. (child.stdin IS
+  // null but we never write to it.)
+  const stdout = child.stdout as Readable;
+  const stderr = child.stderr as Readable;
   const startedAt = Date.now();
   return new Promise<SpawnAgentTaskOutcome>((resolve) => {
     let stdoutBuf = "";
@@ -241,13 +264,13 @@ function runChild(
     };
     let stdoutTail = "";
     let stderrTail = "";
-    child.stdout.setEncoding("utf-8");
-    child.stderr.setEncoding("utf-8");
-    child.stdout.on("data", (chunk: string) => {
+    stdout.setEncoding("utf-8");
+    stderr.setEncoding("utf-8");
+    stdout.on("data", (chunk: string) => {
       stdoutBuf += chunk;
       stdoutTail = lineSplit("stdout", stdoutTail, chunk);
     });
-    child.stderr.on("data", (chunk: string) => {
+    stderr.on("data", (chunk: string) => {
       stderrBuf += chunk;
       stderrTail = lineSplit("stderr", stderrTail, chunk);
     });
