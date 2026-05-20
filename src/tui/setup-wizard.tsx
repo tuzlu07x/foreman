@@ -4974,9 +4974,21 @@ export async function runInstallStep(
             entry,
             getForemanPaths().soulPath,
           );
-          if (soulResult?.changed) {
+          // QA round 5: applyForemanSoul returns `changed: false` when
+          // the agent's identity file already matches the source.
+          // That's NOT a failure — the identity IS in place. We used
+          // to only count `changed: true` cases, so a re-run / partial
+          // wipe (~/.hermes removed but ~/.codex kept) showed
+          // "1 of 2 agents pushed" misleadingly. Count any non-null
+          // result as success; the log line distinguishes write vs
+          // already-current for user clarity.
+          if (soulResult) {
             summary.identityPushed.push(id);
-            log(`  ✓ wrote Foreman identity to ${soulResult.path}`);
+            log(
+              soulResult.changed
+                ? `  ✓ wrote Foreman identity to ${soulResult.path}`
+                : `  ◦ Foreman identity already current at ${soulResult.path}`,
+            );
           }
         } catch (err) {
           const reason =
