@@ -92,7 +92,7 @@ describe("ForemanCommandRouter (#431)", () => {
   });
 
   describe("help", () => {
-    it("lists every registered verb (help / status / stop / write / report / llm)", async () => {
+    it("lists every registered verb (help / status / stop / write / report / activity / llm)", async () => {
       const result = await router.dispatch("help", [], ctx);
       expect(result.ok).toBe(true);
       // Built-ins must all appear.
@@ -101,6 +101,7 @@ describe("ForemanCommandRouter (#431)", () => {
       expect(result.text).toContain("stop");
       expect(result.text).toContain("write");
       expect(result.text).toContain("report");
+      expect(result.text).toContain("activity");
       expect(result.text).toContain("llm");
     });
 
@@ -303,7 +304,9 @@ describe("ForemanCommandRouter (#431)", () => {
       });
       expect(result.ok).toBe(true);
       expect(result.text).toContain("Shutdown queued");
-      expect(result.text).toMatch(/queued id=\d+/);
+      // Wording softened from "queued id" → "tracking id" so the suffix
+      // reads as an audit reference, not a "still waiting" status.
+      expect(result.text).toMatch(/tracking id=\d+/);
       const rows = channel.pending();
       expect(rows).toHaveLength(1);
       expect(rows[0]?.command).toBe("stop");
@@ -590,7 +593,80 @@ describe("ForemanCommandRouter (#431)", () => {
       expect(result.ok).toBe(true);
       expect(result.text).toMatch(/Spawning codex/);
       expect(result.text).toMatch(/output will arrive/);
+      // QA round 14: the "(tracking id=N)" / "(queued id=N)" suffix is
+      // dropped for spawn — the message already explains what happens,
+      // and a trailing "queued" reads like the task is stuck.
+      expect(result.text).not.toMatch(/queued id=|tracking id=/);
       expect(channel.pending()).toHaveLength(1);
+    });
+  });
+
+  // QA round 14 — `/foreman activity` is a non-LLM view of recent
+  // control_commands rows. Previously returned "Unknown command".
+  describe("activity", () => {
+    it("returns NOT_AVAILABLE when no control channel is wired", async () => {
+      const result = await router.dispatch("activity", [], ctx);
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe("NOT_AVAILABLE");
+      expect(result.text).toContain("control channel");
+    });
+
+    it("returns an empty-state hint when there are no rows yet", async () => {
+      const channel = new ControlChannel(db);
+      const result = await router.dispatch("activity", [], {
+        ...ctx,
+        controlChannel: channel,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.text).toMatch(/No \/foreman directives/);
+    });
+
+    it("lists recent rows newest-first with status glyph + id", async () => {
+      const channel = new ControlChannel(db);
+      channel.enqueue({
+        command: "write",
+        args: ["codex", "review the PR"],
+        sourceAgent: "hermes",
+      });
+      const second = channel.enqueue({
+        command: "stop",
+        args: [],
+        sourceAgent: "hermes",
+      });
+      channel.markApplied(second.id);
+      const result = await router.dispatch("activity", [], {
+        ...ctx,
+        controlChannel: channel,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.text).toContain("stop");
+      expect(result.text).toContain("write codex: review the PR");
+      // Newest first → "stop" line appears before "write" line.
+      const stopIdx = result.text.indexOf("stop");
+      const writeIdx = result.text.indexOf("write codex");
+      expect(stopIdx).toBeLessThan(writeIdx);
+      // Applied row uses ✓, pending uses … — both must appear.
+      expect(result.text).toContain("✓");
+      expect(result.text).toContain("…");
+    });
+
+    it("clamps an out-of-range limit arg to the default", async () => {
+      const channel = new ControlChannel(db);
+      for (let i = 0; i < 3; i++) {
+        channel.enqueue({
+          command: "write",
+          args: ["codex", `task ${i}`],
+          sourceAgent: "hermes",
+        });
+      }
+      const result = await router.dispatch("activity", ["9999"], {
+        ...ctx,
+        controlChannel: channel,
+      });
+      expect(result.ok).toBe(true);
+      // 9999 is out of range → clamped to default 10. All 3 rows shown.
+      expect(result.text).toContain("task 0");
+      expect(result.text).toContain("task 2");
     });
   });
 

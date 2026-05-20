@@ -219,6 +219,11 @@ export function registerBuiltinCommands(router: ForemanCommandRouter): void {
     "LLM narration of recent agent activity. Try `/foreman report me`.",
   );
   router.register(
+    "activity",
+    activityHandler,
+    "List recent /foreman directives + their status (no LLM required).",
+  );
+  router.register(
     "llm",
     llmSubrouterHandler,
     "Inspect / manage Foreman's own LLM. Try `/foreman llm status`.",
@@ -268,6 +273,83 @@ function reportHandler(
   return ctx.orchestratorChat
     .answer({ question })
     .then(renderChatOutcome);
+}
+
+// `/foreman activity` — non-LLM view of recent control_commands rows so
+// the user can answer "what did I tell Foreman lately and did it land?"
+// without enabling orchestrator_chat. Limit is small on purpose (10);
+// for longer history the LLM-narrated `/foreman report` is the path.
+function activityHandler(
+  args: string[],
+  ctx: ForemanCommandContext,
+): ForemanCommandResult {
+  if (!ctx.controlChannel) {
+    return {
+      ok: false,
+      text:
+        "`/foreman activity` needs the cross-process control channel — not wired in this process. " +
+        "Run the command on the Foreman host CLI instead.",
+      errorCode: "NOT_AVAILABLE",
+    };
+  }
+  const limitArg = Number(args[0]);
+  const limit =
+    Number.isFinite(limitArg) && limitArg >= 1 && limitArg <= 50
+      ? Math.floor(limitArg)
+      : 10;
+  const rows = ctx.controlChannel.recent(limit);
+  if (rows.length === 0) {
+    return {
+      ok: true,
+      text:
+        "No /foreman directives have been issued yet. Try " +
+        "`foreman write <agent> <task>` or `foreman llm switch <provider> <model>`.",
+    };
+  }
+  const now = Date.now();
+  const lines: string[] = [`Recent directives (last ${rows.length}):`];
+  for (const row of rows) {
+    const ageMs = now - row.createdAt;
+    const status =
+      row.status === "applied"
+        ? "✓"
+        : row.status === "failed"
+          ? "✗"
+          : row.status === "rejected"
+            ? "⊘"
+            : "…";
+    const parsedArgs = parseArgsJson(row.args);
+    const summary = summarizeCommand(row.command, parsedArgs);
+    lines.push(`  ${status} ${summary} — ${describeAgo(ageMs)} ago (id=${row.id})`);
+  }
+  return { ok: true, text: lines.join("\n") };
+}
+
+function parseArgsJson(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+function summarizeCommand(command: string, args: string[]): string {
+  if (command === "write") {
+    const target = args[0] ?? "?";
+    const body = args.slice(1).join(" ");
+    const preview =
+      body.length > 60 ? `${body.slice(0, 57)}…` : body;
+    return `write ${target}: ${preview}`;
+  }
+  if (command === "llm-switch") {
+    return `llm switch ${args.join(" ")}`.trim();
+  }
+  if (command === "llm-budget") {
+    return `llm budget ${args.join(" ")}`.trim();
+  }
+  if (command === "stop") return "stop";
+  return `${command} ${args.join(" ")}`.trim();
 }
 
 function detectLanguageFromArgs(args: string[]): "en" | "tr" {
@@ -411,6 +493,12 @@ function writeHandler(
       `\`task_command_template\` to ${targetAgent}'s registry entry.`;
   return enqueueMutating(ctx, "write", [targetAgent, message], {
     successText,
+    // For callable agents the success line already explains what's about
+    // to happen ("Spawning … output will arrive"). Tacking on a tracking
+    // id reads like the task is stuck in a queue — confusing. Skip it.
+    // For non-callable (relay) targets we keep the id, since the user
+    // may need it to reference the queued directive later.
+    includeQueueId: !isCallable,
   });
 }
 
@@ -422,7 +510,7 @@ function enqueueMutating(
   ctx: ForemanCommandContext,
   command: string,
   args: string[],
-  opts: { successText: string },
+  opts: { successText: string; includeQueueId?: boolean },
 ): ForemanCommandResult {
   if (!ctx.controlChannel) {
     return {
@@ -491,9 +579,16 @@ function enqueueMutating(
     // so the drain handler sees a consistent user id for audit/relay.
     sourceUser: effectiveSourceUser,
   });
+  // "tracking id" rather than "queued id" — the latter reads like the
+  // request is stuck waiting, but in practice the drain handler picks
+  // it up within ~1.5s. The id is for audit / cross-referencing the
+  // control_commands row, not a status indicator.
+  const includeId = opts.includeQueueId !== false;
   return {
     ok: true,
-    text: `${opts.successText} (queued id=${enq.id})`,
+    text: includeId
+      ? `${opts.successText} (tracking id=${enq.id})`
+      : opts.successText,
   };
 }
 
