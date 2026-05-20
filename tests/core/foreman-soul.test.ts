@@ -12,6 +12,7 @@ import { DEFAULT_FOREMAN_SOUL } from "../../src/cli/identity-template.js";
 import {
   applyForemanSoul,
   readForemanSoul,
+  renderSoulForAgent,
 } from "../../src/core/foreman-soul.js";
 import type { AgentEntry } from "../../src/core/registry-catalog.js";
 
@@ -98,6 +99,46 @@ describe("applyForemanSoul", () => {
     expect(readFileSync(result!.path, "utf-8")).toBe("you are Foreman");
   });
 
+  // QA round 12: every `{agent_id}` token in the template is rewritten
+  // to the agent's registered id before the file lands on disk. Each
+  // agent reads its OWN name in the identity contract instead of
+  // claiming the generic Foreman identity.
+  it("substitutes {agent_id} placeholder with the agent's registered id", () => {
+    const soulPath = join(tmpHome, "SOUL.md");
+    writeFileSync(
+      soulPath,
+      "You are agent `{agent_id}` — try `foreman write {agent_id} test`.",
+    );
+    const result = applyForemanSoul(
+      entryWith({ id: "hermes", identity_path: "~/.hermes/SOUL.md" }),
+      soulPath,
+      agentHome,
+    );
+    expect(result?.changed).toBe(true);
+    const written = readFileSync(result!.path, "utf-8");
+    expect(written).toBe(
+      "You are agent `hermes` — try `foreman write hermes test`.",
+    );
+    expect(written).not.toContain("{agent_id}");
+  });
+
+  it("substitutes the SAME template differently for different agents (no cross-leak)", () => {
+    const soulPath = join(tmpHome, "SOUL.md");
+    writeFileSync(soulPath, "agent={agent_id}");
+    const hermesResult = applyForemanSoul(
+      entryWith({ id: "hermes", identity_path: "~/.hermes/SOUL.md" }),
+      soulPath,
+      agentHome,
+    );
+    const codexResult = applyForemanSoul(
+      entryWith({ id: "codex", identity_path: "~/.codex/AGENTS.md" }),
+      soulPath,
+      agentHome,
+    );
+    expect(readFileSync(hermesResult!.path, "utf-8")).toBe("agent=hermes");
+    expect(readFileSync(codexResult!.path, "utf-8")).toBe("agent=codex");
+  });
+
   it("creates the parent dir when the agent home doesn't have it yet", () => {
     const soulPath = join(tmpHome, "SOUL.md");
     writeFileSync(soulPath, "x");
@@ -132,7 +173,12 @@ describe("applyForemanSoul", () => {
       agentHome,
     );
     expect(result?.changed).toBe(true);
-    expect(readFileSync(result!.path, "utf-8")).toBe(DEFAULT_FOREMAN_SOUL);
+    // QA round 12: the on-disk content is the default template with
+    // {agent_id} substituted (test fixture id = "test-agent"), not the
+    // raw template. The substitution invariant lives in renderSoulForAgent.
+    expect(readFileSync(result!.path, "utf-8")).toBe(
+      renderSoulForAgent(DEFAULT_FOREMAN_SOUL, "test-agent"),
+    );
   });
 });
 
@@ -210,5 +256,45 @@ describe("DEFAULT_FOREMAN_SOUL — orchestrator routing (#431)", () => {
   it("instructs the agent to detect both prefix forms (#451)", () => {
     expect(DEFAULT_FOREMAN_SOUL).toMatch(/\/foreman[\s\S]*or[\s\S]*foreman /i);
     expect(DEFAULT_FOREMAN_SOUL).toMatch(/case-insensitive/i);
+  });
+});
+
+// QA round 12: identity contract uses `{agent_id}` placeholder so each
+// agent reads its OWN registered name instead of claiming the generic
+// Foreman identity. renderSoulForAgent is the pure helper covering all
+// substitution sites.
+describe("renderSoulForAgent (#qa-round-12)", () => {
+  it("replaces a single {agent_id} occurrence", () => {
+    expect(renderSoulForAgent("You are {agent_id}", "hermes")).toBe(
+      "You are hermes",
+    );
+  });
+
+  it("replaces every occurrence (global)", () => {
+    expect(
+      renderSoulForAgent(
+        "{agent_id} starts here, {agent_id} ends here",
+        "codex",
+      ),
+    ).toBe("codex starts here, codex ends here");
+  });
+
+  it("is a no-op when the template has no placeholder", () => {
+    expect(renderSoulForAgent("plain text", "x")).toBe("plain text");
+  });
+
+  it("works with hyphenated agent ids (claude-code)", () => {
+    expect(renderSoulForAgent("agent={agent_id}", "claude-code")).toBe(
+      "agent=claude-code",
+    );
+  });
+
+  it("DEFAULT_FOREMAN_SOUL uses {agent_id} (template invariant)", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toContain("{agent_id}");
+    // After substitution the placeholder must be entirely gone — no
+    // partial template strings sneaking through.
+    expect(renderSoulForAgent(DEFAULT_FOREMAN_SOUL, "hermes")).not.toContain(
+      "{agent_id}",
+    );
   });
 });
