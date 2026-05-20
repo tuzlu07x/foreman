@@ -97,6 +97,71 @@ describe("parseRegistryText", () => {
       RegistryValidationError,
     );
   });
+
+  // PR B of the multi-agent orchestration epic — task_command_template
+  // is the new optional field that declares how Foreman spawns the
+  // agent non-interactively when `foreman write <agent> <task>` is
+  // called against it. Generic for any agent with a `--print` /
+  // `exec` / `--prompt` style CLI mode.
+  describe("task_command_template + task_timeout_seconds (PR B)", () => {
+    it("accepts a well-formed task_command_template string", () => {
+      const agent = freshAgent();
+      agent.task_command_template = "codex exec \"${task}\"";
+      const doc = { version: 1, agents: [agent] };
+      const parsed = parseRegistryText(JSON.stringify(doc));
+      expect(parsed.agents[0]?.task_command_template).toBe(
+        "codex exec \"${task}\"",
+      );
+    });
+
+    it("treats task_command_template as optional (defaults to undefined)", () => {
+      const agent = freshAgent();
+      // intentionally not set
+      const doc = { version: 1, agents: [agent] };
+      const parsed = parseRegistryText(JSON.stringify(doc));
+      expect(parsed.agents[0]?.task_command_template).toBeUndefined();
+    });
+
+    it("rejects an empty-string task_command_template", () => {
+      const agent = freshAgent();
+      agent.task_command_template = "";
+      const doc = { version: 1, agents: [agent] };
+      expect(() => parseRegistryText(JSON.stringify(doc))).toThrow(
+        RegistryValidationError,
+      );
+    });
+
+    it("accepts a positive integer task_timeout_seconds", () => {
+      const agent = freshAgent();
+      agent.task_command_template = "x ${task}";
+      agent.task_timeout_seconds = 600;
+      const doc = { version: 1, agents: [agent] };
+      const parsed = parseRegistryText(JSON.stringify(doc));
+      expect(parsed.agents[0]?.task_timeout_seconds).toBe(600);
+    });
+
+    it("rejects zero or negative task_timeout_seconds", () => {
+      for (const bad of [0, -5, -1]) {
+        const agent = freshAgent();
+        agent.task_command_template = "x ${task}";
+        agent.task_timeout_seconds = bad;
+        const doc = { version: 1, agents: [agent] };
+        expect(() => parseRegistryText(JSON.stringify(doc))).toThrow(
+          RegistryValidationError,
+        );
+      }
+    });
+
+    it("rejects non-integer task_timeout_seconds (floats not allowed)", () => {
+      const agent = freshAgent();
+      agent.task_command_template = "x ${task}";
+      agent.task_timeout_seconds = 1.5;
+      const doc = { version: 1, agents: [agent] };
+      expect(() => parseRegistryText(JSON.stringify(doc))).toThrow(
+        RegistryValidationError,
+      );
+    });
+  });
 });
 
 describe("loadBundledRegistry", () => {
@@ -114,6 +179,33 @@ describe("loadBundledRegistry", () => {
         "generic-mcp",
       ]),
     );
+  });
+
+  // PR B — Verify the bundled registry declares task_command_template
+  // for callable agents (Codex, Claude Code). Hermes is a daemon, so
+  // it doesn't get one; OpenClaw / ZeroClaw / generic-mcp don't have
+  // verified non-interactive CLI modes yet — they fall back to the
+  // existing queue + relay behavior in foreman write.
+  it("declares task_command_template for Codex (non-interactive exec mode)", () => {
+    const doc = loadBundledRegistry();
+    const codex = doc.agents.find((a) => a.id === "codex");
+    expect(codex?.task_command_template).toBe("codex exec \"${task}\"");
+    expect(codex?.task_timeout_seconds).toBe(600);
+  });
+
+  it("declares task_command_template for Claude Code (--print mode)", () => {
+    const doc = loadBundledRegistry();
+    const claude = doc.agents.find((a) => a.id === "claude-code");
+    expect(claude?.task_command_template).toBe(
+      "claude --print \"${task}\"",
+    );
+    expect(claude?.task_timeout_seconds).toBe(600);
+  });
+
+  it("does NOT declare task_command_template for daemon-style agents (Hermes)", () => {
+    const doc = loadBundledRegistry();
+    const hermes = doc.agents.find((a) => a.id === "hermes");
+    expect(hermes?.task_command_template).toBeUndefined();
   });
 });
 
