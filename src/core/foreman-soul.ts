@@ -23,6 +23,13 @@ export function readForemanSoul(soulPath: string): string {
 // (e.g. `~/.hermes/SOUL.md`). Idempotent: skips the write when the file
 // already matches the source. Returns null when the registry entry doesn't
 // declare an identity_path — agents we don't have an identity hook for yet.
+//
+// QA round 12: every `{agent_id}` placeholder in the SOUL template is
+// substituted with the entry's id so each agent reads its OWN name in
+// the identity contract. Previously the template hard-coded "you are
+// Foreman" which broke multi-agent orchestration — every chat host
+// claimed the Foreman identity and the user couldn't tell which agent
+// was responding to which message.
 export function applyForemanSoul(
   entry: AgentEntry,
   soulPath: string,
@@ -30,12 +37,22 @@ export function applyForemanSoul(
 ): ApplyForemanSoulResult | null {
   if (!entry.identity_path) return null;
   const target = expandHome(entry.identity_path, homeDir);
-  const desired = readForemanSoul(soulPath);
+  const template = readForemanSoul(soulPath);
+  const desired = renderSoulForAgent(template, entry.id);
   const existing = existsSync(target) ? readFileSync(target, "utf-8") : null;
   if (existing === desired) return { path: target, changed: false };
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, desired, "utf-8");
   return { path: target, changed: true };
+}
+
+/**
+ * Substitute the `{agent_id}` placeholder in the SOUL template with the
+ * actual registered agent id. Pure helper for tests + reuse by other
+ * identity-write paths (e.g. `foreman identity push`).
+ */
+export function renderSoulForAgent(template: string, agentId: string): string {
+  return template.replace(/\{agent_id\}/g, agentId);
 }
 
 function expandHome(p: string, homeDir: string): string {
