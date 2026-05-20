@@ -373,6 +373,19 @@ describe("ForemanCommandRouter (#431)", () => {
         displayName: "OpenClaw",
         transport: "stdio",
       });
+      // QA round 10 tests use hermes + codex; register both so the
+      // registry lookup passes and the self-target / cross-agent
+      // logic gets exercised instead of the unknown-agent branch.
+      registry.register({
+        id: "hermes",
+        displayName: "Hermes",
+        transport: "stdio",
+      });
+      registry.register({
+        id: "codex",
+        displayName: "Codex",
+        transport: "stdio",
+      });
     });
 
     it("requires both agent + message args", async () => {
@@ -467,6 +480,69 @@ describe("ForemanCommandRouter (#431)", () => {
       expect(result.ok).toBe(true);
       const rows = channel.pending();
       expect(JSON.parse(rows[0]!.args)).toEqual(["openclaw", "hi"]);
+    });
+
+    // QA round 10: `foreman write hermes hello` typed in the Hermes
+    // chat used to enqueue a directive Hermes itself would never
+    // pick up (it's the agent typing AND the target). Users assumed
+    // Foreman was broken — actually a usage error. Catch it explicitly.
+    it("self-target — refuses + suggests typing directly to this agent", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "owner" });
+      const result = await router.dispatch(
+        "write",
+        ["hermes", "hello"],
+        {
+          ...ctx,
+          sourceAgent: "hermes",
+          controlChannel: channel,
+          ownerStore: store,
+          sourceUser: "owner",
+        },
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe("UNKNOWN_SUBCOMMAND");
+      expect(result.text).toContain("already talking");
+      expect(result.text).toContain("hermes");
+      expect(channel.pending()).toHaveLength(0);
+    });
+
+    it("self-target is case-insensitive (HERMES from sourceAgent=hermes)", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "owner" });
+      const result = await router.dispatch(
+        "write",
+        ["HERMES", "hi"],
+        {
+          ...ctx,
+          sourceAgent: "hermes",
+          controlChannel: channel,
+          ownerStore: store,
+          sourceUser: "owner",
+        },
+      );
+      expect(result.ok).toBe(false);
+      expect(channel.pending()).toHaveLength(0);
+    });
+
+    it("cross-agent still enqueues + reply mentions v0.1 limitation", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "owner" });
+      const result = await router.dispatch(
+        "write",
+        ["codex", "review the PR"],
+        {
+          ...ctx,
+          sourceAgent: "hermes",
+          controlChannel: channel,
+          ownerStore: store,
+          sourceUser: "owner",
+        },
+      );
+      expect(result.ok).toBe(true);
+      expect(result.text).toMatch(/not auto-invoked/);
+      expect(result.text).toMatch(/wrap-mode/);
+      expect(channel.pending()).toHaveLength(1);
     });
   });
 

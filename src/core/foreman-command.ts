@@ -350,8 +350,8 @@ function writeHandler(
     return {
       ok: false,
       text:
-        "Usage: `/foreman write <agent> <message>`. " +
-        "Example: `/foreman write openclaw pause your current task and focus on Y`.",
+        "Usage: `foreman write <agent> <message>`. " +
+        "Example: `foreman write openclaw pause your current task and focus on Y`.",
       errorCode: "UNKNOWN_SUBCOMMAND",
     };
   }
@@ -360,12 +360,38 @@ function writeHandler(
     return {
       ok: false,
       text:
-        `Unknown agent "${targetAgent}". Run \`/foreman status\` for the list of registered agents.`,
+        `Unknown agent "${targetAgent}". Run \`foreman status\` for the list of registered agents.`,
+      errorCode: "UNKNOWN_SUBCOMMAND",
+    };
+  }
+  // QA round 10: catch the self-target case where the user types
+  // `foreman write hermes hello` *from inside the Hermes chat*. The
+  // current "Directive queued" reply is technically correct but
+  // useless — the agent is ALREADY this chat; the user just needs
+  // to say what they want directly. Without this guard, users
+  // think Foreman is broken when their message goes into a queue
+  // they can't see.
+  if (
+    ctx.sourceAgent &&
+    targetAgent === ctx.sourceAgent.toLowerCase().trim()
+  ) {
+    return {
+      ok: false,
+      text:
+        `You're already talking to **${ctx.sourceAgent}** in this chat — ` +
+        `\`foreman write ${targetAgent} ...\` is for sending directives to ` +
+        `OTHER agents. To say "${message}" to ${ctx.sourceAgent}, just type ` +
+        `it directly (without the \`foreman write\` prefix).`,
       errorCode: "UNKNOWN_SUBCOMMAND",
     };
   }
   return enqueueMutating(ctx, "write", [targetAgent, message], {
-    successText: `Directive queued for ${targetAgent}.`,
+    successText:
+      `Directive queued for ${targetAgent}. ` +
+      `Note: ${targetAgent} is not auto-invoked in v0.1 — the directive ` +
+      `is posted in chat for you to forward and (if ${targetAgent} ` +
+      `declares an \`inbound_dir\`) written to that directory. True ` +
+      `cross-agent auto-execution lands with wrap-mode (#445).`,
   });
 }
 
