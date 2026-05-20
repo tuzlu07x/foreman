@@ -241,4 +241,50 @@ describe("spawnAgentTask", () => {
       require("node:fs").statSync("/tmp/foreman-pwned-test"),
     ).toThrow();
   });
+
+  // QA round 13 bug 3 defensive: set env vars so a recursive Foreman
+  // mcp-stdio (spawned by the child agent's MCP wiring) can detect
+  // it's running inside a Foreman spawn and skip behavior that would
+  // race with the parent's drain poller (DB lock contention).
+  it("sets FOREMAN_SPAWN_DEPTH + FOREMAN_SPAWNED_BY on the child env", async () => {
+    const cmd = makeScript(
+      "env-dump.sh",
+      "#!/bin/sh\necho \"depth=$FOREMAN_SPAWN_DEPTH by=$FOREMAN_SPAWNED_BY\"\n",
+    );
+    const result = await spawnAgentTask({
+      entry: agent({ id: "codex", task_command_template: cmd }),
+      task: "x",
+    });
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.stdout).toContain("depth=1");
+      expect(result.stdout).toContain("by=codex");
+    }
+  });
+
+  it("increments FOREMAN_SPAWN_DEPTH from parent process.env (visible nesting)", async () => {
+    // Simulate the recursive case: process.env already has a depth value
+    // (set by an outer Foreman spawn). The engine reads it, increments,
+    // sets the child's env. Each layer of spawning adds 1 to the
+    // visible depth in audit / debugging.
+    const previous = process.env.FOREMAN_SPAWN_DEPTH;
+    process.env.FOREMAN_SPAWN_DEPTH = "3";
+    try {
+      const cmd = makeScript(
+        "env-dump.sh",
+        "#!/bin/sh\necho \"depth=$FOREMAN_SPAWN_DEPTH\"\n",
+      );
+      const result = await spawnAgentTask({
+        entry: agent({ id: "codex", task_command_template: cmd }),
+        task: "x",
+      });
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.stdout).toContain("depth=4");
+      }
+    } finally {
+      if (previous === undefined) delete process.env.FOREMAN_SPAWN_DEPTH;
+      else process.env.FOREMAN_SPAWN_DEPTH = previous;
+    }
+  });
 });
