@@ -2392,6 +2392,19 @@ export function SetupWizard({
           LLM providers you already have access to. Each one stores its key
           (and endpoint, if applicable) encrypted on disk.
         </Text>
+        {/* QA round 6: users repeatedly assumed the OpenAI key pasted
+            here would also drive agent LLM calls. It does NOT — these
+            keys feed Foreman's own brain (Step 2 — verification,
+            summaries). Agents in Step 3 may use the same key OR a
+            completely separate auth (OpenRouter, OAuth subscriptions).
+            Stating this up front avoids the "I pasted a key, why is
+            Hermes still saying auth failed?" rabbit hole. */}
+        <Text color={theme.accent.warning}>
+          ⓘ Keys here power Foreman's OWN LLM brain (Step 2). Agents
+          (Step 3) have their own credentials — Hermes / Claude Code /
+          Codex may use OpenRouter, OAuth subscriptions, or these same
+          keys depending on the variant you pick later.
+        </Text>
         <MultiSelect
           options={options}
           onSubmit={(values) => {
@@ -3317,6 +3330,17 @@ export function SetupWizard({
                     <Text color={theme.accent.warning}>
                       {"      ⓘ "}
                       {siblingHint}
+                    </Text>
+                  ) : null}
+                  {/* QA round 6: when the highlighted variant uses
+                      OAuth (no key) and is NOT a Step-1-key route, hint
+                      that this auth lives inside the agent itself —
+                      Foreman's stored keys won't satisfy it. */}
+                  {isSelected && !v.required_secret && v.interactive_setup ? (
+                    <Text color={theme.fg.muted}>
+                      {"      ⓘ This route runs the agent's OWN OAuth flow — Foreman's stored API keys do NOT apply. Foreman auto-spawns `"}
+                      {v.interactive_setup}
+                      {"` on the Done screen."}
                     </Text>
                   ) : null}
                 </Box>

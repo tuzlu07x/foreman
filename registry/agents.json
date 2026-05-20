@@ -53,17 +53,18 @@
               }
             },
             "via-codex-oauth": {
-              "label": "OpenAI via Codex OAuth (uses your ChatGPT subscription)",
+              "label": "OpenAI Codex OAuth (uses your ChatGPT subscription)",
               "writes": {
-                "model.default": "openai/${model}",
-                "model.provider": "codex"
+                "model.default": "${model}",
+                "model.provider": "openai-codex",
+                "model.base_url": ""
               },
-              "interactive_setup": "hermes model",
-              "post_setup_verify": "hermes doctor",
-              "depends_on_oauth": {
-                "agent": "codex",
-                "setup_command": "codex login",
-                "verify_command": "codex login status"
+              "interactive_setup": "hermes login --provider openai-codex",
+              "post_setup_verify": "hermes auth status openai-codex",
+              "required_secret": null,
+              "secret_acquisition": {
+                "name": "Hermes' OpenAI Codex OAuth session",
+                "note": "Hermes manages its OWN Codex OAuth credentials (separate from the Codex CLI's auth.json). Run `hermes login --provider openai-codex` and complete the browser flow — Foreman auto-runs this on Done."
               }
             }
           }
