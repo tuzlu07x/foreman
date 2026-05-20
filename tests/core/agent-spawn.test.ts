@@ -262,6 +262,94 @@ describe("spawnAgentTask", () => {
     }
   });
 
+  // QA round 15 — `claude --print` blocks 3s on stdin if the parent
+  // leaves the pipe open. We pin stdin to /dev/null so the child gets
+  // immediate EOF and runs without waiting. Use a script that prints
+  // whether stdin is at EOF on the first read.
+  it("closes child stdin (no 3s wait on tools that auto-read stdin)", async () => {
+    // `read` returns non-zero when stdin is closed/empty → script
+    // prints "no-stdin" instead of hanging.
+    const cmd = makeScript(
+      "stdin-probe.sh",
+      "#!/bin/sh\nif read line; then echo \"got: $line\"; else echo no-stdin; fi\n",
+    );
+    const startedAt = Date.now();
+    const result = await spawnAgentTask({
+      entry: agent({ task_command_template: cmd }),
+      task: "x",
+    });
+    const elapsedMs = Date.now() - startedAt;
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.stdout).toContain("no-stdin");
+    }
+    // Without stdin: 'ignore' the script would hang on `read` until
+    // killed (or the kernel pipe EOF, which never comes from Foreman).
+    // With the fix it completes in well under a second.
+    expect(elapsedMs).toBeLessThan(3000);
+  });
+
+  // QA round 15 — claude-code OAuth login sets `apiKeySource:
+  // "ANTHROPIC_API_KEY"` (the CLI prefers env var over OAuth). A stale
+  // env var anywhere in the user's shell breaks the spawn with
+  // "Invalid API key". Registry entries can declare `task_env_strip`
+  // to delete those keys before spawn so OAuth wins.
+  it("strips env vars listed in entry.task_env_strip before spawn", async () => {
+    const previous = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = "stale-bad-key";
+    try {
+      const cmd = makeScript(
+        "env-strip-probe.sh",
+        "#!/bin/sh\necho \"anth=${ANTHROPIC_API_KEY:-MISSING}\"\n",
+      );
+      const result = await spawnAgentTask({
+        entry: agent({
+          task_command_template: cmd,
+          task_env_strip: ["ANTHROPIC_API_KEY"],
+        }),
+        task: "x",
+      });
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.stdout).toContain("anth=MISSING");
+        expect(result.stdout).not.toContain("stale-bad-key");
+      }
+    } finally {
+      if (previous === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = previous;
+    }
+  });
+
+  it("leaves env vars NOT in task_env_strip intact", async () => {
+    const previous = process.env.ANTHROPIC_API_KEY;
+    const prevOther = process.env.FOREMAN_TEST_KEEPME;
+    process.env.ANTHROPIC_API_KEY = "stale";
+    process.env.FOREMAN_TEST_KEEPME = "keepme-value";
+    try {
+      const cmd = makeScript(
+        "env-keep-probe.sh",
+        "#!/bin/sh\necho \"anth=${ANTHROPIC_API_KEY:-MISSING} keep=${FOREMAN_TEST_KEEPME:-MISSING}\"\n",
+      );
+      const result = await spawnAgentTask({
+        entry: agent({
+          task_command_template: cmd,
+          task_env_strip: ["ANTHROPIC_API_KEY"],
+        }),
+        task: "x",
+      });
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.stdout).toContain("anth=MISSING");
+        expect(result.stdout).toContain("keep=keepme-value");
+      }
+    } finally {
+      if (previous === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = previous;
+      if (prevOther === undefined) delete process.env.FOREMAN_TEST_KEEPME;
+      else process.env.FOREMAN_TEST_KEEPME = prevOther;
+    }
+  });
+
   it("increments FOREMAN_SPAWN_DEPTH from parent process.env (visible nesting)", async () => {
     // Simulate the recursive case: process.env already has a depth value
     // (set by an outer Foreman spawn). The engine reads it, increments,
