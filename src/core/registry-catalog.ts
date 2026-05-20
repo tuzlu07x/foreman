@@ -135,16 +135,19 @@ export const AgentEntrySchema = z
      *  directive. Generic across any agent that exposes a "run one
      *  task and exit" CLI mode (`codex exec`, `claude --print`, etc.).
      *
-     *  The string is interpreted as a shell command with `${task}`
-     *  substituted to the user-provided task text. Examples:
-     *    "codex exec \"${task}\""
-     *    "claude --print \"${task}\""
+     *  The string is tokenized as a shell-like command, then the
+     *  literal `{task}` placeholder is substituted with the user-
+     *  provided task text AS A SINGLE argv element. Examples:
+     *    "codex exec \"{task}\""
+     *    "claude --print \"{task}\""
      *
-     *  Quoting note: substitution happens before shell parsing, so
-     *  task text must be quoted in the template. The spawn engine
-     *  (PR C) handles task-content escaping safely. Optional —
-     *  daemon-style agents (Hermes) leave it unset; they receive
-     *  tasks through their own channel (Telegram message, inbound_dir
+     *  Note: we use `{task}` (no `$`) on purpose — shell-quote treats
+     *  `${name}` as env-var expansion and would clobber the placeholder
+     *  before our substitution runs. The spawn engine runs without a
+     *  shell layer (PR C), so embedded shell metachars in the task
+     *  text CANNOT escape into command injection. Optional — daemon-
+     *  style agents (Hermes) leave it unset; they receive tasks
+     *  through their own channel (Telegram message, inbound_dir
      *  watch, etc.). */
     task_command_template: z.string().min(1).optional(),
     /** Soft timeout for non-interactive task execution in seconds.
