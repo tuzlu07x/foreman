@@ -16,6 +16,7 @@ import { PolicyEngine } from "../core/policy-engine.js";
 import { buildAgentActivityDigest } from "../core/agent-activity-summary.js";
 import { buildActivityPrompt } from "../core/agent-activity-prompt.js";
 import { deliverWriteDirective } from "../core/agent-write.js";
+import { executeWriteDirective } from "../core/agent-execute.js";
 import { ChatPrimaryService } from "../core/chat-primary.js";
 import {
   ControlChannel,
@@ -533,6 +534,41 @@ export function startForeman(
           const telegramChatId = secretStore.exists("telegram-chat-id")
             ? secretStore.get("telegram-chat-id")
             : undefined;
+          // PR D — when the target agent declares task_command_template
+          // we ACTUALLY spawn the agent here (via PR C's engine) and
+          // post the captured output back via Telegram. The directive's
+          // initial "queued" ack already went out via mcp-stdio's tool
+          // response; this is the follow-up post with the result.
+          // Agents without the template fall back to the v0.1 queue+
+          // relay path (Telegram visible post + inbound_dir file).
+          if (entry?.task_command_template) {
+            const exec = await executeWriteDirective(
+              {
+                agentId,
+                message,
+                sourceUser: row.sourceUser ?? undefined,
+                entry,
+              },
+              { telegramBotToken, telegramChatId },
+            );
+            if (exec.spawn.kind === "ok") {
+              return { status: "applied" };
+            }
+            // Failed / timeout / spawn-error still mark the row as
+            // failed for audit traceability — the output relay already
+            // delivered the error explanation to the user's chat.
+            return {
+              status: "failed",
+              error:
+                exec.spawn.kind === "failed"
+                  ? `agent exited ${exec.spawn.exitCode}`
+                  : exec.spawn.kind === "timeout"
+                    ? `agent timed out after ${exec.spawn.timeoutMs}ms`
+                    : exec.spawn.kind === "spawn-error"
+                      ? `spawn error: ${exec.spawn.error}`
+                      : `unsupported: ${exec.spawn.reason}`,
+            };
+          }
           const outcome = await deliverWriteDirective(
             {
               agentId,
