@@ -130,24 +130,28 @@ export function runOauthFlows(steps: WizardOauthRunStep[]): OauthFlowResult[] {
       process.stdout.write(dim(`        ${step.reason}\n`));
     }
     process.stdout.write(dim(`        running… (browser may open)\n`));
-    // QA round 7: setup needs to capture stdout so we can scan for
-    // "command has been removed" / "deprecated" markers that indicate
-    // a CLI rename. We pipe stdout/stderr but echo each line back to
-    // the user's terminal so the browser-OAuth flow still feels live.
-    const setupCaptured = runWithCaptureAndEcho(step.command);
-    const setupVerdict = classifySetupOutput(
-      setupCaptured.exitCode,
-      setupCaptured.output,
-    );
-    if (!setupVerdict.ok) {
+    // QA round 8: setup MUST use full stdio:inherit. Earlier round 7
+    // captured stdout to scan for "command has been removed" markers,
+    // but piping stdout buffers output line-by-line — interactive prompts
+    // and browser-flow URLs that print without a trailing newline never
+    // make it to the user's terminal. Result: hermes auth add hangs at
+    // its first prompt with no visible output (`running…` then silence
+    // forever). We accept that we'll miss the "command-has-been-removed"
+    // signal at SETUP time; verify will catch the consequence (status
+    // says "logged out") and report the failure there.
+    const setup = spawnSync(step.command, {
+      shell: true,
+      stdio: "inherit",
+    });
+    if (setup.status !== 0) {
       process.stdout.write(
         red(
-          `        ✗ ${setupVerdict.reason ?? `exit ${setupCaptured.exitCode ?? "?"}`} — run manually: ${step.command}\n\n`,
+          `        ✗ exit ${setup.status ?? "?"} — run manually: ${step.command}\n\n`,
         ),
       );
       results.push({
         step,
-        setupExitCode: setupCaptured.exitCode,
+        setupExitCode: setup.status,
         verifyExitCode: null,
         succeeded: false,
       });
@@ -157,7 +161,7 @@ export function runOauthFlows(steps: WizardOauthRunStep[]): OauthFlowResult[] {
     if (!step.verify) {
       results.push({
         step,
-        setupExitCode: setupCaptured.exitCode,
+        setupExitCode: setup.status,
         verifyExitCode: null,
         succeeded: true,
       });
@@ -165,6 +169,9 @@ export function runOauthFlows(steps: WizardOauthRunStep[]): OauthFlowResult[] {
       continue;
     }
     process.stdout.write(dim(`        verifying: ${step.verify}\n`));
+    // Verify can safely capture — it's non-interactive (just prints
+    // status). Capture lets us classify "logged in" vs "logged out"
+    // even when exit code is 0 for both.
     const verifyCaptured = runWithCaptureAndEcho(step.verify);
     const verifyVerdict = classifyVerifyOutput(
       verifyCaptured.exitCode,
@@ -179,7 +186,7 @@ export function runOauthFlows(steps: WizardOauthRunStep[]): OauthFlowResult[] {
     );
     results.push({
       step,
-      setupExitCode: setupCaptured.exitCode,
+      setupExitCode: setup.status,
       verifyExitCode: verifyCaptured.exitCode,
       succeeded: verifyVerdict.passed,
     });
