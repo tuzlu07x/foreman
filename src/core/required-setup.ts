@@ -165,15 +165,28 @@ export function resolveRequiredSetup(
     // Queue OAuth flows (interactive setups). Each is per-agent unique;
     // we don't dedupe `codex login` if multiple agents asked for it
     // because each agent's variant + verify command may differ.
+    //
+    // QA round 4 discovered: when a variant has `required_secret: null`
+    // AND `interactive_setup` AND NO `depends_on_oauth`, that command
+    // IS the sole auth path — skipping it leaves the agent unable to
+    // reach its provider. Promote to mandatory. Counter-example we must
+    // NOT promote: Hermes via-codex-oauth declares `interactive_setup:
+    // "hermes model"` (a Hermes-internal config refresh) but its real
+    // auth lives in `depends_on_oauth` (codex login). The depends_on_oauth
+    // block below already handles that case as mandatory; the
+    // interactive_setup stays optional so we don't double-block.
     if (cfg.interactiveSetup) {
+      const isSoleAuthPath = !cfg.requiredSecret && !cfg.dependsOnOauth;
       oauthSteps.push({
         agentId: agent.id,
         variantId: cfg.variantId,
         command: cfg.interactiveSetup,
         verify: cfg.postSetupVerify,
         acquisition: cfg.secretAcquisition,
-        mandatory: false,
-        reason: null,
+        mandatory: isSoleAuthPath,
+        reason: isSoleAuthPath
+          ? `${agent.id} authenticates via ${cfg.interactiveSetup} — without it the agent can't reach ${foremanProvider}.`
+          : null,
       });
     }
 

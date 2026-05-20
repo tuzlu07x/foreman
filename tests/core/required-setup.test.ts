@@ -78,6 +78,12 @@ describe("resolveRequiredSetup — bundled-registry scenarios", () => {
     expect(res.oauthSteps[0]?.command).toBe("codex login");
     expect(res.oauthSteps[0]?.verify).toBe("codex auth status");
     expect(res.oauthSteps[0]?.agentId).toBe("codex");
+    // QA round 4 — when required_secret is null AND interactive_setup
+    // is set, the interactive_setup IS the sole auth path so it MUST
+    // be mandatory. Previously this was queued as optional, leaving
+    // users able to skip past their own auth path.
+    expect(res.oauthSteps[0]?.mandatory).toBe(true);
+    expect(res.oauthSteps[0]?.reason?.toLowerCase()).toContain("codex login");
   });
 
   it("Hermes + OpenClaw + Codex on openai: 2 secrets + 1 oauth combined", () => {
