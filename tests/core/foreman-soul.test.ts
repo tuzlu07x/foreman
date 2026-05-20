@@ -298,3 +298,169 @@ describe("renderSoulForAgent (#qa-round-12)", () => {
     );
   });
 });
+
+// QA round 13 — multi-agent orchestration. SOUL.md now carries a per-agent
+// `{responsibility}` (the role the user assigned in the wizard) AND a
+// `{peer_agents_block}` listing OTHER registered agents + their roles, so
+// every agent on this machine knows who else is around and how to
+// coordinate via Foreman. Both new tokens render via renderSoulForAgent.
+describe("renderSoulForAgent — responsibility + peer block (#multi-agent)", () => {
+  it("substitutes {responsibility} when context provides a note", () => {
+    const out = renderSoulForAgent(
+      "Role: {responsibility}",
+      { agentId: "codex", responsibilityNote: "coder" },
+    );
+    expect(out).toBe("Role: coder");
+  });
+
+  it("falls back to a generic phrasing when responsibility is null", () => {
+    const out = renderSoulForAgent(
+      "Role: {responsibility}",
+      { agentId: "codex", responsibilityNote: null },
+    );
+    expect(out).toBe("Role: general-purpose assistant on this machine");
+  });
+
+  it("falls back to generic phrasing for whitespace-only responsibility", () => {
+    const out = renderSoulForAgent(
+      "Role: {responsibility}",
+      { agentId: "x", responsibilityNote: "   " },
+    );
+    expect(out).toContain("general-purpose assistant");
+  });
+
+  it("trims surrounding whitespace from responsibility", () => {
+    const out = renderSoulForAgent("Role: {responsibility}", {
+      agentId: "x",
+      responsibilityNote: "  reviewer  ",
+    });
+    expect(out).toBe("Role: reviewer");
+  });
+
+  it("renders the peer block as a markdown list of registered peers", () => {
+    const out = renderSoulForAgent(
+      "Peers:\n{peer_agents_block}",
+      {
+        agentId: "hermes",
+        peers: [
+          { id: "codex", displayName: "Codex", responsibilityNote: "coder" },
+          {
+            id: "claude-code",
+            displayName: "Claude Code",
+            responsibilityNote: "reviewer",
+          },
+        ],
+      },
+    );
+    expect(out).toContain("- `codex` — coder (Codex)");
+    expect(out).toContain("- `claude-code` — reviewer (Claude Code)");
+  });
+
+  it("renders graceful empty-state block when there are no peers", () => {
+    const out = renderSoulForAgent(
+      "{peer_agents_block}",
+      { agentId: "hermes", peers: [] },
+    );
+    expect(out).toContain("no peer agents");
+  });
+
+  it("falls back to id when peer has no displayName", () => {
+    const out = renderSoulForAgent("{peer_agents_block}", {
+      agentId: "a",
+      peers: [{ id: "ghost-agent" }],
+    });
+    // Default responsibility for peers without a note is 'general-purpose'.
+    expect(out).toBe("- `ghost-agent` — general-purpose (ghost-agent)");
+  });
+
+  it("supports arbitrary peer counts (3+ agents) — no upper limit", () => {
+    const out = renderSoulForAgent("{peer_agents_block}", {
+      agentId: "hermes",
+      peers: [
+        { id: "codex", responsibilityNote: "coder" },
+        { id: "claude-code", responsibilityNote: "reviewer" },
+        { id: "openclaw", responsibilityNote: "researcher" },
+        { id: "gemini-cli", responsibilityNote: "documenter" },
+      ],
+    });
+    expect(out.split("\n")).toHaveLength(4);
+    expect(out).toContain("codex");
+    expect(out).toContain("claude-code");
+    expect(out).toContain("openclaw");
+    expect(out).toContain("gemini-cli");
+  });
+
+  it("default template includes both new tokens (invariant)", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toContain("{responsibility}");
+    expect(DEFAULT_FOREMAN_SOUL).toContain("{peer_agents_block}");
+    // After full substitution the template has zero leftover placeholders.
+    const rendered = renderSoulForAgent(DEFAULT_FOREMAN_SOUL, {
+      agentId: "hermes",
+      responsibilityNote: "project manager",
+      peers: [{ id: "codex", responsibilityNote: "coder" }],
+    });
+    expect(rendered).not.toMatch(/\{[a-z_]+\}/);
+  });
+
+  it("legacy string signature still works (agentId only)", () => {
+    const out = renderSoulForAgent(
+      "{agent_id}|{responsibility}|{peer_agents_block}",
+      "hermes",
+    );
+    expect(out).toBe(
+      "hermes|general-purpose assistant on this machine|(no peer agents on this machine yet — you're the only one)",
+    );
+  });
+});
+
+describe("applyForemanSoul — multi-agent input shape (#multi-agent)", () => {
+  let tmpHome: string;
+  let agentHome: string;
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), "foreman-soul-multi-"));
+    agentHome = mkdtempSync(join(tmpdir(), "foreman-soul-multi-agenthome-"));
+  });
+  afterEach(() => {
+    rmSync(tmpHome, { recursive: true, force: true });
+    rmSync(agentHome, { recursive: true, force: true });
+  });
+
+  it("accepts the object input form + writes the rendered file", () => {
+    const soulPath = join(tmpHome, "SOUL.md");
+    writeFileSync(
+      soulPath,
+      "I am {agent_id}. Role: {responsibility}. Peers:\n{peer_agents_block}",
+    );
+    const result = applyForemanSoul({
+      entry: entryWith({
+        id: "hermes",
+        identity_path: "~/.hermes/SOUL.md",
+      }),
+      soulPath,
+      responsibilityNote: "project manager",
+      peers: [
+        { id: "codex", displayName: "Codex", responsibilityNote: "coder" },
+      ],
+      homeDir: agentHome,
+    });
+    expect(result?.changed).toBe(true);
+    const written = readFileSync(result!.path, "utf-8");
+    expect(written).toBe(
+      "I am hermes. Role: project manager. Peers:\n- `codex` — coder (Codex)",
+    );
+  });
+
+  it("legacy positional form still works (no peer/responsibility context)", () => {
+    const soulPath = join(tmpHome, "SOUL.md");
+    writeFileSync(soulPath, "I am {agent_id}, role: {responsibility}");
+    const result = applyForemanSoul(
+      entryWith({ id: "x", identity_path: "~/.x/SOUL.md" }),
+      soulPath,
+      agentHome,
+    );
+    expect(result?.changed).toBe(true);
+    expect(readFileSync(result!.path, "utf-8")).toBe(
+      "I am x, role: general-purpose assistant on this machine",
+    );
+  });
+});
