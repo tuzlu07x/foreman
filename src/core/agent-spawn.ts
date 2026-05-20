@@ -134,11 +134,27 @@ export async function spawnAgentTask(
       : DEFAULT_TIMEOUT_MS);
 
   const spawnFn = options.spawnImpl ?? nodeSpawn;
+  // QA round 13 (bug 3) defensive fix: when Foreman's mcp-stdio is the
+  // process running the drain handler, the spawned agent (e.g. codex)
+  // may have its own MCP wiring to Foreman, which would spawn a
+  // RECURSIVE `foreman mcp-stdio` subprocess. That recursive instance
+  // polls the same control_commands table and can race with the parent
+  // poller, or worse, deadlock against it (parent awaits spawn → child
+  // awaits parent's MCP response → both stuck). Mark the env so the
+  // recursive Foreman knows to bail out of its drain poller. Also
+  // bump a depth counter so any further nesting is visible in audit.
+  const currentDepth = Number(process.env.FOREMAN_SPAWN_DEPTH ?? "0") || 0;
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...(options.env ?? {}),
+    FOREMAN_SPAWN_DEPTH: String(currentDepth + 1),
+    FOREMAN_SPAWNED_BY: options.entry.id,
+  };
   let child: ChildProcessWithoutNullStreams;
   try {
     child = spawnFn(command, args, {
       cwd: options.cwd,
-      env: options.env ? { ...process.env, ...options.env } : process.env,
+      env: childEnv,
       shell: false,
       // Detached so the child is the leader of its own process group.
       // On timeout we kill `-child.pid` (the group) so any grandchildren
