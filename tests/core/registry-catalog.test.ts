@@ -133,7 +133,7 @@ describe("parseRegistryText", () => {
 
     it("accepts a positive integer task_timeout_seconds", () => {
       const agent = freshAgent();
-      agent.task_command_template = "x ${task}";
+      agent.task_command_template = "x {task}";
       agent.task_timeout_seconds = 600;
       const doc = { version: 1, agents: [agent] };
       const parsed = parseRegistryText(JSON.stringify(doc));
@@ -143,7 +143,7 @@ describe("parseRegistryText", () => {
     it("rejects zero or negative task_timeout_seconds", () => {
       for (const bad of [0, -5, -1]) {
         const agent = freshAgent();
-        agent.task_command_template = "x ${task}";
+        agent.task_command_template = "x {task}";
         agent.task_timeout_seconds = bad;
         const doc = { version: 1, agents: [agent] };
         expect(() => parseRegistryText(JSON.stringify(doc))).toThrow(
@@ -154,7 +154,7 @@ describe("parseRegistryText", () => {
 
     it("rejects non-integer task_timeout_seconds (floats not allowed)", () => {
       const agent = freshAgent();
-      agent.task_command_template = "x ${task}";
+      agent.task_command_template = "x {task}";
       agent.task_timeout_seconds = 1.5;
       const doc = { version: 1, agents: [agent] };
       expect(() => parseRegistryText(JSON.stringify(doc))).toThrow(
@@ -189,7 +189,10 @@ describe("loadBundledRegistry", () => {
   it("declares task_command_template for Codex (non-interactive exec mode)", () => {
     const doc = loadBundledRegistry();
     const codex = doc.agents.find((a) => a.id === "codex");
-    expect(codex?.task_command_template).toBe("codex exec \"${task}\"");
+    // Note: we use `{task}` (no `$`) — shell-quote would expand
+    // `${task}` as an env var before our substitution. See
+    // agent-spawn.ts module docstring.
+    expect(codex?.task_command_template).toBe("codex exec \"{task}\"");
     expect(codex?.task_timeout_seconds).toBe(600);
   });
 
@@ -197,7 +200,7 @@ describe("loadBundledRegistry", () => {
     const doc = loadBundledRegistry();
     const claude = doc.agents.find((a) => a.id === "claude-code");
     expect(claude?.task_command_template).toBe(
-      "claude --print \"${task}\"",
+      "claude --print \"{task}\"",
     );
     expect(claude?.task_timeout_seconds).toBe(600);
   });
