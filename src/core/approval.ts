@@ -88,7 +88,17 @@ export class DenyAllApprovalService implements ApprovalService {
   }
 }
 
-const DEFAULT_TIMEOUT_MS = 60_000;
+// QA round 9: 60s was the legacy CLI default (user is at the keyboard,
+// answers immediately). With Telegram-routed approvals (#406 +
+// DbApprovalService below), the user's phone may be locked, they may be
+// in a meeting — 60s lets the request auto-deny before they ever read
+// it. CLI flow still uses CLI_DEFAULT_TIMEOUT_MS; DB-backed flow uses
+// the longer DB_DEFAULT_TIMEOUT_MS. Both honour FOREMAN_APPROVAL_TIMEOUT.
+const CLI_DEFAULT_TIMEOUT_MS = 60_000;
+const DB_DEFAULT_TIMEOUT_MS = 600_000; // 10 min
+// Kept as the legacy name so non-DB / non-CLI consumers (notification
+// service classes below) keep working without case-by-case overrides.
+const DEFAULT_TIMEOUT_MS = CLI_DEFAULT_TIMEOUT_MS;
 
 export interface ReadlineApprovalOptions {
   input?: NodeJS.ReadableStream;
@@ -233,7 +243,11 @@ export class DbApprovalService implements ApprovalService {
     opts: DbApprovalOptions = {},
   ) {
     this.bus = opts.bus ?? defaultBus;
-    this.timeoutMs = opts.timeoutMs ?? envTimeoutMs() ?? DEFAULT_TIMEOUT_MS;
+    // QA round 9: DB-backed approval is the flow Telegram (and other
+    // out-of-band channels) use. Default to DB_DEFAULT_TIMEOUT_MS (10 min)
+    // instead of the CLI's 60s — phone unlocked / context-switched users
+    // need real time to react. FOREMAN_APPROVAL_TIMEOUT env still wins.
+    this.timeoutMs = opts.timeoutMs ?? envTimeoutMs() ?? DB_DEFAULT_TIMEOUT_MS;
     this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   }
 
