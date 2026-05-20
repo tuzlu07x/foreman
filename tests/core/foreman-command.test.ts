@@ -549,7 +549,12 @@ describe("ForemanCommandRouter (#431)", () => {
       expect(channel.pending()).toHaveLength(0);
     });
 
-    it("cross-agent still enqueues + reply mentions v0.1 limitation", async () => {
+    it("cross-agent to callable target enqueues + says 'spawning ... output will arrive'", async () => {
+      // PR D: codex declares task_command_template in the bundled
+      // registry, so foreman write now SPAWNS rather than queues+
+      // relays. Success text reflects the new contract — the user
+      // should wait for the follow-up output post, not forward
+      // anything.
       const channel = new ControlChannel(db);
       const store = makeOwnerStore({ "telegram-chat-id": "owner" });
       const result = await router.dispatch(
@@ -564,8 +569,8 @@ describe("ForemanCommandRouter (#431)", () => {
         },
       );
       expect(result.ok).toBe(true);
-      expect(result.text).toMatch(/not auto-invoked/);
-      expect(result.text).toMatch(/wrap-mode/);
+      expect(result.text).toMatch(/Spawning codex/);
+      expect(result.text).toMatch(/output will arrive/);
       expect(channel.pending()).toHaveLength(1);
     });
   });
