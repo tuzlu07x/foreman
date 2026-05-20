@@ -1,0 +1,274 @@
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  executeWriteDirective,
+  renderOutputText,
+} from "../../src/core/agent-execute.js";
+import type { AgentEntry } from "../../src/core/registry-catalog.js";
+
+// =============================================================================
+// Foreman → Agent task execution + output relay — PR D of the multi-agent
+// orchestration epic. Spawn engine (PR C) is exercised end-to-end here
+// with real shell-script subprocesses; the Telegram relay is exercised via
+// a fake fetch impl so we can assert payload shape without hitting the
+// network.
+// =============================================================================
+
+function agent(overrides: Partial<AgentEntry>): AgentEntry {
+  return {
+    id: "codex",
+    name: "Codex",
+    tagline: "fixture",
+    homepage: "https://example.com/",
+    install: { npm: null, brew: null },
+    config_paths: [],
+    required_secrets: [],
+    optional_secrets: [],
+    mcp_compatible: true,
+    supported_versions: "*",
+    min_foreman_version: "0.1.0",
+    ...overrides,
+  } as AgentEntry;
+}
+
+describe("renderOutputText", () => {
+  function input(message: string) {
+    return {
+      agentId: "codex",
+      message,
+      entry: agent({ task_command_template: "echo" }),
+    };
+  }
+
+  it("renders an ok spawn with stdout + agent name header", () => {
+    const text = renderOutputText(
+      input("build the app"),
+      {
+        kind: "ok",
+        exitCode: 0,
+        stdout: "all done\nartifacts written\n",
+        stderr: "",
+        durationMs: 1500,
+      },
+    );
+    expect(text).toContain("Codex");
+    expect(text).toContain("finished your task");
+    expect(text).toContain("all done");
+    expect(text).toContain("artifacts written");
+  });
+
+  it("renders a failed spawn with exit code + stderr block", () => {
+    const text = renderOutputText(
+      input("x"),
+      {
+        kind: "failed",
+        exitCode: 2,
+        stdout: "",
+        stderr: "ENOENT: missing file\n",
+        durationMs: 100,
+      },
+    );
+    expect(text).toContain("Exit code: 2");
+    expect(text).toContain("ENOENT");
+  });
+
+  it("renders a timeout spawn with elapsed time + partial output", () => {
+    const text = renderOutputText(
+      input("x"),
+      {
+        kind: "timeout",
+        stdout: "partial work...",
+        stderr: "",
+        durationMs: 5000,
+        timeoutMs: 5000,
+      },
+    );
+    expect(text).toContain("Timed out");
+    expect(text).toContain("5s");
+    expect(text).toContain("partial work");
+  });
+
+  it("truncates very long stdout to keep under Telegram's text limit", () => {
+    const longOutput = "A".repeat(10_000);
+    const text = renderOutputText(
+      input("x"),
+      {
+        kind: "ok",
+        exitCode: 0,
+        stdout: longOutput,
+        stderr: "",
+        durationMs: 100,
+      },
+      3500,
+    );
+    expect(text).toContain("more chars truncated");
+    // 3500 char limit + ~200 header/wrapping budget; comfortably under 4096.
+    expect(text.length).toBeLessThan(4096);
+  });
+
+  it("renders an unsupported spawn (no task_command_template) as a clear warning", () => {
+    const text = renderOutputText(
+      input("x"),
+      { kind: "unsupported", reason: "no template declared" },
+    );
+    expect(text).toContain("Cannot spawn");
+    expect(text).toContain("no template declared");
+  });
+
+  it("renders a spawn-error with the underlying error message", () => {
+    const text = renderOutputText(
+      input("x"),
+      { kind: "spawn-error", error: "ENOENT" },
+    );
+    expect(text).toContain("Spawn error");
+    expect(text).toContain("ENOENT");
+  });
+
+  it("includes the task excerpt so the user sees what they asked for", () => {
+    const text = renderOutputText(
+      input("review PR #42 — focus on auth changes"),
+      {
+        kind: "ok",
+        exitCode: 0,
+        stdout: "done",
+        stderr: "",
+        durationMs: 50,
+      },
+    );
+    expect(text).toContain("review PR");
+  });
+});
+
+describe("executeWriteDirective", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "foreman-execute-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function makeScript(name: string, body: string): string {
+    const path = join(dir, name);
+    writeFileSync(path, body);
+    chmodSync(path, 0o755);
+    return path;
+  }
+
+  it("returns unsupported when entry has no task_command_template", async () => {
+    const result = await executeWriteDirective(
+      {
+        agentId: "hermes",
+        message: "hi",
+        entry: agent({ id: "hermes", task_command_template: undefined }),
+      },
+      {},
+    );
+    expect(result.spawn.kind).toBe("unsupported");
+    expect(result.outputRelay).toBeNull();
+  });
+
+  it("spawns the agent and POSTs the output back to Telegram", async () => {
+    const echo = makeScript("echo.sh", "#!/bin/sh\necho \"hello: $1\"\n");
+    const fakeFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, result: { message_id: 42 } }),
+    });
+    const result = await executeWriteDirective(
+      {
+        agentId: "codex",
+        message: "do the thing",
+        entry: agent({ task_command_template: `${echo} {task}` }),
+      },
+      {
+        telegramBotToken: "bot-123",
+        telegramChatId: "456",
+        fetchImpl: fakeFetch as unknown as typeof fetch,
+      },
+    );
+    expect(result.spawn.kind).toBe("ok");
+    expect(result.outputRelay?.status).toBe("ok");
+    expect(fakeFetch).toHaveBeenCalledOnce();
+    const call = fakeFetch.mock.calls[0]!;
+    const url = call[0] as string;
+    const body = JSON.parse((call[1] as { body: string }).body);
+    expect(url).toContain("/botbot-123/sendMessage");
+    expect(body.chat_id).toBe("456");
+    expect(body.text).toContain("hello: do the thing");
+    expect(body.parse_mode).toBe("MarkdownV2");
+  });
+
+  it("skips the Telegram relay when bot token is missing", async () => {
+    const echo = makeScript("echo.sh", "#!/bin/sh\necho ok\n");
+    const result = await executeWriteDirective(
+      {
+        agentId: "codex",
+        message: "x",
+        entry: agent({ task_command_template: echo }),
+      },
+      {},
+    );
+    expect(result.spawn.kind).toBe("ok");
+    expect(result.outputRelay?.status).toBe("skipped");
+    expect((result.outputRelay as { reason?: string }).reason).toContain(
+      "telegram-bot-token",
+    );
+  });
+
+  it("reports failed status with exit code + posts the failure to Telegram", async () => {
+    const fail = makeScript("fail.sh", "#!/bin/sh\necho 'broke' >&2\nexit 3\n");
+    const fakeFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, result: { message_id: 7 } }),
+    });
+    const result = await executeWriteDirective(
+      {
+        agentId: "codex",
+        message: "x",
+        entry: agent({ task_command_template: fail }),
+      },
+      {
+        telegramBotToken: "t",
+        telegramChatId: "c",
+        fetchImpl: fakeFetch as unknown as typeof fetch,
+      },
+    );
+    expect(result.spawn.kind).toBe("failed");
+    if (result.spawn.kind === "failed") {
+      expect(result.spawn.exitCode).toBe(3);
+    }
+    const body = JSON.parse(
+      (fakeFetch.mock.calls[0]![1] as { body: string }).body,
+    );
+    expect(body.text).toContain("Exit code: 3");
+    expect(body.text).toContain("broke");
+  });
+
+  it("reports the failure to Telegram when the HTTP POST itself errors", async () => {
+    const echo = makeScript("ok.sh", "#!/bin/sh\necho done\n");
+    const fakeFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      text: async () => "bad gateway",
+    });
+    const result = await executeWriteDirective(
+      {
+        agentId: "codex",
+        message: "x",
+        entry: agent({ task_command_template: echo }),
+      },
+      {
+        telegramBotToken: "t",
+        telegramChatId: "c",
+        fetchImpl: fakeFetch as unknown as typeof fetch,
+      },
+    );
+    expect(result.spawn.kind).toBe("ok");
+    expect(result.outputRelay?.status).toBe("failed");
+    if (result.outputRelay?.status === "failed") {
+      expect(result.outputRelay.reason).toContain("502");
+    }
+  });
+});

@@ -12,6 +12,7 @@ import {
   loadLlmConfig,
   type LlmConfig,
 } from "./llm/config.js";
+import { loadActiveRegistry } from "./registry-catalog.js";
 import type { RegistryService } from "./registry.js";
 
 // =============================================================================
@@ -385,13 +386,31 @@ function writeHandler(
       errorCode: "UNKNOWN_SUBCOMMAND",
     };
   }
+  // PR D — when the target agent declares task_command_template,
+  // the drain handler will spawn it and post the output back to chat.
+  // Tailor the success text so users know to wait for the follow-up
+  // rather than thinking they need to forward the directive manually.
+  // target (RegisteredAgent) is the DB row; task_command_template
+  // lives on the catalog entry. Best-effort lookup — if registry
+  // can't be loaded (corrupt JSON, etc.) we treat as non-callable
+  // and the queue+relay path runs as before.
+  let isCallable = false;
+  try {
+    const catalog = loadActiveRegistry();
+    const entry = catalog.doc.agents.find((a) => a.id === targetAgent);
+    isCallable = Boolean(entry?.task_command_template);
+  } catch {
+    isCallable = false;
+  }
+  const successText = isCallable
+    ? `Spawning ${targetAgent} with your task — output will arrive in this chat when the agent finishes.`
+    : `Directive queued for ${targetAgent}. ` +
+      `${targetAgent} doesn't declare a non-interactive command, so the ` +
+      `directive is posted in chat for you to forward (and dropped in ` +
+      `\`inbound_dir\` if configured). To enable auto-execution, add ` +
+      `\`task_command_template\` to ${targetAgent}'s registry entry.`;
   return enqueueMutating(ctx, "write", [targetAgent, message], {
-    successText:
-      `Directive queued for ${targetAgent}. ` +
-      `Note: ${targetAgent} is not auto-invoked in v0.1 — the directive ` +
-      `is posted in chat for you to forward and (if ${targetAgent} ` +
-      `declares an \`inbound_dir\`) written to that directory. True ` +
-      `cross-agent auto-execution lands with wrap-mode (#445).`,
+    successText,
   });
 }
 
