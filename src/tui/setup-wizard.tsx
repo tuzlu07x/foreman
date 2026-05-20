@@ -517,6 +517,44 @@ export function classifyModelDiscoveryError(
   return rawMessage;
 }
 
+/**
+ * #469 — When the user highlights an OAuth / no-key variant in the
+ * variant picker, scan SIBLING variants in the same provider mapping.
+ * If any sibling's `required_secret` is already in the secret store,
+ * return a one-line note like "You have openrouter-key — picking
+ * 'OpenAI via OpenRouter' would skip the codex login step." When no
+ * sibling matches a stored secret, returns null.
+ *
+ * Prevents the silent footgun where users paste a key in Step 1, pick
+ * an unrelated OAuth route here, and end up debugging why the key
+ * isn't doing anything.
+ *
+ * NOTE: PR #474 merged the call site at the variant-pick render block
+ * but lost this definition during rebase resolution — fixed forward by
+ * reintroducing the helper. The prior file in the PR also had this
+ * exact body next to classifyModelDiscoveryError.
+ */
+export function findSiblingCredHint(
+  providerMapping: {
+    variants: Record<
+      string,
+      { label: string; required_secret?: string | null | undefined }
+    >;
+  },
+  currentVariantId: string,
+  storedSecrets: Set<string>,
+): string | null {
+  for (const [vid, variant] of Object.entries(providerMapping.variants)) {
+    if (vid === currentVariantId) continue;
+    const sibSecret = variant.required_secret;
+    if (!sibSecret) continue;
+    if (storedSecrets.has(sibSecret)) {
+      return `You have ${sibSecret} stored — picking "${variant.label}" would use that key directly (no OAuth setup needed).`;
+    }
+  }
+  return null;
+}
+
 export interface AgentConfigSubmitInput {
   currentIdx: number;
   totalPrompts: number;
