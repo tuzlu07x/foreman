@@ -2,7 +2,11 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runOauthFlows } from "../../src/cli/run-oauth-flow.js";
+import {
+  classifySetupOutput,
+  classifyVerifyOutput,
+  runOauthFlows,
+} from "../../src/cli/run-oauth-flow.js";
 import type { WizardOauthRunStep } from "../../src/tui/setup-wizard.js";
 
 // =============================================================================
@@ -127,5 +131,81 @@ describe("runOauthFlows", () => {
     const all = writeSpy.mock.calls.map((c) => String(c[0])).join("");
     expect(all).toMatch(/OAuth setup: 1\/2 succeeded/);
     expect(all).toMatch(/foreman doctor/);
+  });
+});
+
+// QA round 7: exit-code-only verification missed two failure modes both
+// caught against real Hermes binaries — status commands that exit 0 while
+// printing "logged out", and deprecated setup commands that exit 0 while
+// printing "command has been removed". Content-parsing safeguards each.
+describe("classifyVerifyOutput (#oauth-runner-smart-verify)", () => {
+  it("passes when output mentions 'Logged in' even with exit 0", () => {
+    const v = classifyVerifyOutput(0, "Logged in using ChatGPT\n");
+    expect(v.passed).toBe(true);
+  });
+
+  it("fails when output says 'logged out' despite exit 0", () => {
+    const v = classifyVerifyOutput(
+      0,
+      "openai-codex: logged out (No Codex credentials stored. Run `hermes auth` to authenticate.)\n",
+    );
+    expect(v.passed).toBe(false);
+    expect(v.reason?.toLowerCase()).toContain("logged out");
+  });
+
+  it("fails when output mentions 'No credentials' despite exit 0", () => {
+    const v = classifyVerifyOutput(0, "No credentials configured");
+    expect(v.passed).toBe(false);
+  });
+
+  it("trusts exit 0 + empty output as passing (no markers either way)", () => {
+    const v = classifyVerifyOutput(0, "");
+    expect(v.passed).toBe(true);
+  });
+
+  it("fails on non-zero exit with no success markers", () => {
+    const v = classifyVerifyOutput(2, "some bespoke error");
+    expect(v.passed).toBe(false);
+    expect(v.reason).toContain("exit code 2");
+  });
+
+  it("rescues exit-non-zero when output explicitly says authenticated", () => {
+    const v = classifyVerifyOutput(1, "✓ authenticated (session active)");
+    expect(v.passed).toBe(true);
+  });
+});
+
+describe("classifySetupOutput (#oauth-runner-smart-verify)", () => {
+  it("flags the deprecated 'command has been removed' case as failure", () => {
+    const s = classifySetupOutput(
+      0,
+      "The 'hermes login' command has been removed.\nUse 'hermes auth' to manage credentials, ...",
+    );
+    expect(s.ok).toBe(false);
+    expect(s.reason?.toLowerCase()).toContain("removed");
+  });
+
+  it("flags 'command not found' as failure", () => {
+    const s = classifySetupOutput(0, "zsh: command not found: hermes");
+    expect(s.ok).toBe(false);
+  });
+
+  it("flags 'unrecognized subcommand' as failure", () => {
+    const s = classifySetupOutput(
+      0,
+      "error: unrecognized subcommand 'status'\n  tip: a similar subcommand exists: 'a'",
+    );
+    expect(s.ok).toBe(false);
+  });
+
+  it("trusts exit 0 + benign output", () => {
+    const s = classifySetupOutput(0, "Successfully logged in");
+    expect(s.ok).toBe(true);
+  });
+
+  it("fails on non-zero exit", () => {
+    const s = classifySetupOutput(2, "something went wrong");
+    expect(s.ok).toBe(false);
+    expect(s.reason).toContain("exited 2");
   });
 });
