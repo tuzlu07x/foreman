@@ -2157,7 +2157,29 @@ export function SetupWizard({
     }
 
     if (currentStep === "done" && donePhase === "main") {
+      const mandatoryOauthSteps = requiredSetupResolution.oauthSteps.filter(
+        (o) => o.mandatory,
+      );
+      const allOauthSteps = requiredSetupResolution.oauthSteps;
+      // QA round 4 — mandatory OAuth (Codex/oauth, Hermes/via-codex-oauth,
+      // Claude Code/oauth) is the SOLE auth path for its agent. If the
+      // user just presses [Enter] expecting setup to finish, we still
+      // need to fire those commands or the agent won't be reachable.
+      // [Enter] now auto-runs mandatory steps + exits; [y] runs ALL
+      // (mandatory + optional like `hermes model`); [q] is the only
+      // skip path.
       if (key.return) {
+        if (mandatoryOauthSteps.length > 0) {
+          services.requestOauthRun?.(
+            mandatoryOauthSteps.map((s) => ({
+              agentId: s.agentId,
+              command: s.command,
+              verify: s.verify,
+              mandatory: s.mandatory,
+              reason: s.reason,
+            })),
+          );
+        }
         exit();
         return;
       }
@@ -2178,15 +2200,14 @@ export function SetupWizard({
       // the outer CLI which runs them with inherited stdio so the
       // browser-OAuth flow actually works. Exit cleanly afterwards;
       // re-running `foreman doctor` confirms the final state.
-      if (input === "y" && requiredSetupResolution.oauthSteps.length > 0) {
-        const steps: WizardOauthRunStep[] =
-          requiredSetupResolution.oauthSteps.map((s) => ({
-            agentId: s.agentId,
-            command: s.command,
-            verify: s.verify,
-            mandatory: s.mandatory,
-            reason: s.reason,
-          }));
+      if (input === "y" && allOauthSteps.length > 0) {
+        const steps: WizardOauthRunStep[] = allOauthSteps.map((s) => ({
+          agentId: s.agentId,
+          command: s.command,
+          verify: s.verify,
+          mandatory: s.mandatory,
+          reason: s.reason,
+        }));
         services.requestOauthRun?.(steps);
         exit();
         return;
@@ -3990,8 +4011,15 @@ export function SetupWizard({
             ))}
           </Box>
         ) : null}
+        {/* QA round 4 — [o] used to be advertised unconditionally but
+            it only does anything when the focused row is a secret with
+            a populated acquisition URL. When the screen is showing the
+            "all set" / "OAuth queue only" state there are no secrets,
+            so [o] silently no-ops. Hide it then. */}
         <Text color={theme.fg.muted}>
-          [↑↓] move · [Enter] paste · [o] open URL · [s] skip · [c] continue · [Esc] back
+          {res.secrets.length > 0
+            ? "[↑↓] move · [Enter] paste · [o] open URL · [s] skip · [c] continue · [Esc] back"
+            : "[c] continue · [Esc] back"}
         </Text>
         {!complete && totalErrors === 0 ? (
           <Text color={theme.accent.warning}>
@@ -4386,15 +4414,20 @@ export function SetupWizard({
       )}
       <Box flexDirection="column" marginTop={1}>
         <Text bold>What next?</Text>
-        <Text color={theme.fg.muted}>
-          {"  "}[Enter] Launch Foreman TUI
-        </Text>
-        {requiredSetupResolution.oauthSteps.length > 0 ? (
+        {requiredSetupResolution.oauthSteps.filter((o) => o.mandatory)
+          .length > 0 ? (
           <Text color={theme.accent.warning}>
-            {"  "}[y]     Run OAuth setup now (opens browser){" "}
-            {requiredSetupResolution.oauthSteps.some((o) => o.mandatory)
-              ? "— recommended"
-              : ""}
+            {"  "}[Enter] Run mandatory OAuth ({requiredSetupResolution.oauthSteps.filter((o) => o.mandatory).length} step
+            {requiredSetupResolution.oauthSteps.filter((o) => o.mandatory).length === 1 ? "" : "s"}) + exit
+          </Text>
+        ) : (
+          <Text color={theme.fg.muted}>
+            {"  "}[Enter] Launch Foreman TUI
+          </Text>
+        )}
+        {requiredSetupResolution.oauthSteps.length > 0 ? (
+          <Text color={theme.fg.muted}>
+            {"  "}[y]     Run ALL OAuth steps now (incl. optional)
           </Text>
         ) : null}
         <Text color={theme.fg.muted}>{"  "}[d]     Run foreman doctor</Text>
@@ -4402,7 +4435,7 @@ export function SetupWizard({
           {"  "}[p]     Review policy file
         </Text>
         <Text color={theme.fg.muted}>{"  "}[l]     Show install log</Text>
-        <Text color={theme.fg.muted}>{"  "}[q]     Exit</Text>
+        <Text color={theme.fg.muted}>{"  "}[q]     Exit (skip OAuth)</Text>
       </Box>
     </Box>
   );
