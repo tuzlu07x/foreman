@@ -278,7 +278,7 @@ export async function handleMessage(
               source_user: {
                 type: "string",
                 description:
-                  "Optional — the messaging-platform user id (Telegram numeric id, Discord snowflake, …) for audit traceability.",
+                  "ALWAYS pass the messaging-platform user id of the person who typed the command (Telegram numeric `from.id`, Discord snowflake, Slack user id, …). For Telegram: this is the `from.id` field on the incoming update — NOT the chat id, though for 1:1 chats they're the same. Foreman owner-gates state-mutating verbs (`write`, `stop`, …) against this value, so omitting it WILL cause those commands to fail with NOT_AUTHORIZED. Audit-only commands still record it. When you genuinely can't get the user id (synthetic / scripted invocation), explicitly pass empty string \"\" — never just leave it off.",
               },
             },
           },

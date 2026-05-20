@@ -233,10 +233,16 @@ describe("ForemanCommandRouter (#431)", () => {
       });
       expect(result.ok).toBe(false);
       expect(result.errorCode).toBe("NOT_AUTHORIZED");
+      // QA round 10: error text distinguishes the two failure modes —
+      // here source_user IS sent but the wrong value. Echoing the
+      // received id helps the user spot whether their telegram-chat-id
+      // is the one they expect.
+      expect(result.text).toContain("stranger999");
+      expect(result.text).toContain("doesn't match");
       expect(channel.pending()).toHaveLength(0);
     });
 
-    it("returns NOT_AUTHORIZED when no source_user is supplied", async () => {
+    it("returns NOT_AUTHORIZED with a different (LLM-forgot) message when source_user is absent", async () => {
       const channel = new ControlChannel(db);
       const store = makeOwnerStore({ "telegram-chat-id": "owner123" });
       const result = await router.dispatch("stop", [], {
@@ -247,6 +253,24 @@ describe("ForemanCommandRouter (#431)", () => {
       });
       expect(result.ok).toBe(false);
       expect(result.errorCode).toBe("NOT_AUTHORIZED");
+      // Distinct text from the mismatch case — points at the agent
+      // forgetting to relay source_user, with a "try again" remediation.
+      expect(result.text).toMatch(/didn't pass it|forgets to include/);
+      expect(result.text).toMatch(/Try the same command again/);
+      expect(result.text).not.toMatch(/doesn't match/);
+    });
+
+    it("treats empty-string source_user the same as missing", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "owner123" });
+      const result = await router.dispatch("stop", [], {
+        ...ctx,
+        controlChannel: channel,
+        ownerStore: store,
+        sourceUser: "",
+      });
+      expect(result.errorCode).toBe("NOT_AUTHORIZED");
+      expect(result.text).toMatch(/didn't pass it|forgets to include/);
     });
 
     it("enqueues a stop row + returns the queued id on owner match", async () => {
