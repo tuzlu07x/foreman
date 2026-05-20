@@ -205,10 +205,13 @@ describe("resolveRequiredSetup — bundled-registry scenarios", () => {
     expect(orKey).toBeUndefined();
   });
 
-  // #461 — Hermes via-codex-oauth piggybacks on Codex's ChatGPT login.
-  // Without a mandatory step the user finishes the wizard, sends the
-  // first Telegram message, and hits a silent provider-auth failure.
-  it("via-codex-oauth queues a MANDATORY codex login step (#461)", () => {
+  // QA round 6: Hermes' via-codex-oauth was originally modeled as
+  // piggybacking on Codex CLI's auth.json (depends_on_oauth → codex login).
+  // That was wrong — Hermes runs its OWN OpenAI-Codex OAuth flow via
+  // `hermes login --provider openai-codex` and reads its own token store
+  // (NOT Codex CLI's). Mandatory step is the interactive_setup itself,
+  // promoted by the sole-auth-path rule from earlier round.
+  it("via-codex-oauth queues a MANDATORY hermes login step (sole-auth-path)", () => {
     const res = resolveRequiredSetup({
       agents: [pickAgent("hermes")],
       agentProviders: { hermes: "openai" },
@@ -217,10 +220,12 @@ describe("resolveRequiredSetup — bundled-registry scenarios", () => {
     });
     const mandatory = res.oauthSteps.find((o) => o.mandatory);
     expect(mandatory).toBeDefined();
-    expect(mandatory?.command).toBe("codex login");
-    expect(mandatory?.verify).toBe("codex login status");
+    expect(mandatory?.command).toBe(
+      "hermes login --provider openai-codex",
+    );
+    expect(mandatory?.verify).toBe("hermes auth status openai-codex");
     expect(mandatory?.agentId).toBe("hermes");
-    expect(mandatory?.reason?.toLowerCase()).toContain("codex");
+    expect(mandatory?.reason?.toLowerCase()).toContain("hermes");
   });
 
   it("default openrouter route does not queue any mandatory step (#461)", () => {
