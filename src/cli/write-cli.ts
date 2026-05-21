@@ -2,10 +2,11 @@ import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { ControlChannel } from "../core/control-channel.js";
 import { EventBus, type ForemanEventMap } from "../core/event-bus.js";
+import { readForemanPid } from "../core/foreman-pidfile.js";
 import { RegistryService } from "../core/registry.js";
 import { closeDb, getDb } from "../db/client.js";
 import { getForemanPaths } from "../utils/config.js";
-import { red } from "./colors.js";
+import { orange, red } from "./colors.js";
 
 // =============================================================================
 // `foreman write <agent> <message...>` — CLI counterpart to the chat verb.
@@ -74,10 +75,23 @@ export async function runWrite(
       // the audit log uses this for "where did this come from".
       sourceAgent: "cli",
     });
+    // Only `foreman start` drains the control_commands queue. When it
+    // isn't running the row sits there forever and the directive
+    // appears to silently fail. Detect that up front and warn — the
+    // row is still enqueued (the user can `foreman start` later and it
+    // will be picked up).
+    const startPid = readForemanPid(paths.configDir);
+    if (startPid === null) {
+      console.log(
+        orange("warning: ") +
+          "`foreman start` is not running, so nothing will drain this " +
+          "directive yet. Run `foreman start` to process it.",
+      );
+    }
     console.log(
       `Directive queued for ${targetAgent} (tracking id=${enq.id}). ` +
-        `If \`foreman start\` is running the drain handler picks it up ` +
-        `within ~1.5s and posts the agent's output to your chat.`,
+        `When \`foreman start\` is running the drain handler picks it ` +
+        `up within ~1.5s and posts the agent's output to your chat.`,
     );
     return 0;
   } finally {
