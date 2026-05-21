@@ -102,6 +102,29 @@ describe("foreman write — CLI", () => {
     expect(r.stdout).toMatch(/foreman start/);
   });
 
+  it("warns when `foreman start` is not running (drain handler missing)", () => {
+    runFm(
+      [
+        "agents",
+        "add",
+        "codex",
+        "--type",
+        "codex",
+        "--skip-config",
+        "--skip-projection",
+      ],
+      env,
+    );
+    // The test FOREMAN_HOME is fresh per test → no foreman.pid file →
+    // readForemanPid returns null → warning path fires.
+    const r = runFm(["write", "codex", "hello"], env);
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toMatch(/foreman start.*not running/);
+    // The tracking-id line still prints — the row IS enqueued, the
+    // warning just tells the user nothing will pick it up yet.
+    expect(r.stdout).toMatch(/tracking id=\d+/);
+  });
+
   it("lower-cases the agent id token (case-insensitive lookup)", () => {
     runFm(
       [
