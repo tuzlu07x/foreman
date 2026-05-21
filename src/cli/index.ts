@@ -23,6 +23,7 @@ import { secretsCommand } from "./secrets-cli.js";
 import { setupCommand } from "./setup.js";
 import { startCommand } from "./start.js";
 import { wrapCommand } from "./wrap.js";
+import { writeCommand } from "./write-cli.js";
 
 const program = new Command();
 program
@@ -40,6 +41,7 @@ program.addCommand(logCommand);
 program.addCommand(policyCommand);
 program.addCommand(notifyCommand);
 program.addCommand(chatCommand);
+program.addCommand(writeCommand);
 program.addCommand(activityCommand);
 program.addCommand(llmCommand);
 program.addCommand(agentsCommand);

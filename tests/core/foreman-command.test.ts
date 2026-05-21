@@ -105,6 +105,25 @@ describe("ForemanCommandRouter (#431)", () => {
       expect(result.text).toContain("llm");
     });
 
+    // QA round 15 — `/foreman agent` and `/foreman agents` are common
+    // misfires when an agent's LLM is asked "what's installed".
+    // Aliased to `status` so the call doesn't bounce off
+    // unknown-command.
+    it("`/foreman agent` and `/foreman agents` are aliases of `status`", async () => {
+      const agentRes = await router.dispatch("agent", [], ctx);
+      const agentsRes = await router.dispatch("agents", [], ctx);
+      const statusRes = await router.dispatch("status", [], ctx);
+      expect(agentRes.ok).toBe(true);
+      expect(agentsRes.ok).toBe(true);
+      expect(statusRes.ok).toBe(true);
+      // The body shape should match. We don't compare strings exactly
+      // (the version banner could pick up trivial whitespace diffs);
+      // matching the lead line is enough.
+      const head = (text: string) => text.split("\n")[0];
+      expect(head(agentRes.text)).toBe(head(statusRes.text));
+      expect(head(agentsRes.text)).toBe(head(statusRes.text));
+    });
+
     it("includes custom-registered verbs after registration", async () => {
       router.register(
         "custom-thing",
