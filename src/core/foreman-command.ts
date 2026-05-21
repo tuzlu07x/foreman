@@ -203,6 +203,11 @@ export function registerBuiltinCommands(router: ForemanCommandRouter): void {
     statusHandler,
     "One-line summary — registered agents, runtime status, Foreman build version.",
   );
+  // QA round 15 — agents' LLMs reach for `/foreman agent` / `/foreman
+  // agents` when asking "what's installed". Register both as aliases of
+  // status so the call doesn't bounce off the unknown-command branch.
+  router.register("agent", statusHandler, "Alias of `status`.");
+  router.register("agents", statusHandler, "Alias of `status`.");
   router.register(
     "stop",
     stopHandler,
