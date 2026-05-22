@@ -535,9 +535,17 @@ function enqueueMutating(
   // (the common case) because only the owner can DM the bot anyway.
   // For group chats this would be too permissive — but Foreman v0.1
   // doesn't support multi-user installs.
+  //
+  // QA round 17 — extended: agents sometimes pass DISPLAY NAME (e.g.
+  // "Isa") instead of the numeric Telegram user id. Telegram user
+  // ids are always numeric, so a non-numeric source_user is by
+  // definition wrong. Treat it the same as missing — fall back to
+  // telegram-chat-id rather than rejecting with NOT_AUTHORIZED.
   let effectiveSourceUser = ctx.sourceUser;
+  const isNumericUserId = (s: string | undefined): s is string =>
+    typeof s === "string" && s.trim().length > 0 && /^\d+$/.test(s.trim());
   if (
-    (!effectiveSourceUser || effectiveSourceUser.trim().length === 0) &&
+    !isNumericUserId(effectiveSourceUser) &&
     ctx.ownerStore?.exists("telegram-chat-id")
   ) {
     try {

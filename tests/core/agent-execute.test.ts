@@ -139,6 +139,64 @@ describe("renderOutputText", () => {
     );
     expect(text).toContain("review PR");
   });
+
+  // QA round 17 regression — Claude's normal English output contains
+  // `.`, `!`, `-`, `(`, etc. — all MarkdownV2 reserved chars. Before
+  // wrapping in code blocks, Telegram rejected the whole message with
+  // HTTP 400 ("Character '.' is reserved and must be escaped") and the
+  // user saw nothing. Wrap stdout in ``` and only escape ` / \ inside.
+  it("wraps stdout in a code block so MarkdownV2 reserved chars don't break the message", () => {
+    const text = renderOutputText(
+      input("hi"),
+      {
+        kind: "ok",
+        exitCode: 0,
+        stdout: "Hello! I am Claude. Use `.` and `!` freely.\n",
+        stderr: "",
+        durationMs: 100,
+      },
+    );
+    // Triple-backtick fence is the marker of a MarkdownV2 pre/code block.
+    expect(text).toContain("```");
+    // The reserved chars must reach Telegram LITERAL (no backslash
+    // escape required inside a code block).
+    expect(text).toContain("Hello! I am Claude.");
+    expect(text).toContain("Use ");
+  });
+
+  it("escapes backticks + backslashes inside the code block (would otherwise close the fence)", () => {
+    const text = renderOutputText(
+      input("hi"),
+      {
+        kind: "ok",
+        exitCode: 0,
+        // Embedded backtick + backslash would either close the fence
+        // early or land as a stray escape — break the message
+        // structure. Must be backslash-escaped per Telegram docs.
+        stdout: "Run `npm test` and check the C:\\path\n",
+        stderr: "",
+        durationMs: 100,
+      },
+    );
+    expect(text).toContain("\\`npm test\\`");
+    expect(text).toContain("C:\\\\path");
+  });
+
+  it("wraps stderr in a code block on failed spawns (same reserved-char fix)", () => {
+    const text = renderOutputText(
+      input("x"),
+      {
+        kind: "failed",
+        exitCode: 1,
+        stdout: "",
+        stderr: "Error: file not found at /tmp/foo.txt!\n",
+        durationMs: 100,
+      },
+    );
+    expect(text).toContain("```");
+    expect(text).toContain("file not found");
+    expect(text).toContain(".txt!");
+  });
 });
 
 describe("executeWriteDirective", () => {
