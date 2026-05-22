@@ -103,9 +103,14 @@ export class OpenAILlmClient implements LlmClient {
 
   async call(prompt: string, opts: LlmCallOptions): Promise<LlmResponse> {
     const url = `${this.apiBase}/v1/chat/completions`
+    // QA17 — GPT-5 / o1 / o3 families reject `max_tokens` with
+    // "Unsupported parameter: 'max_tokens' is not supported with this
+    // model. Use 'max_completion_tokens' instead." Pick the right
+    // field by model family rather than hard-failing the orchestrator.
+    const tokenField = pickTokenLimitField(this.model)
     const body = JSON.stringify({
       model: this.model,
-      max_tokens: opts.maxTokens,
+      [tokenField]: opts.maxTokens,
       temperature: opts.temperature ?? 0,
       messages: [{ role: 'user', content: prompt }],
     })
@@ -188,3 +193,17 @@ export function calculateCostUsd(
 }
 
 export const _PRICING_USD_PER_MTOK = PRICING_USD_PER_MTOK
+
+// OpenAI's reasoning / GPT-5 models (gpt-5*, o1*, o3*, o4*) reject
+// the legacy `max_tokens` field and require `max_completion_tokens`.
+// Older GPT-4 / GPT-3.5 family still expects `max_tokens`. Exported
+// for direct testing so the family-detection rules are pinned.
+export function pickTokenLimitField(
+  model: string,
+): 'max_tokens' | 'max_completion_tokens' {
+  // Case-insensitive prefix match — OpenAI uses lowercase consistently
+  // but agents / configs may write "GPT-5" etc.
+  const m = model.toLowerCase()
+  if (/^(gpt-5|o1|o3|o4)/.test(m)) return 'max_completion_tokens'
+  return 'max_tokens'
+}
