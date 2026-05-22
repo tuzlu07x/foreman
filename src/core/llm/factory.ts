@@ -2,8 +2,10 @@ import { SecretNotFoundError, type SecretStore } from '../secret-store.js'
 import { type LlmClient, LlmProviderError } from './client.js'
 import type { LlmConfig, ProviderId } from './config.js'
 import type { OAuthProviderId } from './oauth/oauth-providers.js'
+import { makeAccessTokenProvider } from './oauth/token-refresh.js'
 import { loadOAuthTokens } from './oauth/token-store.js'
 import { AnthropicLlmClient } from './providers/anthropic.js'
+import { CodexLlmClient } from './providers/codex.js'
 import { GeminiLlmClient } from './providers/gemini.js'
 import { OpenAILlmClient } from './providers/openai.js'
 
@@ -16,14 +18,17 @@ import { OpenAILlmClient } from './providers/openai.js'
 // gets back the right concrete `LlmClient` (or a typed error explaining why
 // not).
 //
-// Two failure modes the caller must handle separately:
+// Failure modes the caller must handle separately:
 //
-//   - LlmProviderUnavailableError → schema offers a provider whose runtime
+//   - LlmProviderUnavailableError  → schema offers a provider whose runtime
 //     impl hasn't shipped yet (e.g. ollama, openai_compatible — v0.2).
 //     Surface a "configure a different provider" hint, not a 401.
 //
-//   - LlmCredentialMissingError   → impl is fine but the secret the config
+//   - LlmCredentialMissingError    → impl is fine but the secret the config
 //     points at is missing / unset. Surface "run `foreman secrets add X`".
+//
+//   - LlmOAuthLoginRequiredError   → `auth_mode: oauth` but no token bundle
+//     in the store. Surface "run `foreman llm login <provider>`".
 
 export class LlmProviderUnavailableError extends Error {
   constructor(public readonly providerId: ProviderId) {
@@ -62,21 +67,6 @@ export class LlmOAuthLoginRequiredError extends Error {
   }
 }
 
-/** Temporary — raised when the user picks `auth_mode: oauth` before the
- *  OAuth-aware provider client has shipped (Faz 3 / #506). The factory
- *  dispatch + login-required check land here in #505; the actual client is
- *  one phase behind and replaces this throw one line at a time. */
-export class LlmOAuthNotImplementedError extends Error {
-  constructor(public readonly providerId: OAuthProviderId) {
-    super(
-      `OAuth client for '${providerId}' is not yet implemented — wiring ` +
-        `landed in Faz 2 (#505); the provider client itself lands in Faz 3 ` +
-        `(#506).`,
-    )
-    this.name = 'LlmOAuthNotImplementedError'
-  }
-}
-
 /**
  * Resolve a usable LlmClient for the configured provider. Throws explicitly
  * so the caller can render a contextual error — no silent nulls.
@@ -88,7 +78,7 @@ export function buildLlmClient(
   switch (config.provider) {
     case 'anthropic': {
       if (config.credentials.anthropic?.auth_mode === 'oauth') {
-        return buildOAuthClient('anthropic', secretStore)
+        return buildOAuthClient('anthropic', config.model, secretStore)
       }
       const apiKey = resolveSecret(
         config,
@@ -99,7 +89,7 @@ export function buildLlmClient(
     }
     case 'openai': {
       if (config.credentials.openai?.auth_mode === 'oauth') {
-        return buildOAuthClient('openai', secretStore)
+        return buildOAuthClient('openai', config.model, secretStore)
       }
       const apiKey = resolveSecret(
         config,
@@ -135,19 +125,26 @@ export function buildLlmClient(
   }
 }
 
-/** Dispatch the OAuth-mode path: validate the user has signed in, then defer
- *  to the OAuth-aware client. The provider client itself lands in Faz 3
- *  (#506); for Faz 2 we surface a clear "not yet implemented" once the
- *  login-required check passes so callers can tell wiring is in place. */
+/** Dispatch the OAuth-mode path: validate the user has signed in up front
+ *  (so the error is contextual instead of surfacing on the first call), then
+ *  return an OAuth-aware client wired to a self-refreshing token provider. */
 function buildOAuthClient(
   providerId: OAuthProviderId,
+  model: string,
   store: SecretStore,
 ): LlmClient {
   const tokens = loadOAuthTokens(store, providerId)
   if (!tokens) {
     throw new LlmOAuthLoginRequiredError(providerId)
   }
-  throw new LlmOAuthNotImplementedError(providerId)
+  const tokenProvider = makeAccessTokenProvider(store, providerId)
+  if (providerId === 'anthropic') {
+    return new AnthropicLlmClient({ tokenProvider, model })
+  }
+  // providerId === 'openai' → Codex (ChatGPT backend Responses API). Same
+  // logical provider id from the factory's POV; OAuth-vs-API-key dispatches
+  // to a different concrete client because the wire shape is different.
+  return new CodexLlmClient({ tokenProvider, model })
 }
 
 function resolveSecret(
