@@ -145,6 +145,12 @@ export function buildLlmConfigFromWizard(
         ...input.existing.features,
         verification: true,
         smart_report: true,
+        // #498 — Default ON so free-form "foreman are you there?" hits
+        // the LLM instead of bouncing off "Unknown command". Budget
+        // guardrails (monthly_cap_usd) still apply, so the opt-in cost
+        // concern doesn't disappear — users just no longer have to
+        // hand-edit YAML to talk to Foreman.
+        orchestrator_chat: true,
       },
       credentials: mergeCredentials(
         input.existing.credentials,
