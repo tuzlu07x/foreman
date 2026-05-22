@@ -5,15 +5,6 @@ import {
   type LlmResponse,
 } from "../client.js";
 
-// =============================================================================
-// OpenAI Chat Completions client (#294 / v0.1.0)
-// =============================================================================
-//
-// Mirrors the AnthropicLlmClient shape so the factory (#296) can swap providers
-// without callers branching. Talks to /v1/chat/completions with a single
-// user message — verification + smart-report are one-shot prompts, no streaming
-// / tool-use needed.
-
 export interface OpenAIFetch {
   (
     url: string,
@@ -26,16 +17,14 @@ export interface OpenAIFetch {
   }>;
 }
 
+type OpenAIHttpResponse = Awaited<ReturnType<OpenAIFetch>>;
+
 export interface OpenAIClientOptions {
   apiKey: string;
   model: string;
   fetchImpl?: OpenAIFetch;
-  /** Override the API base. OPENAI_API_BASE env wins if set; explicit opt wins
-   *  over env. Useful for proxies, Azure OpenAI, and tests. */
   apiBase?: string;
-  /** Per-call timeout default; opts.timeoutMs wins. */
   defaultTimeoutMs?: number;
-  /** Optional organisation header (rarely needed; mostly for shared org keys). */
   organisation?: string;
 }
 
@@ -49,12 +38,21 @@ interface OpenAICompletionResponse {
     completion_tokens?: number;
     total_tokens?: number;
   };
-  error?: { type?: string; message?: string; code?: string };
+  error?: OpenAIErrorBody;
 }
 
-// USD per million tokens. Snapshot late 2025 / early 2026. Refresh quarterly.
-// Unknown models fall back to gpt-4o-mini pricing as a conservative floor —
-// we'd rather over-account than silently under-bill a future release.
+export interface OpenAIErrorBody {
+  message?: string;
+  type?: string;
+  param?: string;
+  code?: string;
+}
+
+interface ModelQuirks {
+  tokenField: "max_tokens" | "max_completion_tokens";
+  sendsTemperature: boolean;
+}
+
 const PRICING_USD_PER_MTOK: Record<string, { input: number; output: number }> =
   {
     "gpt-4o-mini": { input: 0.15, output: 0.6 },
@@ -72,7 +70,8 @@ const PRICING_USD_PER_MTOK: Record<string, { input: number; output: number }> =
   };
 
 const DEFAULT_API_BASE = "https://api.openai.com";
-const DEFAULT_TIMEOUT_MS = 5_000;
+const DEFAULT_TIMEOUT_MS = 60_000;
+const MAX_ADAPT_RETRIES = 3;
 
 export class OpenAILlmClient implements LlmClient {
   readonly providerId = "openai" as const;
@@ -82,6 +81,11 @@ export class OpenAILlmClient implements LlmClient {
   private readonly apiBase: string;
   private readonly defaultTimeoutMs: number;
   private readonly organisation?: string;
+
+  private quirks: ModelQuirks = {
+    tokenField: "max_tokens",
+    sendsTemperature: true,
+  };
 
   constructor(opts: OpenAIClientOptions) {
     this.apiKey = opts.apiKey;
@@ -103,13 +107,40 @@ export class OpenAILlmClient implements LlmClient {
 
   async call(prompt: string, opts: LlmCallOptions): Promise<LlmResponse> {
     const url = `${this.apiBase}/v1/chat/completions`;
-    const tokenField = pickTokenLimitField(this.model);
+
+    for (let attempt = 0; ; attempt++) {
+      const { res, durationMs } = await this.post(url, prompt, opts);
+
+      if (res.ok) {
+        return await parseSuccess(res, this.model, durationMs);
+      }
+
+      const text = await res.text().catch(() => "<no body>");
+      if (
+        res.status === 400 &&
+        attempt < MAX_ADAPT_RETRIES &&
+        this.adaptQuirks(text)
+      ) {
+        continue;
+      }
+      throw new LlmProviderError(
+        `OpenAI HTTP ${res.status}: ${text}`,
+        "openai",
+      );
+    }
+  }
+
+  private async post(
+    url: string,
+    prompt: string,
+    opts: LlmCallOptions,
+  ): Promise<{ res: OpenAIHttpResponse; durationMs: number }> {
     const payload: Record<string, unknown> = {
       model: this.model,
-      [tokenField]: opts.maxTokens,
+      [this.quirks.tokenField]: opts.maxTokens,
       messages: [{ role: "user", content: prompt }],
     };
-    if (supportsCustomTemperature(this.model)) {
+    if (this.quirks.sendsTemperature) {
       payload.temperature = opts.temperature ?? 0;
     }
     const body = JSON.stringify(payload);
@@ -120,19 +151,19 @@ export class OpenAILlmClient implements LlmClient {
       opts.timeoutMs ?? this.defaultTimeoutMs,
     );
     const t0 = Date.now();
-    let res;
     try {
       const headers: Record<string, string> = {
         "content-type": "application/json",
         authorization: `Bearer ${this.apiKey}`,
       };
       if (this.organisation) headers["openai-organization"] = this.organisation;
-      res = await this.fetchImpl(url, {
+      const res = await this.fetchImpl(url, {
         method: "POST",
         headers,
         body,
         signal: controller.signal,
       });
+      return { res, durationMs: Date.now() - t0 };
     } catch (err) {
       throw new LlmProviderError(
         `OpenAI fetch failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -141,35 +172,63 @@ export class OpenAILlmClient implements LlmClient {
     } finally {
       clearTimeout(timer);
     }
-    const durationMs = Date.now() - t0;
+  }
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => "<no body>");
-      throw new LlmProviderError(
-        `OpenAI HTTP ${res.status}: ${text}`,
-        "openai",
-      );
+  private adaptQuirks(bodyText: string): boolean {
+    const err = parseOpenAIError(bodyText);
+    if (!err) return false;
+    const param = (err.param ?? "").toLowerCase();
+    const message = (err.message ?? "").toLowerCase();
+
+    if (
+      this.quirks.tokenField === "max_tokens" &&
+      (param === "max_tokens" || message.includes("max_tokens")) &&
+      message.includes("max_completion_tokens")
+    ) {
+      this.quirks.tokenField = "max_completion_tokens";
+      return true;
     }
 
-    const parsed = (await res.json()) as OpenAICompletionResponse;
-    if (parsed.error) {
-      throw new LlmProviderError(
-        `OpenAI error: ${parsed.error.message ?? "unknown"}`,
-        "openai",
-      );
+    if (this.quirks.sendsTemperature && param === "temperature") {
+      this.quirks.sendsTemperature = false;
+      return true;
     }
 
-    const text = parsed.choices?.[0]?.message?.content ?? "";
-    const inputTokens = parsed.usage?.prompt_tokens ?? 0;
-    const outputTokens = parsed.usage?.completion_tokens ?? 0;
-    return {
-      text,
-      inputTokens,
-      outputTokens,
-      costUsd: calculateCostUsd(this.model, inputTokens, outputTokens),
-      durationMs,
-      cacheHit: false,
-    };
+    return false;
+  }
+}
+
+async function parseSuccess(
+  res: OpenAIHttpResponse,
+  model: string,
+  durationMs: number,
+): Promise<LlmResponse> {
+  const parsed = (await res.json()) as OpenAICompletionResponse;
+  if (parsed.error) {
+    throw new LlmProviderError(
+      `OpenAI error: ${parsed.error.message ?? "unknown"}`,
+      "openai",
+    );
+  }
+  const text = parsed.choices?.[0]?.message?.content ?? "";
+  const inputTokens = parsed.usage?.prompt_tokens ?? 0;
+  const outputTokens = parsed.usage?.completion_tokens ?? 0;
+  return {
+    text,
+    inputTokens,
+    outputTokens,
+    costUsd: calculateCostUsd(model, inputTokens, outputTokens),
+    durationMs,
+    cacheHit: false,
+  };
+}
+
+export function parseOpenAIError(bodyText: string): OpenAIErrorBody | null {
+  try {
+    const parsed = JSON.parse(bodyText) as { error?: OpenAIErrorBody };
+    return parsed && typeof parsed === "object" ? (parsed.error ?? null) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -192,17 +251,3 @@ export function calculateCostUsd(
 }
 
 export const _PRICING_USD_PER_MTOK = PRICING_USD_PER_MTOK;
-
-const REASONING_MODEL_RE = /^(gpt-5|o1|o3|o4)/;
-
-export function pickTokenLimitField(
-  model: string,
-): "max_tokens" | "max_completion_tokens" {
-  return REASONING_MODEL_RE.test(model.toLowerCase())
-    ? "max_completion_tokens"
-    : "max_tokens";
-}
-
-export function supportsCustomTemperature(model: string): boolean {
-  return !REASONING_MODEL_RE.test(model.toLowerCase());
-}
