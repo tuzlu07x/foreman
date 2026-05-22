@@ -4,6 +4,7 @@ import {
   OpenAILlmClient,
   calculateCostUsd,
   pickTokenLimitField,
+  supportsCustomTemperature,
   type OpenAIFetch,
 } from '../../../src/core/llm/providers/openai.js'
 
@@ -132,6 +133,59 @@ describe('OpenAILlmClient — call', () => {
       expect(body.max_tokens).toBe(16)
       expect(body.max_completion_tokens).toBeUndefined()
     }
+  })
+
+  // QA18 — GPT-5 / o1 / o3 / o4 families reject any non-default
+  // `temperature` with HTTP 400 ("Only the default (1) value is
+  // supported"). Pre-fix, `foreman hello` against a gpt-5* model failed
+  // immediately because orchestrator_chat sends temperature 0.3.
+  it('omits `temperature` for the gpt-5 / o1 / o3 / o4 families', async () => {
+    for (const model of ['gpt-5-mini', 'gpt-5.5', 'o1-mini', 'o3', 'o4-preview']) {
+      const f = makeFetch([happyResponse()])
+      const client = new OpenAILlmClient({
+        apiKey: 'sk-proj',
+        model,
+        fetchImpl: f.fetchImpl,
+      })
+      await client.call('hi', { feature: 'test', maxTokens: 16, temperature: 0.3 })
+      const body = JSON.parse(String(f.calls[0]!.init.body)) as Record<
+        string,
+        unknown
+      >
+      expect(body.temperature).toBeUndefined()
+    }
+  })
+
+  it('keeps `temperature` for legacy gpt-4o / gpt-4 / gpt-3.5 models', async () => {
+    for (const model of ['gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo']) {
+      const f = makeFetch([happyResponse()])
+      const client = new OpenAILlmClient({
+        apiKey: 'sk-proj',
+        model,
+        fetchImpl: f.fetchImpl,
+      })
+      await client.call('hi', { feature: 'test', maxTokens: 16, temperature: 0.3 })
+      const body = JSON.parse(String(f.calls[0]!.init.body)) as Record<
+        string,
+        unknown
+      >
+      expect(body.temperature).toBe(0.3)
+    }
+  })
+
+  it('defaults `temperature` to 0 for legacy models when none is given', async () => {
+    const f = makeFetch([happyResponse()])
+    const client = new OpenAILlmClient({
+      apiKey: 'sk-proj',
+      model: 'gpt-4o-mini',
+      fetchImpl: f.fetchImpl,
+    })
+    await client.call('hi', { feature: 'test', maxTokens: 16 })
+    const body = JSON.parse(String(f.calls[0]!.init.body)) as Record<
+      string,
+      unknown
+    >
+    expect(body.temperature).toBe(0)
   })
 
   it('extracts text + tokens + computes cost from the response', async () => {
@@ -380,6 +434,37 @@ describe('pickTokenLimitField', () => {
       'some-unknown-model',
     ]) {
       expect(pickTokenLimitField(m)).toBe('max_tokens')
+    }
+  })
+})
+
+describe('supportsCustomTemperature', () => {
+  it('returns false for gpt-5 / o1 / o3 / o4 families', () => {
+    for (const m of [
+      'gpt-5',
+      'gpt-5-mini',
+      'gpt-5.5',
+      'GPT-5-PREVIEW',
+      'o1',
+      'o1-mini',
+      'o1-preview',
+      'o3',
+      'o3-mini',
+      'o4',
+    ]) {
+      expect(supportsCustomTemperature(m)).toBe(false)
+    }
+  })
+
+  it('returns true for gpt-4* / gpt-3.5 / unknown models', () => {
+    for (const m of [
+      'gpt-4o-mini',
+      'gpt-4o',
+      'gpt-4-turbo',
+      'gpt-3.5-turbo',
+      'some-unknown-model',
+    ]) {
+      expect(supportsCustomTemperature(m)).toBe(true)
     }
   })
 })
