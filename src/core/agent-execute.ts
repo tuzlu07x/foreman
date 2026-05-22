@@ -34,6 +34,11 @@ export interface ExecuteDirectiveInput {
    *  task_command_template; otherwise we return `unsupported` and the
    *  caller falls back to deliverWriteDirective. */
   entry: AgentEntry;
+  /** Per-agent model override from `agents.model_version`. Combined
+   *  with `entry.task_model_flag` by the spawn engine to inject the
+   *  CLI flag (e.g. `--model claude-sonnet-4-6`). NULL/undefined =
+   *  the agent's own config default. */
+  modelVersion?: string | null;
 }
 
 export interface ExecuteDeliveryDeps {
@@ -89,6 +94,7 @@ export async function executeWriteDirective(
   const spawn = await spawnAgentTask({
     entry: input.entry,
     task: input.message,
+    modelVersion: input.modelVersion ?? null,
     spawnImpl: deps.spawnImpl,
   });
   const text = renderOutputText(input, spawn, deps.maxOutputLength);
