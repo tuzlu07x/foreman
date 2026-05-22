@@ -206,3 +206,124 @@ describe('AnthropicLlmClient — exposes providerId + model', () => {
     expect(client.model).toBe('claude-haiku-4-5')
   })
 })
+
+// ============================================================================
+// Faz 3 / #506 — OAuth (Claude subscription / Bearer) mode
+// ============================================================================
+//
+// OAuth mode swaps `x-api-key` for a Bearer token, adds the Claude-Code beta
+// + CLI identity headers Anthropic uses to route OAuth traffic, prepends a
+// mandatory "You are Claude Code…" system block (without it Anthropic
+// intermittently 500s OAuth requests), and reports `costUsd: 0` because usage
+// goes against the Claude subscription, not an API budget.
+
+describe('AnthropicLlmClient — OAuth mode', () => {
+  function tokenProviderReturning(
+    accessToken: string,
+  ): () => Promise<{ accessToken: string; accountId?: string }> {
+    return async () => ({ accessToken })
+  }
+
+  it('sends Bearer auth + Claude Code beta headers (no x-api-key)', async () => {
+    const f = makeFetch([happyResponse()])
+    const client = new AnthropicLlmClient({
+      tokenProvider: tokenProviderReturning('sk-ant-oat01-FAKE'),
+      model: 'claude-opus-4-7',
+      fetchImpl: f.fetchImpl,
+    })
+    await client.call('hi', { feature: 'test', maxTokens: 16 })
+    const headers = f.calls[0]!.init.headers as Record<string, string>
+    expect(headers['authorization']).toBe('Bearer sk-ant-oat01-FAKE')
+    expect(headers['x-api-key']).toBeUndefined()
+    expect(headers['anthropic-version']).toBe('2023-06-01')
+    expect(headers['anthropic-beta']).toContain('claude-code-20250219')
+    expect(headers['anthropic-beta']).toContain('oauth-2025-04-20')
+    expect(headers['user-agent']).toMatch(/^claude-cli\//)
+    expect(headers['x-app']).toBe('cli')
+  })
+
+  it('prepends the mandatory Claude Code identity system block', async () => {
+    const f = makeFetch([happyResponse()])
+    const client = new AnthropicLlmClient({
+      tokenProvider: tokenProviderReturning('sk-ant-oat01-x'),
+      model: 'claude-opus-4-7',
+      fetchImpl: f.fetchImpl,
+    })
+    await client.call('hi', { feature: 'test', maxTokens: 16 })
+    const body = JSON.parse(String(f.calls[0]!.init.body)) as {
+      system?: Array<{ type: string; text: string }>
+    }
+    expect(body.system).toEqual([
+      {
+        type: 'text',
+        text: "You are Claude Code, Anthropic's official CLI for Claude.",
+      },
+    ])
+  })
+
+  it('reports costUsd = 0 (subscription, not API budget)', async () => {
+    const f = makeFetch([happyResponse()])
+    const client = new AnthropicLlmClient({
+      tokenProvider: tokenProviderReturning('sk-ant-oat01-x'),
+      model: 'claude-opus-4-7',
+      fetchImpl: f.fetchImpl,
+    })
+    const res = await client.call('hi', { feature: 'test', maxTokens: 16 })
+    expect(res.costUsd).toBe(0)
+    // Tokens still recorded for usage telemetry.
+    expect(res.inputTokens).toBe(8)
+    expect(res.outputTokens).toBe(4)
+  })
+
+  it('calls tokenProvider on every request (so refresh hooks in)', async () => {
+    const f = makeFetch([happyResponse(), happyResponse()])
+    let calls = 0
+    const tp = async () => {
+      calls++
+      return { accessToken: `tok-${calls}` }
+    }
+    const client = new AnthropicLlmClient({
+      tokenProvider: tp,
+      model: 'claude-opus-4-7',
+      fetchImpl: f.fetchImpl,
+    })
+    await client.call('a', { feature: 'test', maxTokens: 16 })
+    await client.call('b', { feature: 'test', maxTokens: 16 })
+    expect(calls).toBe(2)
+    expect(
+      (f.calls[0]!.init.headers as Record<string, string>)['authorization'],
+    ).toBe('Bearer tok-1')
+    expect(
+      (f.calls[1]!.init.headers as Record<string, string>)['authorization'],
+    ).toBe('Bearer tok-2')
+  })
+
+  it('constructor throws when neither apiKey nor tokenProvider is given', () => {
+    expect(
+      () =>
+        new AnthropicLlmClient({
+          model: 'claude-opus-4-7',
+          fetchImpl: vi.fn() as never,
+        }),
+    ).toThrow(/apiKey.*tokenProvider/)
+  })
+
+  it('API-key mode is bit-identical — no system block, x-api-key header', async () => {
+    const f = makeFetch([happyResponse()])
+    const client = new AnthropicLlmClient({
+      apiKey: 'sk-ant-classic',
+      model: 'claude-haiku-4-5',
+      fetchImpl: f.fetchImpl,
+    })
+    await client.call('hi', { feature: 'test', maxTokens: 16 })
+    const headers = f.calls[0]!.init.headers as Record<string, string>
+    expect(headers['x-api-key']).toBe('sk-ant-classic')
+    expect(headers['authorization']).toBeUndefined()
+    expect(headers['anthropic-beta']).toBeUndefined()
+    const body = JSON.parse(String(f.calls[0]!.init.body)) as Record<
+      string,
+      unknown
+    >
+    expect(body.system).toBeUndefined()
+  })
+})

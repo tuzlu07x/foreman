@@ -4,15 +4,28 @@ import {
   type LlmClient,
   type LlmResponse,
 } from "../client.js";
+import type { AccessTokenProvider } from "../oauth/token-refresh.js";
 
 // =============================================================================
 // Anthropic Messages API client (#230 / C7)
 // =============================================================================
 //
-// Minimal impl: one prompt → one assistant message back. Uses native fetch
-// (Node 20+) with an injectable transport for tests. Cost is calculated from
-// a hardcoded pricing table — these numbers must be refreshed when Anthropic
-// changes pricing (see PRICING comment below).
+// Two modes from one class:
+//
+//   - API key  — `x-api-key` header, pay-per-token. The default; bit-identical
+//                to the original implementation.
+//   - OAuth    — `Authorization: Bearer …` against the same /v1/messages
+//                endpoint, drawing from the user's Claude subscription. Adds
+//                the Claude Code beta + identity headers Anthropic uses to
+//                route OAuth traffic, and prepends a mandatory "You are Claude
+//                Code…" system block. Without that prefix Anthropic
+//                intermittently 500s OAuth requests (pi-ai / Hermes both
+//                document this).
+//
+// Wire-shape facts mirrored from `@earendil-works/pi-ai`, the reference
+// implementation Hermes + OpenClaw both ship in production. Bump
+// CLAUDE_CODE_SPOOF_VERSION on each Foreman release; Anthropic rejects OAuth
+// traffic when the spoofed user-agent is too far behind real Claude Code.
 
 export interface AnthropicFetch {
   (
@@ -27,7 +40,12 @@ export interface AnthropicFetch {
 }
 
 export interface AnthropicClientOptions {
-  apiKey: string;
+  /** API-key mode. Required unless `tokenProvider` is set. */
+  apiKey?: string;
+  /** OAuth mode — when set, each call resolves a fresh access token and the
+   *  client sends the Claude Code beta headers + identity system block.
+   *  `apiKey` is ignored in this mode. */
+  tokenProvider?: AccessTokenProvider;
   model: string;
   fetchImpl?: AnthropicFetch;
   /** Override the API base. Useful for proxies / tests. */
@@ -54,16 +72,34 @@ const DEFAULT_API_BASE = "https://api.anthropic.com";
 const DEFAULT_TIMEOUT_MS = 60_000;
 const ANTHROPIC_VERSION = "2023-06-01";
 
+// Beta features required for OAuth traffic: `claude-code-20250219` enables the
+// Claude Code request shape; `oauth-2025-04-20` enables Bearer-token auth.
+const OAUTH_BETA = "claude-code-20250219,oauth-2025-04-20";
+// First `system` block — must be exactly this string for Anthropic to route
+// OAuth traffic reliably. Real system prompts are appended as a second block.
+const CLAUDE_CODE_IDENTITY =
+  "You are Claude Code, Anthropic's official CLI for Claude.";
+// Spoofed CLI version. Bump on each Foreman release; Anthropic rejects OAuth
+// traffic when this is too far behind the real Claude Code release.
+const CLAUDE_CODE_SPOOF_VERSION = "2.1.145";
+
 export class AnthropicLlmClient implements LlmClient {
   readonly providerId = "anthropic" as const;
   readonly model: string;
-  private readonly apiKey: string;
+  private readonly apiKey?: string;
+  private readonly tokenProvider?: AccessTokenProvider;
   private readonly fetchImpl: AnthropicFetch;
   private readonly apiBase: string;
   private readonly defaultTimeoutMs: number;
 
   constructor(opts: AnthropicClientOptions) {
+    if (!opts.apiKey && !opts.tokenProvider) {
+      throw new Error(
+        "AnthropicLlmClient requires either `apiKey` or `tokenProvider`.",
+      );
+    }
     this.apiKey = opts.apiKey;
+    this.tokenProvider = opts.tokenProvider;
     this.model = opts.model;
     this.fetchImpl = opts.fetchImpl ?? ((u, init) => fetch(u, init) as never);
     this.apiBase = opts.apiBase ?? DEFAULT_API_BASE;
@@ -80,12 +116,42 @@ export class AnthropicLlmClient implements LlmClient {
 
   async call(prompt: string, opts: LlmCallOptions): Promise<LlmResponse> {
     const url = `${this.apiBase}/v1/messages`;
-    const body = JSON.stringify({
+
+    // Resolve auth + per-mode request shape. OAuth adds a Bearer token (no
+    // x-api-key), the Claude Code beta headers, and the mandatory identity
+    // system block; API-key mode keeps today's exact wire shape.
+    const isOAuth = Boolean(this.tokenProvider);
+    let headers: Record<string, string>;
+    let bodyObj: Record<string, unknown> = {
       model: this.model,
       max_tokens: opts.maxTokens,
       temperature: opts.temperature ?? 0,
       messages: [{ role: "user", content: prompt }],
-    });
+    };
+    if (isOAuth) {
+      const cred = await this.tokenProvider!();
+      headers = {
+        "content-type": "application/json",
+        authorization: `Bearer ${cred.accessToken}`,
+        "anthropic-version": ANTHROPIC_VERSION,
+        "anthropic-beta": OAUTH_BETA,
+        "user-agent": `claude-cli/${CLAUDE_CODE_SPOOF_VERSION}`,
+        "x-app": "cli",
+      };
+      bodyObj = {
+        ...bodyObj,
+        // Mandatory identity prefix — without it Anthropic intermittently
+        // 500s OAuth traffic. Real system prompts would append as a second
+        // block here once orchestrator_chat threads one through LlmCallOptions.
+        system: [{ type: "text", text: CLAUDE_CODE_IDENTITY }],
+      };
+    } else {
+      headers = {
+        "content-type": "application/json",
+        "x-api-key": this.apiKey!,
+        "anthropic-version": ANTHROPIC_VERSION,
+      };
+    }
 
     const controller = new AbortController();
     const timer = setTimeout(
@@ -97,12 +163,8 @@ export class AnthropicLlmClient implements LlmClient {
     try {
       res = await this.fetchImpl(url, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": this.apiKey,
-          "anthropic-version": ANTHROPIC_VERSION,
-        },
-        body,
+        headers,
+        body: JSON.stringify(bodyObj),
         signal: controller.signal,
       });
     } catch (err) {
@@ -138,7 +200,12 @@ export class AnthropicLlmClient implements LlmClient {
       text,
       inputTokens,
       outputTokens,
-      costUsd: calculateCostUsd(this.model, inputTokens, outputTokens),
+      // OAuth subscriptions don't bill per token — usage goes against the
+      // user's Claude plan, not against an API budget. Match the Codex
+      // client's convention so budget alerts only fire for API-key spend.
+      costUsd: isOAuth
+        ? 0
+        : calculateCostUsd(this.model, inputTokens, outputTokens),
       durationMs,
       cacheHit: false,
     };
