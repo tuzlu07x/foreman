@@ -73,6 +73,20 @@ describe("buildLlmConfigFromWizard — happy path", () => {
     expect(result.next.features.smart_report).toBe(true);
   });
 
+  it("#498 — turns orchestrator_chat on so free-form `foreman …` hits the LLM", () => {
+    // Default schema has orchestrator_chat: false. The wizard's whole
+    // point is "I just configured Foreman's brain" — leaving the
+    // free-form chat route off means the user has to hand-edit YAML
+    // before they can ask Foreman a question. Wizard now flips it on
+    // alongside verification + smart_report.
+    const result = buildLlmConfigFromWizard({
+      savedStorageNames: ["anthropic-api-key"],
+      providerCatalog: CATALOG,
+      existing: defaultLlmConfig(),
+    });
+    expect(result.next.features.orchestrator_chat).toBe(true);
+  });
+
   it("picks the FIRST saved provider as the default when multiple are wired", () => {
     const result = buildLlmConfigFromWizard({
       savedStorageNames: [

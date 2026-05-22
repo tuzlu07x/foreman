@@ -206,6 +206,35 @@ export interface ForemanEventMap {
     agentId: string;
     reason: string;
   };
+  /** #498 — control_commands row inserted (write / stop / llm switch / ...).
+   *  TUI Activity feed listens so spawn directives appear instantly,
+   *  before the drain handler picks them up. The "lie detector" path:
+   *  if Hermes claims a routing, this event has to have fired. */
+  "control:enqueued": {
+    id: number;
+    command: string;
+    args: string[];
+    sourceAgent: string;
+    sourceUser?: string | undefined;
+    createdAt: number;
+  };
+  /** #498 — drain handler marked a control_commands row applied. */
+  "control:applied": {
+    id: number;
+    command: string;
+    sourceAgent: string;
+    durationMs: number;
+    appliedAt: number;
+  };
+  /** #498 — drain handler marked a control_commands row failed/rejected. */
+  "control:failed": {
+    id: number;
+    command: string;
+    sourceAgent: string;
+    status: "failed" | "rejected";
+    error: string;
+    failedAt: number;
+  };
 }
 
 export type ForemanEvent = keyof ForemanEventMap;

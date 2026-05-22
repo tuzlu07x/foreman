@@ -127,7 +127,11 @@ function bootServices(): Services {
   } catch {
     orchestratorChat = null;
   }
-  const controlChannel = new ControlChannel(db);
+  // #498 — Pass the bus so enqueue events can be observed in-process
+  // (tests / audit hooks). Cross-process visibility (mcp-stdio →
+  // foreman start TUI) still goes through the SQLite poll in
+  // useDashboardState — bus events don't cross process boundaries.
+  const controlChannel = new ControlChannel(db, bus);
   return {
     registry,
     policy,
