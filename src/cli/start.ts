@@ -506,6 +506,40 @@ export function startForeman(
       },
     ],
     [
+      "agent-model",
+      async (row) => {
+        // #502 — `/foreman model <agent-id> <model>` writes
+        // `agents.model_version`. Empty string ("") clears the
+        // override → future spawns use the agent's own config default.
+        try {
+          const [agentId, model] = JSON.parse(row.args) as string[];
+          if (!agentId) {
+            return {
+              status: "rejected",
+              error: "agent-model requires [agentId, model] args",
+            };
+          }
+          if (!registry.get(agentId)) {
+            return {
+              status: "rejected",
+              error: `unknown agent "${agentId}"`,
+            };
+          }
+          const normalized = (model ?? "").trim();
+          registry.setModelVersion(
+            agentId,
+            normalized.length > 0 ? normalized : null,
+          );
+          return { status: "applied" };
+        } catch (err) {
+          return {
+            status: "failed",
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      },
+    ],
+    [
       "write",
       async (row) => {
         // #433 — `/foreman write <agent> <message>`. Delivery is
@@ -545,12 +579,18 @@ export function startForeman(
           // Agents without the template fall back to the v0.1 queue+
           // relay path (Telegram visible post + inbound_dir file).
           if (entry?.task_command_template) {
+            // Pick up the per-agent model override stored in `agents.
+            // model_version` so the spawn engine can append the
+            // registry's `task_model_flag` argv pair (e.g. `--model
+            // claude-sonnet-4-6`). NULL = use the agent's own default.
+            const registryRow = registry.get(agentId);
             const exec = await executeWriteDirective(
               {
                 agentId,
                 message,
                 sourceUser: row.sourceUser ?? undefined,
                 entry,
+                modelVersion: registryRow?.modelVersion ?? null,
               },
               { telegramBotToken, telegramChatId },
             );

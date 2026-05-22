@@ -233,6 +233,17 @@ export function registerBuiltinCommands(router: ForemanCommandRouter): void {
     llmSubrouterHandler,
     "Inspect / manage Foreman's own LLM. Try `/foreman llm status`.",
   );
+  // #502 — User-facing shortcut for inspecting + switching models
+  // across Foreman + every registered agent. Wraps `llm switch` for
+  // Foreman's own brain and writes `agents.model_version` for
+  // per-agent overrides (consumed by the spawn engine via
+  // task_model_flag).
+  router.register(
+    "model",
+    modelHandler,
+    "Show / change model for Foreman or an agent. `/foreman model [<agent>] <model>`.",
+  );
+  router.register("models", modelHandler, "Alias of `model`.");
 }
 
 const REPORT_DEFAULT_QUESTION_EN =
@@ -355,6 +366,149 @@ function summarizeCommand(command: string, args: string[]): string {
   }
   if (command === "stop") return "stop";
   return `${command} ${args.join(" ")}`.trim();
+}
+
+// #502 — `/foreman model` — three modes by arg count:
+//   - 0 args: status table (Foreman LLM + every registered agent)
+//   - 1 arg:  switch Foreman's own LLM model, keeping current provider
+//   - 2 args: first arg is either a provider id (then it's a Foreman
+//     LLM provider+model switch) or an agent id (then it's a per-agent
+//     override). Providers and agent ids don't overlap in practice
+//     (openai/anthropic/... vs codex/claude-code/hermes/...).
+const KNOWN_PROVIDER_IDS = new Set([
+  "anthropic",
+  "openai",
+  "gemini",
+  "ollama",
+  "openai_compatible",
+]);
+
+function modelHandler(
+  args: string[],
+  ctx: ForemanCommandContext,
+): ForemanCommandResult {
+  // Mode 1 — status
+  if (args.length === 0) {
+    return modelStatusReply(ctx);
+  }
+  // Mode 2 — single arg, Foreman LLM model only
+  if (args.length === 1) {
+    return enqueueForemanLlmSwitch(ctx, undefined, args[0]!);
+  }
+  // Mode 3 — two args. Disambiguate by first token.
+  const first = args[0]!.toLowerCase();
+  if (KNOWN_PROVIDER_IDS.has(first)) {
+    return enqueueForemanLlmSwitch(ctx, first, args[1]!);
+  }
+  // Treat as agent override.
+  return setAgentModel(ctx, first, args.slice(1).join(" "));
+}
+
+function modelStatusReply(ctx: ForemanCommandContext): ForemanCommandResult {
+  const lines: string[] = [];
+  // Foreman's own LLM
+  try {
+    const cfg = existsSync(ctx.llmConfigPath)
+      ? loadLlmConfig(ctx.llmConfigPath)
+      : defaultLlmConfig();
+    const enabled = cfg.enabled ? "on" : "off";
+    lines.push(
+      `Foreman LLM (${enabled}): ${cfg.provider} · ${cfg.model}`,
+    );
+  } catch {
+    lines.push("Foreman LLM: (could not read llm.yaml)");
+  }
+  // Per-agent
+  const agents = ctx.registry.listAll();
+  if (agents.length > 0) {
+    lines.push("");
+    lines.push("Agents:");
+    for (const a of agents) {
+      const override = a.modelVersion ? a.modelVersion : "(agent default)";
+      lines.push(`  ${a.id} — ${override}`);
+    }
+  }
+  lines.push("");
+  lines.push("Change with:");
+  lines.push("  `/foreman model <new-model>`              (Foreman LLM)");
+  lines.push("  `/foreman model <provider> <new-model>`   (Foreman LLM, switch provider too)");
+  lines.push("  `/foreman model <agent-id> <new-model>`   (per-agent override)");
+  return { ok: true, text: lines.join("\n") };
+}
+
+function enqueueForemanLlmSwitch(
+  ctx: ForemanCommandContext,
+  providerOverride: string | undefined,
+  model: string,
+): ForemanCommandResult {
+  // Reuse the existing llm-switch enqueue path so the drain handler
+  // applies + persists the change exactly as it would for
+  // `/foreman llm switch <provider> <model>`.
+  let provider = providerOverride;
+  if (!provider) {
+    // Single-arg form: keep current provider, just swap the model id.
+    try {
+      const cfg = existsSync(ctx.llmConfigPath)
+        ? loadLlmConfig(ctx.llmConfigPath)
+        : defaultLlmConfig();
+      provider = cfg.provider;
+    } catch {
+      return {
+        ok: false,
+        text:
+          "Couldn't read current Foreman LLM config. Specify the provider explicitly: " +
+          "`/foreman model <provider> <model>`.",
+        errorCode: "NOT_AVAILABLE",
+      };
+    }
+  }
+  return enqueueMutating(ctx, "llm-switch", [provider!, model], {
+    successText: `Foreman LLM switching to ${provider} · ${model}.`,
+  });
+}
+
+function setAgentModel(
+  ctx: ForemanCommandContext,
+  agentId: string,
+  model: string,
+): ForemanCommandResult {
+  if (!ctx.registry.get(agentId)) {
+    return {
+      ok: false,
+      text:
+        `No agent registered with id "${agentId}". Try \`/foreman status\` ` +
+        `or pick one of: ${ctx.registry
+          .listAll()
+          .map((a) => a.id)
+          .join(", ")}.`,
+      errorCode: "UNKNOWN_SUBCOMMAND",
+    };
+  }
+  const normalized = model.trim();
+  if (normalized.length === 0) {
+    return {
+      ok: false,
+      text:
+        "Usage: `/foreman model <agent-id> <model>`. " +
+        "Example: `/foreman model codex gpt-5-mini`. " +
+        "Pass `clear` as the model to remove the override.",
+      errorCode: "UNKNOWN_SUBCOMMAND",
+    };
+  }
+  // Owner-gated like other mutating verbs. Reuse enqueueMutating to get
+  // the source_user fallback + audit row consistently.
+  const value = normalized.toLowerCase() === "clear" ? "" : normalized;
+  return enqueueMutating(
+    ctx,
+    "agent-model",
+    [agentId, value],
+    {
+      successText:
+        value === ""
+          ? `Cleared model override for ${agentId} — future spawns use its default.`
+          : `Setting ${agentId} model to ${value} for future spawns.`,
+    },
+  );
 }
 
 function detectLanguageFromArgs(args: string[]): "en" | "tr" {

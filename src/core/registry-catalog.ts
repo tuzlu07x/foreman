@@ -168,6 +168,14 @@ export const AgentEntrySchema = z
      *  to use its own auth path. Only honored when
      *  `task_command_template` is set. */
     task_env_strip: z.array(z.string().min(1)).optional(),
+    /** CLI flag name used to override the agent's model when spawning
+     *  (e.g. `-m` for codex, `--model` for claude). When the registry
+     *  row has `model_version` set, the spawn engine appends
+     *  `[task_model_flag, model_version]` to the argv so the user's
+     *  picked model wins over the agent's own config default. Without
+     *  this field, model overrides are no-ops (the agent uses its
+     *  config). Only honored when `task_command_template` is set. */
+    task_model_flag: z.string().min(1).optional(),
     /** MCP config block shape (#385). `flat` writes `{<mcp_servers_key>:
      *  {foreman: ...}}` (Claude Code / Hermes / Codex). `nested` writes
      *  `{mcp: {enabled: true, servers: {foreman: ...}}}` (OpenClaw).
