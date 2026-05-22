@@ -432,7 +432,10 @@ export function startForeman(
   // #440 — Cross-process control channel. mcp-stdio enqueues
   // mutating commands; this drain loop dispatches them inside the
   // `foreman start` process where the daemon manager + LlmConfig live.
-  const controlChannel = new ControlChannel(db);
+  // #498 — Bus injection so drain outcomes surface as control:applied /
+  // control:failed events; the TUI Activity feed subscribes for live
+  // status transitions.
+  const controlChannel = new ControlChannel(db, bus);
   const controlHandlers = new Map<string, ControlHandler>([
     [
       "stop",
@@ -551,6 +554,43 @@ export function startForeman(
               },
               { telegramBotToken, telegramChatId },
             );
+            // #498 — Always audit the spawn outcome. control_commands.error
+            // only stores a one-liner (e.g. "agent exited 1"); the real
+            // stderr/stdout was previously lost. Persist the full capture
+            // so users (and future us) can debug "why did claude --print
+            // fail" without instrumenting per-bug. Truncate to keep audit
+            // rows from ballooning under chatty agents.
+            audit.logEvent("control_write_outcome", {
+              id: row.id,
+              agentId,
+              command: entry.task_command_template,
+              spawnKind: exec.spawn.kind,
+              exitCode:
+                exec.spawn.kind === "ok" || exec.spawn.kind === "failed"
+                  ? exec.spawn.exitCode
+                  : null,
+              durationMs:
+                "durationMs" in exec.spawn ? exec.spawn.durationMs : null,
+              timeoutMs:
+                exec.spawn.kind === "timeout" ? exec.spawn.timeoutMs : null,
+              stdoutLen:
+                "stdout" in exec.spawn ? exec.spawn.stdout.length : 0,
+              stderrLen:
+                "stderr" in exec.spawn ? exec.spawn.stderr.length : 0,
+              stdoutTail:
+                "stdout" in exec.spawn
+                  ? exec.spawn.stdout.slice(-2000)
+                  : null,
+              stderrTail:
+                "stderr" in exec.spawn
+                  ? exec.spawn.stderr.slice(-2000)
+                  : null,
+              spawnError:
+                exec.spawn.kind === "spawn-error" ? exec.spawn.error : null,
+              unsupportedReason:
+                exec.spawn.kind === "unsupported" ? exec.spawn.reason : null,
+              outputRelay: exec.outputRelay,
+            });
             if (exec.spawn.kind === "ok") {
               return { status: "applied" };
             }

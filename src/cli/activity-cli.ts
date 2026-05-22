@@ -22,7 +22,7 @@ import { getForemanPaths } from "../utils/config.js";
 import { red } from "./colors.js";
 
 // =============================================================================
-// `foreman activity` — surface the digest #435 generates
+// `foreman report` — surface the digest #435 generates
 // =============================================================================
 //
 // Two output modes:
@@ -30,9 +30,17 @@ import { red } from "./colors.js";
 //   - `--narrate`: pipes the digest through Foreman's own LLM and
 //     prints a 1-3 paragraph human narration. Same budget guardrails
 //     + feature gate as `/foreman report me` (#432).
+//
+// #498 — Previously named `foreman activity` but collided with the
+// chat-side `/foreman activity` (the control_commands ledger) which
+// means a completely different thing. Renamed to `foreman report` to
+// match chat-side semantics (`/foreman report me` is the LLM digest).
+// `foreman activity` kept as a deprecated alias for one release so
+// existing scripts don't break overnight.
 
-export const activityCommand = new Command("activity")
-  .description("Aggregate agent activity over a time window (#435)")
+export const reportCommand = new Command("report")
+  .alias("activity")
+  .description("LLM-narrated digest of recent agent activity (#435)")
   .option(
     "--since <Nd|Nh|Nm>",
     "Window length (e.g. 1h, 30m, 24h). Default 1h.",
@@ -48,12 +56,12 @@ export const activityCommand = new Command("activity")
       narrate?: boolean;
       json?: boolean;
     }) => {
-      const exit = await runActivity(options);
+      const exit = await runReport(options);
       process.exit(exit);
     },
   );
 
-export async function runActivity(options: {
+export async function runReport(options: {
   since?: string;
   agent?: string;
   narrate?: boolean;
