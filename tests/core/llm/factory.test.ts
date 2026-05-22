@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   buildLlmClient,
   LlmCredentialMissingError,
+  LlmOAuthLoginRequiredError,
+  LlmOAuthNotImplementedError,
   LlmProviderUnavailableError,
 } from '../../../src/core/llm/factory.js'
 import { LlmConfigSchema, defaultLlmConfig } from '../../../src/core/llm/config.js'
@@ -163,6 +165,96 @@ describe('buildLlmClient', () => {
     // Not a Promise — verifying contract.
     expect(typeof (result as { then?: unknown }).then).toBe('undefined')
   })
+
+  // ---------- Faz 2 / #505 — `auth_mode: oauth` dispatch ----------
+
+  /** A valid OAuth bundle keyed under the slot `token-store.ts` reads from
+   *  (`llm-oauth-<provider>`). Far-future expiry so refresh isn't triggered. */
+  function seedOAuthTokens(
+    providerId: 'anthropic' | 'openai',
+  ): Record<string, string> {
+    return {
+      [`llm-oauth-${providerId}`]: JSON.stringify({
+        accessToken: 'A',
+        refreshToken: 'R',
+        expiresAt: Date.now() + 60 * 60_000,
+        ...(providerId === 'openai' ? { accountId: 'acc-1' } : {}),
+      }),
+    }
+  }
+
+  it('dispatches to the OAuth path when auth_mode = oauth (anthropic)', () => {
+    const config = LlmConfigSchema.parse({
+      provider: 'anthropic',
+      credentials: { anthropic: { auth_mode: 'oauth' } },
+    })
+    const store = new FakeStore(seedOAuthTokens('anthropic'))
+    // Faz 3 (#506) replaces this throw with the OAuth-aware client.
+    expect(() => buildLlmClient(config, store as never)).toThrow(
+      LlmOAuthNotImplementedError,
+    )
+  })
+
+  it('dispatches to the OAuth path when auth_mode = oauth (openai)', () => {
+    const config = LlmConfigSchema.parse({
+      provider: 'openai',
+      model: 'gpt-5.4',
+      credentials: { openai: { auth_mode: 'oauth' } },
+    })
+    const store = new FakeStore(seedOAuthTokens('openai'))
+    expect(() => buildLlmClient(config, store as never)).toThrow(
+      LlmOAuthNotImplementedError,
+    )
+  })
+
+  it('throws LlmOAuthLoginRequiredError when auth_mode = oauth but no tokens stored', () => {
+    const config = LlmConfigSchema.parse({
+      provider: 'anthropic',
+      credentials: { anthropic: { auth_mode: 'oauth' } },
+    })
+    expect(() =>
+      buildLlmClient(config, new FakeStore({}) as never),
+    ).toThrow(LlmOAuthLoginRequiredError)
+  })
+
+  it('LlmOAuthLoginRequiredError points the user at `foreman llm login <provider>`', () => {
+    const config = LlmConfigSchema.parse({
+      provider: 'openai',
+      credentials: { openai: { auth_mode: 'oauth' } },
+    })
+    try {
+      buildLlmClient(config, new FakeStore({}) as never)
+      throw new Error('expected throw')
+    } catch (err) {
+      expect(err).toBeInstanceOf(LlmOAuthLoginRequiredError)
+      expect((err as Error).message).toMatch(/foreman llm login openai/)
+    }
+  })
+
+  it('api-key path is bit-identical when auth_mode is explicitly api_key', () => {
+    const config = LlmConfigSchema.parse({
+      provider: 'anthropic',
+      credentials: {
+        anthropic: { auth_mode: 'api_key', secret_name: 'anthropic-key' },
+      },
+    })
+    const store = new FakeStore({ 'anthropic-key': 'sk-ant' })
+    const client = buildLlmClient(config, store as never)
+    expect(client.providerId).toBe('anthropic')
+  })
+
+  it('gemini ignores auth_mode = oauth (no subscription-OAuth equivalent today)', () => {
+    const config = LlmConfigSchema.parse({
+      provider: 'gemini',
+      credentials: {
+        gemini: { auth_mode: 'oauth', secret_name: 'gemini-key' },
+      },
+    })
+    const store = new FakeStore({ 'gemini-key': 'AIza' })
+    // No OAuth dispatch — falls through to API-key path.
+    const client = buildLlmClient(config, store as never)
+    expect(client.providerId).toBe('gemini')
+  })
 })
 
 describe('LlmCredentialMissingError + LlmProviderUnavailableError — typed', () => {
@@ -182,5 +274,19 @@ describe('LlmCredentialMissingError + LlmProviderUnavailableError — typed', ()
     const err = new LlmProviderUnavailableError('ollama')
     expect(err.providerId).toBe('ollama')
     expect(err.name).toBe('LlmProviderUnavailableError')
+  })
+
+  it('LlmOAuthLoginRequiredError carries the OAuth provider id', () => {
+    const err = new LlmOAuthLoginRequiredError('anthropic')
+    expect(err.providerId).toBe('anthropic')
+    expect(err.name).toBe('LlmOAuthLoginRequiredError')
+    expect(err.message).toMatch(/foreman llm login anthropic/)
+  })
+
+  it('LlmOAuthNotImplementedError points at Faz 3 (#506)', () => {
+    const err = new LlmOAuthNotImplementedError('openai')
+    expect(err.providerId).toBe('openai')
+    expect(err.name).toBe('LlmOAuthNotImplementedError')
+    expect(err.message).toMatch(/#506/)
   })
 })
