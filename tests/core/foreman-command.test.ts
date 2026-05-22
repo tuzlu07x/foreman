@@ -244,12 +244,15 @@ describe("ForemanCommandRouter (#431)", () => {
 
     it("returns NOT_AUTHORIZED when source_user doesn't match telegram-chat-id", async () => {
       const channel = new ControlChannel(db);
-      const store = makeOwnerStore({ "telegram-chat-id": "owner123" });
+      // QA round 17: Telegram user_ids are always numeric. Test now
+      // uses numeric ids on both sides to model the real scenario
+      // (different legit Telegram users) rather than placeholder text.
+      const store = makeOwnerStore({ "telegram-chat-id": "111000111" });
       const result = await router.dispatch("stop", [], {
         ...ctx,
         controlChannel: channel,
         ownerStore: store,
-        sourceUser: "stranger999",
+        sourceUser: "999000999",
       });
       expect(result.ok).toBe(false);
       expect(result.errorCode).toBe("NOT_AUTHORIZED");
@@ -257,7 +260,7 @@ describe("ForemanCommandRouter (#431)", () => {
       // here source_user IS sent but the wrong value. Echoing the
       // received id helps the user spot whether their telegram-chat-id
       // is the one they expect.
-      expect(result.text).toContain("stranger999");
+      expect(result.text).toContain("999000999");
       expect(result.text).toContain("doesn't match");
       expect(channel.pending()).toHaveLength(0);
     });
@@ -294,6 +297,28 @@ describe("ForemanCommandRouter (#431)", () => {
       });
       expect(result.ok).toBe(true);
       expect(channel.pending()).toHaveLength(1);
+    });
+
+    // QA round 17: Hermes' LLM sometimes passes the user's DISPLAY
+    // NAME (e.g. "Isa") instead of the numeric Telegram user id.
+    // Pre-QA17 the fallback only fired on empty source_user, so "Isa"
+    // != "12345" → NOT_AUTHORIZED → owner locked out. Telegram user
+    // ids are always digits — non-numeric source_user is by definition
+    // wrong, so treat it the same as missing and fall back.
+    it("falls back when source_user is non-numeric (LLM passed display name) — QA round 17", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "8263464163" });
+      const result = await router.dispatch("stop", [], {
+        ...ctx,
+        controlChannel: channel,
+        ownerStore: store,
+        sourceUser: "Isa", // ← display name, not user id
+      });
+      expect(result.ok).toBe(true);
+      expect(channel.pending()).toHaveLength(1);
+      // Audit row should record the *resolved* numeric id so the
+      // drain handler sees a consistent owner.
+      expect(channel.pending()[0]?.sourceUser).toBe("8263464163");
     });
 
     it("rejects when source_user is absent AND no telegram-chat-id is configured", async () => {
@@ -411,7 +436,10 @@ describe("ForemanCommandRouter (#431)", () => {
 
     it("llm switch refuses non-owner", async () => {
       const channel = new ControlChannel(db);
-      const store = makeOwnerStore({ "telegram-chat-id": "owner" });
+      // QA17: use numeric ids on both sides (real Telegram format) so
+      // the non-numeric-fallback added for the display-name case
+      // doesn't mask the legitimate cross-user rejection.
+      const store = makeOwnerStore({ "telegram-chat-id": "111000111" });
       const result = await router.dispatch(
         "llm",
         ["switch", "openai", "gpt-4o"],
@@ -419,7 +447,7 @@ describe("ForemanCommandRouter (#431)", () => {
           ...ctx,
           controlChannel: channel,
           ownerStore: store,
-          sourceUser: "stranger",
+          sourceUser: "999000999",
         },
       );
       expect(result.ok).toBe(false);
@@ -492,7 +520,8 @@ describe("ForemanCommandRouter (#431)", () => {
 
     it("refuses non-owner senders", async () => {
       const channel = new ControlChannel(db);
-      const store = makeOwnerStore({ "telegram-chat-id": "owner" });
+      // QA17: numeric ids on both sides (real Telegram format).
+      const store = makeOwnerStore({ "telegram-chat-id": "111000111" });
       const result = await router.dispatch(
         "write",
         ["openclaw", "msg"],
@@ -500,7 +529,7 @@ describe("ForemanCommandRouter (#431)", () => {
           ...ctx,
           controlChannel: channel,
           ownerStore: store,
-          sourceUser: "stranger",
+          sourceUser: "999000999",
         },
       );
       expect(result.ok).toBe(false);

@@ -114,9 +114,16 @@ export function renderOutputText(
   let tail = "";
   switch (spawn.kind) {
     case "ok": {
-      body = truncateForTelegram(spawn.stdout || "(no output)", maxLength);
+      // QA17 — Wrap stdout in a MarkdownV2 ``` code block so reserved
+      // chars (`.`, `!`, `-`, `(`, `_`, …) in the agent's response
+      // don't break the entire message. Inside a `pre`/`code` block
+      // only `` ` `` and `\` need escaping per Telegram docs. Before
+      // this fix the raw stdout caused HTTP 400 from sendMessage and
+      // the user saw NOTHING — the spawn succeeded but the post was
+      // dropped silently.
+      body = wrapCodeBlock(spawn.stdout || "(no output)", maxLength);
       if (spawn.stderr.trim()) {
-        tail = `\n\n_stderr:_\n\`\`\`\n${truncateForTelegram(spawn.stderr, 800)}\n\`\`\``;
+        tail = `\n\n_stderr:_\n${wrapCodeBlock(spawn.stderr, 800)}`;
       }
       break;
     }
@@ -124,22 +131,22 @@ export function renderOutputText(
       body =
         `⚠ Exit code: ${spawn.exitCode}\n\n` +
         (spawn.stderr.trim()
-          ? `_stderr:_\n\`\`\`\n${truncateForTelegram(spawn.stderr, 1500)}\n\`\`\``
-          : "(no stderr)");
+          ? `_stderr:_\n${wrapCodeBlock(spawn.stderr, 1500)}`
+          : "\\(no stderr\\)");
       if (spawn.stdout.trim()) {
-        tail = `\n\n_stdout:_\n\`\`\`\n${truncateForTelegram(spawn.stdout, 1500)}\n\`\`\``;
+        tail = `\n\n_stdout:_\n${wrapCodeBlock(spawn.stdout, 1500)}`;
       }
       break;
     }
     case "timeout": {
       body =
-        `⏱ Timed out after ${(spawn.timeoutMs / 1000).toFixed(0)}s.\n\n` +
+        `⏱ Timed out after ${escapeMd((spawn.timeoutMs / 1000).toFixed(0))}s\\.\n\n` +
         (spawn.stdout.trim() || spawn.stderr.trim()
-          ? `_partial output:_\n\`\`\`\n${truncateForTelegram(
+          ? `_partial output:_\n${wrapCodeBlock(
               spawn.stdout || spawn.stderr,
               1500,
-            )}\n\`\`\``
-          : "(no output captured before timeout)");
+            )}`
+          : "\\(no output captured before timeout\\)");
       break;
     }
     case "unsupported":
@@ -151,6 +158,17 @@ export function renderOutputText(
   }
   const taskExcerpt = truncateForTelegram(input.message, 200);
   return `${header}\n\n_Task:_ ${escapeMd(taskExcerpt)}\n\n${body}${tail}`;
+}
+
+// QA17 — Wrap arbitrary text in a MarkdownV2 code block. Inside the
+// block only `\` and `` ` `` need to be backslash-escaped; everything
+// else (periods, exclamations, parens, etc.) renders literally. Used
+// for agent stdout/stderr where unescaped reserved chars previously
+// crashed Telegram sendMessage with HTTP 400.
+function wrapCodeBlock(s: string, max: number): string {
+  const truncated = truncateForTelegram(s, max);
+  const escaped = truncated.replace(/[\\`]/g, (m) => `\\${m}`);
+  return `\`\`\`\n${escaped}\n\`\`\``;
 }
 
 function truncateForTelegram(s: string, max: number): string {
