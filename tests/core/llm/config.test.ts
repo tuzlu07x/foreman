@@ -64,6 +64,34 @@ describe('llm-config — schema + defaults', () => {
   it('rejects unknown provider', () => {
     expect(() => LlmConfigSchema.parse({ provider: 'mistral' })).toThrow()
   })
+
+  // ---------- Faz 2 / #505 — `auth_mode` per credential block ----------
+
+  it('credential blocks default to auth_mode = api_key', () => {
+    const c = defaultLlmConfig()
+    expect(c.credentials.anthropic?.auth_mode).toBe('api_key')
+    expect(c.credentials.openai?.auth_mode).toBe('api_key')
+    expect(c.credentials.gemini?.auth_mode).toBe('api_key')
+  })
+
+  it('credential blocks accept auth_mode = oauth', () => {
+    const c = LlmConfigSchema.parse({
+      credentials: {
+        anthropic: { auth_mode: 'oauth' },
+        openai: { auth_mode: 'oauth' },
+      },
+    })
+    expect(c.credentials.anthropic?.auth_mode).toBe('oauth')
+    expect(c.credentials.openai?.auth_mode).toBe('oauth')
+  })
+
+  it('rejects auth_mode values outside {api_key, oauth}', () => {
+    expect(() =>
+      LlmConfigSchema.parse({
+        credentials: { anthropic: { auth_mode: 'magic' } },
+      }),
+    ).toThrow()
+  })
 })
 
 describe('llm-config — load + save', () => {

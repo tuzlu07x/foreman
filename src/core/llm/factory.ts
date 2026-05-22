@@ -1,6 +1,8 @@
 import { SecretNotFoundError, type SecretStore } from '../secret-store.js'
 import { type LlmClient, LlmProviderError } from './client.js'
 import type { LlmConfig, ProviderId } from './config.js'
+import type { OAuthProviderId } from './oauth/oauth-providers.js'
+import { loadOAuthTokens } from './oauth/token-store.js'
 import { AnthropicLlmClient } from './providers/anthropic.js'
 import { GeminiLlmClient } from './providers/gemini.js'
 import { OpenAILlmClient } from './providers/openai.js'
@@ -48,6 +50,33 @@ export class LlmCredentialMissingError extends Error {
   }
 }
 
+/** Raised when `auth_mode: oauth` is configured but the user has not signed
+ *  in yet — no token bundle in the encrypted store. */
+export class LlmOAuthLoginRequiredError extends Error {
+  constructor(public readonly providerId: OAuthProviderId) {
+    super(
+      `Provider '${providerId}' is configured for OAuth but no tokens are ` +
+        `stored. Run: foreman llm login ${providerId}`,
+    )
+    this.name = 'LlmOAuthLoginRequiredError'
+  }
+}
+
+/** Temporary — raised when the user picks `auth_mode: oauth` before the
+ *  OAuth-aware provider client has shipped (Faz 3 / #506). The factory
+ *  dispatch + login-required check land here in #505; the actual client is
+ *  one phase behind and replaces this throw one line at a time. */
+export class LlmOAuthNotImplementedError extends Error {
+  constructor(public readonly providerId: OAuthProviderId) {
+    super(
+      `OAuth client for '${providerId}' is not yet implemented — wiring ` +
+        `landed in Faz 2 (#505); the provider client itself lands in Faz 3 ` +
+        `(#506).`,
+    )
+    this.name = 'LlmOAuthNotImplementedError'
+  }
+}
+
 /**
  * Resolve a usable LlmClient for the configured provider. Throws explicitly
  * so the caller can render a contextual error — no silent nulls.
@@ -58,6 +87,9 @@ export function buildLlmClient(
 ): LlmClient {
   switch (config.provider) {
     case 'anthropic': {
+      if (config.credentials.anthropic?.auth_mode === 'oauth') {
+        return buildOAuthClient('anthropic', secretStore)
+      }
       const apiKey = resolveSecret(
         config,
         secretStore,
@@ -66,6 +98,9 @@ export function buildLlmClient(
       return new AnthropicLlmClient({ apiKey, model: config.model })
     }
     case 'openai': {
+      if (config.credentials.openai?.auth_mode === 'oauth') {
+        return buildOAuthClient('openai', secretStore)
+      }
       const apiKey = resolveSecret(
         config,
         secretStore,
@@ -74,6 +109,10 @@ export function buildLlmClient(
       return new OpenAILlmClient({ apiKey, model: config.model })
     }
     case 'gemini': {
+      // Gemini has no subscription-OAuth equivalent today, so any
+      // `auth_mode: oauth` here is silently ignored — Gemini stays on the
+      // API-key path. Revisit if Google ever ships a Claude-Code-style
+      // sign-in for Gemini.
       const apiKey = resolveSecret(
         config,
         secretStore,
@@ -94,6 +133,21 @@ export function buildLlmClient(
       throw new LlmProviderUnavailableError(_exhaustive)
     }
   }
+}
+
+/** Dispatch the OAuth-mode path: validate the user has signed in, then defer
+ *  to the OAuth-aware client. The provider client itself lands in Faz 3
+ *  (#506); for Faz 2 we surface a clear "not yet implemented" once the
+ *  login-required check passes so callers can tell wiring is in place. */
+function buildOAuthClient(
+  providerId: OAuthProviderId,
+  store: SecretStore,
+): LlmClient {
+  const tokens = loadOAuthTokens(store, providerId)
+  if (!tokens) {
+    throw new LlmOAuthLoginRequiredError(providerId)
+  }
+  throw new LlmOAuthNotImplementedError(providerId)
 }
 
 function resolveSecret(
