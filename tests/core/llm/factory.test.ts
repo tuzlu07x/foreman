@@ -3,12 +3,12 @@ import {
   buildLlmClient,
   LlmCredentialMissingError,
   LlmOAuthLoginRequiredError,
-  LlmOAuthNotImplementedError,
   LlmProviderUnavailableError,
 } from '../../../src/core/llm/factory.js'
 import { LlmConfigSchema, defaultLlmConfig } from '../../../src/core/llm/config.js'
 import { SecretNotFoundError } from '../../../src/core/secret-store.js'
 import { AnthropicLlmClient } from '../../../src/core/llm/providers/anthropic.js'
+import { CodexLlmClient } from '../../../src/core/llm/providers/codex.js'
 import { OpenAILlmClient } from '../../../src/core/llm/providers/openai.js'
 import { GeminiLlmClient } from '../../../src/core/llm/providers/gemini.js'
 
@@ -183,28 +183,31 @@ describe('buildLlmClient', () => {
     }
   }
 
-  it('dispatches to the OAuth path when auth_mode = oauth (anthropic)', () => {
+  it('returns an OAuth-aware AnthropicLlmClient when auth_mode = oauth', () => {
     const config = LlmConfigSchema.parse({
       provider: 'anthropic',
       credentials: { anthropic: { auth_mode: 'oauth' } },
     })
     const store = new FakeStore(seedOAuthTokens('anthropic'))
-    // Faz 3 (#506) replaces this throw with the OAuth-aware client.
-    expect(() => buildLlmClient(config, store as never)).toThrow(
-      LlmOAuthNotImplementedError,
-    )
+    const client = buildLlmClient(config, store as never)
+    expect(client).toBeInstanceOf(AnthropicLlmClient)
+    expect(client.providerId).toBe('anthropic')
+    expect(client.model).toBe(config.model)
   })
 
-  it('dispatches to the OAuth path when auth_mode = oauth (openai)', () => {
+  it('returns a CodexLlmClient when openai auth_mode = oauth', () => {
     const config = LlmConfigSchema.parse({
       provider: 'openai',
       model: 'gpt-5.4',
       credentials: { openai: { auth_mode: 'oauth' } },
     })
     const store = new FakeStore(seedOAuthTokens('openai'))
-    expect(() => buildLlmClient(config, store as never)).toThrow(
-      LlmOAuthNotImplementedError,
-    )
+    const client = buildLlmClient(config, store as never)
+    expect(client).toBeInstanceOf(CodexLlmClient)
+    // Same logical provider id as the API-key OpenAI client — disambiguated
+    // by auth_mode in the factory, not by providerId downstream.
+    expect(client.providerId).toBe('openai')
+    expect(client.model).toBe('gpt-5.4')
   })
 
   it('throws LlmOAuthLoginRequiredError when auth_mode = oauth but no tokens stored', () => {
@@ -283,10 +286,4 @@ describe('LlmCredentialMissingError + LlmProviderUnavailableError — typed', ()
     expect(err.message).toMatch(/foreman llm login anthropic/)
   })
 
-  it('LlmOAuthNotImplementedError points at Faz 3 (#506)', () => {
-    const err = new LlmOAuthNotImplementedError('openai')
-    expect(err.providerId).toBe('openai')
-    expect(err.name).toBe('LlmOAuthNotImplementedError')
-    expect(err.message).toMatch(/#506/)
-  })
 })
