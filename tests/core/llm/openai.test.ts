@@ -3,6 +3,7 @@ import { LlmProviderError } from '../../../src/core/llm/client.js'
 import {
   OpenAILlmClient,
   calculateCostUsd,
+  pickTokenLimitField,
   type OpenAIFetch,
 } from '../../../src/core/llm/providers/openai.js'
 
@@ -76,6 +77,61 @@ describe('OpenAILlmClient — call', () => {
     expect(body.model).toBe('gpt-4o-mini')
     expect(body.max_tokens).toBe(16)
     expect(body.messages[0]).toEqual({ role: 'user', content: 'hello' })
+  })
+
+  // QA17 — GPT-5 / o1 / o3 / o4 families reject `max_tokens` with HTTP
+  // 400. Pre-fix, `foreman hello` against a gpt-5* model failed
+  // immediately with that error and orchestrator_chat looked broken.
+  it('sends `max_completion_tokens` (not `max_tokens`) for gpt-5 family', async () => {
+    const f = makeFetch([happyResponse()])
+    const client = new OpenAILlmClient({
+      apiKey: 'sk-proj',
+      model: 'gpt-5-mini',
+      fetchImpl: f.fetchImpl,
+    })
+    await client.call('hi', { feature: 'test', maxTokens: 32 })
+    const body = JSON.parse(String(f.calls[0]!.init.body)) as Record<
+      string,
+      unknown
+    >
+    expect(body.max_completion_tokens).toBe(32)
+    expect(body.max_tokens).toBeUndefined()
+  })
+
+  it('sends `max_completion_tokens` for the o1 / o3 / o4 reasoning families', async () => {
+    for (const model of ['o1-mini', 'o3', 'o4-preview', 'gpt-5.5']) {
+      const f = makeFetch([happyResponse()])
+      const client = new OpenAILlmClient({
+        apiKey: 'sk-proj',
+        model,
+        fetchImpl: f.fetchImpl,
+      })
+      await client.call('hi', { feature: 'test', maxTokens: 16 })
+      const body = JSON.parse(String(f.calls[0]!.init.body)) as Record<
+        string,
+        unknown
+      >
+      expect(body.max_completion_tokens).toBe(16)
+      expect(body.max_tokens).toBeUndefined()
+    }
+  })
+
+  it('keeps `max_tokens` for legacy gpt-4o / gpt-4 / gpt-3.5 models', async () => {
+    for (const model of ['gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo']) {
+      const f = makeFetch([happyResponse()])
+      const client = new OpenAILlmClient({
+        apiKey: 'sk-proj',
+        model,
+        fetchImpl: f.fetchImpl,
+      })
+      await client.call('hi', { feature: 'test', maxTokens: 16 })
+      const body = JSON.parse(String(f.calls[0]!.init.body)) as Record<
+        string,
+        unknown
+      >
+      expect(body.max_tokens).toBe(16)
+      expect(body.max_completion_tokens).toBeUndefined()
+    }
   })
 
   it('extracts text + tokens + computes cost from the response', async () => {
@@ -294,6 +350,37 @@ describe('calculateCostUsd — OpenAI', () => {
 
   it('returns 0 when both token counts are 0', () => {
     expect(calculateCostUsd('gpt-4o-mini', 0, 0)).toBe(0)
+  })
+})
+
+describe('pickTokenLimitField', () => {
+  it('returns max_completion_tokens for gpt-5 / o1 / o3 / o4 families', () => {
+    for (const m of [
+      'gpt-5',
+      'gpt-5-mini',
+      'gpt-5.5',
+      'GPT-5-PREVIEW',
+      'o1',
+      'o1-mini',
+      'o1-preview',
+      'o3',
+      'o3-mini',
+      'o4',
+    ]) {
+      expect(pickTokenLimitField(m)).toBe('max_completion_tokens')
+    }
+  })
+
+  it('returns max_tokens for gpt-4* / gpt-3.5 / unknown models', () => {
+    for (const m of [
+      'gpt-4o-mini',
+      'gpt-4o',
+      'gpt-4-turbo',
+      'gpt-3.5-turbo',
+      'some-unknown-model',
+    ]) {
+      expect(pickTokenLimitField(m)).toBe('max_tokens')
+    }
   })
 })
 
