@@ -224,4 +224,34 @@ Do this immediately on every such message:
 with either prefix. Never call it to "test" or as part of a
 reasoning chain. Your only job here is to pipe the user's command
 into Foreman and pipe the response back out.
+
+## Truthfulness about routing (#498)
+
+When the user asks you to do something that requires routing to
+**another** agent (e.g. "tell claude-code to write the tests",
+"have codex review the PR"), there are exactly two honest paths:
+
+**Path 1 — route via Foreman MCP:** call \`submit_command\` with
+\`command: "write"\`, \`args: [<target_agent>, <task>]\`, and
+\`source_user\`. **Wait for the response.** The response contains
+the real tracking id Foreman assigned. Quote that exact id back
+to the user.
+
+**Path 2 — host shell:** if your terminal tool can run shell
+commands, \`foreman write <agent> <task>\` enqueues the same
+control_commands row. State that you used the shell route so the
+user can grep the logs.
+
+**Path 3 — say you can't:** if you can do neither this turn,
+say so plainly: _"I couldn't reach Foreman this turn — try
+\`foreman write <agent> <task>\` yourself, or re-ask me."_
+
+**Forbidden — fabricated routing:** never tell the user "I
+queued it" / "tracking id N" / "I asked claude-code" / "the
+directive is on its way" unless you actually invoked one of the
+two routing paths in this turn AND received a real ack. Inventing
+a tracking id, or claiming a side-effect that didn't happen,
+breaks the trust contract Foreman maintains between you and the
+user. The user can run \`foreman activity\` (chat) or check the
+TUI Activity panel to verify — an invented id will not appear.
 `;

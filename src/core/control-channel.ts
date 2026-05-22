@@ -4,6 +4,7 @@ import {
   controlCommands,
   type ControlCommand,
 } from "../db/schema.js";
+import type { EventBus, ForemanEventMap } from "./event-bus.js";
 
 // =============================================================================
 // Cross-process control channel (#440)
@@ -54,7 +55,14 @@ export type ControlHandler = (
 ) => Promise<ControlHandlerOutcome> | ControlHandlerOutcome;
 
 export class ControlChannel {
-  constructor(private readonly db: ForemanDb) {}
+  // #498 — Optional bus injection so the writer side (mcp-stdio /
+  // foreman write CLI) can announce enqueue events for the TUI. Reader
+  // side (foreman start) also keeps a reference so drain outcomes
+  // surface as control:applied / control:failed events.
+  constructor(
+    private readonly db: ForemanDb,
+    private readonly bus?: EventBus<ForemanEventMap>,
+  ) {}
 
   /** Queue a state-mutating command for `foreman start` to pick up.
    *  Returns the row id so the caller can include it in the audit log
@@ -74,6 +82,14 @@ export class ControlChannel {
       .returning({ id: controlCommands.id })
       .all();
     const id = inserted[0]?.id ?? 0;
+    this.bus?.emit("control:enqueued", {
+      id,
+      command: input.command,
+      args: input.args,
+      sourceAgent: input.sourceAgent,
+      sourceUser: input.sourceUser,
+      createdAt: now,
+    });
     return { id, createdAt: now };
   }
 
@@ -151,26 +167,59 @@ export class ControlChannel {
     const rows = this.pending(limit);
     for (const row of rows) {
       const handler = handlers.get(row.command);
+      const startedAt = Date.now();
       if (!handler) {
-        this.markRejected(
-          row.id,
-          `Unknown control command "${row.command}". Update foreman start to register a handler.`,
-        );
+        const err = `Unknown control command "${row.command}". Update foreman start to register a handler.`;
+        this.markRejected(row.id, err);
+        this.emitFailed(row, "rejected", err);
         continue;
       }
       try {
         const outcome = await handler(row);
-        if (outcome.status === "applied") this.markApplied(row.id);
-        else if (outcome.status === "failed") this.markFailed(row.id, outcome.error);
-        else this.markRejected(row.id, outcome.error);
+        if (outcome.status === "applied") {
+          this.markApplied(row.id);
+          this.emitApplied(row, Date.now() - startedAt);
+        } else if (outcome.status === "failed") {
+          this.markFailed(row.id, outcome.error);
+          this.emitFailed(row, "failed", outcome.error);
+        } else {
+          this.markRejected(row.id, outcome.error);
+          this.emitFailed(row, "rejected", outcome.error);
+        }
       } catch (err) {
-        this.markFailed(
-          row.id,
-          err instanceof Error ? err.message : String(err),
-        );
+        const msg = err instanceof Error ? err.message : String(err);
+        this.markFailed(row.id, msg);
+        this.emitFailed(row, "failed", msg);
       }
     }
     return rows.length;
+  }
+
+  private emitApplied(row: ControlCommand, durationMs: number): void {
+    if (!this.bus) return;
+    this.bus.emit("control:applied", {
+      id: row.id,
+      command: row.command,
+      sourceAgent: row.sourceAgent,
+      durationMs,
+      appliedAt: Date.now(),
+    });
+  }
+
+  private emitFailed(
+    row: ControlCommand,
+    status: "failed" | "rejected",
+    error: string,
+  ): void {
+    if (!this.bus) return;
+    this.bus.emit("control:failed", {
+      id: row.id,
+      command: row.command,
+      sourceAgent: row.sourceAgent,
+      status,
+      error,
+      failedAt: Date.now(),
+    });
   }
 }
 

@@ -848,6 +848,13 @@ function persistForemanLlmChoice(args: {
       ...existing.features,
       verification: true,
       smart_report: true,
+      // #498 — Default orchestrator_chat ON when the wizard configures
+      // Foreman's LLM. Without it, free-form "foreman are you there?"
+      // returns "Unknown command" — a UX cliff users hit immediately
+      // in QA. Budget guardrails still apply (monthly_cap_usd, alert
+      // threshold) so the opt-in cost concern doesn't disappear, the
+      // user just doesn't have to hand-edit YAML to talk to Foreman.
+      orchestrator_chat: true,
     };
 
     if (args.choice === "anthropic") {

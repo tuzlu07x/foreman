@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { activityCommand } from "./activity-cli.js";
+import { reportCommand } from "./activity-cli.js";
 import { agentsCommand } from "./agents-cli.js";
 import { chatCommand } from "./chat-cli.js";
 import { createCompletionCommand } from "./completion.js";
@@ -42,7 +42,7 @@ program.addCommand(policyCommand);
 program.addCommand(notifyCommand);
 program.addCommand(chatCommand);
 program.addCommand(writeCommand);
-program.addCommand(activityCommand);
+program.addCommand(reportCommand);
 program.addCommand(llmCommand);
 program.addCommand(agentsCommand);
 program.addCommand(providerCommand);
