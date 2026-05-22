@@ -43,6 +43,12 @@ const BudgetSchema = z
 
 const CredentialBlockSchema = z
   .object({
+    /** How Foreman authenticates to the provider for THIS block. With
+     *  `oauth`, the user signs in via `foreman llm login <provider>` and the
+     *  token bundle lives in the encrypted store under `llm-oauth-<provider>`
+     *  rather than the user-named slot pointed at by `secret_name`. Default
+     *  `api_key` so every existing llm.yaml stays valid (no migration). */
+    auth_mode: z.enum(['api_key', 'oauth']).default('api_key'),
     secret_name: z.string().nullable().optional(),
     endpoint: z.string().optional(),
     endpoint_secret: z.string().optional(),
