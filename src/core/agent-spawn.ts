@@ -52,6 +52,12 @@ export interface SpawnAgentTaskOptions {
   cwd?: string;
   /** Environment overrides merged on top of process.env. */
   env?: NodeJS.ProcessEnv;
+  /** Per-agent model override (e.g. "gpt-5-mini", "claude-sonnet-4-6").
+   *  When set together with `entry.task_model_flag`, the spawn engine
+   *  appends `[task_model_flag, modelVersion]` to the argv so the agent
+   *  picks up the user-chosen model. Without the registry-side flag,
+   *  this is a no-op. Sourced from the registry row (`agents.model_version`). */
+  modelVersion?: string | null;
   /** Override the spawn implementation — tests inject a stub. */
   spawnImpl?: SpawnLike;
 }
@@ -130,6 +136,19 @@ export async function spawnAgentTask(
       kind: "unsupported",
       reason: `agent "${options.entry.id}"'s task_command_template is empty`,
     };
+  }
+
+  // Per-agent model override: when both the registry has a task_model_flag
+  // (e.g. "--model") and the caller passed a modelVersion (e.g.
+  // "claude-sonnet-4-6"), append them to the argv. Order: trailing —
+  // both codex and claude accept flags after the task arg, and keeping
+  // them at the end avoids interfering with positional template tokens.
+  if (
+    options.entry.task_model_flag &&
+    options.modelVersion &&
+    options.modelVersion.trim().length > 0
+  ) {
+    args.push(options.entry.task_model_flag, options.modelVersion);
   }
 
   const timeoutMs =

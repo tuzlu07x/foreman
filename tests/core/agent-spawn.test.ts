@@ -242,6 +242,69 @@ describe("spawnAgentTask", () => {
     ).toThrow();
   });
 
+  // #502 — per-agent model override via task_model_flag + modelVersion.
+  it("appends task_model_flag + modelVersion to argv when both are set", async () => {
+    const cmd = makeScript(
+      "args-dump.sh",
+      '#!/bin/sh\nfor a in "$@"; do echo "ARG:$a"; done\n',
+    );
+    const result = await spawnAgentTask({
+      entry: agent({
+        task_command_template: `${cmd} "{task}"`,
+        task_model_flag: "--model",
+      }),
+      task: "hi",
+      modelVersion: "claude-sonnet-4-6",
+    });
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      // First arg is the task itself, then the trailing model pair.
+      expect(result.stdout).toContain("ARG:hi");
+      expect(result.stdout).toContain("ARG:--model");
+      expect(result.stdout).toContain("ARG:claude-sonnet-4-6");
+    }
+  });
+
+  it("skips the model flag when modelVersion is unset (default behavior)", async () => {
+    const cmd = makeScript(
+      "args-dump.sh",
+      '#!/bin/sh\nfor a in "$@"; do echo "ARG:$a"; done\n',
+    );
+    const result = await spawnAgentTask({
+      entry: agent({
+        task_command_template: `${cmd} "{task}"`,
+        task_model_flag: "--model",
+      }),
+      task: "hi",
+      // modelVersion intentionally omitted
+    });
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.stdout).toContain("ARG:hi");
+      expect(result.stdout).not.toContain("ARG:--model");
+    }
+  });
+
+  it("skips the model flag when registry has no task_model_flag (legacy agents)", async () => {
+    const cmd = makeScript(
+      "args-dump.sh",
+      '#!/bin/sh\nfor a in "$@"; do echo "ARG:$a"; done\n',
+    );
+    const result = await spawnAgentTask({
+      entry: agent({
+        task_command_template: `${cmd} "{task}"`,
+        // no task_model_flag — legacy / unsupported agent
+      }),
+      task: "hi",
+      modelVersion: "some-model",
+    });
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.stdout).toContain("ARG:hi");
+      expect(result.stdout).not.toContain("ARG:some-model");
+    }
+  });
+
   // QA round 13 bug 3 defensive: set env vars so a recursive Foreman
   // mcp-stdio (spawned by the child agent's MCP wiring) can detect
   // it's running inside a Foreman spawn and skip behavior that would

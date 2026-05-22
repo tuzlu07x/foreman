@@ -102,6 +102,7 @@ describe("ForemanCommandRouter (#431)", () => {
       expect(result.text).toContain("write");
       expect(result.text).toContain("report");
       expect(result.text).toContain("activity");
+      expect(result.text).toContain("model");
       expect(result.text).toContain("llm");
     });
 
@@ -715,6 +716,142 @@ describe("ForemanCommandRouter (#431)", () => {
       // 9999 is out of range → clamped to default 10. All 3 rows shown.
       expect(result.text).toContain("task 0");
       expect(result.text).toContain("task 2");
+    });
+  });
+
+  // #502 — `/foreman model` chat command. Three modes:
+  //   0 args → status list
+  //   1 arg  → Foreman LLM model (provider-preserving)
+  //   2 args, first = provider → Foreman LLM provider+model
+  //   2 args, first = agent id → per-agent override (agents.model_version)
+  describe("model", () => {
+    beforeEach(() => {
+      registry.register({
+        id: "codex",
+        displayName: "Codex",
+        transport: "stdio",
+      });
+      registry.register({
+        id: "claude-code",
+        displayName: "Claude Code",
+        transport: "stdio",
+      });
+    });
+
+    it("0 args: shows Foreman LLM + per-agent models", async () => {
+      const result = await router.dispatch("model", [], ctx);
+      expect(result.ok).toBe(true);
+      // Header for Foreman LLM
+      expect(result.text).toMatch(/Foreman LLM/);
+      // Both agents appear
+      expect(result.text).toContain("codex");
+      expect(result.text).toContain("claude-code");
+      // Usage hints
+      expect(result.text).toContain("/foreman model");
+    });
+
+    it("`models` is an alias of `model`", async () => {
+      const a = await router.dispatch("model", [], ctx);
+      const b = await router.dispatch("models", [], ctx);
+      expect(a.text.split("\n")[0]).toBe(b.text.split("\n")[0]);
+    });
+
+    it("1 arg: enqueues llm-switch keeping current provider", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "888777666" });
+      const result = await router.dispatch("model", ["gpt-5-mini"], {
+        ...ctx,
+        controlChannel: channel,
+        ownerStore: store,
+        sourceUser: "888777666",
+      });
+      expect(result.ok).toBe(true);
+      const rows = channel.pending();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.command).toBe("llm-switch");
+      const args = JSON.parse(rows[0]!.args) as string[];
+      // Provider auto-resolved from current llm.yaml (default 'anthropic'),
+      // model is the user's pick.
+      expect(args).toEqual(["anthropic", "gpt-5-mini"]);
+    });
+
+    it("2 args, provider first: explicit Foreman LLM switch", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "888777666" });
+      const result = await router.dispatch(
+        "model",
+        ["openai", "gpt-5-mini"],
+        {
+          ...ctx,
+          controlChannel: channel,
+          ownerStore: store,
+          sourceUser: "888777666",
+        },
+      );
+      expect(result.ok).toBe(true);
+      const rows = channel.pending();
+      expect(rows[0]?.command).toBe("llm-switch");
+      expect(JSON.parse(rows[0]!.args)).toEqual(["openai", "gpt-5-mini"]);
+    });
+
+    it("2 args, agent id first: per-agent override enqueued", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "888777666" });
+      const result = await router.dispatch(
+        "model",
+        ["codex", "gpt-5-mini"],
+        {
+          ...ctx,
+          controlChannel: channel,
+          ownerStore: store,
+          sourceUser: "888777666",
+        },
+      );
+      expect(result.ok).toBe(true);
+      const rows = channel.pending();
+      expect(rows[0]?.command).toBe("agent-model");
+      expect(JSON.parse(rows[0]!.args)).toEqual(["codex", "gpt-5-mini"]);
+    });
+
+    it("unknown agent id (not a provider either) → UNKNOWN_SUBCOMMAND with hint", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "888777666" });
+      const result = await router.dispatch(
+        "model",
+        ["ghost-agent", "gpt-5-mini"],
+        {
+          ...ctx,
+          controlChannel: channel,
+          ownerStore: store,
+          sourceUser: "888777666",
+        },
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errorCode).toBe("UNKNOWN_SUBCOMMAND");
+      expect(result.text).toContain("ghost-agent");
+      // The hint should list available agent ids.
+      expect(result.text).toContain("codex");
+      expect(channel.pending()).toHaveLength(0);
+    });
+
+    it("clear keyword removes the agent override (empty string in row)", async () => {
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "888777666" });
+      const result = await router.dispatch(
+        "model",
+        ["codex", "clear"],
+        {
+          ...ctx,
+          controlChannel: channel,
+          ownerStore: store,
+          sourceUser: "888777666",
+        },
+      );
+      expect(result.ok).toBe(true);
+      const rows = channel.pending();
+      expect(rows[0]?.command).toBe("agent-model");
+      // Drain handler reads "" and calls setModelVersion(agentId, null).
+      expect(JSON.parse(rows[0]!.args)).toEqual(["codex", ""]);
     });
   });
 
