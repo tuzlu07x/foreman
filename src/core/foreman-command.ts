@@ -404,35 +404,92 @@ function modelHandler(
   return setAgentModel(ctx, first, args.slice(1).join(" "));
 }
 
+// Curated "quick switch" model lists per provider. Annotated with a
+// one-word price hint so users skim cost trade-offs without leaving
+// chat. Telegram renders backticked text as inline code → long-press
+// on mobile triggers a copy menu, which is the closest we get to an
+// inline-keyboard model picker without owning the bot.
+const QUICK_MODELS: Record<string, Array<{ id: string; hint: string }>> = {
+  openai: [
+    { id: "gpt-5-nano", hint: "cheapest" },
+    { id: "gpt-5-mini", hint: "balanced" },
+    { id: "gpt-5", hint: "top tier" },
+    { id: "gpt-4o-mini", hint: "legacy budget" },
+  ],
+  anthropic: [
+    { id: "claude-haiku-4-5", hint: "cheapest" },
+    { id: "claude-sonnet-4-6", hint: "balanced" },
+    { id: "claude-opus-4-7", hint: "top tier" },
+  ],
+};
+
+// Maps each registry agent id → which provider's QUICK_MODELS list to
+// surface. Today only callable agents (codex / claude-code) need
+// this; daemon-style agents (Hermes, OpenClaw) don't have a
+// task_model_flag so the override would be a no-op.
+const AGENT_PROVIDER: Record<string, string> = {
+  codex: "openai",
+  "claude-code": "anthropic",
+};
+
 function modelStatusReply(ctx: ForemanCommandContext): ForemanCommandResult {
   const lines: string[] = [];
   // Foreman's own LLM
+  let currentForemanProvider: string | null = null;
   try {
     const cfg = existsSync(ctx.llmConfigPath)
       ? loadLlmConfig(ctx.llmConfigPath)
       : defaultLlmConfig();
     const enabled = cfg.enabled ? "on" : "off";
+    currentForemanProvider = cfg.provider;
     lines.push(
-      `Foreman LLM (${enabled}): ${cfg.provider} · ${cfg.model}`,
+      `Foreman LLM (${enabled}): \`${cfg.provider}\` · \`${cfg.model}\``,
     );
   } catch {
     lines.push("Foreman LLM: (could not read llm.yaml)");
   }
-  // Per-agent
+  // Per-agent (current state)
   const agents = ctx.registry.listAll();
+  const overridableAgents: string[] = [];
   if (agents.length > 0) {
     lines.push("");
     lines.push("Agents:");
     for (const a of agents) {
-      const override = a.modelVersion ? a.modelVersion : "(agent default)";
+      const override = a.modelVersion ? `\`${a.modelVersion}\`` : "(agent default)";
       lines.push(`  ${a.id} — ${override}`);
+      if (AGENT_PROVIDER[a.id]) overridableAgents.push(a.id);
     }
   }
+  // Tap-to-copy quick switches for Foreman LLM
+  if (currentForemanProvider) {
+    const models = QUICK_MODELS[currentForemanProvider];
+    if (models && models.length > 0) {
+      lines.push("");
+      lines.push(`Tap to switch Foreman LLM (keeping ${currentForemanProvider}):`);
+      for (const m of models) {
+        lines.push(`  \`foreman model ${m.id}\` — ${m.hint}`);
+      }
+    }
+  }
+  // Quick switches per overridable agent (codex / claude-code)
+  for (const agentId of overridableAgents) {
+    const providerForAgent = AGENT_PROVIDER[agentId];
+    if (!providerForAgent) continue;
+    const models = QUICK_MODELS[providerForAgent];
+    if (!models || models.length === 0) continue;
+    lines.push("");
+    lines.push(`Tap to switch ${agentId} (${providerForAgent}):`);
+    for (const m of models) {
+      lines.push(`  \`foreman model ${agentId} ${m.id}\` — ${m.hint}`);
+    }
+    lines.push(`  \`foreman model ${agentId} clear\` — back to default`);
+  }
+  // Manual form (kept for power users / agents without quick-list support)
   lines.push("");
-  lines.push("Change with:");
-  lines.push("  `/foreman model <new-model>`              (Foreman LLM)");
-  lines.push("  `/foreman model <provider> <new-model>`   (Foreman LLM, switch provider too)");
-  lines.push("  `/foreman model <agent-id> <new-model>`   (per-agent override)");
+  lines.push("Custom form:");
+  lines.push("  `foreman model <new-model>`              (Foreman LLM)");
+  lines.push("  `foreman model <provider> <new-model>`   (Foreman LLM, switch provider too)");
+  lines.push("  `foreman model <agent-id> <new-model>`   (per-agent override)");
   return { ok: true, text: lines.join("\n") };
 }
 
