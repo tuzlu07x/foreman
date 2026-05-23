@@ -14,7 +14,9 @@ import {
   type ForemanCommandContext,
 } from "../../src/core/foreman-command.js";
 import { RegistryService } from "../../src/core/registry.js";
+import { SecretStore } from "../../src/core/secret-store.js";
 import { createInMemoryDb, type ForemanDb } from "../../src/db/client.js";
+import { generateMasterKey } from "../../src/identity/encryption.js";
 
 function makeOwnerStore(secrets: Record<string, string>): OwnerStore {
   return {
@@ -775,6 +777,150 @@ describe("ForemanCommandRouter (#431)", () => {
       const a = await router.dispatch("model", [], ctx);
       const b = await router.dispatch("models", [], ctx);
       expect(a.text.split("\n")[0]).toBe(b.text.split("\n")[0]);
+    });
+
+    // ---------- Faz 4b / #512 — OAuth status in `foreman model` ----------
+
+    describe("Auth section", () => {
+      it("renders nothing when no secretStore is wired (test ergonomics)", async () => {
+        // The default `ctx` in this describe has no secretStore — backward
+        // compatible: existing tests + agents that don't pass one still work.
+        const result = await router.dispatch("model", [], ctx);
+        expect(result.ok).toBe(true);
+        expect(result.text).not.toContain("Auth:");
+      });
+
+      it("shows `api key (<slot>)` when auth_mode is the default", async () => {
+        writeFileSync(
+          llmConfigPath,
+          `enabled: true
+provider: anthropic
+model: claude-haiku-4-5
+credentials:
+  anthropic:
+    secret_name: anthropic-key
+  openai:
+    secret_name: openai-key
+`,
+          "utf-8",
+        );
+        const store = new SecretStore(db, generateMasterKey());
+        const result = await router.dispatch("model", [], {
+          ...ctx,
+          secretStore: store,
+        });
+        expect(result.text).toContain("Auth:");
+        expect(result.text).toContain("anthropic — api key (`anthropic-key`)");
+        expect(result.text).toContain("openai — api key (`openai-key`)");
+      });
+
+      it("shows `OAuth (signed in)` with no account suffix (Anthropic)", async () => {
+        writeFileSync(
+          llmConfigPath,
+          `enabled: true
+provider: anthropic
+model: claude-opus-4-7
+credentials:
+  anthropic:
+    auth_mode: oauth
+`,
+          "utf-8",
+        );
+        const store = new SecretStore(db, generateMasterKey());
+        store.add(
+          "llm-oauth-anthropic",
+          JSON.stringify({
+            accessToken: "sk-ant-oat01-x",
+            refreshToken: "rt",
+            expiresAt: Date.now() + 60_000,
+          }),
+        );
+        const result = await router.dispatch("model", [], {
+          ...ctx,
+          secretStore: store,
+        });
+        expect(result.text).toContain("anthropic — OAuth (signed in)");
+        expect(result.text).not.toMatch(/anthropic — OAuth \(signed in ·/);
+      });
+
+      it("shows `OAuth (signed in · <account>)` when Codex tokens carry an accountId", async () => {
+        writeFileSync(
+          llmConfigPath,
+          `enabled: true
+provider: openai
+model: gpt-5.4
+credentials:
+  openai:
+    auth_mode: oauth
+`,
+          "utf-8",
+        );
+        const store = new SecretStore(db, generateMasterKey());
+        store.add(
+          "llm-oauth-openai",
+          JSON.stringify({
+            accessToken: "A",
+            refreshToken: "R",
+            expiresAt: Date.now() + 60_000,
+            accountId: "acc-42",
+          }),
+        );
+        const result = await router.dispatch("model", [], {
+          ...ctx,
+          secretStore: store,
+        });
+        expect(result.text).toContain(
+          "openai — OAuth (signed in · acc-42)",
+        );
+      });
+
+      it("nudges with `foreman llm login <provider>` when auth_mode oauth but no tokens", async () => {
+        writeFileSync(
+          llmConfigPath,
+          `enabled: true
+provider: anthropic
+model: claude-haiku-4-5
+credentials:
+  anthropic:
+    auth_mode: oauth
+`,
+          "utf-8",
+        );
+        const store = new SecretStore(db, generateMasterKey());
+        const result = await router.dispatch("model", [], {
+          ...ctx,
+          secretStore: store,
+        });
+        expect(result.text).toContain(
+          "anthropic — OAuth (not signed in) → `foreman llm login anthropic`",
+        );
+      });
+
+      it("auth section appears between Agents and the tap-to-switch quick lists", async () => {
+        writeFileSync(
+          llmConfigPath,
+          `enabled: true
+provider: anthropic
+model: claude-haiku-4-5
+credentials:
+  anthropic:
+    secret_name: anthropic-key
+`,
+          "utf-8",
+        );
+        const store = new SecretStore(db, generateMasterKey());
+        const result = await router.dispatch("model", [], {
+          ...ctx,
+          secretStore: store,
+        });
+        const text = result.text!;
+        const agentsIdx = text.indexOf("Agents:");
+        const authIdx = text.indexOf("Auth:");
+        const tapIdx = text.indexOf("Tap to switch Foreman LLM");
+        expect(agentsIdx).toBeGreaterThan(-1);
+        expect(authIdx).toBeGreaterThan(agentsIdx);
+        expect(tapIdx).toBeGreaterThan(authIdx);
+      });
     });
 
     it("1 arg: enqueues llm-switch keeping current provider", async () => {
