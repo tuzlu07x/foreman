@@ -7,9 +7,16 @@ import {
   isFeatureEnabled,
   loadLlmConfig,
   saveLlmConfig,
+  setAuthMode,
   type LlmConfig,
   type LlmFeature,
 } from '../core/llm/config.js'
+
+// Re-exported so existing importers (`tests/cli/llm-login.test.ts`,
+// `foreman llm logout` / `login` callers) keep working after setAuthMode
+// moved into `core/llm/config.ts` to be shared with the chat-side login
+// handler in #514's follow-up.
+export { setAuthMode }
 import {
   buildLlmClient,
   LlmCredentialMissingError,
@@ -592,23 +599,6 @@ export function performOAuthLogout(
     paths.llmConfigPath,
     setAuthMode(config, providerId, 'api_key'),
   )
-}
-
-/** Return a copy of `config` with `credentials[providerId].auth_mode = mode`,
- *  preserving any existing `secret_name` / other fields on the block. */
-export function setAuthMode(
-  config: LlmConfig,
-  providerId: OAuthProviderId,
-  mode: 'api_key' | 'oauth',
-): LlmConfig {
-  const existing = config.credentials[providerId] ?? { auth_mode: mode }
-  return {
-    ...config,
-    credentials: {
-      ...config.credentials,
-      [providerId]: { ...existing, auth_mode: mode },
-    },
-  }
 }
 
 /** One-line description of a provider's authentication state, for `status`. */
