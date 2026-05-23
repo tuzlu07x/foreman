@@ -405,6 +405,7 @@ export async function handleMessage(
         orchestratorChat: services.orchestratorChat ?? undefined,
         controlChannel: services.controlChannel,
         ownerStore: services.secretStore,
+        secretStore: services.secretStore,
       });
       // #431 — Audit row per /foreman invocation. Persisted to
       // `audit_events` so the TUI Log page + `foreman log` CLI can
