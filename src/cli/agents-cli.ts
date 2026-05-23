@@ -22,6 +22,11 @@ import {
   runInstall,
   runUninstall,
 } from "../core/agent-install.js";
+import {
+  applyPermissions,
+  DEFAULT_PERMISSIONS,
+  resolveAgentSettingsPath,
+} from "../core/agent-permissions.js";
 import { closeDb, getDb } from "../db/client.js";
 import { getForemanPaths } from "../utils/config.js";
 import {
@@ -383,6 +388,111 @@ agentsCommand
       console.log(`agent ${agentId} enabled`);
     } catch (err) {
       handleAgentError(err);
+    }
+    closeDb();
+  });
+
+// ============================================================================
+// permissions — #518 / agent-permissions epic #517 Faz 1
+// ============================================================================
+//
+// Merges Foreman's curated shell-tool permission allowlist into the agent's
+// own settings file. Addresses the "denied + no terminal to prompt" wall
+// non-interactive agents hit on common commands (git clone, gh, npm, …).
+// Idempotent, preserves user-added entries, never auto-adds destructive
+// commands (rm / sudo / curl / chmod / …).
+
+agentsCommand
+  .command("permissions <agentId>")
+  .description(
+    "Apply Foreman's default shell-tool permission allowlist for the agent " +
+      "(Faz 1: claude-code only — see #517 for the roadmap).",
+  )
+  .option(
+    "--dry-run",
+    "Show what would change without writing to the settings file",
+    false,
+  )
+  .action((agentId: string, opts: { dryRun: boolean }) => {
+    const doc = loadActiveRegistry().doc;
+    const catalogEntry = safeFindAgent(doc, agentId);
+    if (!catalogEntry) {
+      console.error(
+        red("error: ") +
+          `Unknown agent '${agentId}'. Try \`foreman agent list\`.`,
+      );
+      closeDb();
+      process.exit(1);
+    }
+    if (!DEFAULT_PERMISSIONS[agentId]) {
+      console.error(
+        red("error: ") +
+          `No permission defaults shipped for '${agentId}' yet. Faz 1 covers ` +
+          `claude-code; codex / openclaw / hermes land in Faz 2 — see #517.`,
+      );
+      closeDb();
+      process.exit(2);
+    }
+    const configPaths = catalogEntry.config_paths ?? [];
+    if (configPaths.length === 0) {
+      console.error(
+        red("error: ") +
+          `Agent '${agentId}' has no config_paths in the registry — can't ` +
+          `locate a settings file.`,
+      );
+      closeDb();
+      process.exit(1);
+    }
+    let result;
+    try {
+      result = applyPermissions(
+        agentId,
+        resolveAgentSettingsPath(configPaths),
+        { dryRun: opts.dryRun },
+      );
+    } catch (err) {
+      console.error(
+        red("error: ") +
+          (err instanceof Error ? err.message : String(err)),
+      );
+      closeDb();
+      process.exit(1);
+    }
+    const verb = opts.dryRun ? "Would write" : "Wrote";
+    if (result.unchanged) {
+      console.log(
+        `${green("✓")} permissions already up to date for ${agentId}`,
+      );
+      console.log(`  ${dim("settings")}  ${result.settingsPath}`);
+    } else {
+      console.log(
+        `${green("✓")} ${verb} permissions for ${bold(agentId)}` +
+          (opts.dryRun ? dim(" (dry-run)") : ""),
+      );
+      console.log(`  ${dim("settings")}  ${result.settingsPath}`);
+      console.log(
+        `  ${dim("added")}     ${result.added.length} ` +
+          `${result.added.length === 1 ? "entry" : "entries"}`,
+      );
+      // Show up to 5 added entries so the user sees what landed; long lists
+      // get truncated with a count to keep the output scannable.
+      const preview = result.added.slice(0, 5);
+      for (const e of preview) {
+        console.log(`            ${dim("+")} ${e}`);
+      }
+      if (result.added.length > preview.length) {
+        console.log(
+          `            ${dim(
+            `+ ${result.added.length - preview.length} more`,
+          )}`,
+        );
+      }
+    }
+    if (result.kept.length > 0) {
+      console.log(
+        `  ${dim("kept")}      ${result.kept.length} user-defined ` +
+          `${result.kept.length === 1 ? "entry" : "entries"} (untouched)`,
+      );
     }
     closeDb();
   });
