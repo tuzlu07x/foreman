@@ -159,3 +159,29 @@ export function isFeatureEnabled(
 ): boolean {
   return config.enabled && config.features[feature] === true
 }
+
+// ============================================================================
+// auth_mode mutation helper (#512 / Faz 4b — used by CLI login + chat-side
+// login). Pure — returns a copy with `credentials[providerId].auth_mode`
+// updated and any other fields on the block preserved.
+// ============================================================================
+
+/** Provider ids that support subscription OAuth (anthropic + openai). Kept as
+ *  a string literal union here so callers don't have to reach into
+ *  `oauth/oauth-providers.ts` just to call `setAuthMode`. */
+export type AuthModeProviderId = 'anthropic' | 'openai'
+
+export function setAuthMode(
+  config: LlmConfig,
+  providerId: AuthModeProviderId,
+  mode: 'api_key' | 'oauth',
+): LlmConfig {
+  const existing = config.credentials[providerId] ?? { auth_mode: mode }
+  return {
+    ...config,
+    credentials: {
+      ...config.credentials,
+      [providerId]: { ...existing, auth_mode: mode },
+    },
+  }
+}

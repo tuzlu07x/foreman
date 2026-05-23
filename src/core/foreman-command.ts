@@ -10,10 +10,28 @@ import {
   defaultLlmConfig,
   isFeatureEnabled,
   loadLlmConfig,
+  saveLlmConfig,
+  setAuthMode,
   type LlmConfig,
 } from "./llm/config.js";
-import type { OAuthProviderId } from "./llm/oauth/oauth-providers.js";
-import { loadOAuthTokens } from "./llm/oauth/token-store.js";
+import {
+  buildAuthorizeUrl,
+  exchangeCodeForTokens,
+  parseCallbackInput,
+  type OAuthFetch,
+  type OAuthTokens,
+} from "./llm/oauth/oauth-flow.js";
+import { generatePkce, generateState } from "./llm/oauth/pkce.js";
+import {
+  getOAuthProvider,
+  isOAuthProviderId,
+  type OAuthProviderId,
+} from "./llm/oauth/oauth-providers.js";
+import {
+  loadOAuthTokens,
+  saveOAuthTokens,
+} from "./llm/oauth/token-store.js";
+import { SecretNotFoundError } from "./secret-store.js";
 import { loadActiveRegistry } from "./registry-catalog.js";
 import type { RegistryService } from "./registry.js";
 import type { SecretStore } from "./secret-store.js";
@@ -55,8 +73,13 @@ export interface ForemanCommandContext {
    *  the user is signed in to anthropic / openai). Distinct from
    *  `ownerStore` (which is the chat-id ownership check); the same
    *  `SecretStore` instance can be passed to both. When omitted, the
-   *  OAuth-status section of `/foreman model` is skipped silently. */
+   *  OAuth-status section of `/foreman model` is skipped silently and
+   *  `/foreman llm login` / `callback` reply with "not configured".  */
   secretStore?: SecretStore;
+  /** Faz 4b / #512 — Optional fetch override for the OAuth token exchange
+   *  in the chat-side `/foreman llm callback` handler. Production omits
+   *  this (uses global fetch); tests inject a deterministic mock. */
+  oauthFetch?: OAuthFetch;
   /** Agent id that routed the user's command (mirrors `submit_approval`
    *  pattern). Used for the audit log + future per-agent gating. */
   sourceAgent: string;
@@ -874,7 +897,7 @@ function enqueueMutating(
 function llmSubrouterHandler(
   args: string[],
   ctx: ForemanCommandContext,
-): ForemanCommandResult {
+): ForemanCommandResult | Promise<ForemanCommandResult> {
   const sub = (args[0] ?? "status").toLowerCase();
   if (sub === "status") return llmStatusHandler(args.slice(1), ctx);
   if (sub === "switch") {
@@ -913,11 +936,239 @@ function llmSubrouterHandler(
       successText: `Will set Foreman LLM monthly cap to $${parsed.toFixed(2)}.`,
     });
   }
+  // Faz 4b / #512 — in-chat subscription login. Two-step flow because the
+  // browser's loopback redirect can't reach the Foreman host across a
+  // Telegram session: step 1 emits the authorize URL + persists per-user
+  // PKCE state, step 2 takes the pasted redirect URL and finishes the
+  // exchange. State lives in the encrypted secret store with a TTL so a
+  // stale start doesn't sit around forever.
+  if (sub === "login") return llmLoginChatHandler(args.slice(1), ctx);
+  if (sub === "callback") return llmCallbackChatHandler(args.slice(1), ctx);
   return {
     ok: false,
     text:
-      `Unknown llm subcommand "${sub}". Available: status, switch, budget.`,
+      `Unknown llm subcommand "${sub}". Available: status, switch, budget, login, callback.`,
     errorCode: "UNKNOWN_SUBCOMMAND",
+  };
+}
+
+// ============================================================================
+// Chat-side OAuth login (#512 / Faz 4b)
+// ============================================================================
+
+/** Per-user pending OAuth login state — the PKCE bits we need to validate
+ *  + finish the exchange when the user pastes the redirect URL back. */
+interface PendingChatLogin {
+  providerId: OAuthProviderId;
+  verifier: string;
+  state: string;
+  createdAt: number;
+}
+
+// 10 minutes — comfortably longer than a normal browser sign-in but short
+// enough that abandoned starts don't pile up in the secret store.
+const PENDING_LOGIN_TTL_MS = 10 * 60 * 1000;
+
+function pendingLoginSecretName(userId: string): string {
+  return `oauth-pending-${userId}`;
+}
+
+function savePendingChatLogin(
+  store: SecretStore,
+  userId: string,
+  pending: PendingChatLogin,
+): void {
+  const name = pendingLoginSecretName(userId);
+  const json = JSON.stringify(pending);
+  if (store.exists(name)) store.rotate(name, json);
+  else store.add(name, json);
+}
+
+function loadPendingChatLogin(
+  store: SecretStore,
+  userId: string,
+): PendingChatLogin | null {
+  let json: string;
+  try {
+    json = store.get(pendingLoginSecretName(userId));
+  } catch (err) {
+    if (err instanceof SecretNotFoundError) return null;
+    throw err;
+  }
+  let parsed: PendingChatLogin;
+  try {
+    parsed = JSON.parse(json) as PendingChatLogin;
+  } catch {
+    return null;
+  }
+  if (
+    typeof parsed.providerId !== "string" ||
+    typeof parsed.verifier !== "string" ||
+    typeof parsed.state !== "string" ||
+    typeof parsed.createdAt !== "number"
+  ) {
+    return null;
+  }
+  if (Date.now() - parsed.createdAt > PENDING_LOGIN_TTL_MS) {
+    // Expired — drop it eagerly so the next login starts clean.
+    clearPendingChatLogin(store, userId);
+    return null;
+  }
+  return parsed;
+}
+
+function clearPendingChatLogin(store: SecretStore, userId: string): void {
+  const name = pendingLoginSecretName(userId);
+  if (store.exists(name)) store.remove(name);
+}
+
+function llmLoginChatHandler(
+  args: string[],
+  ctx: ForemanCommandContext,
+): ForemanCommandResult {
+  const providerArg = (args[0] ?? "").toLowerCase();
+  if (!providerArg) {
+    return {
+      ok: false,
+      text:
+        "Usage: `/foreman llm login <anthropic|openai>`. " +
+        "Step 1 of 2 — I'll send you a URL to open in your browser.",
+      errorCode: "UNKNOWN_SUBCOMMAND",
+    };
+  }
+  if (!isOAuthProviderId(providerArg)) {
+    return {
+      ok: false,
+      text: `Unknown OAuth provider \`${providerArg}\`. Available: anthropic, openai.`,
+      errorCode: "UNKNOWN_SUBCOMMAND",
+    };
+  }
+  if (!ctx.secretStore) {
+    return {
+      ok: false,
+      text: "Server isn't wired for OAuth (no secret store).",
+    };
+  }
+  if (!ctx.sourceUser) {
+    return {
+      ok: false,
+      text:
+        "Can't run OAuth login over this chat — no per-user identifier is " +
+        "available. Use `foreman llm login` on the host instead.",
+    };
+  }
+  const provider = getOAuthProvider(providerArg);
+  const { verifier, challenge } = generatePkce();
+  const state =
+    provider.stateMode === "pkce-verifier" ? verifier : generateState();
+  const authUrl = buildAuthorizeUrl(provider, challenge, state);
+  savePendingChatLogin(ctx.secretStore, ctx.sourceUser, {
+    providerId: providerArg,
+    verifier,
+    state,
+    createdAt: Date.now(),
+  });
+  return {
+    ok: true,
+    text: [
+      `Sign in to ${provider.label}:`,
+      "",
+      "1. Open this URL in any browser:",
+      `   ${authUrl}`,
+      "",
+      "2. After signing in, your browser will land on a `localhost` URL that " +
+        "won't load. Copy the **full URL** from the address bar.",
+      "",
+      "3. Send it back to me with: `/foreman llm callback <paste-url-here>`",
+      "",
+      `_Link expires in ${Math.round(PENDING_LOGIN_TTL_MS / 60_000)} minutes._`,
+    ].join("\n"),
+  };
+}
+
+async function llmCallbackChatHandler(
+  args: string[],
+  ctx: ForemanCommandContext,
+): Promise<ForemanCommandResult> {
+  // Allow the pasted URL to contain spaces by joining; the user might have
+  // an OS that re-wraps long URLs across whitespace.
+  const pasted = args.join(" ").trim();
+  if (!pasted) {
+    return {
+      ok: false,
+      text:
+        "Usage: `/foreman llm callback <full redirect URL>`. " +
+        "Run `/foreman llm login <provider>` first to get the URL.",
+      errorCode: "UNKNOWN_SUBCOMMAND",
+    };
+  }
+  if (!ctx.secretStore || !ctx.sourceUser) {
+    return {
+      ok: false,
+      text: "No pending OAuth login (server not configured for chat login).",
+    };
+  }
+  const pending = loadPendingChatLogin(ctx.secretStore, ctx.sourceUser);
+  if (!pending) {
+    return {
+      ok: false,
+      text:
+        "No pending OAuth login (or it expired). Start with " +
+        "`/foreman llm login <anthropic|openai>`.",
+    };
+  }
+  let parsed: { code: string; state?: string };
+  try {
+    parsed = parseCallbackInput(pasted);
+  } catch (err) {
+    return {
+      ok: false,
+      text: `Could not parse that URL: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (parsed.state !== undefined && parsed.state !== pending.state) {
+    return {
+      ok: false,
+      text:
+        "OAuth state mismatch — abort (possible CSRF). " +
+        "Run `/foreman llm login` again to restart.",
+    };
+  }
+  const provider = getOAuthProvider(pending.providerId);
+  let tokens: OAuthTokens;
+  try {
+    tokens = await exchangeCodeForTokens(
+      provider,
+      { code: parsed.code, verifier: pending.verifier, state: pending.state },
+      ctx.oauthFetch,
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      text: `Token exchange failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  saveOAuthTokens(ctx.secretStore, pending.providerId, tokens);
+  clearPendingChatLogin(ctx.secretStore, ctx.sourceUser);
+  // Flip llm.yaml so the factory picks up the OAuth-aware client next call.
+  try {
+    const config = existsSync(ctx.llmConfigPath)
+      ? loadLlmConfig(ctx.llmConfigPath)
+      : defaultLlmConfig();
+    saveLlmConfig(
+      ctx.llmConfigPath,
+      setAuthMode(config, pending.providerId, "oauth"),
+    );
+  } catch {
+    // Tokens are persisted; the yaml flip is best-effort here. The user can
+    // re-run `foreman llm status` to confirm and fix manually if needed.
+  }
+  const account = tokens.accountId ? ` (account ${tokens.accountId})` : "";
+  return {
+    ok: true,
+    text:
+      `✓ Signed in to ${pending.providerId}${account}. ` +
+      `\`auth_mode\` set to oauth in llm.yaml — next LLM call uses your subscription.`,
   };
 }
 
