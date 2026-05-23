@@ -177,4 +177,100 @@ credentials:
       expect(r.message).toMatch(/doesn't match anthropic key format/)
     })
   })
+
+  // ---------- Faz 5 / #508 — OAuth (`auth_mode: oauth`) checks ----------
+
+  describe('OAuth credentials', () => {
+    function writeOAuthYaml(provider: 'anthropic' | 'openai' | 'gemini'): void {
+      writeFileSync(
+        join(tmp, 'llm.yaml'),
+        `enabled: true
+provider: ${provider}
+model: m
+credentials:
+  ${provider}:
+    auth_mode: oauth
+`,
+        'utf-8',
+      )
+    }
+
+    it('warn when auth_mode: oauth but no tokens are stored', () => {
+      runInit()
+      writeOAuthYaml('anthropic')
+      const r = checkLlmCredentials()
+      expect(r.status).toBe('warn')
+      expect(r.message).toMatch(/anthropic.*OAuth.*no tokens/)
+      expect(r.remediation).toContain('foreman llm login anthropic')
+    })
+
+    it('ok when auth_mode: oauth and tokens are present (Anthropic, no accountId)', () => {
+      runInit()
+      writeOAuthYaml('anthropic')
+      const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
+      store.add(
+        'llm-oauth-anthropic',
+        JSON.stringify({
+          accessToken: 'sk-ant-oat01-x',
+          refreshToken: 'rt',
+          expiresAt: Date.now() + 60 * 60_000,
+        }),
+      )
+      const r = checkLlmCredentials()
+      expect(r.status).toBe('ok')
+      expect(r.message).toMatch(/anthropic OAuth tokens present/)
+      // No accountId for Anthropic → no "(account ...)" suffix.
+      expect(r.message).not.toContain('account ')
+    })
+
+    it('ok when auth_mode: oauth and tokens are present (Codex, with accountId)', () => {
+      runInit()
+      writeOAuthYaml('openai')
+      const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
+      store.add(
+        'llm-oauth-openai',
+        JSON.stringify({
+          accessToken: 'A',
+          refreshToken: 'R',
+          expiresAt: Date.now() + 60 * 60_000,
+          accountId: 'acc-42',
+        }),
+      )
+      const r = checkLlmCredentials()
+      expect(r.status).toBe('ok')
+      expect(r.message).toMatch(/openai OAuth tokens present \(account acc-42\)/)
+    })
+
+    it('warn when a non-OAuth provider (gemini) is configured with auth_mode: oauth', () => {
+      // Factory silently falls back to api-key for gemini; doctor flags
+      // it so the user notices their config does nothing.
+      runInit()
+      writeOAuthYaml('gemini')
+      const r = checkLlmCredentials()
+      expect(r.status).toBe('warn')
+      expect(r.message).toMatch(/Foreman only supports OAuth for anthropic \+ openai/)
+      expect(r.remediation).toContain('api_key')
+    })
+
+    it('does not regress when auth_mode is api_key (explicit) — uses the existing path', () => {
+      runInit()
+      writeFileSync(
+        join(tmp, 'llm.yaml'),
+        `enabled: true
+provider: anthropic
+model: m
+credentials:
+  anthropic:
+    auth_mode: api_key
+    secret_name: anthropic-key
+`,
+        'utf-8',
+      )
+      const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
+      store.add('anthropic-key', 'sk-ant-real')
+      const r = checkLlmCredentials()
+      expect(r.status).toBe('ok')
+      expect(r.message).toMatch(/anthropic credentials present/)
+    })
+  })
 })

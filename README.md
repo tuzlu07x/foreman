@@ -88,7 +88,7 @@ Per-agent recipes:
 
 Foreman ships three bundled catalogs that drive the wizard, the TUI management pages, and the CLI surfaces. Tier-1 entries below; see the linked guides for setup walkthroughs.
 
-**LLM providers** ([docs/llm-providers.md](docs/llm-providers.md)) — Anthropic · OpenAI · Google Gemini · Ollama (local) · Custom OpenAI-compatible (Groq / Together / OpenRouter / vLLM / LiteLLM)
+**LLM providers** ([docs/llm-providers.md](docs/llm-providers.md)) — Anthropic · OpenAI · Google Gemini · Ollama (local) · Custom OpenAI-compatible (Groq / Together / OpenRouter / vLLM / LiteLLM). Anthropic + OpenAI can also be authenticated by signing in with your Claude or ChatGPT subscription — `foreman llm login <provider>` ([details](docs/llm.md#subscription-oauth-claude--codex)).
 
 **Agents** ([docs/agent-lifecycle.md](docs/agent-lifecycle.md)) — Claude Code · Codex · Hermes · OpenClaw · ZeroClaw · Generic MCP
 

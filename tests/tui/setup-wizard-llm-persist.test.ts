@@ -235,7 +235,10 @@ describe("buildLlmConfigFromWizard — merge semantics", () => {
 
   it("preserves existing credentials for providers the wizard did NOT touch", () => {
     const existing = defaultLlmConfig();
-    existing.credentials.gemini = { secret_name: "my-custom-gemini-slot" };
+    existing.credentials.gemini = {
+      auth_mode: "api_key",
+      secret_name: "my-custom-gemini-slot",
+    };
     const result = buildLlmConfigFromWizard({
       savedStorageNames: ["anthropic-api-key"],
       providerCatalog: CATALOG,
