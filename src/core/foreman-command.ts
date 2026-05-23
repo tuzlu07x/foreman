@@ -12,8 +12,11 @@ import {
   loadLlmConfig,
   type LlmConfig,
 } from "./llm/config.js";
+import type { OAuthProviderId } from "./llm/oauth/oauth-providers.js";
+import { loadOAuthTokens } from "./llm/oauth/token-store.js";
 import { loadActiveRegistry } from "./registry-catalog.js";
 import type { RegistryService } from "./registry.js";
+import type { SecretStore } from "./secret-store.js";
 
 // =============================================================================
 // Foreman command router (#431)
@@ -47,6 +50,13 @@ export interface ForemanCommandContext {
   /** #440 — Secret store used by `isOwner` to gate mutating verbs.
    *  When omitted, every mutating verb is rejected (safe default). */
   ownerStore?: OwnerStore;
+  /** Faz 4b / #512 — Full secret store used by read-only verbs that need
+   *  to peek at OAuth token slots (e.g. `/foreman model` rendering whether
+   *  the user is signed in to anthropic / openai). Distinct from
+   *  `ownerStore` (which is the chat-id ownership check); the same
+   *  `SecretStore` instance can be passed to both. When omitted, the
+   *  OAuth-status section of `/foreman model` is skipped silently. */
+  secretStore?: SecretStore;
   /** Agent id that routed the user's command (mirrors `submit_approval`
    *  pattern). Used for the audit log + future per-agent gating. */
   sourceAgent: string;
@@ -432,12 +442,51 @@ const AGENT_PROVIDER: Record<string, string> = {
   "claude-code": "anthropic",
 };
 
+// Providers for which Foreman supports subscription sign-in (alongside
+// API-key auth). Mirrors the OAuth catalog in `oauth-providers.ts` — kept as
+// a local literal so this file doesn't reach across the LLM module just to
+// enumerate them.
+const OAUTH_CAPABLE: readonly OAuthProviderId[] = ["anthropic", "openai"];
+
+/** Push an `Auth:` block onto `lines` describing how each OAuth-capable
+ *  provider is currently authenticating. Mirrors the `foreman llm status`
+ *  CLI output so Telegram users see the same picture without leaving chat. */
+function appendAuthLines(
+  lines: string[],
+  cfg: LlmConfig,
+  store: SecretStore,
+): void {
+  const rows: string[] = [];
+  for (const pid of OAUTH_CAPABLE) {
+    const cred = cfg.credentials[pid];
+    if (cred?.auth_mode === "oauth") {
+      const tokens = loadOAuthTokens(store, pid);
+      if (tokens) {
+        const account = tokens.accountId ? ` · ${tokens.accountId}` : "";
+        rows.push(`  ${pid} — OAuth (signed in${account})`);
+      } else {
+        rows.push(
+          `  ${pid} — OAuth (not signed in) → \`foreman llm login ${pid}\``,
+        );
+      }
+    } else {
+      const slot = cred?.secret_name ? ` (\`${cred.secret_name}\`)` : "";
+      rows.push(`  ${pid} — api key${slot}`);
+    }
+  }
+  if (rows.length === 0) return;
+  lines.push("");
+  lines.push("Auth:");
+  for (const row of rows) lines.push(row);
+}
+
 function modelStatusReply(ctx: ForemanCommandContext): ForemanCommandResult {
   const lines: string[] = [];
   // Foreman's own LLM
   let currentForemanProvider: string | null = null;
+  let cfg: LlmConfig | null = null;
   try {
-    const cfg = existsSync(ctx.llmConfigPath)
+    cfg = existsSync(ctx.llmConfigPath)
       ? loadLlmConfig(ctx.llmConfigPath)
       : defaultLlmConfig();
     const enabled = cfg.enabled ? "on" : "off";
@@ -459,6 +508,12 @@ function modelStatusReply(ctx: ForemanCommandContext): ForemanCommandResult {
       lines.push(`  ${a.id} — ${override}`);
       if (AGENT_PROVIDER[a.id]) overridableAgents.push(a.id);
     }
+  }
+  // OAuth / API-key auth state per provider (#512 / Faz 4b). Skipped silently
+  // when no secretStore was wired into ctx (test ergonomics — keeps existing
+  // tests untouched and works without a master key on disk).
+  if (cfg && ctx.secretStore) {
+    appendAuthLines(lines, cfg, ctx.secretStore);
   }
   // Tap-to-copy quick switches for Foreman LLM
   if (currentForemanProvider) {
