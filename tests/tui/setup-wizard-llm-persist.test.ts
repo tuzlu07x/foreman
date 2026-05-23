@@ -266,3 +266,63 @@ describe("buildLlmConfigFromWizard — merge semantics", () => {
     expect(result.next.provider).toBe("anthropic");
   });
 });
+
+// ---------- Faz 4b-3 / #512 — wizard "Sign in with subscription" option ----
+
+describe("buildLlmConfigFromWizard — signedInProviders (Faz 4b-3)", () => {
+  it("flips auth_mode: oauth for a provider the user signed in to", () => {
+    const result = buildLlmConfigFromWizard({
+      savedStorageNames: [],
+      signedInProviders: ["anthropic"],
+      providerCatalog: CATALOG,
+      existing: defaultLlmConfig(),
+    });
+    expect(result.wiredProviders).toEqual(["anthropic"]);
+    expect(result.next.enabled).toBe(true);
+    expect(result.next.provider).toBe("anthropic");
+    expect(result.next.credentials.anthropic?.auth_mode).toBe("oauth");
+    // No secret_name is forced — `foreman llm login` runs post-wizard to
+    // populate the dedicated `llm-oauth-anthropic` store slot.
+    expect(result.next.credentials.anthropic?.secret_name).toBe(
+      "anthropic-key", // preserved from defaultLlmConfig — switching modes shouldn't lose it
+    );
+  });
+
+  it("handles both signed-in providers in one wizard run", () => {
+    const result = buildLlmConfigFromWizard({
+      savedStorageNames: [],
+      signedInProviders: ["anthropic", "openai"],
+      providerCatalog: CATALOG,
+      existing: defaultLlmConfig(),
+    });
+    expect(result.wiredProviders).toContain("anthropic");
+    expect(result.wiredProviders).toContain("openai");
+    expect(result.next.credentials.anthropic?.auth_mode).toBe("oauth");
+    expect(result.next.credentials.openai?.auth_mode).toBe("oauth");
+  });
+
+  it("can mix a pasted key (openai) with a signed-in provider (anthropic)", () => {
+    const result = buildLlmConfigFromWizard({
+      savedStorageNames: ["openai-api-key"],
+      signedInProviders: ["anthropic"],
+      providerCatalog: CATALOG,
+      existing: defaultLlmConfig(),
+    });
+    expect(result.next.credentials.openai?.secret_name).toBe("openai-api-key");
+    expect(result.next.credentials.openai?.auth_mode ?? "api_key").toBe(
+      "api_key",
+    );
+    expect(result.next.credentials.anthropic?.auth_mode).toBe("oauth");
+  });
+
+  it("absent signedInProviders is a no-op (existing call sites unaffected)", () => {
+    const result = buildLlmConfigFromWizard({
+      savedStorageNames: ["anthropic-api-key"],
+      providerCatalog: CATALOG,
+      existing: defaultLlmConfig(),
+    });
+    expect(result.next.credentials.anthropic?.auth_mode ?? "api_key").toBe(
+      "api_key",
+    );
+  });
+});

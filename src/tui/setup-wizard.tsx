@@ -120,6 +120,20 @@ import { singleBorder, theme } from "./theme.js";
 
 const DEFAULT_AGENTS = ["hermes", "claude-code"];
 
+// Faz 4b-3 / #512 — providers that support subscription OAuth as an
+// alternative to an API key. Used by the values phase to ask "key or sign
+// in?" before the password prompt for these providers. Mirrors the catalog
+// in src/core/llm/oauth/oauth-providers.ts.
+const OAUTH_CAPABLE_WIZARD_PROVIDERS = new Set<"anthropic" | "openai">([
+  "anthropic",
+  "openai",
+]);
+function isOAuthCapableProvider(
+  id: string,
+): id is "anthropic" | "openai" {
+  return (OAUTH_CAPABLE_WIZARD_PROVIDERS as Set<string>).has(id);
+}
+
 // #459 — Braille spinner frames used by the install step. 10-frame rotation
 // at 80ms = 8 frames/sec — matches the snappy boot-mascot vibe.
 const BRAILLE_SPINNER_FRAMES = [
@@ -780,14 +794,16 @@ function persistLlmConfigFromWizardState(
   services: WizardServices,
   providerCatalog: ProviderEntry[],
   savedStorageNames: string[],
+  signedInProviders: ("anthropic" | "openai")[] = [],
 ): void {
-  if (savedStorageNames.length === 0) return;
+  if (savedStorageNames.length === 0 && signedInProviders.length === 0) return;
   try {
     // loadLlmConfig falls back to defaults when the file doesn't exist, so
     // we always get a typed LlmConfig to merge into.
     const existing = loadLlmConfig(services.llmConfigPath);
     const { next, wiredProviders } = buildLlmConfigFromWizard({
       savedStorageNames,
+      signedInProviders,
       providerCatalog,
       existing,
     });
@@ -800,6 +816,7 @@ function persistLlmConfigFromWizardState(
     try {
       const { next } = buildLlmConfigFromWizard({
         savedStorageNames,
+        signedInProviders,
         providerCatalog,
         existing: defaultLlmConfig(),
       });
@@ -873,6 +890,8 @@ function persistForemanLlmChoice(args: {
         ...existing.credentials,
         ollama: {
           ...(existing.credentials.ollama ?? {}),
+          auth_mode:
+            existing.credentials.ollama?.auth_mode ?? "api_key",
           endpoint: existing.credentials.ollama?.endpoint ??
             "http://localhost:11434",
           secret_name: null,
@@ -884,6 +903,8 @@ function persistForemanLlmChoice(args: {
       next.credentials = {
         ...existing.credentials,
         openai_compatible: {
+          auth_mode:
+            existing.credentials.openai_compatible?.auth_mode ?? "api_key",
           endpoint_secret: `${args.preset.id}-endpoint`,
           key_secret: args.preset.key_secret_name,
         },
@@ -1020,6 +1041,16 @@ export function SetupWizard({
   const [providersPhase, setProvidersPhase] = useState<ProvidersPhase>("picker");
   const [providersSaved, setProvidersSaved] = useState<string[]>([]);
   const [providersSkipped, setProvidersSkipped] = useState<string[]>([]);
+  // Faz 4b-3 / #512 — per OAuth-capable provider (anthropic, openai) the user
+  // selected, the values phase asks "API key or sign in with subscription?".
+  // `providersSignedIn` carries those that chose sign-in (no key paste, set
+  // `auth_mode: oauth` in llm.yaml, queue `foreman llm login <provider>` for
+  // post-wizard execution). `authModeAsked` debounces the prompt so each
+  // provider is asked at most once per wizard run.
+  const [providersSignedIn, setProvidersSignedIn] = useState<
+    ("anthropic" | "openai")[]
+  >([]);
+  const [authModeAsked, setAuthModeAsked] = useState<string[]>([]);
   const [providersWarning, setProvidersWarning] = useState<string | null>(null);
 
   // Agents already registered in this Foreman home — drive the wizard's
@@ -2168,6 +2199,20 @@ export function SetupWizard({
         (o) => o.mandatory,
       );
       const allOauthSteps = requiredSetupResolution.oauthSteps;
+      // Faz 4b-3 / #512 — for every provider the user picked subscription
+      // sign-in on in the providers step, queue a `foreman llm login` to
+      // run with the rest of the OAuth flows. Treated as mandatory because
+      // the user explicitly opted in; without running it `auth_mode: oauth`
+      // is set but no tokens exist and the first call errors with
+      // LlmOAuthLoginRequiredError.
+      const foremanLlmOauthSteps: WizardOauthRunStep[] =
+        providersSignedIn.map((pid) => ({
+          agentId: "foreman-llm",
+          command: `foreman llm login ${pid}`,
+          verify: null,
+          mandatory: true,
+          reason: `Sign in to ${pid} so Foreman LLM uses your subscription`,
+        }));
       // QA round 4 — mandatory OAuth (Codex/oauth, Hermes/via-codex-oauth,
       // Claude Code/oauth) is the SOLE auth path for its agent. If the
       // user just presses [Enter] expecting setup to finish, we still
@@ -2176,16 +2221,18 @@ export function SetupWizard({
       // (mandatory + optional like `hermes model`); [q] is the only
       // skip path.
       if (key.return) {
-        if (mandatoryOauthSteps.length > 0) {
-          services.requestOauthRun?.(
-            mandatoryOauthSteps.map((s) => ({
-              agentId: s.agentId,
-              command: s.command,
-              verify: s.verify,
-              mandatory: s.mandatory,
-              reason: s.reason,
-            })),
-          );
+        const mandatorySteps: WizardOauthRunStep[] = [
+          ...mandatoryOauthSteps.map((s) => ({
+            agentId: s.agentId,
+            command: s.command,
+            verify: s.verify,
+            mandatory: s.mandatory,
+            reason: s.reason,
+          })),
+          ...foremanLlmOauthSteps,
+        ];
+        if (mandatorySteps.length > 0) {
+          services.requestOauthRun?.(mandatorySteps);
         }
         exit();
         return;
@@ -2207,14 +2254,20 @@ export function SetupWizard({
       // the outer CLI which runs them with inherited stdio so the
       // browser-OAuth flow actually works. Exit cleanly afterwards;
       // re-running `foreman doctor` confirms the final state.
-      if (input === "y" && allOauthSteps.length > 0) {
-        const steps: WizardOauthRunStep[] = allOauthSteps.map((s) => ({
-          agentId: s.agentId,
-          command: s.command,
-          verify: s.verify,
-          mandatory: s.mandatory,
-          reason: s.reason,
-        }));
+      if (
+        input === "y" &&
+        (allOauthSteps.length > 0 || foremanLlmOauthSteps.length > 0)
+      ) {
+        const steps: WizardOauthRunStep[] = [
+          ...allOauthSteps.map((s) => ({
+            agentId: s.agentId,
+            command: s.command,
+            verify: s.verify,
+            mandatory: s.mandatory,
+            reason: s.reason,
+          })),
+          ...foremanLlmOauthSteps,
+        ];
         services.requestOauthRun?.(steps);
         exit();
         return;
@@ -2443,6 +2496,73 @@ export function SetupWizard({
       setProvidersPhase("summary");
       return <Text>…</Text>;
     }
+    // Faz 4b-3 — for OAuth-capable providers (anthropic, openai), offer
+    // subscription sign-in ahead of the key paste. Asked once per provider
+    // per wizard run (`authModeAsked` debounces); on Y we mark the provider
+    // for OAuth + skip the key prompt, on N we fall through to the normal
+    // PasswordInput render below.
+    if (
+      prompt.kind === "key" &&
+      isOAuthCapableProvider(prompt.providerId) &&
+      !authModeAsked.includes(prompt.providerId)
+    ) {
+      const providerLabel = provider.name;
+      const subscriptionLabel =
+        prompt.providerId === "anthropic" ? "Claude" : "ChatGPT";
+      const oauthProviderId = prompt.providerId;
+      return (
+        <Box flexDirection="column" gap={1} paddingY={1}>
+          <WizardProgress
+            current={1}
+            total={4}
+            label="LLM Providers"
+            phase={`auth mode ${theme.symbols.bullet} ${providerLabel}`}
+          />
+          <Text>
+            {theme.symbols.bullet} How do you want to authenticate to{" "}
+            <Text bold color={theme.accent.primary}>
+              {providerLabel}
+            </Text>
+            ?
+          </Text>
+          <Text color={theme.fg.muted}>
+            If you have a {subscriptionLabel} subscription, signing in skips
+            the API-key paste — Foreman draws from your plan's rate limits,
+            no separate API budget needed.
+          </Text>
+          <Text>
+            Sign in with your {subscriptionLabel} subscription instead of
+            pasting a key? (y/n)
+          </Text>
+          <ConfirmInput
+            onConfirm={() => {
+              setProvidersSignedIn((prev) =>
+                prev.includes(oauthProviderId) ? prev : [...prev, oauthProviderId],
+              );
+              setAuthModeAsked((prev) =>
+                prev.includes(oauthProviderId) ? prev : [...prev, oauthProviderId],
+              );
+              // Skip the key prompt for this provider; advance.
+              if (providerIdx + 1 >= providerPrompts.length) {
+                setProvidersPhase("summary");
+              } else {
+                setProviderIdx(providerIdx + 1);
+              }
+            }}
+            onCancel={() => {
+              // Falls through to PasswordInput on next render.
+              setAuthModeAsked((prev) =>
+                prev.includes(oauthProviderId) ? prev : [...prev, oauthProviderId],
+              );
+            }}
+          />
+          <Text color={theme.fg.muted}>
+            [y] sign in via `foreman llm login` after wizard
+            {" · "}[n] paste an API key now
+          </Text>
+        </Box>
+      );
+    }
     const storageName = storageNameForPrompt(prompt, provider);
     const isEndpoint = prompt.kind === "endpoint";
     const progress = `(${providerIdx + 1}/${providerPrompts.length})`;
@@ -2573,6 +2693,18 @@ export function SetupWizard({
             Providers page)
           </Text>
         )}
+        {providersSignedIn.length > 0 && (
+          <Box flexDirection="column">
+            <Text color={theme.accent.primary}>
+              ⚿ Will sign in via subscription (post-wizard):
+            </Text>
+            {providersSignedIn.map((id) => (
+              <Text key={`signin:${id}`} color={theme.fg.muted}>
+                {"  "}• {id} — runs `foreman llm login {id}`
+              </Text>
+            ))}
+          </Box>
+        )}
         {skippedCount > 0 && (
           <Box flexDirection="column">
             <Text color={theme.accent.warning}>
@@ -2588,11 +2720,21 @@ export function SetupWizard({
         <Text>Continue to agents? (y/n)</Text>
         <ConfirmInput
           onConfirm={() => {
-            persistLlmConfigFromWizardState(services, providerCatalog, providersSaved);
+            persistLlmConfigFromWizardState(
+              services,
+              providerCatalog,
+              providersSaved,
+              providersSignedIn,
+            );
             advance("providers");
           }}
           onCancel={() => {
-            persistLlmConfigFromWizardState(services, providerCatalog, providersSaved);
+            persistLlmConfigFromWizardState(
+              services,
+              providerCatalog,
+              providersSaved,
+              providersSignedIn,
+            );
             advance("providers");
           }}
         />
@@ -4443,20 +4585,49 @@ export function SetupWizard({
             ))}
         </Box>
       )}
+      {providersSignedIn.length > 0 && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold color={theme.accent.warning}>
+            ⚿ Foreman LLM sign-in — opens your browser
+          </Text>
+          {providersSignedIn.map((pid) => (
+            <Box
+              key={`foreman-llm-signin:${pid}`}
+              flexDirection="column"
+              marginLeft={2}
+            >
+              <Text color={theme.accent.warning}>
+                ▸ foreman llm login {pid}
+              </Text>
+              <Text color={theme.fg.muted}>
+                {"  "}sign in to {pid} with your subscription
+              </Text>
+            </Box>
+          ))}
+        </Box>
+      )}
       <Box flexDirection="column" marginTop={1}>
         <Text bold>What next?</Text>
-        {requiredSetupResolution.oauthSteps.filter((o) => o.mandatory)
-          .length > 0 ? (
-          <Text color={theme.accent.warning}>
-            {"  "}[Enter] Run mandatory OAuth ({requiredSetupResolution.oauthSteps.filter((o) => o.mandatory).length} step
-            {requiredSetupResolution.oauthSteps.filter((o) => o.mandatory).length === 1 ? "" : "s"}) + exit
-          </Text>
-        ) : (
-          <Text color={theme.fg.muted}>
-            {"  "}[Enter] Launch Foreman TUI
-          </Text>
-        )}
-        {requiredSetupResolution.oauthSteps.length > 0 ? (
+        {(() => {
+          const mandatoryCount =
+            requiredSetupResolution.oauthSteps.filter((o) => o.mandatory).length +
+            providersSignedIn.length;
+          if (mandatoryCount > 0) {
+            return (
+              <Text color={theme.accent.warning}>
+                {"  "}[Enter] Run mandatory OAuth ({mandatoryCount} step
+                {mandatoryCount === 1 ? "" : "s"}) + exit
+              </Text>
+            );
+          }
+          return (
+            <Text color={theme.fg.muted}>
+              {"  "}[Enter] Launch Foreman TUI
+            </Text>
+          );
+        })()}
+        {requiredSetupResolution.oauthSteps.length > 0 ||
+        providersSignedIn.length > 0 ? (
           <Text color={theme.fg.muted}>
             {"  "}[y]     Run ALL OAuth steps now (incl. optional)
           </Text>
