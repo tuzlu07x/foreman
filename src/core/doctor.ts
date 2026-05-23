@@ -12,6 +12,8 @@ import { legacyHasInterestingFiles } from "../utils/migrate-config.js";
 import { EventBus, type ForemanEventMap } from "./event-bus.js";
 import { getBudgetStatus } from "./llm/budget.js";
 import { loadLlmConfig } from "./llm/config.js";
+import { isOAuthProviderId } from "./llm/oauth/oauth-providers.js";
+import { loadOAuthTokens } from "./llm/oauth/token-store.js";
 import {
   loadActiveProviders,
   loadActiveRegistry,
@@ -429,9 +431,19 @@ export function checkLlmCredentials(): CheckResult {
       message: "LLM global switch is off — credentials not required",
     };
   }
-  const providerCred = (config.credentials as Record<string, { secret_name?: string | null } | undefined>)[
-    config.provider
-  ];
+
+  // OAuth path (Faz 2 / #505 onwards) — check token presence in the encrypted
+  // store instead of an API-key secret slot. Branch up front so the api-key
+  // checks below stay focused.
+  const providerCred = (
+    config.credentials as Record<
+      string,
+      { auth_mode?: "api_key" | "oauth"; secret_name?: string | null } | undefined
+    >
+  )[config.provider];
+  if (providerCred?.auth_mode === "oauth") {
+    return checkOAuthCredentials(config.provider);
+  }
   const secretName = providerCred?.secret_name ?? null;
   if (!secretName) {
     return {
@@ -485,6 +497,50 @@ export function checkLlmCredentials(): CheckResult {
       name: "llm_credentials",
       status: "warn",
       message: `couldn't check secret store: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/** OAuth credential check — when the active provider has `auth_mode: oauth`,
+ *  verify a token bundle is in the encrypted store. Mirrors the api-key
+ *  check's "tell the user clearly what's missing" contract: the user has
+ *  opted in to OAuth in llm.yaml, so a missing token is a `warn`, not silent
+ *  fallback to whatever the factory would error with on the first call. */
+function checkOAuthCredentials(providerId: string): CheckResult {
+  if (!isOAuthProviderId(providerId)) {
+    // Gemini etc. don't have a subscription OAuth flow; the factory silently
+    // ignores `auth_mode: oauth` and uses the api-key path. Flag it here so
+    // the user notices the config is doing nothing.
+    return {
+      name: "llm_credentials",
+      status: "warn",
+      message: `provider '${providerId}' has auth_mode: oauth but Foreman only supports OAuth for anthropic + openai — the setting is being ignored`,
+      remediation: `Set credentials.${providerId}.auth_mode: api_key in llm.yaml (or switch provider to anthropic / openai).`,
+    };
+  }
+  try {
+    const db = getDb();
+    const store = new SecretStore(db, loadOrCreateSecretsMasterKey());
+    const tokens = loadOAuthTokens(store, providerId);
+    if (!tokens) {
+      return {
+        name: "llm_credentials",
+        status: "warn",
+        message: `${providerId} is configured for OAuth but no tokens are stored`,
+        remediation: `Run \`foreman llm login ${providerId}\`.`,
+      };
+    }
+    const accountNote = tokens.accountId ? ` (account ${tokens.accountId})` : "";
+    return {
+      name: "llm_credentials",
+      status: "ok",
+      message: `${providerId} OAuth tokens present${accountNote} — lazy refresh on next call`,
+    };
+  } catch (err) {
+    return {
+      name: "llm_credentials",
+      status: "warn",
+      message: `couldn't check OAuth token store: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }

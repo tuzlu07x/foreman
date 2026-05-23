@@ -155,17 +155,20 @@ describe('performOAuthLogin', () => {
     rmSync(tmpDir, { recursive: true, force: true })
   })
 
-  function fakeDeps(tokens: OAuthTokens): LoginDeps & {
-    runLoginCalls: number
-    lastLoginIO: Parameters<LoginDeps['runLogin']>[1] | null
-  } {
-    const state = { runLoginCalls: 0, lastLoginIO: null as never }
-    return {
+  type LoginIO = Parameters<LoginDeps['runLogin']>[1]
+  type FakeDeps = LoginDeps & {
+    readonly runLoginCalls: number
+    readonly lastLoginIO: LoginIO | null
+  }
+  function fakeDeps(tokens: OAuthTokens): FakeDeps {
+    const state: { runLoginCalls: number; lastLoginIO: LoginIO | null } = {
       runLoginCalls: 0,
       lastLoginIO: null,
+    }
+    return {
       runLogin: async (_provider, io) => {
         state.runLoginCalls++
-        state.lastLoginIO = io as never
+        state.lastLoginIO = io
         return tokens
       },
       openInBrowser: vi.fn(),
@@ -176,7 +179,7 @@ describe('performOAuthLogin', () => {
       get lastLoginIO() {
         return state.lastLoginIO
       },
-    } as never
+    }
   }
 
   it('persists tokens + flips auth_mode to oauth in llm.yaml (Codex)', async () => {
@@ -217,7 +220,7 @@ describe('performOAuthLogin', () => {
       store,
       deps,
     )
-    const io = (deps as never as { lastLoginIO: { useLoopback?: boolean; readPastedCode?: unknown } }).lastLoginIO
+    const io = deps.lastLoginIO!
     expect(io.useLoopback).toBe(true)
     expect(io.readPastedCode).toBeUndefined()
   })
@@ -235,7 +238,7 @@ describe('performOAuthLogin', () => {
       store,
       deps,
     )
-    const io = (deps as never as { lastLoginIO: { useLoopback?: boolean; readPastedCode?: unknown } }).lastLoginIO
+    const io = deps.lastLoginIO!
     expect(io.useLoopback).toBe(false)
     expect(typeof io.readPastedCode).toBe('function')
   })
