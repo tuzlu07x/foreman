@@ -11,6 +11,10 @@ import {
   RegistryService,
   type RegisteredAgent,
 } from "../core/registry.js";
+import {
+  installPreToolUseHook,
+  uninstallPreToolUseHook,
+} from "../core/agent-hook.js";
 import { buildMcpSnippet } from "../core/agent-mcp-snippet.js";
 import {
   checkAgentUpdates,
@@ -574,6 +578,167 @@ agentsCommand
     console.log(
       `  ${dim("revoke")}    \`foreman agent untrust ${agentId}\``,
     );
+    closeDb();
+  });
+
+// ============================================================================
+// hook install / hook uninstall — #517 Faz 4
+// ============================================================================
+//
+// Wires the agent's settings file to spawn `foreman hook <agentId>` before
+// every matching tool call. Once installed, a denied or risk-flagged call
+// → Foreman approval pipeline → Telegram inline keyboard → user taps
+// Allow / Deny → exit 0 / 2 → call proceeds or aborts. Claude Code only
+// for now; Codex/OpenClaw don't expose an equivalent pre-call hook.
+
+const hookSub = agentsCommand
+  .command("hook")
+  .description(
+    "Install / uninstall Foreman's PreToolUse hook in the agent's settings " +
+      "(#517 Faz 4 — claude-code only).",
+  );
+
+hookSub
+  .command("install <agentId>")
+  .description(
+    "Add a PreToolUse hook to the agent's settings that pipes risky tool " +
+      "calls through Foreman's approval flow (Telegram inline keyboards).",
+  )
+  .option(
+    "--matcher <regex>",
+    "Tool name regex Claude Code matches before invoking the hook",
+    "Bash|Write|Edit|WebFetch",
+  )
+  .option(
+    "--command <cmd>",
+    "Override the hook command (default: `foreman hook <agentId>`)",
+  )
+  .option("--dry-run", "Show what would change without writing", false)
+  .action(
+    (
+      agentId: string,
+      opts: { matcher: string; command?: string; dryRun: boolean },
+    ) => {
+      if (agentId !== "claude-code") {
+        console.error(
+          red("error: ") +
+            `Hook install is claude-code only in Faz 4. Other agents either ` +
+            `don't expose a pre-call hook (Codex, OpenClaw) or land in a ` +
+            `follow-up — see #517 for the roadmap.`,
+        );
+        closeDb();
+        process.exit(2);
+      }
+      const catalogEntry = safeFindAgent(loadActiveRegistry().doc, agentId);
+      if (!catalogEntry) {
+        console.error(
+          red("error: ") +
+            `Unknown agent '${agentId}'. Run \`foreman agent list\`.`,
+        );
+        closeDb();
+        process.exit(1);
+      }
+      const configPaths = catalogEntry.config_paths ?? [];
+      if (configPaths.length === 0) {
+        console.error(
+          red("error: ") +
+            `Agent '${agentId}' has no config_paths in the registry.`,
+        );
+        closeDb();
+        process.exit(1);
+      }
+      const settingsPath = resolveAgentSettingsPath(configPaths);
+      const hookCmd =
+        opts.command && opts.command.trim().length > 0
+          ? opts.command
+          : `foreman hook ${agentId}`;
+      let result;
+      try {
+        result = installPreToolUseHook({
+          settingsPath,
+          hookCommand: hookCmd,
+          matcher: opts.matcher,
+          dryRun: opts.dryRun,
+        });
+      } catch (err) {
+        console.error(
+          red("error: ") + (err instanceof Error ? err.message : String(err)),
+        );
+        closeDb();
+        process.exit(1);
+      }
+      const verb = opts.dryRun ? "Would install" : "Installed";
+      if (result.alreadyInstalled) {
+        console.log(
+          `${green("✓")} hook already installed for ${bold(agentId)}`,
+        );
+        console.log(`  ${dim("settings")}  ${result.settingsPath}`);
+      } else {
+        console.log(
+          `${green("✓")} ${verb} PreToolUse hook for ${bold(agentId)}` +
+            (opts.dryRun ? dim(" (dry-run)") : ""),
+        );
+        console.log(`  ${dim("settings")}  ${result.settingsPath}`);
+        console.log(`  ${dim("matcher")}   ${result.matcher}`);
+        console.log(`  ${dim("command")}   ${hookCmd}`);
+        console.log(
+          `  ${dim("revoke")}    \`foreman agent hook uninstall ${agentId}\``,
+        );
+      }
+      closeDb();
+    },
+  );
+
+hookSub
+  .command("uninstall <agentId>")
+  .description(
+    "Remove Foreman's PreToolUse hook from the agent's settings. " +
+      "User-added hook entries are left alone.",
+  )
+  .option("--dry-run", "Show what would change without writing", false)
+  .action((agentId: string, opts: { dryRun: boolean }) => {
+    const catalogEntry = safeFindAgent(loadActiveRegistry().doc, agentId);
+    if (!catalogEntry) {
+      console.error(
+        red("error: ") +
+          `Unknown agent '${agentId}'. Run \`foreman agent list\`.`,
+      );
+      closeDb();
+      process.exit(1);
+    }
+    const configPaths = catalogEntry.config_paths ?? [];
+    if (configPaths.length === 0) {
+      console.error(
+        red("error: ") +
+          `Agent '${agentId}' has no config_paths in the registry.`,
+      );
+      closeDb();
+      process.exit(1);
+    }
+    const settingsPath = resolveAgentSettingsPath(configPaths);
+    let result;
+    try {
+      result = uninstallPreToolUseHook(settingsPath, { dryRun: opts.dryRun });
+    } catch (err) {
+      console.error(
+        red("error: ") + (err instanceof Error ? err.message : String(err)),
+      );
+      closeDb();
+      process.exit(1);
+    }
+    if (!result.removed) {
+      console.log(
+        `${dim("·")} no Foreman-managed PreToolUse hook found for ${bold(
+          agentId,
+        )} — nothing to do.`,
+      );
+    } else {
+      console.log(
+        `${green("✓")} Removed Foreman PreToolUse hook for ${bold(agentId)}` +
+          (opts.dryRun ? dim(" (dry-run)") : ""),
+      );
+      console.log(`  ${dim("settings")}  ${result.settingsPath}`);
+    }
     closeDb();
   });
 
