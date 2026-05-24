@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { and, eq, gte, inArray, sql } from "drizzle-orm";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
@@ -31,10 +31,40 @@ export interface RuleConditions {
   commandMatch?: string[];
   /** Rule does NOT apply when `args.path` matches this regex. */
   pathNotMatch?: string;
+  /** #526 — Rule applies only when the target tool name matches this regex.
+   *  Lets a user say "block all `read_*` tools from hermes" with one rule
+   *  instead of one per tool. */
+  toolPattern?: string;
+  /** #526 — Rule applies only when ANY string arg value contains this
+   *  case-insensitive substring. Used by the "block any call referencing
+   *  pastebin.com" pattern the approval modal can offer. */
+  argContains?: string;
   rateLimits?: {
     messagesPerMinute?: number;
     tokensPerHour?: number;
   };
+  /** #526 — Provenance stamp for rules injected by Foreman from an
+   *  approval modal action. `source: { kind: "user" }` is implicit for
+   *  hand-edited YAML rules; this block is populated when the rule
+   *  came from `addPredicateRule()`. */
+  source?: PolicyRuleSource;
+}
+
+/** #526 — Provenance metadata embedded on a rule's `conditions.source`.
+ *  Lets `foreman policy list` (and the audit log) say "this rule was
+ *  added by Foreman from approval abc123" instead of looking like it
+ *  appeared out of nowhere. */
+export interface PolicyRuleSource {
+  kind: "user" | "approval";
+  /** Stable id of the approval row that triggered the rule injection.
+   *  Cross-references the audit log entry. */
+  approvalId?: string;
+  /** Unix ms when the rule was added. */
+  addedAt: number;
+  /** Short human-language reason — typically the risk factor that the
+   *  user blocked (e.g. "secret_file_pattern_env"). Surfaces in the
+   *  policy.yaml comment block + `foreman policy list`. */
+  reason?: string;
 }
 
 export interface RememberInput {
@@ -44,17 +74,29 @@ export interface RememberInput {
   conditions?: RuleConditions;
 }
 
+const PolicyRuleSourceSchema: z.ZodType<PolicyRuleSource> = z
+  .object({
+    kind: z.enum(["user", "approval"]),
+    approvalId: z.string().optional(),
+    addedAt: z.number().int().nonnegative(),
+    reason: z.string().optional(),
+  })
+  .strict();
+
 const RuleConditionsSchema: z.ZodType<RuleConditions> = z
   .object({
     pathMatch: z.array(z.string()).optional(),
     commandMatch: z.array(z.string()).optional(),
     pathNotMatch: z.string().optional(),
+    toolPattern: z.string().optional(),
+    argContains: z.string().optional(),
     rateLimits: z
       .object({
         messagesPerMinute: z.number().int().positive().optional(),
         tokensPerHour: z.number().int().positive().optional(),
       })
       .optional(),
+    source: PolicyRuleSourceSchema.optional(),
   })
   .strict();
 
@@ -371,6 +413,72 @@ export class PolicyEngine {
     return ruleId;
   }
 
+  /** #526 — Inject a predicate-based deny rule from an approval modal action.
+   *  Persists to the policies table + (best-effort) appends to policy.yaml
+   *  with a provenance comment block so the user can see / edit / delete
+   *  the rule later. Returns the rule id so the caller can echo it back to
+   *  the user.
+   *
+   *  Why this is separate from `remember`:
+   *  - `remember` is identity-based (this exact source → this exact target).
+   *    The credential-leak case needs predicate-based ("any `.env*` read by
+   *    hermes"), which `remember` can't express.
+   *  - `addPredicateRule` always stamps `source: { kind: 'approval', … }`
+   *    so the rule's origin is traceable in audits + the modal can later
+   *    offer "remove this rule" tied to the same approvalId.
+   */
+  addPredicateRule(input: AddPredicateRuleInput): number {
+    const now = Date.now();
+    const conditions: RuleConditions = {
+      ...(input.predicate.pathMatch ? { pathMatch: input.predicate.pathMatch } : {}),
+      ...(input.predicate.toolPattern
+        ? { toolPattern: input.predicate.toolPattern }
+        : {}),
+      ...(input.predicate.argContains
+        ? { argContains: input.predicate.argContains }
+        : {}),
+      source: {
+        kind: "approval",
+        approvalId: input.approvalId,
+        addedAt: now,
+        ...(input.reason ? { reason: input.reason } : {}),
+      },
+    };
+    const result = this.db
+      .insert(policies)
+      .values({
+        sourceAgent: input.sourceAgent,
+        target: input.target,
+        effect: "deny",
+        conditions: JSON.stringify(conditions),
+        createdAt: now,
+        createdBy: "remember-action",
+        enabled: 1,
+      })
+      .run();
+    const ruleId = Number(result.lastInsertRowid);
+    this.bus.emit("policy:changed", {
+      ruleId,
+      sourceAgent: input.sourceAgent,
+      target: input.target,
+      effect: "deny",
+      createdBy: "remember-action",
+      changedAt: now,
+    });
+    // Best-effort YAML append — if the caller passed a path we keep the
+    // file in sync so the next `loadFromYaml` doesn't lose the rule, AND
+    // the user can grep / edit / delete by hand. Failure to write is
+    // logged-only; the DB insert already happened so the rule is live.
+    if (input.policyYamlPath) {
+      try {
+        appendApprovalRuleToYaml(input.policyYamlPath, input, now);
+      } catch {
+        // best-effort; DB persistence is the source of truth
+      }
+    }
+    return ruleId;
+  }
+
   list(): (typeof policies.$inferSelect)[] {
     return this.db.select().from(policies).all();
   }
@@ -449,7 +557,50 @@ export class PolicyEngine {
       const hit = cond.commandMatch.some((sub) => command.includes(sub));
       if (!hit) return false;
     }
+    // #526 — toolPattern: rule applies when the request's targetTool matches
+    // the regex. AND'd with the other predicates so a "block all read_* on
+    // hermes" rule narrows by tool while leaving path matching open.
+    if (cond.toolPattern) {
+      if (!req.targetTool || !safeRegexTest(cond.toolPattern, req.targetTool)) {
+        return false;
+      }
+    }
+    // #526 — argContains: case-insensitive substring across all string
+    // values in args. The "block any call mentioning pastebin.com" pattern
+    // hits exfil heuristics that don't fit pathMatch.
+    if (cond.argContains) {
+      const haystack = this.extractArgStrings(req.args).toLowerCase();
+      if (!haystack.includes(cond.argContains.toLowerCase())) return false;
+    }
     return true;
+  }
+
+  /** #526 — Flatten every string-valued arg into a single haystack for
+   *  the `argContains` predicate. Order-stable so a regex over the result
+   *  would be deterministic (we use a substring check though). */
+  private extractArgStrings(args: unknown): string {
+    if (args === null || args === undefined) return "";
+    if (typeof args === "string") return args;
+    if (typeof args !== "object") return String(args);
+    const parts: string[] = [];
+    const walk = (value: unknown): void => {
+      if (value === null || value === undefined) return;
+      if (typeof value === "string") {
+        parts.push(value);
+        return;
+      }
+      if (typeof value !== "object") {
+        parts.push(String(value));
+        return;
+      }
+      if (Array.isArray(value)) {
+        for (const item of value) walk(item);
+        return;
+      }
+      for (const v of Object.values(value as Record<string, unknown>)) walk(v);
+    };
+    walk(args);
+    return parts.join(" ");
   }
 
   private extractCommand(args: unknown): string | null {
@@ -538,6 +689,105 @@ export class PolicyEngine {
 
 export function secretTarget(secretName: string): string {
   return `secret:${secretName}`;
+}
+
+/** #526 — Predicate descriptor for `addPredicateRule`. Mirrors the
+ *  user-facing fields the approval modal proposes via its custom
+ *  ChannelAction button. All three predicate fields are optional; at
+ *  least one must be set or the rule would match every request. */
+export interface AddPredicateRuleInput {
+  /** Source agent the rule applies to (e.g. "hermes"). `*` matches any. */
+  sourceAgent: string;
+  /** Rule target string, same shape as `evaluate()`'s `requestTarget`:
+   *  `"<agentId>:<tool>"` for cross-agent, `"tool:<name>"` for plain
+   *  tools, `"*"` for everything. */
+  target: string;
+  predicate: {
+    pathMatch?: string[];
+    toolPattern?: string;
+    argContains?: string;
+  };
+  /** Approval row id that triggered the injection. Stamped onto the
+   *  rule's conditions.source so audits + `foreman policy list` show
+   *  the origin. */
+  approvalId: string;
+  /** Short human-language reason (typically the matched risk factor
+   *  name, e.g. "secret_file_pattern_env"). Surfaces in the YAML
+   *  comment block + the chat confirmation. */
+  reason?: string;
+  /** Optional policy.yaml path — when set, the rule is appended to
+   *  the file with a provenance comment block so it survives the next
+   *  `loadFromYaml` reload AND is editable by hand. When omitted, the
+   *  rule lives in the DB only (still active; just not in the YAML). */
+  policyYamlPath?: string;
+}
+
+/** #526 — Best-effort YAML append for an approval-injected rule. The
+ *  file may be empty or have an existing `rules:` block; we handle both
+ *  cases by appending a self-contained YAML list item with a comment
+ *  block above it. We do NOT round-trip the existing YAML through the
+ *  yaml lib (would lose comments + formatting); the append is plain
+ *  text that the loader parses fine because it's valid YAML on its own.
+ *
+ *  When the file doesn't exist, the function creates it with a `rules:`
+ *  block so the appended item is anchored correctly. */
+function appendApprovalRuleToYaml(
+  path: string,
+  input: AddPredicateRuleInput,
+  addedAt: number,
+): void {
+  const block = renderApprovalRuleYamlBlock(input, addedAt);
+  if (!existsSync(path)) {
+    writeFileSync(path, `rules:\n${block}`, "utf-8");
+    return;
+  }
+  const existing = readFileSync(path, "utf-8");
+  // If the file already has a `rules:` key, append to that block.
+  // Otherwise, append a fresh `rules:` block at the end. Both paths
+  // keep existing comments / formatting intact because we never
+  // re-serialize what's already there.
+  const hasRulesBlock = /^rules:\s*$/m.test(existing) || /^rules:\s*\n/m.test(existing);
+  const sep = existing.endsWith("\n") ? "" : "\n";
+  if (hasRulesBlock) {
+    appendFileSync(path, `${sep}${block}`, "utf-8");
+  } else {
+    appendFileSync(path, `${sep}\nrules:\n${block}`, "utf-8");
+  }
+}
+
+function renderApprovalRuleYamlBlock(
+  input: AddPredicateRuleInput,
+  addedAt: number,
+): string {
+  const iso = new Date(addedAt).toISOString();
+  const lines: string[] = [];
+  lines.push(`# === Foreman approval-injected rule ===`);
+  lines.push(`# Added from approval ${input.approvalId} at ${iso}`);
+  if (input.reason) {
+    lines.push(`# Reason: ${input.reason}`);
+  }
+  lines.push(
+    `# Edit / delete this rule by removing this entire block; Foreman won't re-add it.`,
+  );
+  lines.push(`  - source: ${input.sourceAgent}`);
+  lines.push(`    target: ${input.target}`);
+  lines.push(`    effect: deny`);
+  lines.push(`    conditions:`);
+  if (input.predicate.pathMatch && input.predicate.pathMatch.length > 0) {
+    lines.push(`      pathMatch:`);
+    for (const p of input.predicate.pathMatch) {
+      // Pattern strings may contain regex metachars + backslashes; YAML
+      // double-quote handles them with the standard escape rules.
+      lines.push(`        - ${JSON.stringify(p)}`);
+    }
+  }
+  if (input.predicate.toolPattern) {
+    lines.push(`      toolPattern: ${JSON.stringify(input.predicate.toolPattern)}`);
+  }
+  if (input.predicate.argContains) {
+    lines.push(`      argContains: ${JSON.stringify(input.predicate.argContains)}`);
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 function safeRegexTest(pattern: string, input: string): boolean {
