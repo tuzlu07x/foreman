@@ -357,3 +357,62 @@ function formatTokenCount(n: number): string {
   // machine to make snapshot diffs meaningful).
   return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 }
+
+// =============================================================================
+// Session resolution prompt (#527)
+// =============================================================================
+//
+// When the loop detector halts a session, the bridge ships an interactive
+// prompt with option buttons: "Skip / Let PM decide / I'll decide /
+// Abandon". This renderer turns the `session:resolution-needed` event
+// into a Notification with `intent: 'custom'` ChannelActions whose
+// payloads encode the user's pick. The agent SOUL's callback_query
+// handler relays the tap through the `submit_resolution` MCP tool.
+
+export function renderSessionResolutionPrompt(
+  e: ForemanEventMap['session:resolution-needed'],
+): Omit<Notification, 'id'> {
+  const idShort = e.sessionId.slice(0, 6)
+  const lines: string[] = []
+  lines.push(`🛑 Session needs your call — ${idShort}`)
+  lines.push('')
+  lines.push(e.contextSummary)
+  lines.push('')
+  lines.push('Pick how to continue:')
+  for (const opt of e.options) {
+    lines.push(`  • ${opt.label}`)
+  }
+  if (e.deadlineMs > 0) {
+    lines.push('')
+    lines.push(
+      `⏱ Auto-abandon at ${new Date(e.deadlineMs).toISOString().slice(11, 19)} UTC — pick now to keep the session alive.`,
+    )
+  }
+
+  const actions: NotificationAction[] = e.options.map((opt) => ({
+    // Stable id used in the inline-keyboard callback_data
+    // (`fa:resolve_<optionId>:<sessionId>`). The session manager's
+    // provideResolution() uses the same id to look up the option +
+    // its payload.
+    id: `resolve_${opt.id}`,
+    label: opt.label,
+    intent: 'custom' as const,
+    payload: {
+      action: 'resolve-session',
+      sessionId: e.sessionId,
+      optionId: opt.id,
+    },
+    // Abandon button gets the danger colour; everything else stays
+    // neutral so the user reads the labels rather than the colour cue.
+    style: opt.id === 'opt-abandon' ? ('danger' as const) : ('neutral' as const),
+  }))
+
+  return {
+    level: 'critical',
+    requestId: null,
+    title: `🛑 ${idShort} needs your call`,
+    body: lines.join('\n'),
+    actions,
+    agentBlocking: false,
+  }
+}

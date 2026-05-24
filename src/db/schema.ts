@@ -118,6 +118,21 @@ export const sessions = sqliteTable("sessions", {
   status: text("status", { enum: ["active", "completed", "halted"] })
     .notNull()
     .default("active"),
+  // #527 — Interactive session resume. When a halt is resolvable (loop
+  // detection, eventually turn/token "bump budget"), Foreman asks the
+  // user for a resolution + records what was offered + chosen. NULL
+  // for halts without an interactive resume path.
+  resolutionStatus: text("resolution_status", {
+    enum: ["needed", "provided", "consumed", "expired"],
+  }),
+  /** JSON ResolutionOption[] — what the user saw on the chat buttons.
+   *  Persisted so the audit log replays the offer, not just the pick. */
+  resolutionOptions: text("resolution_options"),
+  /** JSON `{ optionId, payload, providedAt, providedBy }` once resolved.
+   *  NULL while still waiting / expired. */
+  resolutionPayload: text("resolution_payload"),
+  /** Auto-abandon deadline. Mirrors the approval deadline shape. */
+  resolutionDeadlineMs: integer("resolution_deadline_ms"),
 });
 
 export const auditEvents = sqliteTable("audit_events", {
