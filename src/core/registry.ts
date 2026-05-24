@@ -54,6 +54,14 @@ export interface RegisteredAgent {
    *  for individual shell calls. Foreman's MCP-level mediation
    *  remains the security boundary. */
   taskSkipPermissions: boolean;
+  /** Responsibility-based auto-routing — role bucket the agent
+   *  participates in within a flow. NULL = no flow participation
+   *  (agent stays in classic one-shot mode). */
+  role: string | null;
+  /** Raw JSON array of handoff rules; the FlowRouter parses this when
+   *  classifying an output to decide the next step. NULL = no rules,
+   *  output falls through to orchestrator summarization. */
+  handoffRules: string | null;
 }
 
 export interface RegisterResult {
@@ -368,6 +376,32 @@ export class RegistryService {
     });
   }
 
+  /** Auto-routing — set the agent's role bucket. Allowed values:
+   *  'coder' | 'reviewer' | 'orchestrator' | 'custom' | null (opt-out).
+   *  Throws AgentNotFoundError if the agent isn't registered. */
+  setRole(agentId: string, role: string | null): void {
+    const existing = this.get(agentId);
+    if (!existing) throw new AgentNotFoundError(agentId);
+    this.db
+      .update(agents)
+      .set({ role })
+      .where(eq(agents.id, agentId))
+      .run();
+  }
+
+  /** Auto-routing — replace the agent's handoff_rules JSON array.
+   *  Pass null to clear. Caller is responsible for shape validation
+   *  (the FlowRouter's parseHandoffRules filters malformed entries). */
+  setHandoffRules(agentId: string, rulesJson: string | null): void {
+    const existing = this.get(agentId);
+    if (!existing) throw new AgentNotFoundError(agentId);
+    this.db
+      .update(agents)
+      .set({ handoffRules: rulesJson })
+      .where(eq(agents.id, agentId))
+      .run();
+  }
+
   private requireAgent(agentId: string): RegisteredAgent {
     const agent = this.get(agentId);
     if (!agent) throw new AgentNotFoundError(agentId);
@@ -392,5 +426,7 @@ function toRegisteredAgent(row: typeof agents.$inferSelect): RegisteredAgent {
     modelVersion: row.modelVersion,
     responsibilityNote: row.responsibilityNote,
     taskSkipPermissions: row.taskSkipPermissions === 1,
+    role: row.role,
+    handoffRules: row.handoffRules,
   };
 }

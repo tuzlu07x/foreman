@@ -38,6 +38,18 @@ export const agents = sqliteTable("agents", {
   // 0 = honour the allowlist (default + safe); 1 = skip. Flipped via
   // `foreman agent trust <id>` / `foreman agent untrust <id>`.
   taskSkipPermissions: integer("task_skip_permissions").notNull().default(0),
+  // Responsibility-based auto-routing (docs/auto-routing-design.md).
+  // `role` buckets the agent into the routing pattern ('coder' |
+  // 'reviewer' | 'orchestrator' | 'custom'); NULL = no flow
+  // participation, agent behaves as before.
+  role: text("role"),
+  // JSON array of {when, toRole, template, intent} handoff rules. When
+  // this agent finishes a flow step, the router classifies the output
+  // and looks up the first rule whose `when` matches; the rule's
+  // `toRole` resolves to a peer agent (preferring same role) and the
+  // `template` becomes the next step's prompt. NULL = no rules → output
+  // flows to orchestrator for summarization.
+  handoffRules: text("handoff_rules"),
 });
 
 export const policies = sqliteTable(
@@ -395,6 +407,80 @@ export type ControlCommand = typeof controlCommands.$inferSelect;
 export type NewControlCommand = typeof controlCommands.$inferInsert;
 export type PendingQuestion = typeof pendingQuestions.$inferSelect;
 export type NewPendingQuestion = typeof pendingQuestions.$inferInsert;
+
+// =============================================================================
+// Responsibility-based auto-routing — flows + flow_steps
+// =============================================================================
+//
+// `flows` = one row per user-initiated multi-step goal (e.g. "implement
+// to-do-app issues #1-5 and review"). Lifecycle: 'active' → 'completed'
+// (success) | 'halted' (cycle ceiling, cost ceiling, manual stop).
+//
+// `flow_steps` = a directed tree of agent-to-agent handoffs within a
+// flow. Root step has source_agent=NULL + parent_step_id=NULL (user
+// kicked it off). Each subsequent step references its parent.
+// `directive_id` ties the step back to the control_commands row whose
+// drain triggered the spawn — gives the full audit trail.
+
+export const flows = sqliteTable(
+  "flows",
+  {
+    id: text("id").primaryKey(),
+    startedAt: integer("started_at").notNull(),
+    endedAt: integer("ended_at"),
+    status: text("status", {
+      enum: ["active", "completed", "halted"],
+    })
+      .notNull()
+      .default("active"),
+    initiator: text("initiator"),
+    goal: text("goal").notNull(),
+    currentHolder: text("current_holder"),
+    finalSummary: text("final_summary"),
+    costUsd: real("cost_usd").notNull().default(0),
+    maxSteps: integer("max_steps").notNull().default(10),
+    stepCount: integer("step_count").notNull().default(0),
+  },
+  (t) => ({
+    statusIdx: index("idx_flows_status").on(t.status),
+    startedAtIdx: index("idx_flows_started_at").on(t.startedAt),
+  }),
+);
+
+export const flowSteps = sqliteTable(
+  "flow_steps",
+  {
+    id: text("id").primaryKey(),
+    flowId: text("flow_id")
+      .notNull()
+      .references(() => flows.id),
+    parentStepId: text("parent_step_id"),
+    stepOrder: integer("step_order").notNull(),
+    sourceAgent: text("source_agent"),
+    targetAgent: text("target_agent").notNull(),
+    directiveId: integer("directive_id").references(() => controlCommands.id),
+    intent: text("intent").notNull(),
+    prompt: text("prompt").notNull(),
+    outputClassification: text("output_classification"),
+    outputSummary: text("output_summary"),
+    status: text("status", {
+      enum: ["pending", "running", "completed", "failed"],
+    })
+      .notNull()
+      .default("pending"),
+    startedAt: integer("started_at").notNull(),
+    completedAt: integer("completed_at"),
+  },
+  (t) => ({
+    flowIdx: index("idx_flow_steps_flow").on(t.flowId),
+    statusIdx: index("idx_flow_steps_status").on(t.status),
+  }),
+);
+
+export type Flow = typeof flows.$inferSelect;
+export type NewFlow = typeof flows.$inferInsert;
+export type FlowStep = typeof flowSteps.$inferSelect;
+export type NewFlowStep = typeof flowSteps.$inferInsert;
 
 // FTS5 virtual table and triggers live in a hand-written migration
 // (drizzle-kit cannot emit virtual tables). See:
