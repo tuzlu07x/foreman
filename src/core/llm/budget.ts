@@ -73,6 +73,15 @@ export interface UsageRow {
   requestId?: string
   durationMs: number
   cacheHit?: boolean
+  /** #530 — Session this call belongs to (if any). Surfaces in
+   *  `costBySession` rollup + the session:completed notification.
+   *  Undefined for ad-hoc calls (doctor probes, CLI one-shots). */
+  sessionId?: string
+  /** #530 — Project label. Auto-derived from cwd basename when callers
+   *  don't supply one (via `deriveProjectTag()`). Long-running coding
+   *  projects that span multiple sessions accumulate spend under the
+   *  same tag. */
+  projectTag?: string
 }
 
 export function recordUsage(db: ForemanDb, row: UsageRow): string {
@@ -90,9 +99,195 @@ export function recordUsage(db: ForemanDb, row: UsageRow): string {
       requestId: row.requestId ?? null,
       durationMs: row.durationMs,
       cacheHit: row.cacheHit ? 1 : 0,
+      sessionId: row.sessionId ?? null,
+      projectTag: row.projectTag ?? null,
     })
     .run()
   return id
+}
+
+// =============================================================================
+// #530 — Per-session + per-project rollup queries
+// =============================================================================
+//
+// The session:completed event (#523) ships costUsd:0 as a placeholder; the
+// wiring layer in foreman start calls `costBySession(sessionId).totalUsd`
+// when emitting the event so the notification template shows the real
+// number. The `foreman llm usage --by session|project` CLI uses the same
+// queries with grouping.
+
+export interface SessionCostSummary {
+  totalUsd: number
+  calls: number
+  firstAt: number | null
+  lastAt: number | null
+}
+
+export interface ProjectCostSummary {
+  totalUsd: number
+  calls: number
+  /** Distinct sessions tagged with this project — answers "how many
+   *  coding sessions did this project see". */
+  sessions: number
+  firstAt: number | null
+  lastAt: number | null
+}
+
+/** Cost summary for a single session. Returns zeros when the session id
+ *  isn't tagged on any row (legacy / ad-hoc call). */
+export function costBySession(
+  db: ForemanDb,
+  sessionId: string,
+): SessionCostSummary {
+  const row = db
+    .select({
+      total: sql<number>`coalesce(sum(${llmUsage.costUsd}), 0)`,
+      calls: sql<number>`count(*)`,
+      firstAt: sql<number | null>`min(${llmUsage.ts})`,
+      lastAt: sql<number | null>`max(${llmUsage.ts})`,
+    })
+    .from(llmUsage)
+    .where(eq(llmUsage.sessionId, sessionId))
+    .get()
+  return {
+    totalUsd: row?.total ?? 0,
+    calls: row?.calls ?? 0,
+    firstAt: row?.firstAt ?? null,
+    lastAt: row?.lastAt ?? null,
+  }
+}
+
+/** Cost summary for a project tag. Optional `since` clamps the window
+ *  ("how much did todo-app cost this month?"). */
+export function costByProject(
+  db: ForemanDb,
+  projectTag: string,
+  since?: Date | number,
+): ProjectCostSummary {
+  const sinceMs = since instanceof Date ? since.getTime() : since
+  const filters = [eq(llmUsage.projectTag, projectTag)]
+  if (typeof sinceMs === 'number') {
+    filters.push(gte(llmUsage.ts, sinceMs))
+  }
+  const row = db
+    .select({
+      total: sql<number>`coalesce(sum(${llmUsage.costUsd}), 0)`,
+      calls: sql<number>`count(*)`,
+      sessions: sql<number>`count(distinct ${llmUsage.sessionId})`,
+      firstAt: sql<number | null>`min(${llmUsage.ts})`,
+      lastAt: sql<number | null>`max(${llmUsage.ts})`,
+    })
+    .from(llmUsage)
+    .where(and(...filters))
+    .get()
+  return {
+    totalUsd: row?.total ?? 0,
+    calls: row?.calls ?? 0,
+    sessions: row?.sessions ?? 0,
+    firstAt: row?.firstAt ?? null,
+    lastAt: row?.lastAt ?? null,
+  }
+}
+
+export interface ProjectCostRow {
+  projectTag: string
+  totalUsd: number
+  calls: number
+  sessions: number
+  lastAt: number
+}
+
+/** List every project tag with its rollup. Sorted by spend descending so
+ *  the most expensive project sits at the top. Backs `foreman llm usage
+ *  --by project`. Skips the null-project bucket (untagged ad-hoc calls). */
+export function listProjectCosts(
+  db: ForemanDb,
+  since?: Date | number,
+): ProjectCostRow[] {
+  const sinceMs = since instanceof Date ? since.getTime() : since
+  const filters = [sql`${llmUsage.projectTag} is not null`]
+  if (typeof sinceMs === 'number') {
+    filters.push(gte(llmUsage.ts, sinceMs))
+  }
+  const rows = db
+    .select({
+      projectTag: llmUsage.projectTag,
+      total: sql<number>`coalesce(sum(${llmUsage.costUsd}), 0)`,
+      calls: sql<number>`count(*)`,
+      sessions: sql<number>`count(distinct ${llmUsage.sessionId})`,
+      lastAt: sql<number>`max(${llmUsage.ts})`,
+    })
+    .from(llmUsage)
+    .where(and(...filters))
+    .groupBy(llmUsage.projectTag)
+    .all()
+  return rows
+    .map((r) => ({
+      projectTag: r.projectTag ?? '(none)',
+      totalUsd: r.total ?? 0,
+      calls: r.calls ?? 0,
+      sessions: r.sessions ?? 0,
+      lastAt: r.lastAt ?? 0,
+    }))
+    .sort((a, b) => b.totalUsd - a.totalUsd)
+}
+
+export interface SessionCostRow {
+  sessionId: string
+  totalUsd: number
+  calls: number
+  lastAt: number
+}
+
+/** List every session tag with its rollup. Sorted by spend descending.
+ *  Backs `foreman llm usage --by session`. Skips the null-session bucket. */
+export function listSessionCosts(
+  db: ForemanDb,
+  since?: Date | number,
+): SessionCostRow[] {
+  const sinceMs = since instanceof Date ? since.getTime() : since
+  const filters = [sql`${llmUsage.sessionId} is not null`]
+  if (typeof sinceMs === 'number') {
+    filters.push(gte(llmUsage.ts, sinceMs))
+  }
+  const rows = db
+    .select({
+      sessionId: llmUsage.sessionId,
+      total: sql<number>`coalesce(sum(${llmUsage.costUsd}), 0)`,
+      calls: sql<number>`count(*)`,
+      lastAt: sql<number>`max(${llmUsage.ts})`,
+    })
+    .from(llmUsage)
+    .where(and(...filters))
+    .groupBy(llmUsage.sessionId)
+    .all()
+  return rows
+    .map((r) => ({
+      sessionId: r.sessionId ?? '(none)',
+      totalUsd: r.total ?? 0,
+      calls: r.calls ?? 0,
+      lastAt: r.lastAt ?? 0,
+    }))
+    .sort((a, b) => b.totalUsd - a.totalUsd)
+}
+
+/** Best-effort project-tag derivation from the current working
+ *  directory's basename. Falls back to undefined when cwd is the
+ *  filesystem root or some other shape we can't make sense of (CI
+ *  workspace paths, /tmp); the row records `project_tag: null` then
+ *  and the by-project queries skip it. */
+export function deriveProjectTag(cwd: string = process.cwd()): string | undefined {
+  if (!cwd || cwd === '/' || cwd === '.') return undefined
+  // Normalize trailing slashes + grab the basename.
+  const trimmed = cwd.replace(/[/\\]+$/, '')
+  const idx = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+  const basename = idx >= 0 ? trimmed.slice(idx + 1) : trimmed
+  if (!basename) return undefined
+  // Skip obvious tmp / cache / system roots so we don't end up with
+  // `project_tag: "tmp"` everywhere.
+  const ignored = new Set(['tmp', 'var', 'private', 'home', 'Users'])
+  if (ignored.has(basename)) return undefined
+  return basename
 }
 
 /**
@@ -244,6 +439,13 @@ export interface UsageQuery {
   since?: number
   /** Exact feature name match (verification / smart_report / test / ...). */
   feature?: string
+  /** #530 — Exact project tag match ("todo-app"). NULL-tagged rows
+   *  excluded. */
+  project?: string
+  /** #530 — Exact session id match (ULID). Used by the future
+   *  `foreman log` session-thread view + by integration tests
+   *  asserting that mediator/sessionManager calls tag correctly. */
+  sessionId?: string
   limit?: number
 }
 
@@ -254,6 +456,10 @@ export function queryUsage(
   const clauses = []
   if (q.since !== undefined) clauses.push(gte(llmUsage.ts, q.since))
   if (q.feature !== undefined) clauses.push(eq(llmUsage.feature, q.feature))
+  if (q.project !== undefined) clauses.push(eq(llmUsage.projectTag, q.project))
+  if (q.sessionId !== undefined) {
+    clauses.push(eq(llmUsage.sessionId, q.sessionId))
+  }
   const where = clauses.length === 0 ? undefined : and(...clauses)
   const query = db.select().from(llmUsage)
   const filtered = where ? query.where(where) : query

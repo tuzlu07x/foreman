@@ -118,9 +118,14 @@ export interface ForemanEventMap {
     reason?: string;
     turnCount: number;
     tokenCount: number;
-    /** Sum of `llm_usage.cost_usd` rows tagged with this session. Placeholder
-     *  `0` until #530 wires the per-session cost rollup column. */
+    /** #530 — Sum of `llm_usage.cost_usd` rows tagged with this session.
+     *  Populated by SessionManager when wired with a cost provider;
+     *  defaults to 0 in test paths that don't bother. */
     costUsd: number;
+    /** #530 — Project tag the session was started under (cwd basename
+     *  by default). Undefined when the session never declared one —
+     *  the lifecycle template just omits the "(todo-app)" suffix. */
+    projectTag?: string;
     durationMs: number;
     completedAt: number;
   };

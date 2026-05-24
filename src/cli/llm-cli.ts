@@ -25,6 +25,8 @@ import {
 import {
   featureSplit,
   getBudgetStatus,
+  listProjectCosts,
+  listSessionCosts,
   parseSince,
   queryUsage,
   recordUsage,
@@ -447,12 +449,20 @@ llmCommand
   .option('--limit <n>', 'How many rows to show', (v) => parseInt(v, 10), 30)
   .option('--since <Nd|Nh|Nm>', 'Only rows newer than this window (e.g. 24h, 7d)')
   .option('--feature <name>', 'Filter to a single feature (verification / smart_report / test)')
+  // #530 — Rollup flags: group spend by project tag or session id.
+  // `--by session` / `--by project` produce a summary table instead of
+  // the per-call itemisation; `--project <tag>` filters the itemised
+  // view to a single project ("how did todo-app spend its $1.18?").
+  .option('--by <session|project>', 'Group rows + sum cost by this dimension')
+  .option('--project <tag>', 'Filter rows to a single project tag (overrides --by project)')
   .option('--json', 'Output JSON instead of a table', false)
   .action(
     (options: {
       limit: number
       since?: string
       feature?: string
+      by?: string
+      project?: string
       json?: boolean
     }) => {
       requireInitialised()
@@ -470,10 +480,65 @@ llmCommand
           process.exit(1)
         }
       }
+
+      // #530 — Rollup mode: produce a project / session summary instead of
+      // the per-call itemisation. Filter by project takes precedence
+      // (drops into the itemisation with a project filter) so users get
+      // both the per-project total + the per-call breakdown in one
+      // invocation.
+      if (options.by && !options.project) {
+        const by = options.by.toLowerCase()
+        if (by !== 'session' && by !== 'project') {
+          console.error(
+            red('error: ') + `--by must be 'session' or 'project' (got '${options.by}')`,
+          )
+          closeDb()
+          process.exit(1)
+        }
+        const grouped =
+          by === 'project'
+            ? listProjectCosts(db, sinceTs)
+            : listSessionCosts(db, sinceTs)
+        if (options.json) {
+          process.stdout.write(JSON.stringify(grouped, null, 2) + '\n')
+          closeDb()
+          return
+        }
+        if (grouped.length === 0) {
+          console.log(dim(`(no matching ${by} rollups)`))
+          closeDb()
+          return
+        }
+        for (const r of grouped) {
+          const tag =
+            'projectTag' in r ? r.projectTag : r.sessionId.slice(0, 8)
+          const cost = r.totalUsd.toFixed(4)
+          const lastAt = r.lastAt
+            ? new Date(r.lastAt).toISOString().slice(0, 19).replace('T', ' ')
+            : '-'
+          const sessions =
+            'sessions' in r ? ` ${r.sessions} session${r.sessions === 1 ? '' : 's'}` : ''
+          console.log(
+            `${tag.padEnd(24)} \$${cost.padStart(10)} ${String(r.calls).padStart(4)} calls${sessions} ${dim(`(last ${lastAt})`)}`,
+          )
+        }
+        const total = grouped.reduce((s, r) => s + r.totalUsd, 0)
+        console.log(
+          dim(
+            `\nTotal: \$${total.toFixed(4)} across ${grouped.length} ${by}${grouped.length === 1 ? '' : 's'}`,
+          ),
+        )
+        closeDb()
+        return
+      }
+
       const rows = queryUsage(db, {
         limit: options.limit,
         since: sinceTs,
         feature: options.feature,
+        // #530 — project filter lands here so the itemised view stays
+        // bit-identical for callers that don't pass --project.
+        ...(options.project ? { project: options.project } : {}),
       })
       if (options.json) {
         process.stdout.write(JSON.stringify(rows, null, 2) + '\n')
@@ -491,16 +556,20 @@ llmCommand
         const req = r.requestId
           ? dim(` ${r.requestId.slice(0, 5)}…`)
           : ''
+        const tag = r.projectTag ? dim(` [${r.projectTag}]`) : ''
         console.log(
-          `${dim(ts)} ${r.provider.padEnd(9)} ${r.feature.padEnd(18)} ${r.model.padEnd(22)} in=${String(r.inputTokens).padStart(5)} out=${String(r.outputTokens).padStart(5)} \$${cost} ${dim(`${r.durationMs}ms`)}${r.cacheHit ? dim(' (cache)') : ''}${req}`,
+          `${dim(ts)} ${r.provider.padEnd(9)} ${r.feature.padEnd(18)} ${r.model.padEnd(22)} in=${String(r.inputTokens).padStart(5)} out=${String(r.outputTokens).padStart(5)} \$${cost} ${dim(`${r.durationMs}ms`)}${r.cacheHit ? dim(' (cache)') : ''}${req}${tag}`,
         )
       }
       const total = rows.reduce((s, r) => s + r.costUsd, 0)
       const cached = rows.filter((r) => r.cacheHit).length
       const label = options.since ? `${options.since} total` : `${rows.length}-row total`
+      const filterNote = options.project
+        ? ` for project '${options.project}'`
+        : ''
       console.log(
         dim(
-          `\n${label}: \$${total.toFixed(4)} across ${rows.length} call${rows.length === 1 ? '' : 's'} (${cached} cached)`,
+          `\n${label}${filterNote}: \$${total.toFixed(4)} across ${rows.length} call${rows.length === 1 ? '' : 's'} (${cached} cached)`,
         ),
       )
       closeDb()
