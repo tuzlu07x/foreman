@@ -355,4 +355,83 @@ agents:
       expect(result.decision).toBe("deny");
     });
   });
+
+  // #529 — Session enforcement limits surfaced through policy.yaml so
+  // operators can tune the halt cap + advisory threshold without code
+  // changes. The two consumers — SessionManager (hard halt) and the
+  // loop-detection rule (advisory factor) — read these per call so a
+  // YAML reload takes effect mid-session.
+  describe("session_limits (#529)", () => {
+    it("defaults to 100K token_limit + 80% warning_pct when policy.yaml omits the block", () => {
+      // Empty load (or no `session_limits:`) must produce the prior
+      // hardcoded behaviour so deployments without the new key keep
+      // working unchanged.
+      engine.loadYamlText("");
+      expect(engine.getSessionLimits()).toEqual({
+        tokenLimit: 100_000,
+        tokenBudgetWarningPct: 80,
+      });
+    });
+
+    it("honours both fields when policy.yaml supplies them", () => {
+      engine.loadYamlText(
+        "session_limits:\n  token_limit: 250000\n  token_budget_warning_pct: 60\n",
+      );
+      expect(engine.getSessionLimits()).toEqual({
+        tokenLimit: 250_000,
+        tokenBudgetWarningPct: 60,
+      });
+    });
+
+    it("fills in defaults field-by-field when only one is overridden", () => {
+      // Operator bumps only the hard cap; the advisory threshold should
+      // stay at 80% so the warning still fires before the halt.
+      engine.loadYamlText("session_limits:\n  token_limit: 50000\n");
+      expect(engine.getSessionLimits()).toEqual({
+        tokenLimit: 50_000,
+        tokenBudgetWarningPct: 80,
+      });
+    });
+
+    it("rejects non-positive token_limit at the schema layer", () => {
+      expect(() =>
+        engine.loadYamlText("session_limits:\n  token_limit: 0\n"),
+      ).toThrow();
+      expect(() =>
+        engine.loadYamlText("session_limits:\n  token_limit: -10\n"),
+      ).toThrow();
+    });
+
+    it("rejects warning_pct outside [1, 100] at the schema layer", () => {
+      expect(() =>
+        engine.loadYamlText(
+          "session_limits:\n  token_budget_warning_pct: 0\n",
+        ),
+      ).toThrow();
+      expect(() =>
+        engine.loadYamlText(
+          "session_limits:\n  token_budget_warning_pct: 101\n",
+        ),
+      ).toThrow();
+    });
+
+    it("hot reload restores defaults when session_limits is removed", () => {
+      // Set + clear the override — the engine should snap back to the
+      // hardcoded defaults rather than keep the stale override around.
+      engine.loadYamlText("session_limits:\n  token_limit: 250000\n");
+      expect(engine.getSessionLimits().tokenLimit).toBe(250_000);
+      engine.loadYamlText("");
+      expect(engine.getSessionLimits()).toEqual({
+        tokenLimit: 100_000,
+        tokenBudgetWarningPct: 80,
+      });
+    });
+
+    it("returns a shallow copy so callers can't mutate engine state", () => {
+      engine.loadYamlText("session_limits:\n  token_limit: 250000\n");
+      const snap = engine.getSessionLimits();
+      snap.tokenLimit = 1;
+      expect(engine.getSessionLimits().tokenLimit).toBe(250_000);
+    });
+  });
 });

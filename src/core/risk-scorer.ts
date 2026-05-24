@@ -9,7 +9,7 @@ import {
   secretPatternRule,
   shellPatternRule,
 } from './risk-rules/index.js'
-import type { ResponsibilityPolicy } from './policy-engine.js'
+import type { ResponsibilityPolicy, SessionLimits } from './policy-engine.js'
 import type {
   LlmVerification,
   RiskAssessment,
@@ -62,6 +62,10 @@ export interface RiskScorerOptions {
   /** Snapshot of the policy engine's responsibility_policies (#299). Per-call
    *  closure so YAML reloads take effect without rebuilding the scorer. */
   responsibilityPolicies?: () => ResponsibilityPolicy[]
+  /** #529 — Snapshot of the policy engine's session_limits. Consumed by the
+   *  loop-detection rule (advisory token-budget factor). Per-call closure
+   *  so a policy.yaml reload moves the threshold without restart. */
+  sessionLimits?: () => SessionLimits
 }
 
 export function bucketFor(totalScore: number): RiskBucket {
@@ -90,6 +94,7 @@ export class RiskScorer {
       db: this.db,
       getAgentResponsibility: this.options.getAgentResponsibility,
       responsibilityPolicies: this.options.responsibilityPolicies,
+      sessionLimits: this.options.sessionLimits,
     }
     const factors: RiskFactor[] = []
     for (const rule of this.rules) {
