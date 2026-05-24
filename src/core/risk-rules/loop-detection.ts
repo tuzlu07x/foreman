@@ -232,12 +232,19 @@ function tokenBudget(
     .where(eq(sessions.id, req.sessionId))
     .get()
   if (!row) return null
-  // SessionManager's default token limit (kept here so we don't need a runtime
-  // dep on the SessionManager instance). A future policy override can replace
-  // this constant per-deployment.
-  const limit = 100_000
+  // #529 — Pull the limit + warning threshold from the policy engine
+  // (per-call closure so policy.yaml reloads land mid-session). Hardcoded
+  // fallback matches SessionManager's DEFAULT_TOKEN_LIMIT so deployments
+  // that don't wire `sessionLimits` get the same behaviour as before this
+  // PR. This rule is purely **advisory** — the actual halt happens in
+  // SessionManager.recordTurn.
+  const limits = ctx.sessionLimits?.()
+  const limit = limits?.tokenLimit ?? 100_000
+  const warnRatio = limits
+    ? limits.tokenBudgetWarningPct / 100
+    : LOOP_THRESHOLDS.tokenBudgetWarnRatio
   const used = row.tokenCount
-  if (used < limit * LOOP_THRESHOLDS.tokenBudgetWarnRatio) return null
+  if (used < limit * warnRatio) return null
   const ratio = Math.min(100, Math.round((used / limit) * 100))
   return {
     rule: 'loop_token_budget',

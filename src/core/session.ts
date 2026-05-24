@@ -37,6 +37,12 @@ export interface RecordTurnResult {
 export interface SessionManagerOptions {
   turnLimit?: number;
   tokenLimit?: number;
+  /** #529 — Optional runtime-resolved token cap, typically wired to
+   *  `PolicyEngine.getSessionLimits().tokenLimit`. Invoked per
+   *  `recordTurn` so a `policy.yaml` reload takes effect mid-session
+   *  without rebuilding the SessionManager. When set, wins over the
+   *  static `tokenLimit` option. */
+  tokenLimitProvider?: () => number;
   bus?: EventBus<ForemanEventMap>;
 }
 
@@ -51,6 +57,7 @@ export class SessionManager {
   private readonly bus: EventBus<ForemanEventMap>;
   private readonly turnLimit: number;
   private readonly tokenLimit: number;
+  private readonly tokenLimitProvider?: () => number;
 
   constructor(
     private readonly db: ForemanDb,
@@ -59,6 +66,24 @@ export class SessionManager {
     this.bus = opts.bus ?? defaultBus;
     this.turnLimit = opts.turnLimit ?? DEFAULT_TURN_LIMIT;
     this.tokenLimit = opts.tokenLimit ?? DEFAULT_TOKEN_LIMIT;
+    this.tokenLimitProvider = opts.tokenLimitProvider;
+  }
+
+  // #529 — Resolve the active token cap per enforcement check. Provider
+  // wins so policy.yaml reloads land mid-session; defensive fallback to
+  // the static option / hardcoded default if the provider throws or
+  // returns a non-positive value.
+  private resolveTokenLimit(): number {
+    if (!this.tokenLimitProvider) return this.tokenLimit;
+    try {
+      const limit = this.tokenLimitProvider();
+      if (typeof limit === "number" && Number.isFinite(limit) && limit > 0) {
+        return limit;
+      }
+    } catch {
+      // ignore — defensive against a misconfigured provider
+    }
+    return this.tokenLimit;
   }
 
   startSession(
@@ -102,7 +127,7 @@ export class SessionManager {
     const nextTokens = current.tokenCount + tokenCount;
 
     const overTurn = nextMessages > this.turnLimit;
-    const overTokens = nextTokens > this.tokenLimit;
+    const overTokens = nextTokens > this.resolveTokenLimit();
     if (overTurn || overTokens) {
       const reason: HaltReason = overTurn ? "turn_limit" : "token_limit";
       this.markHalted(
