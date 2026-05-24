@@ -11,6 +11,7 @@ import {
   renderResolvedFooter,
   renderSessionCompleted,
   renderSessionProgress,
+  renderSessionResolutionPrompt,
   renderSessionStarted,
 } from './render.js'
 import type { ChannelId, Notification, UserDecision } from './types.js'
@@ -55,6 +56,11 @@ export class NotificationBridge {
   private offSessionStarted: (() => void) | null = null
   private offSessionProgress: (() => void) | null = null
   private offSessionCompleted: (() => void) | null = null
+  // #527 — Interactive session resume prompt. Critical-level push when
+  // a halt is resolvable; the bridge renders option buttons via the
+  // existing ChannelAction shape so Telegram inline keyboards (#522)
+  // pick them up automatically.
+  private offSessionResolutionNeeded: (() => void) | null = null
   /** Maps requestId → notificationIds we've sent, so the resolved handler
    *  knows which messages to update. Cleared once a resolution lands. */
   private readonly outstanding = new Map<string, Set<string>>()
@@ -127,6 +133,20 @@ export class NotificationBridge {
       })
     })
 
+    // 6. #527 — Interactive session resume. Resolvable halts emit a
+    //    resolution-needed prompt the user picks from. Routed at
+    //    critical level so the message still pushes through a silence
+    //    window — losing this prompt means the session abandons.
+    this.offSessionResolutionNeeded = this.bus.on(
+      'session:resolution-needed',
+      (e) => {
+        this.handleResolutionNeeded(e).catch(() => {
+          // best-effort — the session will auto-abandon on deadline
+          // even if the push fails
+        })
+      },
+    )
+
     await this.service.startListening()
     // #525 — Start the shared countdown ticker so in-flight approval
     // messages get their "⏱ Auto-deny in Xm Ys" tail refreshed each
@@ -158,6 +178,10 @@ export class NotificationBridge {
     if (this.offSessionCompleted) {
       this.offSessionCompleted()
       this.offSessionCompleted = null
+    }
+    if (this.offSessionResolutionNeeded) {
+      this.offSessionResolutionNeeded()
+      this.offSessionResolutionNeeded = null
     }
     this.outstanding.clear()
     this.approvalBodies.clear()
@@ -302,6 +326,18 @@ export class NotificationBridge {
     const state = this.getState()
     if (isSilenced(state)) return
     await this.service.send('session_lifecycle', payload)
+  }
+
+  /** #527 — Resolution-needed prompt. Pushes a critical-level message
+   *  with option buttons so the user can resume / abandon a halted
+   *  session. Silence window is bypassed (level: critical) because
+   *  losing this prompt costs the session — auto-abandon fires on
+   *  deadline. */
+  private async handleResolutionNeeded(
+    e: import('../event-bus.js').ForemanEventMap['session:resolution-needed'],
+  ): Promise<void> {
+    const payload = renderSessionResolutionPrompt(e)
+    await this.service.send('critical', payload)
   }
 
   private async handleOobDecision(d: UserDecision): Promise<void> {

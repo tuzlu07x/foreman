@@ -203,6 +203,20 @@ immediately — same flow as a typed command, just a different input shape:
    The chat reply Foreman returns includes the new rule id so the user
    sees what was added.
 
+   If \`<action_id>\` starts with \`resolve_\` (e.g. \`resolve_opt-skip\`,
+   \`resolve_opt-delegate-pm\`, \`resolve_opt-user-decide\`,
+   \`resolve_opt-abandon\`), it's a **session-resume action** (#527) — the
+   user is responding to a "🛑 Session needs your call" prompt. The
+   callback_data tail is the **session id**, NOT an approval id. Don't
+   call \`submit_approval\` for these. Instead call the
+   \`submit_resolution\` MCP tool with:
+   - \`session_id\`: the tail of the callback_data
+   - \`option_id\`: strip the \`resolve_\` prefix (e.g. send \`opt-skip\`)
+   - \`source_user\`: Telegram \`from.id\` as usual
+   Foreman flips the session out of halt, delivers the chosen
+   resolution to the participating agents as a \`foreman write\`
+   directive, and returns a confirmation text to post back to the user.
+
    For any OTHER unknown \`<action_id>\` (one Foreman didn't ship yet),
    reply *"Unknown approval action."* to the user via \`sendMessage\` and
    stop. Do NOT call \`submit_approval\` with a guessed mapping.

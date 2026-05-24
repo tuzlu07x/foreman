@@ -880,3 +880,92 @@ describe('NotificationBridge — countdown ticker integration (#525)', () => {
     expect(stopSpy).toHaveBeenCalledOnce()
   })
 })
+
+// =============================================================================
+// #527 — Interactive session resume prompt. The bridge subscribes to
+// `session:resolution-needed` and pushes a critical-level message with
+// option buttons so the user can resume / abandon a halted session.
+// =============================================================================
+describe('NotificationBridge — session resolution prompt (#527)', () => {
+  let db: ForemanDb
+  let sqlite: Database.Database
+  let bus: EventBus<ForemanEventMap>
+  let channel: FakeChannel
+  let service: NotificationService
+  let bridge: NotificationBridge
+
+  beforeEach(() => {
+    const handle = createInMemoryDb()
+    db = handle.db
+    sqlite = handle.sqlite
+    bus = new EventBus<ForemanEventMap>()
+    channel = new FakeChannel('telegram')
+    service = new NotificationService({
+      db,
+      config: configWithTelegram(),
+      channels: new Map<ChannelId, NotificationChannel>([['telegram', channel]]),
+    })
+    bridge = new NotificationBridge(service, { bus })
+  })
+
+  afterEach(async () => {
+    await bridge.stop()
+    sqlite.close()
+  })
+
+  function emitResolutionNeeded(): void {
+    bus.emit('session:resolution-needed', {
+      sessionId: '01HZX4N5YJK2P8Q3R6V7T9W2WB',
+      reason: 'loop_detection',
+      contextSummary: 'agents disagreed about tags field',
+      options: [
+        {
+          id: 'opt-skip',
+          label: 'Skip — decide later',
+          payload: { kind: 'skip', note: 'skip' },
+        },
+        {
+          id: 'opt-abandon',
+          label: 'Abandon session',
+          payload: { kind: 'abandon' },
+        },
+      ],
+      deadlineMs: Date.now() + 10 * 60_000,
+      requestedAt: Date.now(),
+    })
+  }
+
+  it('dispatches the prompt at critical level with option buttons', async () => {
+    await bridge.start()
+    emitResolutionNeeded()
+    await tick()
+    expect(channel.sendCalls).toHaveLength(1)
+    const sent = channel.sendCalls[0]!
+    expect(sent.level).toBe('critical')
+    expect(sent.body).toContain('agents disagreed about tags field')
+    const actionIds = sent.actions.map((a) => a.id)
+    expect(actionIds).toEqual(['resolve_opt-skip', 'resolve_opt-abandon'])
+  })
+
+  it('start()/stop() registers + clears the resolution listener', async () => {
+    expect(bus.listenerCount('session:resolution-needed')).toBe(0)
+    await bridge.start()
+    expect(bus.listenerCount('session:resolution-needed')).toBe(1)
+    await bridge.stop()
+    expect(bus.listenerCount('session:resolution-needed')).toBe(0)
+  })
+
+  it('still dispatches during a silence window (critical level bypasses)', async () => {
+    await bridge.stop()
+    bridge = new NotificationBridge(service, {
+      bus,
+      getState: () => ({ silencedUntil: Date.now() + 60_000, mutedAgents: [] }),
+    })
+    await bridge.start()
+    emitResolutionNeeded()
+    await tick()
+    // Critical-level prompts always push — losing this prompt costs the
+    // session (auto-abandons on deadline).
+    expect(channel.sendCalls).toHaveLength(1)
+  })
+})

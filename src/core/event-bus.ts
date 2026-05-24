@@ -11,6 +11,17 @@ import type { SecurityReport } from "./security-report.js";
  * here, then every callsite gets type-checked. Loose `string` / `unknown`
  * fields are reserved for fields that genuinely vary (e.g. tool args).
  */
+/** #527 — Discriminated union describing what to do with a halted session
+ *  once the user picks an option. The SessionManager.resume dispatcher
+ *  reads `kind` to choose between broadcasting a user directive,
+ *  delegating to a specific peer, asking the user for free-form input,
+ *  or abandoning the session entirely. */
+export type SessionResolutionPayload =
+  | { kind: "skip"; note: string }
+  | { kind: "delegate-to"; target: string; note?: string }
+  | { kind: "user-input-needed"; prompt: string }
+  | { kind: "abandon" };
+
 export interface ForemanEventMap {
   "request:received": {
     requestId: string;
@@ -112,6 +123,41 @@ export interface ForemanEventMap {
     costUsd: number;
     durationMs: number;
     completedAt: number;
+  };
+  /** #527 — A resumable halt (loop detection, eventually turn/token bump)
+   *  needs the user to pick how to continue. NotificationBridge renders
+   *  the options as buttons; SessionManager re-emits `session:resumed`
+   *  once a resolution arrives. */
+  "session:resolution-needed": {
+    sessionId: string;
+    /** Original halt reason (`loop_detection` for v0.1.1). */
+    reason: "loop_detection" | "turn_limit" | "token_limit" | "manual";
+    /** Short narrative describing why the halt fired + what the user is
+     *  deciding. LLM-generated when available; falls back to a templated
+     *  string keyed off the reason + participants. */
+    contextSummary: string;
+    options: Array<{
+      /** Stable id used in the inline-keyboard callback_data + audit row. */
+      id: string;
+      /** Button label as the user sees it. */
+      label: string;
+      /** What the option means semantically — the SessionManager.resume
+       *  dispatcher reads `kind` to choose between broadcast / delegate /
+       *  abandon paths. */
+      payload: SessionResolutionPayload;
+    }>;
+    /** Auto-abandon deadline (Unix ms). */
+    deadlineMs: number;
+    requestedAt: number;
+  };
+  "session:resumed": {
+    sessionId: string;
+    optionId: string;
+    payload: SessionResolutionPayload;
+    /** Identifier of who tapped (channel-specific — Telegram from.id, …).
+     *  Undefined when SessionManager auto-resumes (test paths). */
+    providedBy?: string;
+    resumedAt: number;
   };
   "approval:requested": {
     requestId: string;

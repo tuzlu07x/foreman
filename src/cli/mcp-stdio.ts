@@ -292,6 +292,40 @@ export async function handleMessage(
             },
           },
         },
+        {
+          // #527 — Agent-routed session resolution. User tapped a
+          // "Skip / Let PM decide / I'll decide / Abandon" button on
+          // a halt prompt; the agent's getUpdates consumer parses the
+          // `fa:resolve_<option_id>:<session_id>` callback_data and
+          // calls this tool. Foreman flips the session out of halt
+          // (or finalizes as abandoned) + enqueues a `write` directive
+          // to the participating agents so they receive the user's
+          // resolution as a normal chat message.
+          name: "submit_resolution",
+          description:
+            "Submit the user's session-resolution choice when they tap a button on a Foreman halt prompt. The callback_data is `fa:resolve_<option_id>:<session_id>`; pass both ids verbatim along with the Telegram numeric `from.id` as `source_user`. Foreman flips the session out of halt + delivers the resolution to the agents as a `foreman write` directive. Do NOT call this on your own initiative — only when the user taps a button on a `🛑 Session needs your call` message.",
+          inputSchema: {
+            type: "object",
+            required: ["session_id", "option_id"],
+            properties: {
+              session_id: {
+                type: "string",
+                description:
+                  "Session id from the callback_data tail (e.g. '01HZX...WB').",
+              },
+              option_id: {
+                type: "string",
+                description:
+                  "Option id from the callback_data (e.g. 'opt-skip', 'opt-delegate-pm', 'opt-user-decide', 'opt-abandon').",
+              },
+              source_user: {
+                type: "string",
+                description:
+                  "Telegram numeric `from.id` of the user who tapped the button. Recorded in the audit log alongside the resolution.",
+              },
+            },
+          },
+        },
       ],
     });
   }
@@ -442,6 +476,72 @@ export async function handleMessage(
       return reply(id, {
         content: [{ type: "text", text: result.text }],
         isError: !result.ok,
+      });
+    }
+
+    if (toolName === "submit_resolution") {
+      // #527 — Agent-routed session resolution. The user tapped a
+      // resolution button on a halt prompt; we hand the pick to the
+      // SessionManager which flips state + enqueues a `write` row to
+      // notify the participating agents.
+      const args = params?.arguments ?? {};
+      const sessionId =
+        typeof args.session_id === "string" ? args.session_id : "";
+      const optionId =
+        typeof args.option_id === "string" ? args.option_id : "";
+      const sourceUser =
+        typeof args.source_user === "string" ? args.source_user : undefined;
+      if (!sessionId) {
+        return replyError(
+          id,
+          -32602,
+          "submit_resolution requires args.session_id (string)",
+        );
+      }
+      if (!optionId) {
+        return replyError(
+          id,
+          -32602,
+          "submit_resolution requires args.option_id (string)",
+        );
+      }
+      if (!services.sessionManager) {
+        return replyError(
+          id,
+          -32603,
+          "submit_resolution not supported by this Foreman build (session manager not wired)",
+        );
+      }
+      const option = services.sessionManager.provideResolution(
+        sessionId,
+        optionId,
+        sourceUser ? { providedBy: sourceUser } : {},
+      );
+      if (!option) {
+        return reply(id, {
+          content: [
+            {
+              type: "text",
+              text: `Unknown resolution option "${optionId}" for session ${sessionId} (either the session isn't waiting for a resolution, or the option id doesn't match what Foreman offered).`,
+            },
+          ],
+          isError: true,
+        });
+      }
+      services.audit.logEvent("session:resolved", {
+        sessionId,
+        optionId: option.id,
+        payload: option.payload,
+        sourceAgent,
+        sourceUser: sourceUser ?? null,
+      });
+      return reply(id, {
+        content: [
+          {
+            type: "text",
+            text: `Resolution submitted: ${option.label}`,
+          },
+        ],
       });
     }
 
