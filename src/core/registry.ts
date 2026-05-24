@@ -62,6 +62,14 @@ export class AgentNotFoundError extends Error {
   }
 }
 
+/** #524 — Result shape for `RegistryService.findByCommandToken`. The
+ *  ambiguous case surfaces the candidate ids so the LLM fallback can hint
+ *  "did you mean a or b?" without re-running the lookup. */
+export type AgentLookupResult =
+  | { kind: "match"; agent: RegisteredAgent }
+  | { kind: "ambiguous"; candidates: string[] }
+  | { kind: "none" };
+
 export class RegistryService {
   constructor(
     private readonly db: ForemanDb,
@@ -133,6 +141,40 @@ export class RegistryService {
       )
       .all();
     return rows.map(toRegisteredAgent);
+  }
+
+  /** #524 — Look up an active agent by the first token of a free-form
+   *  chat message ("OpenClaw, todo app yap" → agent `openclaw`).
+   *
+   *  - Case-insensitive exact match against `id` and `displayName`. No
+   *    substring matching (would surprise-route "Code" → "claude-code").
+   *  - No fuzzy / typo tolerance — silent surprise routing is worse than
+   *    a clear "unknown command".
+   *  - Returns `ambiguous` when more than one active agent shares the same
+   *    case-folded id or displayName; callers fall through to the LLM
+   *    fallback with a clarifying hint.
+   *  - Blocked / disabled agents are NOT considered (uses the same
+   *    `list()` filter as the mediator). A `foreman agent remove
+   *    openclaw` makes "openclaw foo" fall through to the LLM, not route
+   *    to a removed agent. */
+  findByCommandToken(token: string): AgentLookupResult {
+    const needle = token.toLowerCase().trim();
+    if (!needle) return { kind: "none" };
+    const matches: RegisteredAgent[] = [];
+    for (const agent of this.list()) {
+      if (
+        agent.id.toLowerCase() === needle ||
+        agent.displayName.toLowerCase() === needle
+      ) {
+        matches.push(agent);
+      }
+    }
+    if (matches.length === 0) return { kind: "none" };
+    if (matches.length === 1) return { kind: "match", agent: matches[0]! };
+    return {
+      kind: "ambiguous",
+      candidates: matches.map((a) => a.id),
+    };
   }
 
   // Like list() but includes blocked rows — used by the TUI Agents page so the

@@ -1195,37 +1195,40 @@ credentials:
     });
   });
 
+  // Hoisted from "orchestrator chat dispatch" so the #524 free-form
+  // invocation tests below can reuse the same stub.
+  function makeStubChat(args: {
+    enabled?: boolean;
+    outcome?: Parameters<
+      NonNullable<ForemanCommandContext["orchestratorChat"]>["answer"]
+    > extends []
+      ? never
+      : Awaited<
+          ReturnType<
+            NonNullable<ForemanCommandContext["orchestratorChat"]>["answer"]
+          >
+        >;
+  } = {}): {
+    isEnabled: () => boolean;
+    answer: ReturnType<typeof vi.fn>;
+  } {
+    return {
+      isEnabled: () => args.enabled ?? true,
+      answer: vi.fn().mockResolvedValue(
+        args.outcome ?? {
+          status: "ok",
+          text: "Stub LLM response",
+          costUsd: 0.0005,
+          durationMs: 120,
+        },
+      ),
+    };
+  }
+
   // #432 — orchestrator chat dispatch paths. The router itself doesn't
   // call the LLM — it delegates to ctx.orchestratorChat. These tests
   // wire a stub chat and assert routing behavior + fallback messages.
   describe("orchestrator chat dispatch", () => {
-    function makeStubChat(args: {
-      enabled?: boolean;
-      outcome?: Parameters<
-        NonNullable<ForemanCommandContext["orchestratorChat"]>["answer"]
-      > extends []
-        ? never
-        : Awaited<
-            ReturnType<
-              NonNullable<ForemanCommandContext["orchestratorChat"]>["answer"]
-            >
-          >;
-    } = {}): {
-      isEnabled: () => boolean;
-      answer: ReturnType<typeof vi.fn>;
-    } {
-      return {
-        isEnabled: () => args.enabled ?? true,
-        answer: vi.fn().mockResolvedValue(
-          args.outcome ?? {
-            status: "ok",
-            text: "Stub LLM response",
-            costUsd: 0.0005,
-            durationMs: 120,
-          },
-        ),
-      };
-    }
 
     it("/foreman report me invokes chat.answer with default question", async () => {
       const chat = makeStubChat();
@@ -1335,23 +1338,11 @@ credentials:
       expect(chat.answer).not.toHaveBeenCalled();
     });
 
-    it("focus-agent dispatch: first token matching a registered agent sets focusAgentId", async () => {
-      registry.register({
-        id: "openclaw",
-        displayName: "OpenClaw",
-        transport: "stdio",
-      });
-      const chat = makeStubChat();
-      await router.dispatch("openclaw", ["ne", "yapıyor"], {
-        ...ctx,
-        orchestratorChat: chat as unknown as NonNullable<
-          ForemanCommandContext["orchestratorChat"]
-        >,
-      });
-      const call = chat.answer.mock.calls[0]?.[0];
-      expect(call.focusAgentId).toBe("openclaw");
-      expect(call.question).toBe("openclaw ne yapıyor");
-    });
+    // #524 replaced the old #432 "first-token = agent → focused LLM
+    // question" behavior with a direct routing to `write`. The focused-
+    // LLM-question path is now reached via `/foreman report <agent>`
+    // explicitly. See the "free-form agent invocation (#524)" describe
+    // block below for the new routing assertions.
 
     it("budget_exceeded outcome surfaces as NOT_AVAILABLE with spend / cap", async () => {
       const chat = makeStubChat({
@@ -1382,6 +1373,246 @@ credentials:
       expect(result.ok).toBe(false);
       expect(result.errorCode).toBe("NOT_AVAILABLE");
       expect(result.text).toContain("network timeout");
+    });
+  });
+
+  // ============================================================================
+  // #524 — Free-form agent invocation.
+  //
+  // The fallback branch now prefers routing to `write <agent> <rest>` when
+  // the first token names an active agent — chat-native phrasing like
+  // "OpenClaw, todo app yap" works without the user having to remember the
+  // `foreman write` prefix. Tests pin: case-insensitive id + displayName
+  // match, leading punctuation strip, active-only filter, ambiguity →
+  // fall-through-with-hint, single-token no-task → fall-through.
+  // ============================================================================
+  describe("free-form agent invocation (#524)", () => {
+    function registerOpenclaw(): void {
+      registry.register({
+        id: "openclaw",
+        displayName: "OpenClaw",
+        transport: "stdio",
+      });
+    }
+
+    function ctxWithChannel(
+      channel: ControlChannel,
+      store: OwnerStore,
+      overrides: Partial<ForemanCommandContext> = {},
+    ): ForemanCommandContext {
+      return {
+        ...ctx,
+        controlChannel: channel,
+        ownerStore: store,
+        sourceUser: "1",
+        ...overrides,
+      };
+    }
+
+    // ControlChannel.pending() returns raw DB rows where `args` is the
+    // JSON-stringified array we enqueued. Tests need the typed shape;
+    // this helper unrolls it once instead of repeating the parse.
+    function parsedArgs(row: { args: string }): string[] {
+      return JSON.parse(row.args) as string[];
+    }
+
+    it("routes lower-cased agent id + task to `write` via the control channel", async () => {
+      registerOpenclaw();
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "1" });
+      const result = await router.dispatch(
+        "openclaw",
+        ["todo", "app", "yap"],
+        ctxWithChannel(channel, store),
+      );
+      expect(result.ok).toBe(true);
+      expect(channel.pending()).toHaveLength(1);
+      const row = channel.pending()[0]!;
+      expect(row.command).toBe("write");
+      expect(parsedArgs(row)).toEqual(["openclaw", "todo app yap"]);
+    });
+
+    it("matches case-insensitively on agent id (OpenClaw, OPENCLAW, openclaw)", async () => {
+      registerOpenclaw();
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "1" });
+      for (const variant of ["OpenClaw", "OPENCLAW", "openclaw"]) {
+        await router.dispatch(variant, ["foo"], ctxWithChannel(channel, store));
+      }
+      expect(channel.pending()).toHaveLength(3);
+      for (const row of channel.pending()) {
+        expect(row.command).toBe("write");
+        expect(parsedArgs(row)[0]).toBe("openclaw");
+      }
+    });
+
+    it("matches case-insensitively on displayName ('OpenClaw' → id openclaw)", async () => {
+      registry.register({
+        // Construct a case where id and displayName diverge so the test
+        // is unambiguous about WHICH field matched.
+        id: "oc",
+        displayName: "OpenClaw",
+        transport: "stdio",
+      });
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "1" });
+      await router.dispatch(
+        "openclaw",
+        ["build", "X"],
+        ctxWithChannel(channel, store),
+      );
+      expect(parsedArgs(channel.pending()[0]!)).toEqual(["oc", "build X"]);
+    });
+
+    it("strips leading punctuation after the agent name (',' ':' ';' '-' '–' '—')", async () => {
+      registerOpenclaw();
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "1" });
+      for (const lead of [",", ":", ";", "-", "–", "—"]) {
+        await router.dispatch(
+          "openclaw",
+          [`${lead} build`, "X"],
+          ctxWithChannel(channel, store),
+        );
+      }
+      const tasks = channel.pending().map((r) => parsedArgs(r)[1]);
+      for (const task of tasks) {
+        expect(task).toBe("build X");
+      }
+    });
+
+    it("preserves punctuation in the middle of the task body", async () => {
+      registerOpenclaw();
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "1" });
+      // Only the FIRST punctuation cluster after the agent name is
+      // stripped. Commas / colons later in the task body stay verbatim.
+      await router.dispatch(
+        "openclaw",
+        [",", "run", "npm", "install,", "then", "npm", "test"],
+        ctxWithChannel(channel, store),
+      );
+      expect(parsedArgs(channel.pending()[0]!)[1]).toBe(
+        "run npm install, then npm test",
+      );
+    });
+
+    it("falls through to LLM when the first token isn't a registered agent", async () => {
+      // No agent registered with this id — the LLM should see the
+      // verbatim input + answer it as a regular question.
+      const chat = makeStubChat();
+      const result = await router.dispatch("supernova", ["hello"], {
+        ...ctx,
+        orchestratorChat: chat as unknown as NonNullable<
+          ForemanCommandContext["orchestratorChat"]
+        >,
+      });
+      expect(result.ok).toBe(true);
+      const call = chat.answer.mock.calls[0]?.[0];
+      expect(call.question).toBe("supernova hello");
+      expect(call.focusAgentId).toBeUndefined();
+    });
+
+    it("falls through to LLM when first token matches but task body is empty", async () => {
+      // "openclaw" alone — no task. Treating this as an empty `write`
+      // would be confusing; fall through so the LLM can answer "did you
+      // mean to delegate something?".
+      registerOpenclaw();
+      const chat = makeStubChat();
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "1" });
+      const result = await router.dispatch("openclaw", [], {
+        ...ctxWithChannel(channel, store),
+        orchestratorChat: chat as unknown as NonNullable<
+          ForemanCommandContext["orchestratorChat"]
+        >,
+      });
+      expect(result.ok).toBe(true);
+      expect(channel.pending()).toHaveLength(0); // no write enqueued
+      const call = chat.answer.mock.calls[0]?.[0];
+      expect(call.question).toBe("openclaw");
+      expect(call.focusAgentId).toBe("openclaw");
+    });
+
+    it("blocked agent falls through to LLM (not routed and then errored)", async () => {
+      registerOpenclaw();
+      registry.block("openclaw");
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "1" });
+      const chat = makeStubChat();
+      await router.dispatch("openclaw", ["foo"], {
+        ...ctxWithChannel(channel, store),
+        orchestratorChat: chat as unknown as NonNullable<
+          ForemanCommandContext["orchestratorChat"]
+        >,
+      });
+      expect(channel.pending()).toHaveLength(0);
+      // Hits the LLM path with no focusAgentId because
+      // registry.get(blocked) still returns the row but
+      // findByCommandToken filters on list() (active only).
+      expect(chat.answer).toHaveBeenCalledOnce();
+    });
+
+    it("ambiguous displayName falls through to LLM with a clarifying hint", async () => {
+      // Two active agents whose displayNames collide after lowercase.
+      registry.register({
+        id: "code-a",
+        displayName: "Code",
+        transport: "stdio",
+      });
+      registry.register({
+        id: "code-b",
+        displayName: "Code",
+        transport: "stdio",
+      });
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "1" });
+      const chat = makeStubChat();
+      await router.dispatch("Code", ["review", "this"], {
+        ...ctxWithChannel(channel, store),
+        orchestratorChat: chat as unknown as NonNullable<
+          ForemanCommandContext["orchestratorChat"]
+        >,
+      });
+      expect(channel.pending()).toHaveLength(0);
+      const call = chat.answer.mock.calls[0]?.[0];
+      expect(call.question).toContain("could refer to agents");
+      expect(call.question).toContain("code-a");
+      expect(call.question).toContain("code-b");
+      expect(call.question).toContain("Code review this");
+    });
+
+    it("does NOT substring-match — 'Code' does not route to 'claude-code'", async () => {
+      registry.register({
+        id: "claude-code",
+        displayName: "Claude Code",
+        transport: "stdio",
+      });
+      const channel = new ControlChannel(db);
+      const store = makeOwnerStore({ "telegram-chat-id": "1" });
+      const chat = makeStubChat();
+      await router.dispatch("Code", ["review"], {
+        ...ctxWithChannel(channel, store),
+        orchestratorChat: chat as unknown as NonNullable<
+          ForemanCommandContext["orchestratorChat"]
+        >,
+      });
+      expect(channel.pending()).toHaveLength(0);
+      expect(chat.answer).toHaveBeenCalledOnce();
+    });
+
+    it("registered verbs still win over agent ids (handler precedence)", async () => {
+      // If a user happens to install an agent named `help`, the built-in
+      // `/foreman help` handler must keep working — verbs are checked
+      // before the agent-routing fallback.
+      registry.register({
+        id: "help",
+        displayName: "help",
+        transport: "stdio",
+      });
+      const result = await router.dispatch("help", [], ctx);
+      expect(result.ok).toBe(true);
+      expect(result.text.toLowerCase()).toContain("help");
     });
   });
 });
