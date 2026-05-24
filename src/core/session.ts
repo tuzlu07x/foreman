@@ -61,19 +61,34 @@ export class SessionManager {
     this.tokenLimit = opts.tokenLimit ?? DEFAULT_TOKEN_LIMIT;
   }
 
-  startSession(participants: string[]): string {
+  startSession(
+    participants: string[],
+    opts: { trigger?: string; estimatedTurns?: number } = {},
+  ): string {
     const id = ulid();
+    const startedAt = Date.now();
     this.db
       .insert(sessions)
       .values({
         id,
         participants: JSON.stringify(participants),
-        startedAt: Date.now(),
+        startedAt,
         messageCount: 0,
         tokenCount: 0,
         status: "active",
       })
       .run();
+    // #523 — lifecycle push so the notification bridge can tell the user
+    // "▶️ openclaw çalışmaya başladı" without polling. Trigger defaults to
+    // "unknown" so callers that haven't been updated still get a coherent
+    // event payload.
+    this.bus.emit("session:started", {
+      sessionId: id,
+      participants,
+      trigger: opts.trigger ?? "unknown",
+      estimatedTurns: opts.estimatedTurns,
+      startedAt,
+    });
     return id;
   }
 
@@ -120,11 +135,30 @@ export class SessionManager {
   }
 
   complete(sessionId: string): void {
+    const current = this.get(sessionId);
+    if (!current) return;
+    // Don't double-complete (e.g. complete() after halt()) — the halt path
+    // already emitted its lifecycle event with outcome:'halted'.
+    if (current.status !== "active") return;
+    const completedAt = Date.now();
     this.db
       .update(sessions)
-      .set({ status: "completed", endedAt: Date.now() })
+      .set({ status: "completed", endedAt: completedAt })
       .where(eq(sessions.id, sessionId))
       .run();
+    // #523 — costUsd is a placeholder until the per-session cost rollup
+    // (#530) wires the `llm_usage.session_id` column. The notification
+    // template renders "$0.00" until then, which matches the in-flight
+    // "we don't know yet" UX.
+    this.bus.emit("session:completed", {
+      sessionId,
+      outcome: "success",
+      turnCount: current.messageCount,
+      tokenCount: current.tokenCount,
+      costUsd: 0,
+      durationMs: completedAt - current.startedAt,
+      completedAt,
+    });
   }
 
   get(sessionId: string): SessionInfo | null {
@@ -165,6 +199,7 @@ export class SessionManager {
     tokenCount: number,
   ): void {
     const haltedAt = Date.now();
+    const current = this.get(sessionId);
     this.db
       .update(sessions)
       .set({ status: "halted", endedAt: haltedAt })
@@ -177,6 +212,24 @@ export class SessionManager {
       tokenCount,
       haltedAt,
     });
+    // #523 — Halt also completes the session from the user's POV; emit the
+    // lifecycle event so the notification bridge can render the "⚠ halted"
+    // push without subscribing to two separate event types. Kept alongside
+    // session:halted (not replacing it) because existing listeners — the
+    // audit log + loop-detection counters — depend on the halt-specific
+    // shape.
+    if (current) {
+      this.bus.emit("session:completed", {
+        sessionId,
+        outcome: "halted",
+        reason,
+        turnCount,
+        tokenCount,
+        costUsd: 0,
+        durationMs: haltedAt - current.startedAt,
+        completedAt: haltedAt,
+      });
+    }
   }
 
   private requireSession(sessionId: string): SessionInfo {

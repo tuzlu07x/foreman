@@ -14,6 +14,11 @@ export type NotificationLevel =
    *  without asking the user first (high-risk pattern caught). Routed
    *  via notify.yaml's `routing.risk_deny.channels`. */
   | 'risk_deny'
+  /** #523 — Session lifecycle push (started / progress / completed). The
+   *  user sees "▶️ openclaw çalışmaya başladı" / "⏳ 14 turn, 1h 18m" /
+   *  "✓ done in 23s ($0.04)" without having to call `/foreman activity`.
+   *  Routed via `routing.session_lifecycle`. */
+  | 'session_lifecycle'
 
 export type ChannelId = 'telegram' | 'discord' | 'slack' | 'webhook' | 'system'
 

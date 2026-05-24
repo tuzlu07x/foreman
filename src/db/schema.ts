@@ -208,7 +208,20 @@ export const notifications = sqliteTable(
     id: text("id").primaryKey(),
     requestId: text("request_id"),
     level: text("level", {
-      enum: ["critical", "warning", "info", "summary", "budget_alert", "risk_deny"],
+      enum: [
+        "critical",
+        "warning",
+        "info",
+        "summary",
+        "budget_alert",
+        "risk_deny",
+        // #523 — session lifecycle pushes (started / progress / completed).
+        // SQLite's notifications.level column is TEXT with no CHECK
+        // constraint, so no migration is needed; this enum extension is a
+        // TypeScript-only widening that lets the new bridge handlers insert
+        // rows without a type assertion.
+        "session_lifecycle",
+      ],
     }).notNull(),
     channel: text("channel").notNull(),
     body: text("body").notNull(),
