@@ -390,6 +390,7 @@
       "task_timeout_seconds": 600,
       "task_env_strip": ["OPENAI_API_KEY"],
       "task_model_flag": "-m",
+      "task_skip_permissions_flag": "--full-auto",
       "supported_versions": ">=0.100.0",
       "min_foreman_version": "0.1.2",
       "provider_mapping": {
@@ -473,6 +474,7 @@
       "task_timeout_seconds": 600,
       "task_env_strip": ["ANTHROPIC_API_KEY"],
       "task_model_flag": "--model",
+      "task_skip_permissions_flag": "--dangerously-skip-permissions",
       "supported_versions": ">=0.5.0",
       "min_foreman_version": "0.1.2",
       "provider_mapping": {

@@ -222,4 +222,38 @@ describe('RegistryService', () => {
       expect(registry.findByCommandToken('openclaw').kind).toBe('none')
     })
   })
+
+  // #517 Faz 3 — Trust flag flips the agent into "skip shell allowlist"
+  // mode. Spawn engine reads it; SessionInfo + RegisteredAgent surface
+  // it; setter validates the row exists.
+  describe('setTaskSkipPermissions (#517 Faz 3)', () => {
+    it('defaults to false for freshly-registered agents', () => {
+      registry.register({ id: 'a', displayName: 'A', transport: 'stdio' })
+      expect(registry.get('a')?.taskSkipPermissions).toBe(false)
+    })
+
+    it('flips the flag on + off', () => {
+      registry.register({ id: 'a', displayName: 'A', transport: 'stdio' })
+      registry.setTaskSkipPermissions('a', true)
+      expect(registry.get('a')?.taskSkipPermissions).toBe(true)
+      registry.setTaskSkipPermissions('a', false)
+      expect(registry.get('a')?.taskSkipPermissions).toBe(false)
+    })
+
+    it('throws AgentNotFoundError for an unknown agent', () => {
+      expect(() => registry.setTaskSkipPermissions('ghost', true)).toThrow(
+        AgentNotFoundError,
+      )
+    })
+
+    it('surfaces through list() + listAll() too', () => {
+      registry.register({ id: 'a', displayName: 'A', transport: 'stdio' })
+      registry.register({ id: 'b', displayName: 'B', transport: 'stdio' })
+      registry.setTaskSkipPermissions('a', true)
+      const a = registry.list().find((r) => r.id === 'a')
+      const b = registry.list().find((r) => r.id === 'b')
+      expect(a?.taskSkipPermissions).toBe(true)
+      expect(b?.taskSkipPermissions).toBe(false)
+    })
+  })
 })

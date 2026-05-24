@@ -47,6 +47,13 @@ export interface RegisteredAgent {
   providerVariant: string | null;
   modelVersion: string | null;
   responsibilityNote: string | null;
+  /** #517 Faz 3 — Operator has trusted this agent to bypass its
+   *  shell-tool allowlist (`foreman agent trust <id>`). When true,
+   *  the spawn engine appends the registry's
+   *  `task_skip_permissions_flag` so the agent runs without prompting
+   *  for individual shell calls. Foreman's MCP-level mediation
+   *  remains the security boundary. */
+  taskSkipPermissions: boolean;
 }
 
 export interface RegisterResult {
@@ -227,6 +234,20 @@ export class RegistryService {
     if (result.changes === 0) throw new AgentNotFoundError(agentId);
   }
 
+  /** #517 Faz 3 — Flip the `task_skip_permissions` flag. `foreman agent
+   *  trust <id>` wires the user's "I trust this agent + accept MCP-level
+   *  mediation as the only boundary" decision. The spawn engine checks
+   *  the flag at task time + appends the agent's
+   *  `task_skip_permissions_flag` from the catalog when set. */
+  setTaskSkipPermissions(agentId: string, trusted: boolean): void {
+    const result = this.db
+      .update(agents)
+      .set({ taskSkipPermissions: trusted ? 1 : 0 })
+      .where(eq(agents.id, agentId))
+      .run();
+    if (result.changes === 0) throw new AgentNotFoundError(agentId);
+  }
+
   // Temporary pause — config + MCP wiring stay intact, but the mediator and
   // auth path reject requests. Use enable() to resume. Distinct from block(),
   // which is the "flagged as malicious" path.
@@ -370,5 +391,6 @@ function toRegisteredAgent(row: typeof agents.$inferSelect): RegisteredAgent {
     providerVariant: row.providerVariant,
     modelVersion: row.modelVersion,
     responsibilityNote: row.responsibilityNote,
+    taskSkipPermissions: row.taskSkipPermissions === 1,
   };
 }
