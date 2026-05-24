@@ -329,4 +329,93 @@ describe("executeWriteDirective", () => {
       expect(result.outputRelay.reason).toContain("502");
     }
   });
+
+  // ============================================================================
+  // #517 Faz 3 wiring fix — taskSkipPermissions forwarded into spawnAgentTask.
+  // Without this, the trust CLI's DB flag was a silent no-op + a trusted
+  // codex still ran in `sandbox: read-only`. Bug surfaced in QA when the
+  // operator ran `foreman agent trust codex` + codex still couldn't write
+  // files. See manual QA report 2026-05-24.
+  // ============================================================================
+
+  it("forwards taskSkipPermissions=true so the spawn engine appends the trust flag", async () => {
+    const argsDump = makeScript(
+      "args.sh",
+      '#!/bin/sh\nfor a in "$@"; do echo "ARG:$a"; done\n',
+    );
+    const result = await executeWriteDirective(
+      {
+        agentId: "codex",
+        message: "do the thing",
+        entry: agent({
+          task_command_template: `${argsDump} "{task}"`,
+          task_skip_permissions_flag: "--full-auto",
+        }),
+        taskSkipPermissions: true,
+      },
+      {},
+    );
+    expect(result.spawn.kind).toBe("ok");
+    if (result.spawn.kind === "ok") {
+      // The trust flag landed on argv exactly where the spawn engine
+      // puts it (trailing position, after task + any model flag).
+      expect(result.spawn.stdout).toContain("ARG:--full-auto");
+      expect(result.spawn.stdout).toContain("ARG:do the thing");
+    }
+  });
+
+  it("does NOT append the trust flag when taskSkipPermissions=false (default)", async () => {
+    const argsDump = makeScript(
+      "args.sh",
+      '#!/bin/sh\nfor a in "$@"; do echo "ARG:$a"; done\n',
+    );
+    const result = await executeWriteDirective(
+      {
+        agentId: "codex",
+        message: "do the thing",
+        entry: agent({
+          task_command_template: `${argsDump} "{task}"`,
+          task_skip_permissions_flag: "--full-auto",
+        }),
+        // taskSkipPermissions intentionally omitted — default is "untrusted".
+      },
+      {},
+    );
+    expect(result.spawn.kind).toBe("ok");
+    if (result.spawn.kind === "ok") {
+      expect(result.spawn.stdout).not.toContain("--full-auto");
+      // The task itself still made it through.
+      expect(result.spawn.stdout).toContain("ARG:do the thing");
+    }
+  });
+
+  it("is a no-op when the catalog entry has no task_skip_permissions_flag even if trusted", async () => {
+    // Hermes-style daemon agent: no flag in the catalog → trust is
+    // meaningless on the spawn side. Defensive: don't append a phantom
+    // empty string or crash.
+    const argsDump = makeScript(
+      "args.sh",
+      '#!/bin/sh\nfor a in "$@"; do echo "ARG:$a"; done\n',
+    );
+    const result = await executeWriteDirective(
+      {
+        agentId: "hermes",
+        message: "ping",
+        entry: agent({
+          task_command_template: `${argsDump} "{task}"`,
+          // no task_skip_permissions_flag
+        }),
+        taskSkipPermissions: true,
+      },
+      {},
+    );
+    expect(result.spawn.kind).toBe("ok");
+    if (result.spawn.kind === "ok") {
+      const argLines = result.spawn.stdout
+        .split("\n")
+        .filter((l) => l.startsWith("ARG:"));
+      // Just the task; no phantom flag.
+      expect(argLines).toEqual(["ARG:ping"]);
+    }
+  });
 });
