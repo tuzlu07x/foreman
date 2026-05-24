@@ -176,6 +176,7 @@ Should be back on track. No action needed from you.
 - **Foreman doesn't host LLMs.** It uses the keys you give it for its own optional smart features. It doesn't proxy your agent's LLM calls — agents talk to their LLMs directly. Foreman intercepts only MCP tool calls.
 - **Foreman is not a platform.** No web dashboard, no team accounts, no SaaS (until v0.4+ multi-user mode). Local-first, single-machine.
 - **Foreman doesn't replace your agents.** Hermes is still Hermes. OpenClaw is still OpenClaw. Foreman gives them shared rules + a shared audit trail + a single human in the loop.
+- **Foreman is a pre-execution gate, not a post-execution monitor.** It decides before a tool call runs, not after. It does not undo writes, roll back git operations, or un-send email. The user-facing story is "Foreman caught it before anything ran" — a stronger guarantee than "Foreman cleaned up afterwards", which would be best-effort and racy. See [`docs/architecture.md` §12](./architecture.md#12-what-foreman-does-not-do) and the [canonical scenario](./scenario-pazartesi-sabahi.md) for the long form.
 
 ---
 
