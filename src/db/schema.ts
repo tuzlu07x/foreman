@@ -222,6 +222,41 @@ export const pendingApprovals = sqliteTable(
   }),
 );
 
+// #528 — Cross-process queue for `ask_user_with_options` MCP calls. The
+// tool handler in mcp-stdio inserts a row + polls; the chat listener in
+// `foreman start` writes the user's pick back. Same IPC pattern as
+// pending_approvals + control_commands.
+export const pendingQuestions = sqliteTable(
+  "pending_questions",
+  {
+    id: text("id").primaryKey(),
+    sourceAgent: text("source_agent").notNull(),
+    sessionId: text("session_id"),
+    question: text("question").notNull(),
+    context: text("context"),
+    optionsJson: text("options_json").notNull(),
+    allowFreeText: integer("allow_free_text").notNull().default(1),
+    status: text("status", {
+      enum: ["pending", "answered", "timeout", "abandoned"],
+    })
+      .notNull()
+      .default("pending"),
+    chosenOptionId: text("chosen_option_id"),
+    freeText: text("free_text"),
+    requestedAt: integer("requested_at").notNull(),
+    deadlineMs: integer("deadline_ms").notNull(),
+    answeredAt: integer("answered_at"),
+    answeredBy: text("answered_by"),
+  },
+  (t) => ({
+    statusIdx: index("pending_questions_status_idx").on(
+      t.status,
+      t.requestedAt,
+    ),
+    sessionIdx: index("pending_questions_session_idx").on(t.sessionId),
+  }),
+);
+
 // Out-of-band notifications (#235 / C11). One row per attempted delivery on
 // one channel. `notification_messages` tracks the per-channel message id so
 // we can update / cancel later.
@@ -343,6 +378,8 @@ export type ChatPrimary = typeof chatPrimary.$inferSelect;
 export type NewChatPrimary = typeof chatPrimary.$inferInsert;
 export type ControlCommand = typeof controlCommands.$inferSelect;
 export type NewControlCommand = typeof controlCommands.$inferInsert;
+export type PendingQuestion = typeof pendingQuestions.$inferSelect;
+export type NewPendingQuestion = typeof pendingQuestions.$inferInsert;
 
 // FTS5 virtual table and triggers live in a hand-written migration
 // (drizzle-kit cannot emit virtual tables). See:

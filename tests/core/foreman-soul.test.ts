@@ -300,6 +300,44 @@ describe("DEFAULT_FOREMAN_SOUL — inline keyboard callbacks (#522)", () => {
     // the full action_id with the resolve_ prefix.
     expect(DEFAULT_FOREMAN_SOUL).toMatch(/strip the.*resolve_.*prefix/i);
   });
+
+  // #528 — ask_user_with_options callback flow. Pin both the callback
+  // route (button taps → submit_user_answer) and the free-text route
+  // (plain reply → submit_user_answer with free_text).
+  it("documents the ask_* custom action handling (#528)", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toContain("ask_");
+    // "structured-question\nanswer** (#528)" — the marker straddles a soft
+    // line break inserted by the template formatter. Allow whitespace
+    // (including newlines) between the words.
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(
+      /structured-question\s+answer[\s\S]*?#528/,
+    );
+  });
+
+  it("routes ask_* taps to submit_user_answer, NOT submit_approval (#528)", () => {
+    // Split on the regex (dotall-style) so the line break inside
+    // "structured-question\nanswer" doesn't hide the section.
+    const section =
+      DEFAULT_FOREMAN_SOUL.split(/structured-question\s+answer/)[1] ?? "";
+    expect(section).toContain("`submit_user_answer`");
+    expect(section).toMatch(/[Dd]on'?t[\s\S]*?call[\s\S]*?submit_approval/);
+  });
+
+  it("documents how to parse ask_<question_id>_<option_id> (#528)", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/split.*on.*_/i);
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/question id/i);
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/option id/i);
+  });
+
+  it("documents the free-text reply route via submit_user_answer.free_text (#528)", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/Free-text answers.*#528/);
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/free_text/);
+  });
+
+  it("instructs the agent to relay /cancel via free_text instead of dropping it (#528)", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/\/cancel/);
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/[Nn]ever silently drop a \/cancel/);
+  });
 });
 
 // #431 — Orchestrator routing section. Mirrors the approval-routing
