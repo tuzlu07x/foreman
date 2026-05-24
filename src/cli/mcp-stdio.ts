@@ -204,6 +204,22 @@ export async function handleMessage(
   const method = "method" in msg ? msg.method : null;
   const id = "id" in msg ? msg.id : undefined;
 
+  // QA-fix 2026-05-24 (Wiring 5) — every JSON-RPC message from the
+  // agent is a liveness signal. Bump heartbeat so `last seen` advances
+  // for Hermes (and any agent that drives Foreman via MCP — Hermes
+  // never goes through the spawn path because it's the chat-primary,
+  // so without this it would forever show "never seen" even while
+  // actively orchestrating). Best-effort: registry may be stubbed in
+  // tests, the agent row may have been deleted mid-loop, etc.; we'd
+  // rather swallow than break the MCP handshake.
+  if (services.registry?.heartbeat) {
+    try {
+      services.registry.heartbeat(sourceAgent);
+    } catch {
+      // ignore — defensive; missing/blocked agents shouldn't break MCP
+    }
+  }
+
   if (method === "initialize") {
     return reply(id, {
       protocolVersion: PROTOCOL_VERSION,

@@ -48,6 +48,12 @@ function makeServices(
       logEvent: vi.fn(),
       logRequest: vi.fn(),
     },
+    // Wiring 5 — heartbeat hook lives at the top of handleMessage, so
+    // every test exercises it. Default to a no-op spy; tests that want
+    // to assert on heartbeat behavior swap this for a tracking fake.
+    registry: {
+      heartbeat: vi.fn(),
+    },
     llmConfigPath: "/tmp/test-llm.yaml",
     configDir: "/tmp/test-config",
   } as unknown as McpStdioServices;
@@ -904,6 +910,99 @@ describe("mcp-stdio handleMessage", () => {
           errorCode: "UNKNOWN_COMMAND",
         }),
       );
+    });
+  });
+
+  // ===========================================================================
+  // QA-fix 2026-05-24 (Wiring 5) — heartbeat on every MCP message.
+  //
+  // Before: Hermes (and any agent that drives Foreman via MCP rather than
+  // by being spawned) never received a registry.heartbeat() call.
+  // Result: `foreman status` showed "hermes: active, never" even while
+  // Hermes was actively orchestrating the chat. PR #549's heartbeat in
+  // the drain handler only covered SPAWNED targets (codex, claude-code)
+  // — Hermes is always a CALLER, never a target, so it slipped through.
+  //
+  // Fix: heartbeat at the top of handleMessage. Every initialize,
+  // tools/list, tools/call, ping, etc. now bumps `last_seen_at` for
+  // the sourceAgent. Best-effort wrapper so a missing/stubbed registry
+  // doesn't break the MCP handshake.
+  // ===========================================================================
+  describe("registry heartbeat on every MCP message (Wiring 5)", () => {
+    it("calls registry.heartbeat(sourceAgent) on initialize", async () => {
+      const services = makeServices("allowed");
+      await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {},
+      } as JSONRPCMessage);
+      expect(services.registry.heartbeat).toHaveBeenCalledWith("hermes");
+    });
+
+    it("calls registry.heartbeat(sourceAgent) on tools/list", async () => {
+      const services = makeServices("allowed");
+      await handleMessage(services, "claude-code", {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/list",
+      } as JSONRPCMessage);
+      expect(services.registry.heartbeat).toHaveBeenCalledWith("claude-code");
+    });
+
+    it("calls registry.heartbeat(sourceAgent) on tools/call (submit_command)", async () => {
+      const services = makeServices("allowed");
+      await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "submit_command",
+          arguments: { command: "status", args: [] },
+        },
+      } as JSONRPCMessage);
+      expect(services.registry.heartbeat).toHaveBeenCalledWith("hermes");
+    });
+
+    it("uses the actual sourceAgent identity, not a fixed value", async () => {
+      // Distinct callers each bump their OWN heartbeat — proves we're
+      // not accidentally hardcoding "hermes" anywhere in the wiring.
+      const a = makeServices("allowed");
+      const b = makeServices("allowed");
+      await handleMessage(a, "codex", {
+        jsonrpc: "2.0",
+        id: 4,
+        method: "initialize",
+      } as JSONRPCMessage);
+      await handleMessage(b, "openclaw", {
+        jsonrpc: "2.0",
+        id: 5,
+        method: "initialize",
+      } as JSONRPCMessage);
+      expect(a.registry.heartbeat).toHaveBeenCalledWith("codex");
+      expect(b.registry.heartbeat).toHaveBeenCalledWith("openclaw");
+    });
+
+    it("swallows registry.heartbeat throws so the MCP handshake still completes", async () => {
+      // Defensive: registry might throw AgentNotFoundError if the agent
+      // was deleted mid-loop, or be stubbed without heartbeat in some
+      // future test fixture. Either way the MCP response must still
+      // come back — Foreman's bookkeeping must NEVER break the wire
+      // protocol.
+      const services = makeServices("allowed");
+      (services.registry as unknown as { heartbeat: () => void }).heartbeat =
+        vi.fn(() => {
+          throw new Error("agent blocked");
+        });
+      const out = (await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 99,
+        method: "initialize",
+        params: {},
+      } as JSONRPCMessage)) as unknown as {
+        result?: { protocolVersion?: string };
+      };
+      expect(out.result?.protocolVersion).toBeDefined();
     });
   });
 });
