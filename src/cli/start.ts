@@ -17,6 +17,9 @@ import { buildAgentActivityDigest } from "../core/agent-activity-summary.js";
 import { buildActivityPrompt } from "../core/agent-activity-prompt.js";
 import { deliverWriteDirective } from "../core/agent-write.js";
 import { executeWriteDirective } from "../core/agent-execute.js";
+import { createHeuristicClassifier } from "../core/flow-classifier.js";
+import { FlowManager } from "../core/flow-manager.js";
+import { FlowRouter } from "../core/flow-router.js";
 import { extractCwdFromTask } from "../core/extract-cwd-from-task.js";
 import { ChatPrimaryService } from "../core/chat-primary.js";
 import {
@@ -36,6 +39,7 @@ import { checkAgentUpdates } from "../core/agent-update-check.js";
 import { loadActiveRegistry } from "../core/registry-catalog.js";
 import { checkForUpdate } from "../core/update-check.js";
 import { closeDb, getDb, getSqlite, type ForemanDb } from "../db/client.js";
+import { controlCommands } from "../db/schema.js";
 import { loadOrCreateMasterKey } from "../identity/keypair.js";
 import { App } from "../tui/app.js";
 import type { BootInfo } from "../tui/boot-info.js";
@@ -202,6 +206,16 @@ export function startForeman(
     bus,
     costProvider: (sid) => costBySession(db, sid).totalUsd,
   });
+  // Responsibility-based auto-routing (docs/auto-routing-design.md).
+  // FlowManager is the DB-backed lifecycle store; FlowRouter consumes
+  // it + the classifier + the registry to decide each post-spawn
+  // handoff. Both are process-scoped and cheap to instantiate.
+  const flowManager = new FlowManager(db);
+  const flowRouter = new FlowRouter(
+    flowManager,
+    registry,
+    createHeuristicClassifier(),
+  );
   // Optional LLM verifier (#231 / C8) — only built when llm.yaml has the
   // verification feature on AND credentials resolve. Failures are silent so
   // the heuristic-only flow stays unaffected.
@@ -557,7 +571,13 @@ export function startForeman(
         // ("Directive queued for openclaw") already went out via
         // mcp-stdio; this loop just executes the side-effects.
         try {
-          const [agentId, message] = JSON.parse(row.args) as string[];
+          // Args format: classic `[agentId, message]`, or flow-aware
+          // `[agentId, message, flowId, stepId]`. The 4-element variant
+          // signals that this directive is a step inside an active flow
+          // and the executor should hand it the router so the post-spawn
+          // hook can classify + chain.
+          const parsed = JSON.parse(row.args) as string[];
+          const [agentId, message, flowId, stepId] = parsed;
           if (!agentId || !message) {
             return {
               status: "rejected",
@@ -610,6 +630,54 @@ export function startForeman(
             } catch {
               /* ignore — agent might have been removed mid-drain */
             }
+            // Responsibility-based auto-routing — when args carry
+            // flowId + stepId, wire the executor with a FlowRouter +
+            // an enqueueFollowUp callback. The callback inserts the
+            // next step's directive into control_commands so the next
+            // drain iteration spawns it (no recursive call from inside
+            // the drain handler).
+            const flowContext = flowId && stepId
+              ? {
+                  flowId,
+                  stepId,
+                  flowManager,
+                  router: flowRouter,
+                  enqueueFollowUp: async (next: {
+                    targetAgent: string;
+                    prompt: string;
+                    flowId: string;
+                    stepId: string;
+                  }): Promise<number | null> => {
+                    const inserted = db
+                      .insert(controlCommands)
+                      .values({
+                        command: "write",
+                        args: JSON.stringify([
+                          next.targetAgent,
+                          next.prompt,
+                          next.flowId,
+                          next.stepId,
+                        ]),
+                        sourceAgent: "foreman:flow-router",
+                        sourceUser: row.sourceUser ?? null,
+                        status: "pending",
+                        createdAt: Date.now(),
+                      })
+                      .returning({ id: controlCommands.id })
+                      .get();
+                    return inserted?.id ?? null;
+                  },
+                }
+              : undefined;
+            // Mark the step running before the spawn so `foreman flow
+            // show` reflects in-progress state in real time.
+            if (flowId && stepId) {
+              try {
+                flowManager.markStepRunning(stepId, row.id);
+              } catch {
+                /* ignore — step might have been racey-removed */
+              }
+            }
             const exec = await executeWriteDirective(
               {
                 agentId,
@@ -625,6 +693,7 @@ export function startForeman(
                 // around the spawn. Lights up #523 lifecycle pushes,
                 // #530 cost rollup, and the TUI Sessions panel.
                 sessionManager,
+                ...(flowContext ? { flowContext } : {}),
               },
               { telegramBotToken, telegramChatId },
             );
