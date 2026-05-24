@@ -3,6 +3,8 @@ import {
   type SpawnAgentTaskOutcome,
   spawnAgentTask,
 } from "./agent-spawn.js";
+import type { FlowManager } from "./flow-manager.js";
+import type { FlowRouter, RoutingDecision } from "./flow-router.js";
 import type { AgentEntry } from "./registry-catalog.js";
 import type { SessionManager } from "./session.js";
 
@@ -69,6 +71,33 @@ export interface ExecuteDirectiveInput {
    *  no `agents: last seen` heartbeat — TUI / Telegram both showed
    *  "0 active" + "never seen" while real work was happening. */
   sessionManager?: SessionManager;
+  /** Responsibility-based auto-routing (docs/auto-routing-design.md).
+   *  When the directive was dispatched as part of an active flow, the
+   *  caller (drain handler) passes the flow + step ids + the wired
+   *  router. After the spawn completes, the executor:
+   *    1. marks the step completed in `flow_steps`
+   *    2. asks the router what to do next (forward / finalize / halt)
+   *    3. when `forward`, enqueues a new control_commands row targeting
+   *       the next agent (no LLM round-trip — the router decides)
+   *  Without these, executeWriteDirective stays in classic one-shot
+   *  mode (output → user via Telegram). */
+  flowContext?: {
+    flowId: string;
+    stepId: string;
+    flowManager: FlowManager;
+    router: FlowRouter;
+    /** Called by the executor when the router returns `forward`. The
+     *  drain handler implementation enqueues the new directive into
+     *  `control_commands` so the next drain iteration spawns it. Kept
+     *  as a callback so this module doesn't need direct DB access for
+     *  control_commands. */
+    enqueueFollowUp: (input: {
+      targetAgent: string;
+      prompt: string;
+      flowId: string;
+      stepId: string;
+    }) => Promise<number | null>;
+  };
 }
 
 export interface ExecuteDeliveryDeps {
@@ -96,6 +125,10 @@ export interface ExecuteDirectiveOutcome {
     | { status: "skipped"; reason: string }
     | { status: "failed"; reason: string }
     | null;
+  /** Routing decision the FlowRouter produced after the spawn finished.
+   *  `null` when the directive wasn't part of a flow. Callers can
+   *  inspect this to log/audit the chain or update the TUI. */
+  routing?: RoutingDecision | null;
 }
 
 const DEFAULT_MAX_OUTPUT = 3500;
@@ -186,9 +219,91 @@ export async function executeWriteDirective(
     }
   }
 
-  const text = renderOutputText(input, spawn, deps.maxOutputLength);
-  const outputRelay = await postTelegramOutput(text, deps);
-  return { spawn, outputRelay };
+  // Responsibility-based auto-routing — let the FlowRouter classify the
+  // output + decide the next step. Best-effort throughout: if any of
+  // the flow plumbing throws, we still relay the output to the user
+  // (current behavior) so a buggy classifier can never trap the chain.
+  let routing: RoutingDecision | null = null;
+  if (input.flowContext) {
+    try {
+      const output = renderSpawnStdout(spawn);
+      const summaryForStep = output.slice(0, 600);
+      if (spawn.kind === "ok") {
+        input.flowContext.flowManager.completeStep(
+          input.flowContext.stepId,
+          null,           // classification filled below from router
+          summaryForStep,
+        );
+      } else {
+        input.flowContext.flowManager.failStep(
+          input.flowContext.stepId,
+          summaryForStep,
+        );
+      }
+      routing = input.flowContext.router.routeAfterCompletion({
+        flowId: input.flowContext.flowId,
+        stepId: input.flowContext.stepId,
+        sourceAgent: input.agentId,
+        output,
+        spawnOk: spawn.kind === "ok",
+      });
+      if (routing.kind === "forward") {
+        const directiveId = await input.flowContext.enqueueFollowUp({
+          targetAgent: routing.targetAgent,
+          prompt: routing.prompt,
+          flowId: routing.flowId,
+          stepId: routing.stepId,
+        });
+        input.flowContext.flowManager.markStepRunning(
+          routing.stepId,
+          directiveId,
+        );
+      }
+    } catch (err) {
+      process.stderr.write(
+        `foreman: flow routing failed for ${input.agentId}: ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
+    }
+  }
+
+  // Telegram relay rule:
+  //   - No flow → always relay (classic behavior).
+  //   - Flow + routing was forward → suppress (chat would get noisy with
+  //     intermediate outputs; the final summary lands when the flow
+  //     finalizes).
+  //   - Flow + routing finalized/halted → relay (this IS the summary).
+  //   - Flow + routing noop → relay (something odd happened, default to
+  //     visible).
+  const suppressRelay =
+    routing !== null && routing.kind === "forward";
+
+  let outputRelay: ExecuteDirectiveOutcome["outputRelay"] = null;
+  if (!suppressRelay) {
+    const text = renderOutputText(input, spawn, deps.maxOutputLength);
+    outputRelay = await postTelegramOutput(text, deps);
+  } else {
+    outputRelay = {
+      status: "skipped",
+      reason: `flow ${routing!.kind === "forward" ? "forward" : "noop"} — output handed to ${routing!.kind === "forward" ? routing!.targetAgent : "—"}`,
+    };
+  }
+
+  return { spawn, outputRelay, routing };
+}
+
+function renderSpawnStdout(spawn: SpawnAgentTaskOutcome): string {
+  switch (spawn.kind) {
+    case "ok":
+    case "failed":
+    case "timeout":
+      return spawn.stdout || spawn.stderr || "";
+    case "spawn-error":
+      return spawn.error;
+    case "unsupported":
+      return spawn.reason;
+  }
 }
 
 /**

@@ -771,6 +771,204 @@ agentsCommand
     closeDb();
   });
 
+// ============================================================================
+// role / responsibility / handoff — responsibility-based auto-routing
+// (see docs/auto-routing-design.md).
+// ============================================================================
+//
+// Once `role` is set on an agent (one of coder/reviewer/orchestrator/custom),
+// the FlowRouter knows where to dispatch this agent's output when it
+// completes a flow step. `responsibility` is free-form prose (already
+// stored as responsibility_note) that surfaces in `foreman agent show`.
+// `handoff` mutates the agent's handoff_rules JSON array.
+
+const ALLOWED_ROLES = new Set([
+  "coder",
+  "reviewer",
+  "orchestrator",
+  "custom",
+]);
+
+agentsCommand
+  .command("role <agentId> <role>")
+  .description(
+    "Set the agent's role for auto-routing. One of: coder, reviewer, " +
+      "orchestrator, custom, none (unset). Affects flow handoffs only — " +
+      "classic one-shot writes are unchanged.",
+  )
+  .action((agentId: string, role: string) => {
+    const registry = getRegistry();
+    const agent = registry.get(agentId);
+    if (!agent) {
+      console.error(red("error: ") + `Unknown agent '${agentId}'.`);
+      closeDb();
+      process.exit(1);
+    }
+    const normalized = role.toLowerCase();
+    if (normalized !== "none" && !ALLOWED_ROLES.has(normalized)) {
+      console.error(
+        red("error: ") +
+          `Invalid role '${role}'. Allowed: ${[...ALLOWED_ROLES, "none"].join(", ")}.`,
+      );
+      closeDb();
+      process.exit(1);
+    }
+    try {
+      registry.setRole(agentId, normalized === "none" ? null : normalized);
+    } catch (err) {
+      handleAgentError(err);
+    }
+    console.log(
+      `${green("✓")} ${bold(agentId)} role = ${
+        normalized === "none" ? "(unset)" : normalized
+      }`,
+    );
+    closeDb();
+  });
+
+agentsCommand
+  .command("responsibility <agentId> [text...]")
+  .description(
+    "Set the agent's responsibility brief (1-2 sentences describing what " +
+      "this agent owns in a flow). Pass no text to clear it. Shown in " +
+      "`foreman agent show` and surfaced by the orchestrator when routing.",
+  )
+  .action((agentId: string, text: string[]) => {
+    const registry = getRegistry();
+    const agent = registry.get(agentId);
+    if (!agent) {
+      console.error(red("error: ") + `Unknown agent '${agentId}'.`);
+      closeDb();
+      process.exit(1);
+    }
+    const joined = text.join(" ").trim();
+    try {
+      registry.setResponsibilityNote(agentId, joined.length > 0 ? joined : null);
+    } catch (err) {
+      handleAgentError(err);
+    }
+    console.log(
+      `${green("✓")} ${bold(agentId)} responsibility = ${
+        joined.length > 0 ? `"${joined}"` : "(cleared)"
+      }`,
+    );
+    closeDb();
+  });
+
+agentsCommand
+  .command("handoff <agentId> <action>")
+  .description(
+    "Manage the agent's handoff rules. action = 'add', 'list', 'clear'. " +
+      "For 'add', also pass --when <classification> --to-role <role> " +
+      "--template '<prompt>' --intent <intent>.",
+  )
+  .option(
+    "--when <classification>",
+    "Classifier verdict that triggers this rule (e.g. changes_requested, approved, code_written).",
+  )
+  .option(
+    "--to-role <role>",
+    "Role of the agent that should receive the forward (e.g. coder, reviewer).",
+  )
+  .option(
+    "--template <prompt>",
+    "Prompt template for the forwarded directive. Use {output} or {summary} placeholders.",
+  )
+  .option(
+    "--intent <intent>",
+    "Free-form intent label recorded on the new flow step (e.g. fix, review, summarize).",
+  )
+  .action(
+    (
+      agentId: string,
+      action: string,
+      opts: {
+        when?: string;
+        toRole?: string;
+        template?: string;
+        intent?: string;
+      },
+    ) => {
+      const registry = getRegistry();
+      const agent = registry.get(agentId);
+      if (!agent) {
+        console.error(red("error: ") + `Unknown agent '${agentId}'.`);
+        closeDb();
+        process.exit(1);
+      }
+      const existing = agent.handoffRules
+        ? (JSON.parse(agent.handoffRules) as unknown[])
+        : [];
+      const rules: Array<{
+        when: string;
+        toRole: string;
+        template: string;
+        intent: string;
+      }> = Array.isArray(existing)
+        ? (existing.filter(
+            (r) =>
+              r != null &&
+              typeof r === "object" &&
+              "when" in r &&
+              "toRole" in r &&
+              "template" in r &&
+              "intent" in r,
+          ) as Array<{
+            when: string;
+            toRole: string;
+            template: string;
+            intent: string;
+          }>)
+        : [];
+
+      if (action === "list") {
+        if (rules.length === 0) {
+          console.log(
+            `${dim("no handoff rules — output falls through to orchestrator")}`,
+          );
+        } else {
+          rules.forEach((r, i) => {
+            console.log(
+              `${bold(`${i + 1}.`)} ${dim("when")} ${r.when} ${dim("→")} ${r.toRole} ${dim("(intent:")} ${r.intent}${dim(")")}`,
+            );
+            console.log(`   ${dim("template:")} ${r.template}`);
+          });
+        }
+        closeDb();
+        return;
+      }
+      if (action === "clear") {
+        registry.setHandoffRules(agentId, null);
+        console.log(`${green("✓")} ${bold(agentId)} handoff rules cleared`);
+        closeDb();
+        return;
+      }
+      if (action === "add") {
+        const { when, toRole, template, intent } = opts;
+        if (!when || !toRole || !template || !intent) {
+          console.error(
+            red("error: ") +
+              "add requires all of --when, --to-role, --template, --intent",
+          );
+          closeDb();
+          process.exit(1);
+        }
+        rules.push({ when, toRole, template, intent });
+        registry.setHandoffRules(agentId, JSON.stringify(rules));
+        console.log(
+          `${green("✓")} ${bold(agentId)} handoff rule added (${rules.length} total)`,
+        );
+        closeDb();
+        return;
+      }
+      console.error(
+        red("error: ") + `unknown action '${action}'. Use add / list / clear.`,
+      );
+      closeDb();
+      process.exit(1);
+    },
+  );
+
 function safeFindAgent(
   doc: ReturnType<typeof loadActiveRegistry>["doc"],
   id: string,
