@@ -362,6 +362,108 @@ describe("mcp-stdio handleMessage", () => {
       expect(call.actionId).toBeUndefined();
     });
 
+    // ============================================================================
+    // #527 — submit_resolution tool: user taps a "Skip / Let PM decide / I'll
+    // decide / Abandon" button on a halt prompt; the agent relays via this MCP
+    // tool; Foreman flips the session out of halt + enqueues a write to the
+    // participating agents.
+    // ============================================================================
+    it("advertises submit_resolution in tools/list (#527)", async () => {
+      const out = (await handleMessage(makeServices("allowed"), "hermes", {
+        jsonrpc: "2.0",
+        id: 30,
+        method: "tools/list",
+      } as JSONRPCMessage)) as unknown as {
+        result: { tools: { name: string }[] };
+      };
+      expect(out.result.tools.map((t) => t.name)).toContain("submit_resolution");
+    });
+
+    it("forwards session_id + option_id + source_user to sessionManager.provideResolution (#527)", async () => {
+      const services = makeServices("allowed");
+      // Stub the session manager so the handler has somewhere to call.
+      const provideSpy = vi.fn(() => ({
+        id: "opt-skip",
+        label: "Skip — decide later",
+        payload: { kind: "skip", note: "skip" },
+      }));
+      (services as unknown as { sessionManager: unknown }).sessionManager = {
+        provideResolution: provideSpy,
+      };
+      const out = (await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 31,
+        method: "tools/call",
+        params: {
+          name: "submit_resolution",
+          arguments: {
+            session_id: "sess-abc",
+            option_id: "opt-skip",
+            source_user: "tg-user-1",
+          },
+        },
+      } as JSONRPCMessage)) as unknown as {
+        result: { content: { text: string }[] };
+      };
+      expect(provideSpy).toHaveBeenCalledWith("sess-abc", "opt-skip", {
+        providedBy: "tg-user-1",
+      });
+      expect(out.result.content[0]?.text).toContain("Resolution submitted");
+      expect(out.result.content[0]?.text).toContain("Skip");
+    });
+
+    it("returns an isError reply when the option_id is unknown (#527)", async () => {
+      const services = makeServices("allowed");
+      (services as unknown as { sessionManager: unknown }).sessionManager = {
+        provideResolution: vi.fn(() => null),
+      };
+      const out = (await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 32,
+        method: "tools/call",
+        params: {
+          name: "submit_resolution",
+          arguments: { session_id: "sess-abc", option_id: "opt-nope" },
+        },
+      } as JSONRPCMessage)) as unknown as {
+        result: { content: { text: string }[]; isError: boolean };
+      };
+      expect(out.result.isError).toBe(true);
+      expect(out.result.content[0]?.text).toContain("Unknown resolution option");
+    });
+
+    it("rejects submit_resolution without session_id (#527)", async () => {
+      const out = (await handleMessage(makeServices("allowed"), "hermes", {
+        jsonrpc: "2.0",
+        id: 33,
+        method: "tools/call",
+        params: {
+          name: "submit_resolution",
+          arguments: { option_id: "opt-skip" },
+        },
+      } as JSONRPCMessage)) as unknown as {
+        error: { code: number; message: string };
+      };
+      expect(out.error.code).toBe(-32602);
+      expect(out.error.message).toMatch(/session_id/);
+    });
+
+    it("rejects submit_resolution without option_id (#527)", async () => {
+      const out = (await handleMessage(makeServices("allowed"), "hermes", {
+        jsonrpc: "2.0",
+        id: 34,
+        method: "tools/call",
+        params: {
+          name: "submit_resolution",
+          arguments: { session_id: "sess-abc" },
+        },
+      } as JSONRPCMessage)) as unknown as {
+        error: { code: number; message: string };
+      };
+      expect(out.error.code).toBe(-32602);
+      expect(out.error.message).toMatch(/option_id/);
+    });
+
     it("echoes the policy rule id back when submitFromAgent returns one (#526)", async () => {
       const services = makeServices("allowed", "policy:7", undefined, {
         ok: true,

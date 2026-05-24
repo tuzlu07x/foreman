@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ControlChannel } from '../../src/core/control-channel.js'
 import { EventBus, type ForemanEventMap } from '../../src/core/event-bus.js'
 import {
   SessionManager,
@@ -200,24 +201,32 @@ describe('SessionManager', () => {
     expect(completed).toHaveBeenCalledOnce()
   })
 
-  it('halt() emits session:completed with outcome=halted + reason alongside session:halted', () => {
+  it('halt(reason="manual") emits session:halted + session:completed (no resolution path)', () => {
+    // Manual halts have no interactive resolution template; the standard
+    // lifecycle push ("⚠ halted") fires immediately so the user sees the
+    // session is over. Loop-detection halts hold the session open until
+    // the user resolves — covered by the "interactive resolution" suite
+    // below.
     const halted = vi.fn()
     const completed = vi.fn()
     bus.on('session:halted', halted)
     bus.on('session:completed', completed)
     const id = manager.startSession(['a', 'b'])
-    manager.halt(id, 'loop_detection')
+    manager.halt(id, 'manual')
     expect(halted).toHaveBeenCalledOnce()
     expect(completed).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: id,
         outcome: 'halted',
-        reason: 'loop_detection',
+        reason: 'manual',
       }),
     )
   })
 
-  it('turn-limit auto-halt also fires session:completed (outcome=halted)', () => {
+  it('turn-limit auto-halt fires session:completed immediately (no interactive resume in v0.1.1)', () => {
+    // turn/token-limit halts are non-interactive in v0.1.1 — issue
+    // #527 explicitly scopes interactive resume to loop_detection.
+    // Budget halts get the standard "⚠ halted" lifecycle push.
     const completed = vi.fn()
     bus.on('session:completed', completed)
     const id = manager.startSession(['a', 'b'])
@@ -229,6 +238,36 @@ describe('SessionManager', () => {
         reason: 'turn_limit',
       }),
     )
+  })
+
+  it('loop_detection halt holds the session open + emits session:resolution-needed (#527)', () => {
+    // Interactive halt: session:completed is DEFERRED until the user
+    // picks a resolution (or the deadline expires + the session
+    // auto-abandons). Pinning this is the contract between the
+    // SessionManager and the NotificationBridge resolution prompt.
+    const halted = vi.fn()
+    const completed = vi.fn()
+    const resolutionNeeded = vi.fn()
+    bus.on('session:halted', halted)
+    bus.on('session:completed', completed)
+    bus.on('session:resolution-needed', resolutionNeeded)
+    const id = manager.startSession(['openclaw', 'hermes'])
+    manager.halt(id, 'loop_detection')
+    expect(halted).toHaveBeenCalledOnce()
+    expect(resolutionNeeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: id,
+        reason: 'loop_detection',
+      }),
+    )
+    // No completion event — the session is paused waiting for input.
+    expect(completed).not.toHaveBeenCalled()
+    // The session row now carries resolution metadata.
+    const info = manager.get(id)!
+    expect(info.status).toBe('halted')
+    expect(info.resolutionStatus).toBe('needed')
+    expect(info.resolutionOptions?.length).toBeGreaterThanOrEqual(4)
+    expect(info.resolutionDeadlineMs).toBeGreaterThan(Date.now())
   })
 
   // ============================================================================
@@ -302,5 +341,162 @@ describe('SessionManager', () => {
     })
     const id = m.startSession(['a', 'b'])
     expect(m.recordTurn(id, 50).allowed).toBe(true)
+  })
+
+  // ============================================================================
+  // #527 — Interactive session resume: provideResolution, expireResolution,
+  // control-channel delivery, audit-clean lifecycle.
+  // ============================================================================
+  describe('interactive resume (#527)', () => {
+    it('provideResolution(skip) resumes the session + broadcasts a write to every participant', () => {
+      const channel = new ControlChannel(db)
+      const m = new SessionManager(db, { bus, controlChannel: channel })
+      const resumed = vi.fn()
+      bus.on('session:resumed', resumed)
+      const id = m.startSession(['openclaw', 'hermes'])
+      m.halt(id, 'loop_detection')
+      const option = m.provideResolution(id, 'opt-skip', {
+        providedBy: 'tg-user-1',
+      })
+      expect(option?.id).toBe('opt-skip')
+      // Session flipped back to active.
+      const info = m.get(id)!
+      expect(info.status).toBe('active')
+      expect(info.resolutionStatus).toBe('consumed')
+      expect(info.resolutionRecord?.optionId).toBe('opt-skip')
+      expect(info.resolutionRecord?.providedBy).toBe('tg-user-1')
+      // Bus event fired with the right payload.
+      expect(resumed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: id,
+          optionId: 'opt-skip',
+          payload: expect.objectContaining({ kind: 'skip' }),
+          providedBy: 'tg-user-1',
+        }),
+      )
+      // Control channel: one `write` row per participant.
+      const pending = channel.pending()
+      expect(pending).toHaveLength(2)
+      const targets = pending.map((r) => JSON.parse(r.args)[0])
+      expect(targets.sort()).toEqual(['hermes', 'openclaw'])
+      for (const row of pending) {
+        expect(row.command).toBe('write')
+        const args = JSON.parse(row.args) as string[]
+        expect(args[1]).toContain(`[session ${id}]`)
+        expect(args[1]).toContain('skip')
+      }
+    })
+
+    it('provideResolution(delegate-to) routes to a single target', () => {
+      const channel = new ControlChannel(db)
+      const m = new SessionManager(db, { bus, controlChannel: channel })
+      const id = m.startSession(['openclaw', 'hermes'])
+      m.halt(id, 'loop_detection')
+      m.provideResolution(id, 'opt-delegate-pm')
+      const pending = channel.pending()
+      expect(pending).toHaveLength(1)
+      const args = JSON.parse(pending[0]!.args) as string[]
+      expect(args[0]).toBe('openclaw')
+      expect(args[1]).toContain(`[session ${id}]`)
+    })
+
+    it('provideResolution(user-input-needed) prompts the first participant', () => {
+      const channel = new ControlChannel(db)
+      const m = new SessionManager(db, { bus, controlChannel: channel })
+      const id = m.startSession(['hermes', 'openclaw'])
+      m.halt(id, 'loop_detection')
+      m.provideResolution(id, 'opt-user-decide')
+      const pending = channel.pending()
+      expect(pending).toHaveLength(1)
+      const args = JSON.parse(pending[0]!.args) as string[]
+      expect(args[0]).toBe('hermes') // first participant
+      expect(args[1]).toContain('asked to decide manually')
+    })
+
+    it('provideResolution(abandon) finalizes as abandoned + does NOT enqueue any write', () => {
+      const channel = new ControlChannel(db)
+      const m = new SessionManager(db, { bus, controlChannel: channel })
+      const completed = vi.fn()
+      bus.on('session:completed', completed)
+      const id = m.startSession(['openclaw', 'hermes'])
+      m.halt(id, 'loop_detection')
+      m.provideResolution(id, 'opt-abandon')
+      expect(channel.pending()).toHaveLength(0)
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: id,
+          outcome: 'abandoned',
+          reason: 'user-abandoned',
+        }),
+      )
+      expect(m.get(id)?.status).toBe('completed')
+    })
+
+    it('provideResolution returns null for an unknown option id', () => {
+      const m = new SessionManager(db, { bus })
+      const id = m.startSession(['a', 'b'])
+      m.halt(id, 'loop_detection')
+      expect(m.provideResolution(id, 'nope')).toBeNull()
+      // Session stays needing resolution.
+      expect(m.get(id)?.resolutionStatus).toBe('needed')
+    })
+
+    it('provideResolution returns null when the session is not waiting for one', () => {
+      const m = new SessionManager(db, { bus })
+      const id = m.startSession(['a', 'b'])
+      // Never halted → no resolution to provide.
+      expect(m.provideResolution(id, 'opt-skip')).toBeNull()
+    })
+
+    it('expireResolution auto-abandons a needs-resolution session past its deadline', () => {
+      const m = new SessionManager(db, { bus })
+      const completed = vi.fn()
+      bus.on('session:completed', completed)
+      const id = m.startSession(['openclaw', 'hermes'])
+      m.halt(id, 'loop_detection')
+      const expired = m.expireResolution(id)
+      expect(expired).toBe(true)
+      expect(m.get(id)?.status).toBe('completed')
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: id,
+          outcome: 'abandoned',
+          reason: 'resolution_timeout',
+        }),
+      )
+    })
+
+    it('expireResolution is a no-op when the session never needed one', () => {
+      const m = new SessionManager(db, { bus })
+      const id = m.startSession(['a', 'b'])
+      expect(m.expireResolution(id)).toBe(false)
+    })
+
+    it('skipping the control channel still resumes state (degraded delivery)', () => {
+      // Unit-test wiring with no ControlChannel — state flips, no
+      // writes enqueued. Useful for tests that don't care about
+      // delivery + as a pragmatic fallback if the channel is down.
+      const m = new SessionManager(db, { bus })
+      const id = m.startSession(['openclaw', 'hermes'])
+      m.halt(id, 'loop_detection')
+      const option = m.provideResolution(id, 'opt-skip')
+      expect(option?.id).toBe('opt-skip')
+      expect(m.get(id)?.status).toBe('active')
+      expect(m.get(id)?.resolutionStatus).toBe('consumed')
+    })
+
+    it('resolution metadata round-trips through SessionInfo (audit-replay)', () => {
+      const m = new SessionManager(db, { bus })
+      const id = m.startSession(['openclaw', 'hermes'])
+      m.halt(id, 'loop_detection')
+      const info = m.get(id)!
+      // Options offered land on the SessionInfo so `foreman log` /
+      // future TUI views can render the prompt the user saw.
+      const ids = (info.resolutionOptions ?? []).map((o) => o.id)
+      expect(ids).toContain('opt-skip')
+      expect(ids).toContain('opt-delegate-pm')
+      expect(ids).toContain('opt-user-decide')
+      expect(ids).toContain('opt-abandon')
+    })
   })
 })
