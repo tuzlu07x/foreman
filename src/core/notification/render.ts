@@ -317,7 +317,11 @@ export function renderSessionCompleted(
 ): Omit<Notification, 'id'> {
   const idShort = e.sessionId.slice(0, 6)
   const icon = e.outcome === 'success' ? '✓' : '⚠'
-  const lines = [`${icon} ${idShort} ${e.outcome}`]
+  // #530 — When the session declared a project tag, surface it in both
+  // the title + body header so the user can scan a list of completion
+  // pushes and see which project each one belongs to without expanding.
+  const projectSuffix = e.projectTag ? ` (${e.projectTag})` : ''
+  const lines = [`${icon} ${idShort} ${e.outcome}${projectSuffix}`]
   lines.push(
     `${e.turnCount} turn · ${formatElapsed(e.durationMs)} · $${e.costUsd.toFixed(2)}`,
   )
@@ -327,7 +331,7 @@ export function renderSessionCompleted(
   return {
     level: 'session_lifecycle',
     requestId: null,
-    title: `${icon} ${idShort} ${e.outcome}`,
+    title: `${icon} ${idShort} ${e.outcome}${projectSuffix}`,
     body: lines.join('\n'),
     actions: [],
     agentBlocking: false,

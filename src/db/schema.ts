@@ -320,10 +320,19 @@ export const llmUsage = sqliteTable(
     requestId: text("request_id"),
     durationMs: integer("duration_ms").notNull(),
     cacheHit: integer("cache_hit").notNull().default(0),
+    // #530 — Per-session + per-project cost rollup. session_id matches
+    // `sessions.id` (ULID); project_tag is auto-derived from cwd
+    // basename when callers don't supply one. Both nullable so legacy
+    // rows + ad-hoc / doctor probes stay unaffected; the by-session +
+    // by-project queries simply exclude them.
+    sessionId: text("session_id"),
+    projectTag: text("project_tag"),
   },
   (t) => ({
     tsIdx: index("llm_usage_ts_idx").on(t.ts),
     featureIdx: index("llm_usage_feature_idx").on(t.feature, t.ts),
+    sessionIdx: index("llm_usage_session_idx").on(t.sessionId, t.ts),
+    projectIdx: index("llm_usage_project_idx").on(t.projectTag, t.ts),
   }),
 );
 

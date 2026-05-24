@@ -93,6 +93,13 @@ export interface SessionManagerOptions {
   controlChannel?: ControlChannel;
   /** #527 — Injectable clock for deterministic resolution-deadline tests. */
   nowFn?: () => number;
+  /** #530 — Per-session cost rollup. Wired in production to
+   *  `(sid) => costBySession(db, sid).totalUsd` so `session:completed`
+   *  events ship the real spend instead of the previous `0` placeholder.
+   *  When omitted, the manager falls back to `0` — the notification
+   *  template still renders cleanly ("$0.00") and the test paths that
+   *  don't care about cost stay self-contained. */
+  costProvider?: (sessionId: string) => number;
 }
 
 export class SessionNotFoundError extends Error {
@@ -110,6 +117,12 @@ export class SessionManager {
   private readonly resolutionTimeoutMs: number;
   private readonly controlChannel?: ControlChannel;
   private readonly now: () => number;
+  private readonly costProvider?: (sessionId: string) => number;
+  /** #530 — In-memory `sessionId → projectTag` map populated on
+   *  startSession + read on completion so the lifecycle push can
+   *  show "(todo-app)" alongside the cost line. Process-scoped;
+   *  cleared on session terminal states to keep the map bounded. */
+  private readonly projectTags = new Map<string, string>();
 
   constructor(
     private readonly db: ForemanDb,
@@ -123,6 +136,23 @@ export class SessionManager {
       opts.resolutionTimeoutMs ?? DEFAULT_RESOLUTION_TIMEOUT_MS;
     this.controlChannel = opts.controlChannel;
     this.now = opts.nowFn ?? Date.now;
+    this.costProvider = opts.costProvider;
+  }
+
+  /** #530 — Resolve the rolled-up cost for a session. Defensive:
+   *  provider throws / returns non-finite → fall back to 0 so the
+   *  completion event still fires cleanly. */
+  private resolveSessionCost(sessionId: string): number {
+    if (!this.costProvider) return 0;
+    try {
+      const cost = this.costProvider(sessionId);
+      if (typeof cost === "number" && Number.isFinite(cost) && cost >= 0) {
+        return cost;
+      }
+    } catch {
+      // ignore — defensive
+    }
+    return 0;
   }
 
   // #529 — Resolve the active token cap per enforcement check. Provider
@@ -144,7 +174,15 @@ export class SessionManager {
 
   startSession(
     participants: string[],
-    opts: { trigger?: string; estimatedTurns?: number } = {},
+    opts: {
+      trigger?: string;
+      estimatedTurns?: number;
+      /** #530 — Project tag for cost rollup. When omitted, callers
+       *  outside the test path typically pass `deriveProjectTag()`
+       *  from llm/budget. Recorded in an in-memory map (session
+       *  lifecycle is process-scoped, so persistence isn't needed). */
+      projectTag?: string;
+    } = {},
   ): string {
     const id = ulid();
     const startedAt = Date.now();
@@ -159,6 +197,9 @@ export class SessionManager {
         status: "active",
       })
       .run();
+    if (opts.projectTag && opts.projectTag.length > 0) {
+      this.projectTags.set(id, opts.projectTag);
+    }
     // #523 — lifecycle push so the notification bridge can tell the user
     // "▶️ openclaw çalışmaya başladı" without polling. Trigger defaults to
     // "unknown" so callers that haven't been updated still get a coherent
@@ -227,16 +268,18 @@ export class SessionManager {
       .set({ status: "completed", endedAt: completedAt })
       .where(eq(sessions.id, sessionId))
       .run();
-    // #523 — costUsd is a placeholder until the per-session cost rollup
-    // (#530) wires the `llm_usage.session_id` column. The notification
-    // template renders "$0.00" until then, which matches the in-flight
-    // "we don't know yet" UX.
+    // #530 — Roll up cost from llm_usage rows tagged with this session
+    // when the provider is wired. Falls back to 0 in test paths that
+    // don't bother — the notification template still renders cleanly.
+    const projectTag = this.projectTags.get(sessionId);
+    this.projectTags.delete(sessionId);
     this.bus.emit("session:completed", {
       sessionId,
       outcome: "success",
       turnCount: current.messageCount,
       tokenCount: current.tokenCount,
-      costUsd: 0,
+      costUsd: this.resolveSessionCost(sessionId),
+      ...(projectTag ? { projectTag } : {}),
       durationMs: completedAt - current.startedAt,
       completedAt,
     });
@@ -329,13 +372,16 @@ export class SessionManager {
     // The resume / expire / abandon paths emit session:completed when
     // the halt truly terminates.
     if (current && !wantsResolution) {
+      const projectTag = this.projectTags.get(sessionId);
+      this.projectTags.delete(sessionId);
       this.bus.emit("session:completed", {
         sessionId,
         outcome: "halted",
         reason,
         turnCount,
         tokenCount,
-        costUsd: 0,
+        costUsd: this.resolveSessionCost(sessionId),
+        ...(projectTag ? { projectTag } : {}),
         durationMs: haltedAt - current.startedAt,
         completedAt: haltedAt,
       });
@@ -499,13 +545,16 @@ export class SessionManager {
       .set({ status: "completed", endedAt: completedAt })
       .where(eq(sessions.id, sessionId))
       .run();
+    const projectTag = this.projectTags.get(sessionId);
+    this.projectTags.delete(sessionId);
     this.bus.emit("session:completed", {
       sessionId,
       outcome: "abandoned",
       reason,
       turnCount: current.messageCount,
       tokenCount: current.tokenCount,
-      costUsd: 0,
+      costUsd: this.resolveSessionCost(sessionId),
+      ...(projectTag ? { projectTag } : {}),
       durationMs: completedAt - current.startedAt,
       completedAt,
     });
