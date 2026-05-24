@@ -1,8 +1,10 @@
+import { basename } from "node:path";
 import {
   type SpawnAgentTaskOutcome,
   spawnAgentTask,
 } from "./agent-spawn.js";
 import type { AgentEntry } from "./registry-catalog.js";
+import type { SessionManager } from "./session.js";
 
 // =============================================================================
 // Foreman → Agent task execution + output relay (PR D of orchestration epic)
@@ -57,6 +59,16 @@ export interface ExecuteDirectiveInput {
    *  is already inside the target project but breaks when they aren't
    *  (the to-do-app QA case). */
   cwd?: string;
+  /** QA-fix 2026-05-24 (Wiring 4) — SessionManager for lifecycle
+   *  tracking around the spawn. When provided, the executor opens a
+   *  session before spawning (`startSession` → `session:started` event
+   *  → #523 lifecycle push to Telegram), then closes it on outcome
+   *  (`complete` on ok, `halt` on failure/timeout/spawn-error → both
+   *  emit `session:completed`). Without this, agents were silently
+   *  spawned with no session row, no lifecycle pushes, no cost rollup,
+   *  no `agents: last seen` heartbeat — TUI / Telegram both showed
+   *  "0 active" + "never seen" while real work was happening. */
+  sessionManager?: SessionManager;
 }
 
 export interface ExecuteDeliveryDeps {
@@ -109,6 +121,31 @@ export async function executeWriteDirective(
       outputRelay: null,
     };
   }
+
+  // QA-fix 2026-05-24 (Wiring 4) — open a session BEFORE the spawn so
+  // the lifecycle bridge can ship "▶️ codex started" to Telegram while
+  // the agent is actually working. Project tag is the cwd basename
+  // when we have one (#530 — surfaces as "(to-do-app)" in completion
+  // pushes). All best-effort: SessionManager throw shouldn't kill the
+  // spawn, so we wrap + log to stderr but proceed.
+  let sessionId: string | null = null;
+  if (input.sessionManager) {
+    try {
+      sessionId = input.sessionManager.startSession([input.agentId], {
+        trigger: "user_command:write",
+        ...(input.cwd
+          ? { projectTag: basename(input.cwd) }
+          : {}),
+      });
+    } catch (err) {
+      process.stderr.write(
+        `foreman: failed to open session for ${input.agentId}: ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
+    }
+  }
+
   const spawn = await spawnAgentTask({
     entry: input.entry,
     task: input.message,
@@ -125,6 +162,30 @@ export async function executeWriteDirective(
     ...(input.cwd ? { cwd: input.cwd } : {}),
     spawnImpl: deps.spawnImpl,
   });
+
+  // QA-fix 2026-05-24 (Wiring 4) — close the session on outcome. `ok`
+  // completes (success → `session:completed { outcome: 'success' }` +
+  // lifecycle push). Failure modes halt the session ('manual' reason
+  // since the agent didn't hit a turn/token limit — it just failed for
+  // its own reasons) which fires `session:halted` + `session:completed
+  // { outcome: 'halted' }`. Either way the user sees a Telegram push +
+  // the TUI Sessions panel drops the row from `active`.
+  if (sessionId && input.sessionManager) {
+    try {
+      if (spawn.kind === "ok") {
+        input.sessionManager.complete(sessionId);
+      } else {
+        input.sessionManager.halt(sessionId, "manual");
+      }
+    } catch (err) {
+      process.stderr.write(
+        `foreman: failed to close session ${sessionId}: ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
+    }
+  }
+
   const text = renderOutputText(input, spawn, deps.maxOutputLength);
   const outputRelay = await postTelegramOutput(text, deps);
   return { spawn, outputRelay };
