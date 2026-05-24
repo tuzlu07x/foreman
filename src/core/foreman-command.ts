@@ -150,15 +150,47 @@ export class ForemanCommandRouter {
     if (handler) {
       return await handler(args, ctx);
     }
+    // #524 — Free-form agent invocation. Before falling through to the
+    // LLM, see if the first token names a registered agent. If so, treat
+    // the rest of the message as a `write` directive. This lets users
+    // type "OpenClaw, todo app yap" instead of `foreman write openclaw
+    // todo app yap` — chat-native UX without losing the verb-based CLI.
+    const lookup = ctx.registry.findByCommandToken(command);
+    if (lookup.kind === "match") {
+      const task = stripLeadingPunctuation(args.join(" ")).trim();
+      if (task.length > 0) {
+        // Delegate to the existing write handler so the success text +
+        // queue/callable detection + owner gate stay in ONE place. The
+        // user sees the same reply whether they typed `foreman write
+        // openclaw foo` or `openclaw foo`. writeHandler joins
+        // `args.slice(1)`, so passing the whole task as args[1]
+        // preserves any internal whitespace verbatim.
+        return await writeHandler([lookup.agent.id, task], ctx);
+      }
+      // First token matched an agent but there's no task body — fall
+      // through to LLM so "openclaw" by itself becomes "ne yapıyor
+      // openclaw?", not an awkward empty-task error.
+    }
     // #432 — Free-form fallback. When the verb isn't registered but
     // Foreman LLM orchestrator chat is enabled, treat the whole input
     // (`<command> <args...>`) as a natural-language question. Agent id
     // detection: if the first token matches a registered agent, focus
     // the snapshot on it (`/foreman openclaw ne yapıyor`).
     if (ctx.orchestratorChat?.isEnabled()) {
-      const question = [command, ...args].join(" ").trim();
+      let question = [command, ...args].join(" ").trim();
       const maybeAgent = ctx.registry.get(command.toLowerCase());
       const focusAgentId = maybeAgent ? maybeAgent.id : undefined;
+      // #524 — When two active agents collide on case-folded id or
+      // displayName, prepend a disambiguation hint so the LLM can ask
+      // the user to clarify instead of guessing. Rare in practice (the
+      // wizard tries to prevent collisions on registration) but the
+      // hint makes the surprise routing path obvious if it happens.
+      if (lookup.kind === "ambiguous") {
+        question =
+          `Note: '${command}' could refer to agents ` +
+          `[${lookup.candidates.join(", ")}]; ask the user to clarify.\n\n` +
+          question;
+      }
       const outcome = await ctx.orchestratorChat.answer({
         question,
         focusAgentId,
@@ -173,6 +205,15 @@ export class ForemanCommandRouter {
       errorCode: "UNKNOWN_COMMAND",
     };
   }
+}
+
+// #524 — Strip a single run of leading punctuation right after the agent
+// name so chat-native phrasing parses cleanly: "OpenClaw, todo app yap" →
+// task "todo app yap"; "OpenClaw: build X" → "build X". Only the FIRST
+// punctuation cluster after the name is stripped — punctuation in the
+// middle of the task body stays intact.
+function stripLeadingPunctuation(s: string): string {
+  return s.replace(/^[\s,;:–—-]+/u, "");
 }
 
 // Translates the chat service's outcome variants into a uniform
