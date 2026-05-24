@@ -17,6 +17,7 @@ import { buildAgentActivityDigest } from "../core/agent-activity-summary.js";
 import { buildActivityPrompt } from "../core/agent-activity-prompt.js";
 import { deliverWriteDirective } from "../core/agent-write.js";
 import { executeWriteDirective } from "../core/agent-execute.js";
+import { extractCwdFromTask } from "../core/extract-cwd-from-task.js";
 import { ChatPrimaryService } from "../core/chat-primary.js";
 import {
   ControlChannel,
@@ -589,6 +590,11 @@ export function startForeman(
             // Without this forward, the DB flag was a silent no-op + a
             // trusted codex still ran in `sandbox: read-only` (#544 finish).
             const registryRow = registry.get(agentId);
+            // QA-fix 2026-05-24 — extract a workdir hint from the task
+            // text so codex's sandbox roots include the project the
+            // user actually mentioned. Without this, codex landed in
+            // Foreman's own cwd and refused to write outside it.
+            const derivedCwd = extractCwdFromTask(message);
             const exec = await executeWriteDirective(
               {
                 agentId,
@@ -598,6 +604,7 @@ export function startForeman(
                 modelVersion: registryRow?.modelVersion ?? null,
                 taskSkipPermissions:
                   registryRow?.taskSkipPermissions === true,
+                ...(derivedCwd ? { cwd: derivedCwd } : {}),
               },
               { telegramBotToken, telegramChatId },
             );

@@ -48,6 +48,15 @@ export interface ExecuteDirectiveInput {
    *  + forwards it here; without this wiring the trust CLI's DB flag
    *  was a silent no-op (#544 out-of-scope finished here). */
   taskSkipPermissions?: boolean;
+  /** Working directory for the spawned process. Drain handler derives
+   *  this from the task text via `extractCwdFromTask(message)` so an
+   *  agent task that mentions an absolute project path lands inside
+   *  that project. Codex's sandbox roots include the workdir, so the
+   *  cwd determines what the agent can read/write. When undefined,
+   *  the spawn inherits Foreman's own cwd — works when the operator
+   *  is already inside the target project but breaks when they aren't
+   *  (the to-do-app QA case). */
+  cwd?: string;
 }
 
 export interface ExecuteDeliveryDeps {
@@ -108,6 +117,12 @@ export async function executeWriteDirective(
     // get their respective `--full-auto` / `--dangerously-skip-permissions`
     // appended when the operator ran `foreman agent trust <id>`.
     taskSkipPermissions: input.taskSkipPermissions === true,
+    // QA-fix 2026-05-24 — forward the derived cwd so codex's sandbox
+    // workdir lands inside the project the user actually mentioned
+    // (e.g. /Users/fatih/Downloads/to-do-app) instead of Foreman's
+    // own checkout. Without this, codex's writable roots exclude the
+    // target and the implementation never starts.
+    ...(input.cwd ? { cwd: input.cwd } : {}),
     spawnImpl: deps.spawnImpl,
   });
   const text = renderOutputText(input, spawn, deps.maxOutputLength);
