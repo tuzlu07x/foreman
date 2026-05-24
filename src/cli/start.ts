@@ -583,6 +583,11 @@ export function startForeman(
             // model_version` so the spawn engine can append the
             // registry's `task_model_flag` argv pair (e.g. `--model
             // claude-sonnet-4-6`). NULL = use the agent's own default.
+            // #517 Faz 3 wiring — read the operator-set trust flag so
+            // `foreman agent trust <id>` actually flips the spawn into
+            // `--full-auto` / `--dangerously-skip-permissions` mode.
+            // Without this forward, the DB flag was a silent no-op + a
+            // trusted codex still ran in `sandbox: read-only` (#544 finish).
             const registryRow = registry.get(agentId);
             const exec = await executeWriteDirective(
               {
@@ -591,6 +596,8 @@ export function startForeman(
                 sourceUser: row.sourceUser ?? undefined,
                 entry,
                 modelVersion: registryRow?.modelVersion ?? null,
+                taskSkipPermissions:
+                  registryRow?.taskSkipPermissions === true,
               },
               { telegramBotToken, telegramChatId },
             );
