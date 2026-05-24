@@ -11,6 +11,7 @@ import {
   renderSessionProgress,
   renderSessionResolutionPrompt,
   renderSessionStarted,
+  renderUserQuestion,
 } from '../../../src/core/notification/render.js'
 import type { RiskFactor } from '../../../src/core/risk-rules/types.js'
 
@@ -631,5 +632,82 @@ describe('renderSessionResolutionPrompt (#527)', () => {
   it('includes a UTC deadline line so the user sees when auto-abandon fires', () => {
     const n = renderSessionResolutionPrompt(baseEvent)
     expect(n.body).toContain('Auto-abandon at 08:55:00 UTC')
+  })
+})
+
+// =============================================================================
+// #528 — Structured user question. Warning-level notification with one
+// ChannelAction per option. The agent's `ask_user_with_options` MCP tool
+// call blocks on the pending_questions row; the user's tap resolves it
+// via submit_user_answer.
+// =============================================================================
+describe('renderUserQuestion (#528)', () => {
+  const NOW = 1_700_000_000_000
+
+  function baseQuestion(
+    overrides: Partial<Parameters<typeof renderUserQuestion>[0]> = {},
+  ): Parameters<typeof renderUserQuestion>[0] {
+    return {
+      questionId: '01HZX4N5YJK2P8Q3R6V7T9W2WB',
+      sourceAgent: 'hermes',
+      question: 'shadcn/ui or custom?',
+      options: [
+        { id: 'opt-shadcn', label: 'shadcn/ui (recommended)' },
+        { id: 'opt-custom', label: 'Custom build' },
+      ],
+      allowFreeText: true,
+      deadlineMs: NOW + 5 * 60_000,
+      requestedAt: NOW,
+      ...overrides,
+    }
+  }
+
+  it('renders at warning level with the short question id in the title', () => {
+    const n = renderUserQuestion(baseQuestion())
+    expect(n.level).toBe('warning')
+    expect(n.title).toContain('hermes asks')
+    expect(n.title).toContain('01HZX4')
+    expect(n.requestId).toBeNull()
+    expect(n.agentBlocking).toBe(false)
+  })
+
+  it('includes the question + every option label in the body', () => {
+    const n = renderUserQuestion(baseQuestion())
+    expect(n.body).toContain('shadcn/ui or custom?')
+    expect(n.body).toContain('hermes asks')
+  })
+
+  it('renders one ChannelAction per option with the ask_<qid>_<oid> action id', () => {
+    const n = renderUserQuestion(baseQuestion())
+    expect(n.actions).toHaveLength(2)
+    const ids = n.actions.map((a) => a.id)
+    expect(ids).toEqual([
+      'ask_01HZX4N5YJK2P8Q3R6V7T9W2WB_opt-shadcn',
+      'ask_01HZX4N5YJK2P8Q3R6V7T9W2WB_opt-custom',
+    ])
+    for (const a of n.actions) {
+      expect(a.intent).toBe('custom')
+      const payload = a.payload as Record<string, unknown>
+      expect(payload.action).toBe('answer-question')
+      expect(payload.questionId).toBe('01HZX4N5YJK2P8Q3R6V7T9W2WB')
+    }
+  })
+
+  it('mentions the free-text fallback when allowFreeText=true', () => {
+    const n = renderUserQuestion(baseQuestion({ allowFreeText: true }))
+    expect(n.body).toMatch(/just type your answer/i)
+  })
+
+  it('omits the free-text mention when allowFreeText=false', () => {
+    const n = renderUserQuestion(baseQuestion({ allowFreeText: false }))
+    expect(n.body).not.toMatch(/just type your answer/i)
+    expect(n.body).toMatch(/Pick one/i)
+  })
+
+  it('renders the optional context paragraph above the question', () => {
+    const n = renderUserQuestion(
+      baseQuestion({ context: 'auth flow needs a quick call' }),
+    )
+    expect(n.body).toContain('auth flow needs a quick call')
   })
 })

@@ -13,6 +13,7 @@ import {
   renderSessionProgress,
   renderSessionResolutionPrompt,
   renderSessionStarted,
+  renderUserQuestion,
 } from './render.js'
 import type { ChannelId, Notification, UserDecision } from './types.js'
 
@@ -61,6 +62,11 @@ export class NotificationBridge {
   // existing ChannelAction shape so Telegram inline keyboards (#522)
   // pick them up automatically.
   private offSessionResolutionNeeded: (() => void) | null = null
+  // #528 — Agent ask_user_with_options. Warning-level push that ships
+  // the agent's question to the user's chat with one button per option;
+  // free-text replies are routed via the agent SOUL → submit_user_answer
+  // MCP tool by way of the same channel listener.
+  private offQuestionAsked: (() => void) | null = null
   /** Maps requestId → notificationIds we've sent, so the resolved handler
    *  knows which messages to update. Cleared once a resolution lands. */
   private readonly outstanding = new Map<string, Set<string>>()
@@ -147,6 +153,15 @@ export class NotificationBridge {
       },
     )
 
+    // 7. #528 — ask_user_with_options. Agent surfaced a structured
+    //    question to the user; render the option buttons.
+    this.offQuestionAsked = this.bus.on('question:asked', (e) => {
+      this.handleQuestionAsked(e).catch(() => {
+        // best-effort — agent tool call still times out cleanly on
+        // pending_questions deadline if the push fails
+      })
+    })
+
     await this.service.startListening()
     // #525 — Start the shared countdown ticker so in-flight approval
     // messages get their "⏱ Auto-deny in Xm Ys" tail refreshed each
@@ -182,6 +197,10 @@ export class NotificationBridge {
     if (this.offSessionResolutionNeeded) {
       this.offSessionResolutionNeeded()
       this.offSessionResolutionNeeded = null
+    }
+    if (this.offQuestionAsked) {
+      this.offQuestionAsked()
+      this.offQuestionAsked = null
     }
     this.outstanding.clear()
     this.approvalBodies.clear()
@@ -338,6 +357,20 @@ export class NotificationBridge {
   ): Promise<void> {
     const payload = renderSessionResolutionPrompt(e)
     await this.service.send('critical', payload)
+  }
+
+  /** #528 — Agent ask_user_with_options. Warning-level push so the
+   *  question lands prominently but doesn't bypass silence windows
+   *  the way an approval would. Same agent-mute discipline as the
+   *  approval flow: muted source agents never trigger questions. */
+  private async handleQuestionAsked(
+    e: import('../event-bus.js').ForemanEventMap['question:asked'],
+  ): Promise<void> {
+    const state = this.getState()
+    if (isAgentMuted(state, e.sourceAgent)) return
+    if (isSilenced(state)) return
+    const payload = renderUserQuestion(e)
+    await this.service.send('warning', payload)
   }
 
   private async handleOobDecision(d: UserDecision): Promise<void> {
