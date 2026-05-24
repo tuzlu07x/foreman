@@ -4,6 +4,7 @@ import { agentsCommand } from "./agents-cli.js";
 import { chatCommand } from "./chat-cli.js";
 import { createCompletionCommand } from "./completion.js";
 import { doctorCommand } from "./doctor.js";
+import { hookCommand } from "./hook-cli.js";
 import { identityCommand } from "./identity-cli.js";
 import { initCommand } from "./init.js";
 import { logCommand } from "./log.js";
@@ -55,6 +56,7 @@ program.addCommand(doctorCommand);
 program.addCommand(migrateConfigCommand);
 program.addCommand(migrateCommand);
 program.addCommand(wrapCommand);
+program.addCommand(hookCommand);
 program.addCommand(createCompletionCommand(() => program));
 
 function isForemanFriendlyError(
