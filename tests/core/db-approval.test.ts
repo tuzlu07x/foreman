@@ -350,5 +350,163 @@ describe("ApprovalBridge", () => {
         bridge.stop();
       }
     });
+
+    // ============================================================================
+    // #526 — Custom action path: agent passes action_id (block_*) → Foreman
+    // injects a predicate-based deny rule + coerces the decision to deny.
+    // ============================================================================
+
+    // #526 custom-action path tests don't need a real request() poll
+    // loop — they exercise submitFromAgent in isolation. Use a helper
+    // that inserts the pending row directly so the test doesn't leave
+    // a dangling polling promise after afterEach() closes the DB.
+    function seedPending(
+      approvalId: string,
+      overrides: Partial<typeof pendingApprovals.$inferInsert> = {},
+    ): void {
+      db.insert(pendingApprovals)
+        .values({
+          requestId: approvalId,
+          sourceAgent: "hermes",
+          targetAgent: null,
+          targetTool: "read_file",
+          args: JSON.stringify({ path: ".env" }),
+          riskScore: 80,
+          riskReasons: JSON.stringify(["secret_path"]),
+          riskFactors: JSON.stringify([
+            {
+              rule: "secret_path",
+              category: "secret",
+              points: 60,
+              reason: ".env-style file",
+            },
+          ]),
+          riskBucket: "high",
+          status: "pending",
+          requestedAt: Date.now(),
+          ...overrides,
+        })
+        .run();
+    }
+
+    it('custom action_id triggers the policy injector + coerces decision to deny (#526)', async () => {
+      const injected: unknown[] = [];
+      const service = new DbApprovalService(db, {
+        bus,
+        timeoutMs: 5000,
+        pollIntervalMs: 20,
+        injectPredicateRule: (input) => {
+          injected.push(input);
+          return 42;
+        },
+      });
+      seedPending("block-1");
+      const out = await service.submitFromAgent({
+        approvalId: "block-1",
+        decision: "allow", // agent passed allow; coerced to deny by the custom path
+        sourceAgent: "hermes",
+        actionId: "block_secret_path",
+      });
+      expect(out.ok).toBe(true);
+      expect(out.policyRuleId).toBe(42);
+      expect(injected).toHaveLength(1);
+      expect(injected[0]).toMatchObject({
+        approvalId: "block-1",
+        sourceAgent: "hermes",
+        target: "tool:read_file",
+        predicate: { pathMatch: ["\\.env(\\..*)?$"] },
+        reason: "secret_path",
+      });
+    });
+
+    it('emits approval:resolved with decision=denied for block_* actions (#526)', async () => {
+      const service = new DbApprovalService(db, {
+        bus,
+        timeoutMs: 5000,
+        pollIntervalMs: 20,
+        injectPredicateRule: () => 7,
+      });
+      seedPending("block-emit-1");
+      const events: ForemanEventMap["approval:resolved"][] = [];
+      bus.on("approval:resolved", (e) => events.push(e));
+      await service.submitFromAgent({
+        approvalId: "block-emit-1",
+        decision: "allow", // intentionally allow — must still flip to denied
+        sourceAgent: "hermes",
+        actionId: "block_secret_path",
+      });
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        requestId: "block-emit-1",
+        decision: "denied",
+        via: "agent_mcp",
+        routedBy: "hermes",
+      });
+    });
+
+    it('rejects custom action_id when no matching risk factor exists on the row (#526)', async () => {
+      const service = new DbApprovalService(db, {
+        bus,
+        timeoutMs: 5000,
+        pollIntervalMs: 20,
+        injectPredicateRule: () => 1,
+      });
+      // Pending row has secret_path factor but the agent claims a
+      // shell action — should reject cleanly.
+      seedPending("noface-1");
+      const out = await service.submitFromAgent({
+        approvalId: "noface-1",
+        decision: "deny",
+        sourceAgent: "hermes",
+        actionId: "block_shell_rm_rf_general",
+      });
+      expect(out.ok).toBe(false);
+      expect(out.error).toMatch(/unknown action_id/);
+    });
+
+    it('returns an error when policy injection is not wired (#526)', async () => {
+      const service = new DbApprovalService(db, {
+        bus,
+        timeoutMs: 5000,
+        pollIntervalMs: 20,
+        // No injectPredicateRule — simulates a Foreman build that didn't
+        // wire the policy engine into the approval service.
+      });
+      seedPending("noinjector-1");
+      const out = await service.submitFromAgent({
+        approvalId: "noinjector-1",
+        decision: "deny",
+        sourceAgent: "hermes",
+        actionId: "block_secret_path",
+      });
+      expect(out.ok).toBe(false);
+      expect(out.error).toMatch(/policy injection not wired/);
+    });
+
+    it('plain allow/deny path is unchanged when action_id is absent (#526 backward-compat)', async () => {
+      const injected: unknown[] = [];
+      const service = new DbApprovalService(db, {
+        bus,
+        timeoutMs: 5000,
+        pollIntervalMs: 20,
+        injectPredicateRule: (input) => {
+          injected.push(input);
+          return 99;
+        },
+      });
+      seedPending("plain-1");
+      const events: ForemanEventMap["approval:resolved"][] = [];
+      bus.on("approval:resolved", (e) => events.push(e));
+      const out = await service.submitFromAgent({
+        approvalId: "plain-1",
+        decision: "allow",
+        sourceAgent: "hermes",
+        // no actionId
+      });
+      expect(out.ok).toBe(true);
+      expect(out.policyRuleId).toBeUndefined();
+      expect(injected).toHaveLength(0); // injector not called for plain path
+      expect(events[0]?.decision).toBe("allowed"); // not coerced to denied
+    });
   });
 });

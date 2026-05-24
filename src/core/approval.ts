@@ -6,6 +6,7 @@ import {
   type EventBus,
   type ForemanEventMap,
 } from "./event-bus.js";
+import { predicateHintForFactor } from "./risk-rules/predicate-hint.js";
 import type {
   LlmVerification,
   RiskBucket,
@@ -60,6 +61,15 @@ export interface SubmitApprovalFromAgentOpts {
    *  agent passes to `foreman mcp-stdio`). Surfaces in the audit log so
    *  operators can tell which agent's chat the user replied in. */
   sourceAgent: string;
+  /** #526 — Optional custom action id (e.g. `block_secret_path`) tapped
+   *  by the user on an inline-keyboard custom button. When set, the
+   *  approval service looks up the matching predicate-hint from the
+   *  approval row's risk factors + injects a permanent deny rule via
+   *  `policyEngine.addPredicateRule()` BEFORE emitting the resolution
+   *  event (so the next identical call by the same agent is denied by
+   *  the new rule without re-asking). Decision is always coerced to
+   *  `deny` for `block_*` actions. */
+  actionId?: string;
 }
 
 export interface SubmitApprovalResult {
@@ -67,6 +77,10 @@ export interface SubmitApprovalResult {
   /** Free-text error message when `ok === false`. Designed to be shown
    *  back to the agent's user (e.g. "approval abc123 not found"). */
   error?: string;
+  /** #526 — When a custom `block_*` action injected a predicate rule,
+   *  the new rule id is echoed back so the chat reply can confirm
+   *  "policy rule #12 added". Undefined for plain allow/deny. */
+  policyRuleId?: number;
 }
 
 export interface ApprovalService {
@@ -229,6 +243,31 @@ export interface DbApprovalOptions {
   timeoutMs?: number;
   /** How often to poll the DB for a resolution. */
   pollIntervalMs?: number;
+  /** #526 — Optional callback that injects a predicate-based deny rule
+   *  from a custom approval action (`block_*` button). Set when wiring
+   *  Foreman with a policy engine; omit in unit tests that don't
+   *  exercise the policy-injection path. Returns the new rule id so
+   *  the chat reply can echo it. Synchronous on purpose — the policy
+   *  engine writes to the same SQLite handle the approval service uses,
+   *  so there's no I/O wait. */
+  injectPredicateRule?: (input: ApprovalRuleInjection) => number;
+}
+
+/** #526 — Payload the approval service hands to the policy-engine
+ *  injector when the user taps a custom `block_*` button. Decoupled
+ *  from `AddPredicateRuleInput` so the approval module doesn't import
+ *  the policy engine (avoids a circular dep — the wiring layer joins
+ *  them in `foreman start`). */
+export interface ApprovalRuleInjection {
+  approvalId: string;
+  sourceAgent: string;
+  target: string;
+  predicate: {
+    pathMatch?: string[];
+    toolPattern?: string;
+    argContains?: string;
+  };
+  reason?: string;
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 200;
@@ -237,6 +276,9 @@ export class DbApprovalService implements ApprovalService {
   private readonly bus: EventBus<ForemanEventMap>;
   private readonly timeoutMs: number;
   private readonly pollIntervalMs: number;
+  private readonly injectPredicateRule?: (
+    input: ApprovalRuleInjection,
+  ) => number;
 
   constructor(
     private readonly db: ForemanDb,
@@ -249,6 +291,7 @@ export class DbApprovalService implements ApprovalService {
     // need real time to react. FOREMAN_APPROVAL_TIMEOUT env still wins.
     this.timeoutMs = opts.timeoutMs ?? envTimeoutMs() ?? DB_DEFAULT_TIMEOUT_MS;
     this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+    this.injectPredicateRule = opts.injectPredicateRule;
   }
 
   async request(req: ApprovalRequest): Promise<ApprovalDecision> {
@@ -328,7 +371,18 @@ export class DbApprovalService implements ApprovalService {
   async submitFromAgent(
     opts: SubmitApprovalFromAgentOpts,
   ): Promise<SubmitApprovalResult> {
-    const row = this.db
+    // Pull the full row when an actionId is set so the custom-action
+    // path can re-derive the predicate from the persisted riskFactors.
+    // For the plain allow/deny case, the smaller status-only query
+    // keeps the hot path narrow.
+    const fullRow = opts.actionId
+      ? this.db
+          .select()
+          .from(pendingApprovals)
+          .where(eq(pendingApprovals.requestId, opts.approvalId))
+          .get()
+      : null;
+    const row = fullRow ?? this.db
       .select({
         status: pendingApprovals.status,
       })
@@ -344,10 +398,44 @@ export class DbApprovalService implements ApprovalService {
         error: `approval ${opts.approvalId} already ${row.status}`,
       };
     }
+
+    // #526 — Custom action path: look up the predicate from the risk
+    // factors persisted on the approval row, inject the deny rule, and
+    // coerce the decision to "deny" regardless of what the agent sent
+    // (a `block_*` action always implies block-and-deny).
+    let policyRuleId: number | undefined;
+    let effectiveDecision: "allow" | "deny" = opts.decision;
+    if (opts.actionId && fullRow) {
+      if (!this.injectPredicateRule) {
+        return {
+          ok: false,
+          error:
+            "policy injection not wired in this Foreman build (#526 — restart with the injector configured)",
+        };
+      }
+      const proposal = resolveProposalFromRow(opts.actionId, fullRow);
+      if (!proposal) {
+        return {
+          ok: false,
+          error: `unknown action_id "${opts.actionId}" for approval ${opts.approvalId} (no matching risk factor)`,
+        };
+      }
+      try {
+        policyRuleId = this.injectPredicateRule(proposal);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          ok: false,
+          error: `policy injection failed: ${message}`,
+        };
+      }
+      effectiveDecision = "deny";
+    }
+
     const decisionStr: "allowed" | "denied" =
-      opts.decision === "allow" ? "allowed" : "denied";
+      effectiveDecision === "allow" ? "allowed" : "denied";
     const rememberValue: "allow" | "deny" | undefined = opts.remember
-      ? opts.decision
+      ? effectiveDecision
       : undefined;
     this.bus.emit("approval:resolved", {
       requestId: opts.approvalId,
@@ -357,8 +445,49 @@ export class DbApprovalService implements ApprovalService {
       via: "agent_mcp",
       routedBy: opts.sourceAgent,
     });
-    return { ok: true };
+    return { ok: true, ...(policyRuleId ? { policyRuleId } : {}) };
   }
+}
+
+/** #526 — Re-derive the predicate proposal for a custom `block_*`
+ *  action from the approval row's persisted riskFactors + args. The
+ *  callback_data round-trips only the action id (Telegram 64-byte cap);
+ *  the actual predicate is rebuilt here so the agent never needs to
+ *  understand policy schema. */
+function resolveProposalFromRow(
+  actionId: string,
+  row: typeof pendingApprovals.$inferSelect,
+): ApprovalRuleInjection | null {
+  if (!actionId.startsWith("block_")) return null;
+  const factorRule = actionId.slice("block_".length);
+  if (!factorRule) return null;
+  let factors: RiskFactor[] = [];
+  try {
+    factors = row.riskFactors
+      ? (JSON.parse(row.riskFactors) as RiskFactor[])
+      : [];
+  } catch {
+    factors = [];
+  }
+  const matched = factors.find((f) => f.rule === factorRule);
+  if (!matched) return null;
+  let args: unknown = null;
+  try {
+    args = row.args ? JSON.parse(row.args) : null;
+  } catch {
+    args = null;
+  }
+  const proposal = predicateHintForFactor(matched, args, row.sourceAgent);
+  if (!proposal) return null;
+  if (proposal.actionId !== actionId) return null;
+  if (!row.targetTool) return null;
+  return {
+    approvalId: row.requestId,
+    sourceAgent: row.sourceAgent,
+    target: `tool:${row.targetTool}`,
+    predicate: proposal.predicate,
+    reason: proposal.reason,
+  };
 }
 
 function sleep(ms: number): Promise<void> {

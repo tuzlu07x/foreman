@@ -1,4 +1,5 @@
 import type { ForemanEventMap } from '../event-bus.js'
+import { predicateHintsForFactors } from '../risk-rules/predicate-hint.js'
 import type { RiskBucket, RiskFactor } from '../risk-rules/types.js'
 import type { Notification, NotificationAction, NotificationLevel } from './types.js'
 
@@ -24,15 +25,56 @@ export function renderApprovalNotification(
   const level = levelForBucket(req.riskBucket)
   const title = formatTitle(req)
   const body = formatBody(req)
-  const actions = buildActions(req.riskBucket, req.riskFactors)
+  const standard = buildActions(req.riskBucket, req.riskFactors)
+  // #526 — when the request hit a recognisable risk factor (secret path,
+  // shell-destructive command, exfil host, …) offer one-tap "block this
+  // pattern permanently" buttons alongside the standard Allow / Deny.
+  // The button's `intent: 'custom'` + `payload.action: 'add-deny-rule'`
+  // is round-tripped via the Telegram callback_query path → the agent's
+  // `submit_approval` MCP tool gets called with `action_id`, and Foreman's
+  // bridge wires it into `policyEngine.addPredicateRule()`.
+  const custom = buildCustomPolicyActions(req)
   return {
     level,
     requestId: req.requestId,
     title,
     body,
-    actions,
+    actions: [...standard, ...custom],
     agentBlocking: true,
   }
+}
+
+/** #526 — Derive "block this pattern" actions from the request's risk
+ *  factors. Pure function so the test surface is independent of the
+ *  approval bridge. */
+function buildCustomPolicyActions(
+  req: ForemanEventMap['approval:requested'],
+): NotificationAction[] {
+  // No targetTool → no place to bind a predicate rule. Cross-agent calls
+  // without a tool (pure routing) don't have a request-shape factor anyway,
+  // so this branch typically returns empty.
+  if (!req.targetTool) return []
+  const proposals = predicateHintsForFactors(
+    req.riskFactors,
+    req.args,
+    req.sourceAgent,
+  )
+  return proposals.map((p) => ({
+    id: p.actionId,
+    label: p.label,
+    intent: 'custom' as const,
+    style: 'danger' as const,
+    payload: {
+      action: 'add-deny-rule',
+      sourceAgent: req.sourceAgent,
+      // Bind to the matched tool — a `.env` block targets the read path
+      // the agent just attempted. Future broader rules (e.g. matching
+      // multiple tools) need a separate predicate type.
+      target: `tool:${req.targetTool}`,
+      predicate: p.predicate,
+      reason: p.reason,
+    },
+  }))
 }
 
 function formatTitle(req: ForemanEventMap['approval:requested']): string {

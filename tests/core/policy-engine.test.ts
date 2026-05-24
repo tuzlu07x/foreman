@@ -1,4 +1,7 @@
 import type Database from "better-sqlite3";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventBus, type ForemanEventMap } from "../../src/core/event-bus.js";
 import { PolicyEngine } from "../../src/core/policy-engine.js";
@@ -432,6 +435,238 @@ agents:
       const snap = engine.getSessionLimits();
       snap.tokenLimit = 1;
       expect(engine.getSessionLimits().tokenLimit).toBe(250_000);
+    });
+  });
+
+  // #526 — Predicate-based rule injection from approval modal actions.
+  // The toolPattern + argContains conditions are new; pathMatch already
+  // existed and stays behavior-identical.
+  describe("predicate conditions (#526)", () => {
+    it("toolPattern matches when the target tool matches the regex", () => {
+      engine.loadYamlText(
+        `rules:\n` +
+          `  - source: hermes\n` +
+          `    target: tool:read_file\n` +
+          `    effect: deny\n` +
+          `    conditions:\n` +
+          `      toolPattern: "^read_"\n`,
+      );
+      const result = engine.evaluate({
+        sourceAgent: "hermes",
+        targetTool: "read_file",
+      });
+      expect(result.decision).toBe("deny");
+    });
+
+    it("toolPattern does NOT match when target tool fails the regex", () => {
+      engine.loadYamlText(
+        `rules:\n` +
+          `  - source: hermes\n` +
+          `    target: tool:read_file\n` +
+          `    effect: deny\n` +
+          `    conditions:\n` +
+          `      toolPattern: "^write_"\n`,
+      );
+      const result = engine.evaluate({
+        sourceAgent: "hermes",
+        targetTool: "read_file",
+      });
+      // toolPattern excludes; falls back to ASK
+      expect(result.decision).toBe("ask");
+    });
+
+    it("argContains matches case-insensitively across nested string args", () => {
+      engine.loadYamlText(
+        `rules:\n` +
+          `  - source: hermes\n` +
+          `    target: tool:fetch\n` +
+          `    effect: deny\n` +
+          `    conditions:\n` +
+          `      argContains: pastebin.com\n`,
+      );
+      const result = engine.evaluate({
+        sourceAgent: "hermes",
+        targetTool: "fetch",
+        args: { url: "https://PASTEBIN.com/abc123", method: "GET" },
+      });
+      expect(result.decision).toBe("deny");
+    });
+
+    it("argContains does NOT match when substring is absent", () => {
+      engine.loadYamlText(
+        `rules:\n` +
+          `  - source: hermes\n` +
+          `    target: tool:fetch\n` +
+          `    effect: deny\n` +
+          `    conditions:\n` +
+          `      argContains: pastebin\n`,
+      );
+      const result = engine.evaluate({
+        sourceAgent: "hermes",
+        targetTool: "fetch",
+        args: { url: "https://example.com/data" },
+      });
+      expect(result.decision).toBe("ask");
+    });
+
+    it("AND's multiple predicates — pathMatch + toolPattern together", () => {
+      engine.loadYamlText(
+        `rules:\n` +
+          `  - source: hermes\n` +
+          `    target: tool:read_file\n` +
+          `    effect: deny\n` +
+          `    conditions:\n` +
+          `      pathMatch:\n` +
+          `        - "\\\\.env"\n` +
+          `      toolPattern: "^read"\n`,
+      );
+      // Both match → deny.
+      expect(
+        engine.evaluate({
+          sourceAgent: "hermes",
+          targetTool: "read_file",
+          args: { path: ".env.local" },
+        }).decision,
+      ).toBe("deny");
+      // toolPattern matches but pathMatch doesn't → ASK.
+      expect(
+        engine.evaluate({
+          sourceAgent: "hermes",
+          targetTool: "read_file",
+          args: { path: "src/app.ts" },
+        }).decision,
+      ).toBe("ask");
+    });
+  });
+
+  // #526 — addPredicateRule: programmatic rule injection from the
+  // approval modal's custom action button. Persists to DB + (optionally)
+  // appends to policy.yaml with a provenance comment block.
+  describe("addPredicateRule (#526)", () => {
+    it("persists the rule to the policies table with conditions.source provenance", () => {
+      const id = engine.addPredicateRule({
+        sourceAgent: "hermes",
+        target: "tool:read_file",
+        predicate: { pathMatch: ["\\.env(\\..*)?$"] },
+        approvalId: "appr-abc",
+        reason: "secret_path",
+      });
+      expect(id).toBeGreaterThan(0);
+      const rules = engine.list();
+      const injected = rules.find((r) => r.id === id);
+      expect(injected).toBeDefined();
+      expect(injected!.effect).toBe("deny");
+      const conditions = JSON.parse(injected!.conditions ?? "{}") as {
+        pathMatch?: string[];
+        source?: { kind?: string; approvalId?: string; reason?: string };
+      };
+      expect(conditions.pathMatch).toEqual(["\\.env(\\..*)?$"]);
+      expect(conditions.source).toMatchObject({
+        kind: "approval",
+        approvalId: "appr-abc",
+        reason: "secret_path",
+      });
+    });
+
+    it("immediately denies a matching request after injection", () => {
+      engine.addPredicateRule({
+        sourceAgent: "hermes",
+        target: "tool:read_file",
+        predicate: { pathMatch: ["\\.env(\\..*)?$"] },
+        approvalId: "appr-1",
+        reason: "secret_path",
+      });
+      // Same source + target + matching path → deny without re-asking.
+      expect(
+        engine.evaluate({
+          sourceAgent: "hermes",
+          targetAgent: undefined,
+          targetTool: "read_file",
+          args: { path: ".env.production" },
+        }).decision,
+      ).toBe("deny");
+      // Different path → predicate fails → falls back to ASK.
+      expect(
+        engine.evaluate({
+          sourceAgent: "hermes",
+          targetTool: "read_file",
+          args: { path: "src/app.ts" },
+        }).decision,
+      ).toBe("ask");
+    });
+
+    it("appends to policy.yaml with a provenance comment block when path is set", () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), "foreman-policy-"));
+      const yamlPath = join(tmpDir, "policy.yaml");
+      try {
+        engine.addPredicateRule({
+          sourceAgent: "hermes",
+          target: "tool:read_file",
+          predicate: { pathMatch: ["\\.env(\\..*)?$"] },
+          approvalId: "appr-xyz",
+          reason: "secret_path",
+          policyYamlPath: yamlPath,
+        });
+        const yaml = readFileSync(yamlPath, "utf-8");
+        // Provenance comment + the rule itself round-trip.
+        expect(yaml).toContain("# === Foreman approval-injected rule ===");
+        expect(yaml).toContain("Added from approval appr-xyz");
+        expect(yaml).toContain("Reason: secret_path");
+        expect(yaml).toContain("source: hermes");
+        expect(yaml).toContain("target: tool:read_file");
+        expect(yaml).toContain("effect: deny");
+        expect(yaml).toContain("pathMatch:");
+        // The pattern is double-quoted so backslashes survive the YAML round trip.
+        expect(yaml).toContain('"\\\\.env(\\\\..*)?$"');
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("appended rule survives a loadFromYaml reload", () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), "foreman-policy-"));
+      const yamlPath = join(tmpDir, "policy.yaml");
+      try {
+        engine.addPredicateRule({
+          sourceAgent: "hermes",
+          target: "tool:read_file",
+          predicate: { pathMatch: ["\\.env(\\..*)?$"] },
+          approvalId: "appr-xyz",
+          reason: "secret_path",
+          policyYamlPath: yamlPath,
+        });
+        // Wipe DB rules then reload from disk — the appended rule
+        // should reappear with its predicate + source intact.
+        engine.loadFromYaml(yamlPath);
+        const result = engine.evaluate({
+          sourceAgent: "hermes",
+          targetTool: "read_file",
+          args: { path: ".env" },
+        });
+        expect(result.decision).toBe("deny");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("emits policy:changed when a rule is injected", () => {
+      const spy = vi.fn();
+      bus.on("policy:changed", spy);
+      const id = engine.addPredicateRule({
+        sourceAgent: "hermes",
+        target: "tool:read_file",
+        predicate: { pathMatch: ["\\.env"] },
+        approvalId: "appr-evt",
+      });
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ruleId: id,
+          sourceAgent: "hermes",
+          target: "tool:read_file",
+          effect: "deny",
+          createdBy: "remember-action",
+        }),
+      );
     });
   });
 });

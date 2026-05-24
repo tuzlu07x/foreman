@@ -292,6 +292,102 @@ describe("mcp-stdio handleMessage", () => {
       expect(out.result.isError).toBe(true);
       expect(out.result.content[0]?.text).toContain("missing-id");
     });
+
+    // ============================================================================
+    // #526 — submit_approval `action_id` parameter for custom policy-injection
+    // buttons (`block_*`). Foreman wires it through to submitFromAgent so the
+    // approval service can look up the proposed predicate from the persisted
+    // approval row + inject the deny rule.
+    // ============================================================================
+
+    it("advertises the action_id parameter in submit_approval's input schema (#526)", async () => {
+      const out = (await handleMessage(makeServices("allowed"), "hermes", {
+        jsonrpc: "2.0",
+        id: 16,
+        method: "tools/list",
+      } as JSONRPCMessage)) as unknown as {
+        result: {
+          tools: Array<{
+            name: string;
+            inputSchema?: { properties?: Record<string, unknown> };
+          }>;
+        };
+      };
+      const submit = out.result.tools.find((t) => t.name === "submit_approval");
+      expect(submit?.inputSchema?.properties).toHaveProperty("action_id");
+    });
+
+    it("forwards action_id verbatim to submitFromAgent (#526)", async () => {
+      const services = makeServices("allowed");
+      await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 17,
+        method: "tools/call",
+        params: {
+          name: "submit_approval",
+          arguments: {
+            approval_id: "appr-abc",
+            decision: "deny",
+            action_id: "block_secret_path",
+          },
+        },
+      } as JSONRPCMessage);
+      expect(services.approval.submitFromAgent).toHaveBeenCalledWith({
+        approvalId: "appr-abc",
+        decision: "deny",
+        remember: false,
+        sourceAgent: "hermes",
+        actionId: "block_secret_path",
+      });
+    });
+
+    it("omits action_id from the forwarded call when the field is absent (#526)", async () => {
+      // Plain allow/deny path stays bit-identical — actionId is undefined
+      // so submitFromAgent's existing signature consumers see no change.
+      const services = makeServices("allowed");
+      await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 18,
+        method: "tools/call",
+        params: {
+          name: "submit_approval",
+          arguments: { approval_id: "appr-plain", decision: "allow" },
+        },
+      } as JSONRPCMessage);
+      const call = (
+        services.approval.submitFromAgent as unknown as {
+          mock: { calls: unknown[][] };
+        }
+      ).mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(call.actionId).toBeUndefined();
+    });
+
+    it("echoes the policy rule id back when submitFromAgent returns one (#526)", async () => {
+      const services = makeServices("allowed", "policy:7", undefined, {
+        ok: true,
+        // Simulate the custom path returning a rule id; the chat reply
+        // should surface it so the user sees what was added.
+      } as { ok: boolean; error?: string });
+      (services.approval.submitFromAgent as unknown as {
+        mockResolvedValueOnce: (v: { ok: boolean; policyRuleId: number }) => void;
+      }).mockResolvedValueOnce({ ok: true, policyRuleId: 42 });
+      const out = (await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 19,
+        method: "tools/call",
+        params: {
+          name: "submit_approval",
+          arguments: {
+            approval_id: "appr-rule",
+            decision: "deny",
+            action_id: "block_secret_path",
+          },
+        },
+      } as JSONRPCMessage)) as unknown as {
+        result: { content: { text: string }[] };
+      };
+      expect(out.result.content[0]?.text).toContain("policy rule #42");
+    });
   });
 
   // #431 — Agent-routed orchestrator command. User types `/foreman <verb>`
