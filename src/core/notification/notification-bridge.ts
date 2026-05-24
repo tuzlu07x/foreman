@@ -1,4 +1,5 @@
 import { bus as defaultBus, type EventBus, type ForemanEventMap } from '../event-bus.js'
+import { CountdownTicker } from './countdown-ticker.js'
 import { NotificationService } from './notification-service.js'
 import {
   isAgentMuted,
@@ -34,11 +35,17 @@ export interface NotificationBridgeOptions {
    *  bridge re-reads on every dispatch so `foreman notify silence 4h`
    *  takes effect without a process restart. */
   getState?: () => NotifyState
+  /** #525 — Shared CountdownTicker that edits each in-flight approval
+   *  message every minute to refresh the "⏱ Auto-deny in Xm Ys" tail.
+   *  When omitted, a default ticker is constructed; tests inject a
+   *  fake-timer version for deterministic ticks. */
+  countdownTicker?: CountdownTicker
 }
 
 export class NotificationBridge {
   private readonly bus: EventBus<ForemanEventMap>
   private readonly getState: () => NotifyState
+  private readonly countdownTicker: CountdownTicker
   private offRequested: (() => void) | null = null
   private offResolved: (() => void) | null = null
   private offDecided: (() => void) | null = null
@@ -51,6 +58,10 @@ export class NotificationBridge {
   /** Maps requestId → notificationIds we've sent, so the resolved handler
    *  knows which messages to update. Cleared once a resolution lands. */
   private readonly outstanding = new Map<string, Set<string>>()
+  /** #525 — Maps requestId → notification body the bridge sent, so the
+   *  CountdownTicker has the original text to splice an updated tail
+   *  into on each tick. Cleared on resolution alongside `outstanding`. */
+  private readonly approvalBodies = new Map<string, string>()
 
   constructor(
     private readonly service: NotificationService,
@@ -59,6 +70,7 @@ export class NotificationBridge {
     this.bus = opts.bus ?? defaultBus
     this.getState =
       opts.getState ?? (() => ({ silencedUntil: null, mutedAgents: [] }))
+    this.countdownTicker = opts.countdownTicker ?? new CountdownTicker()
   }
 
   async start(): Promise<void> {
@@ -116,6 +128,10 @@ export class NotificationBridge {
     })
 
     await this.service.startListening()
+    // #525 — Start the shared countdown ticker so in-flight approval
+    // messages get their "⏱ Auto-deny in Xm Ys" tail refreshed each
+    // minute. Idempotent — second start() call no-ops.
+    this.countdownTicker.start()
   }
 
   async stop(): Promise<void> {
@@ -144,6 +160,8 @@ export class NotificationBridge {
       this.offSessionCompleted = null
     }
     this.outstanding.clear()
+    this.approvalBodies.clear()
+    this.countdownTicker.stop()
     await this.service.shutdown()
   }
 
@@ -172,20 +190,56 @@ export class NotificationBridge {
       this.outstanding.set(req.requestId, set)
     }
     set.add(result.notificationId)
+    // #525 — Register the message with the countdown ticker so the
+    // "⏱ Auto-deny in Xm Ys" tail refreshes each minute. Cache the
+    // rendered body so tick() can splice a fresh tail without
+    // re-running the full render pipeline. Only registers when both a
+    // deadline AND a sent message ref are known — silenced / muted /
+    // skipped / failed paths leave the ticker untouched.
+    if (req.deadlineMs != null) {
+      this.approvalBodies.set(req.requestId, payload.body)
+      for (const [channelId, outcome] of result.outcomes) {
+        if (outcome.status !== 'sent') continue
+        const channel = this.service.channelById(channelId)
+        if (!channel) continue
+        this.countdownTicker.register({
+          approvalId: req.requestId,
+          channel,
+          ref: outcome.ref,
+          body: payload.body,
+          deadlineMs: req.deadlineMs,
+        })
+      }
+    }
   }
 
   private async handleResolved(
     res: ForemanEventMap['approval:resolved'],
   ): Promise<void> {
+    // #525 — Stop ticking + push a final "✓ Decided" edit through the
+    // ticker (it knows how to strip the countdown tail cleanly). Done
+    // before the outstanding-map iteration below so the countdown
+    // doesn't get one more tick after the resolution event fires.
+    const footer = renderResolvedFooter(res)
+    await this.countdownTicker.resolve(res.requestId, footer)
+    this.approvalBodies.delete(res.requestId)
+
     const ids = this.outstanding.get(res.requestId)
     if (!ids || ids.size === 0) return
-    const footer = renderResolvedFooter(res)
     for (const notificationId of ids) {
       const ref = this.service.getMessageRef(notificationId)
       const row = this.service.getNotification(notificationId)
       if (!ref || !row) continue
       const channel = this.service.channelById(ref.channel as ChannelId)
       if (!channel) continue
+      // If the ticker already pushed the final edit for this channel,
+      // re-editing here would just produce an identical "no change"
+      // edit (Telegram returns 400 on those). Telegram channels are
+      // already handled by the ticker.resolve() above; non-Telegram
+      // channels (system, webhook) didn't have the countdown tail in
+      // the first place — append the footer the old way.
+      const hasCountdownTail = (row.body ?? '').includes('\n⏱')
+      if (hasCountdownTail) continue
       try {
         await channel.updateMessage(
           { channelMessageId: ref.channelMessageId },
