@@ -442,6 +442,36 @@ describe('renderSessionCompleted (#523)', () => {
     })
     expect(n.body).toContain('$0.00')
   })
+
+  it('appends "(project)" suffix to the header when projectTag is set (#530)', () => {
+    const n = renderSessionCompleted({
+      sessionId: 'sess-abc-12345',
+      outcome: 'success',
+      turnCount: 87,
+      tokenCount: 50_000,
+      costUsd: 1.18,
+      projectTag: 'todo-app',
+      durationMs: 12 * 60_000,
+      completedAt: 0,
+    })
+    expect(n.title).toContain('(todo-app)')
+    expect(n.body).toContain('(todo-app)')
+    expect(n.body).toContain('$1.18')
+  })
+
+  it('omits the "(project)" suffix when projectTag is absent (#530)', () => {
+    const n = renderSessionCompleted({
+      sessionId: 'sess-abc-12345',
+      outcome: 'success',
+      turnCount: 1,
+      tokenCount: 10,
+      costUsd: 0.04,
+      durationMs: 1000,
+      completedAt: 0,
+    })
+    expect(n.title).not.toMatch(/\(/)
+    expect(n.body.split('\n')[0]!).not.toMatch(/\(/)
+  })
 })
 
 describe('formatElapsed (#523)', () => {

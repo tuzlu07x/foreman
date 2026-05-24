@@ -499,4 +499,131 @@ describe('SessionManager', () => {
       expect(ids).toContain('opt-abandon')
     })
   })
+
+  // ============================================================================
+  // #530 — Per-session cost rollup + project tag plumbing.
+  // ============================================================================
+  describe('cost rollup + project tag (#530)', () => {
+    it('costProvider is invoked on complete() + the result lands on session:completed', () => {
+      const provider = vi.fn(() => 1.23)
+      const m = new SessionManager(db, { bus, costProvider: provider })
+      const completed = vi.fn()
+      bus.on('session:completed', completed)
+      const id = m.startSession(['hermes'])
+      m.complete(id)
+      expect(provider).toHaveBeenCalledWith(id)
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: id,
+          costUsd: 1.23,
+        }),
+      )
+    })
+
+    it('costProvider is invoked on the halted completion path too', () => {
+      const provider = vi.fn(() => 0.42)
+      const m = new SessionManager(db, { bus, costProvider: provider })
+      const completed = vi.fn()
+      bus.on('session:completed', completed)
+      const id = m.startSession(['hermes'])
+      m.halt(id, 'manual') // non-interactive → emits completed immediately
+      expect(provider).toHaveBeenCalledWith(id)
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: id,
+          costUsd: 0.42,
+          outcome: 'halted',
+        }),
+      )
+    })
+
+    it('falls back to costUsd=0 when no provider is wired', () => {
+      const m = new SessionManager(db, { bus })
+      const completed = vi.fn()
+      bus.on('session:completed', completed)
+      const id = m.startSession(['hermes'])
+      m.complete(id)
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({ costUsd: 0 }),
+      )
+    })
+
+    it('falls back to 0 when the provider throws (defensive)', () => {
+      const m = new SessionManager(db, {
+        bus,
+        costProvider: () => {
+          throw new Error('boom')
+        },
+      })
+      const completed = vi.fn()
+      bus.on('session:completed', completed)
+      const id = m.startSession(['hermes'])
+      m.complete(id)
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({ costUsd: 0 }),
+      )
+    })
+
+    it('falls back to 0 when the provider returns a negative / NaN value', () => {
+      const m = new SessionManager(db, {
+        bus,
+        costProvider: () => -1,
+      })
+      const completed = vi.fn()
+      bus.on('session:completed', completed)
+      const id = m.startSession(['hermes'])
+      m.complete(id)
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({ costUsd: 0 }),
+      )
+    })
+
+    it('startSession with projectTag surfaces it on session:completed', () => {
+      const m = new SessionManager(db, { bus })
+      const completed = vi.fn()
+      bus.on('session:completed', completed)
+      const id = m.startSession(['hermes'], { projectTag: 'todo-app' })
+      m.complete(id)
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: id,
+          projectTag: 'todo-app',
+        }),
+      )
+    })
+
+    it('omits projectTag from session:completed when startSession didn\'t set one', () => {
+      const m = new SessionManager(db, { bus })
+      const completed = vi.fn()
+      bus.on('session:completed', completed)
+      const id = m.startSession(['hermes'])
+      m.complete(id)
+      const payload = completed.mock.calls[0]![0] as { projectTag?: string }
+      expect(payload.projectTag).toBeUndefined()
+    })
+
+    it('projectTag survives halted + abandoned terminal paths', () => {
+      const m = new SessionManager(db, { bus })
+      const completed = vi.fn()
+      bus.on('session:completed', completed)
+
+      // Halted (non-interactive: manual halt)
+      const id1 = m.startSession(['hermes'], { projectTag: 'p1' })
+      m.halt(id1, 'manual')
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({ projectTag: 'p1', outcome: 'halted' }),
+      )
+
+      // Abandoned (loop_detection halt + expireResolution)
+      const id2 = m.startSession(['hermes', 'openclaw'], { projectTag: 'p2' })
+      m.halt(id2, 'loop_detection')
+      m.expireResolution(id2)
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectTag: 'p2',
+          outcome: 'abandoned',
+        }),
+      )
+    })
+  })
 })
