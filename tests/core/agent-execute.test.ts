@@ -389,6 +389,34 @@ describe("executeWriteDirective", () => {
     }
   });
 
+  it("forwards cwd to the spawn so the agent's workdir lands inside the user's project (#bug-B-cwd)", async () => {
+    // Manual QA finding 2026-05-24: codex spawned in Foreman's cwd
+    // (/Users/fatih/Projects/foreman) instead of the project the user
+    // mentioned in the task text. With cwd forwarded, the spawn engine
+    // hands the `cwd` option through to nodeSpawn, and the agent's
+    // workdir matches what was requested.
+    const pwd = makeScript("pwd.sh", "#!/bin/sh\npwd\n");
+    const result = await executeWriteDirective(
+      {
+        agentId: "codex",
+        message: "task",
+        entry: agent({ task_command_template: pwd }),
+        cwd: dir,
+      },
+      {},
+    );
+    expect(result.spawn.kind).toBe("ok");
+    if (result.spawn.kind === "ok") {
+      // macOS resolves /var → /private/var; both forms should be
+      // accepted (the spawn used `dir`, the agent's `pwd` may resolve
+      // symlinks). The relevant assertion is "the spawn cwd is the
+      // tmpdir we passed", not the exact string form.
+      expect(result.spawn.stdout.trim()).toMatch(
+        new RegExp(`${dir.split("/").pop()}\\b`),
+      );
+    }
+  });
+
   it("is a no-op when the catalog entry has no task_skip_permissions_flag even if trusted", async () => {
     // Hermes-style daemon agent: no flag in the catalog → trust is
     // meaningless on the spawn side. Defensive: don't append a phantom
