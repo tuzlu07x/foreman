@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventBus, type ForemanEventMap } from '../../../src/core/event-bus.js'
+import { CountdownTicker } from '../../../src/core/notification/countdown-ticker.js'
 import { NotificationBridge } from '../../../src/core/notification/notification-bridge.js'
 import { NotificationService } from '../../../src/core/notification/notification-service.js'
 import {
@@ -759,5 +760,123 @@ describe('NotificationBridge — session lifecycle dispatch (#523)', () => {
     expect(bus.listenerCount('session:started')).toBe(0)
     expect(bus.listenerCount('session:progress')).toBe(0)
     expect(bus.listenerCount('session:completed')).toBe(0)
+  })
+})
+
+// =============================================================================
+// #525 — Countdown ticker integration. The bridge registers each in-flight
+// approval message with the ticker on `approval:requested` so the tail
+// refreshes every minute, then unregisters + pushes a final edit on
+// `approval:resolved`.
+// =============================================================================
+describe('NotificationBridge — countdown ticker integration (#525)', () => {
+  let db: ForemanDb
+  let sqlite: Database.Database
+  let bus: EventBus<ForemanEventMap>
+  let channel: FakeChannel
+  let service: NotificationService
+  let ticker: CountdownTicker
+  let bridge: NotificationBridge
+  let now: number
+
+  beforeEach(() => {
+    const handle = createInMemoryDb()
+    db = handle.db
+    sqlite = handle.sqlite
+    bus = new EventBus<ForemanEventMap>()
+    channel = new FakeChannel('telegram')
+    service = new NotificationService({
+      db,
+      config: configWithTelegram(),
+      channels: new Map<ChannelId, NotificationChannel>([['telegram', channel]]),
+    })
+    // Sync the fake clock with real wall time so renderApprovalNotification
+    // (which uses Date.now() to format the initial countdown line) agrees
+    // with the ticker's nowFn baseline. Tests then advance `now` manually.
+    now = Date.now()
+    ticker = new CountdownTicker({
+      nowFn: () => now,
+      // The bridge calls ticker.start() — keep the timer plumbing inert
+      // here; tests advance `now` and call ticker.tick() directly when
+      // they need to verify edits.
+      setIntervalFn: ((..._: unknown[]) => ({ unref: () => undefined })) as unknown as typeof setInterval,
+      clearIntervalFn: (() => undefined) as unknown as typeof clearInterval,
+    })
+    bridge = new NotificationBridge(service, { bus, countdownTicker: ticker })
+  })
+
+  afterEach(async () => {
+    await bridge.stop()
+    sqlite.close()
+  })
+
+  it('registers an in-flight approval with the ticker when deadlineMs is set', async () => {
+    await bridge.start()
+    bus.emit(
+      'approval:requested',
+      approvalEvent({ deadlineMs: now + 10 * 60_000 }),
+    )
+    await tick()
+    expect(ticker.size()).toBe(1)
+    expect(channel.sendCalls).toHaveLength(1)
+    // Initial body already carries the first countdown line — the
+    // ticker just replaces the tail on subsequent ticks.
+    expect(channel.sendCalls[0]!.body).toMatch(/Auto-deny in \d+m/)
+  })
+
+  it('does NOT register when deadlineMs is absent', async () => {
+    await bridge.start()
+    bus.emit('approval:requested', approvalEvent({ deadlineMs: undefined }))
+    await tick()
+    expect(ticker.size()).toBe(0)
+    expect(channel.sendCalls[0]!.body).not.toContain('⏱')
+  })
+
+  it('does NOT register when the channel skipped the send (muted source)', async () => {
+    await bridge.stop()
+    bridge = new NotificationBridge(service, {
+      bus,
+      countdownTicker: ticker,
+      getState: () => ({ silencedUntil: null, mutedAgents: ['hermes'] }),
+    })
+    await bridge.start()
+    bus.emit(
+      'approval:requested',
+      approvalEvent({ deadlineMs: now + 10 * 60_000 }),
+    )
+    await tick()
+    expect(ticker.size()).toBe(0)
+    expect(channel.sendCalls).toHaveLength(0)
+  })
+
+  it('unregisters + pushes a final edit on approval:resolved', async () => {
+    await bridge.start()
+    bus.emit(
+      'approval:requested',
+      approvalEvent({ deadlineMs: now + 10 * 60_000 }),
+    )
+    await tick()
+    expect(ticker.size()).toBe(1)
+    bus.emit('approval:resolved', {
+      requestId: 'r-1',
+      decision: 'allowed',
+      resolvedBy: 'user',
+    })
+    await tick()
+    expect(ticker.size()).toBe(0)
+    // Final edit pushed with the ✓ Allowed footer + countdown tail
+    // stripped (no double ⏱ in the body).
+    const lastEdit = channel.updateCalls.at(-1)
+    expect(lastEdit?.body).toContain('✓ Allowed')
+    expect(lastEdit?.body).not.toContain('⏱')
+  })
+
+  it('starts + stops the ticker alongside the bridge', async () => {
+    const startSpy = vi.spyOn(ticker, 'start')
+    const stopSpy = vi.spyOn(ticker, 'stop')
+    await bridge.start()
+    expect(startSpy).toHaveBeenCalledOnce()
+    await bridge.stop()
+    expect(stopSpy).toHaveBeenCalledOnce()
   })
 })

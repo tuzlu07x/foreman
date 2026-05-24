@@ -127,6 +127,12 @@ export interface ForemanEventMap {
     /** Three-layer modal payload (#232 / C9). Drives the modal rendering. */
     securityReport: SecurityReport | null;
     sessionId?: string;
+    /** #525 — Absolute Unix ms timestamp when the approval auto-resolves to
+     *  its default decision (typically deny). Set by the approval service
+     *  on the underlying DB row + propagated by the bridge so channels can
+     *  render a live countdown. Undefined means "no deadline known" — the
+     *  channel skips the countdown line. */
+    deadlineMs?: number;
   };
   "approval:resolved": {
     requestId: string;
