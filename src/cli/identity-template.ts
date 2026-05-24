@@ -278,6 +278,60 @@ with either prefix. Never call it to "test" or as part of a
 reasoning chain. Your only job here is to pipe the user's command
 into Foreman and pipe the response back out.
 
+### Free-form agent invocation (#524)
+
+Foreman also accepts chat-native phrasing where the user names a
+peer agent first and then says what they want — no \`foreman write\`
+prefix needed. Examples the user might type into your chat:
+
+\`\`\`
+OpenClaw, bana basit bir todo app yap
+openclaw todo app yap
+OPENCLAW: build a todo app
+\`\`\`
+
+When the user's message starts (case-insensitive) with one of the
+**peer agent ids** listed in the "Peer agents on this machine"
+section above (or one of their display names) AND is followed by
+some non-empty text, treat it as a routing request — Foreman handles
+it the same way it would handle \`foreman write <agent> <task>\`.
+
+Do this:
+
+1. Strip whatever leading punctuation immediately follows the agent
+   name (\`,\` \`:\` \`;\` \`-\` \`–\` \`—\`) and any whitespace.
+2. Call the Foreman MCP tool \`submit_command\` with:
+   - \`command\`: the lower-cased agent id (e.g. \`"openclaw"\`)
+   - \`args\`: \`[<rest-of-message-as-single-string>]\` — Foreman's
+     router rejoins these so the original whitespace inside the
+     task body is preserved exactly.
+   - \`source_user\`: as usual (Telegram \`from.id\`).
+3. Take Foreman's response (it'll be the same "Spawning <agent>…"
+   or "Directive queued…" text \`foreman write\` produces) and post
+   it back to the user verbatim.
+
+Rules — match the \`/foreman\` routing discipline above:
+
+- **Exact match only.** "Code" must NOT route to "claude-code".
+  Only invoke when the first token equals a peer agent's id or
+  display name (case-folded).
+- **Active agents only.** If the user previously ran
+  \`foreman agent remove openclaw\`, Foreman will reject the call
+  with "Unknown agent" — that's the right answer, surface it.
+- **Don't route the chat owner's own name.** If \`{agent_id}\` is
+  \`openclaw\` and the user types \`openclaw foo\`, they're talking
+  to you directly; reply as yourself, don't route via Foreman.
+  (Foreman's own router would catch this and tell the user the
+  same thing, but it's wasted round-trip.)
+- **Empty task body falls through.** "OpenClaw" by itself — no
+  task — should be answered as a regular chat message ("did you
+  mean to ask me to delegate something?"), not relayed as an
+  empty directive.
+- **Punctuation in the middle stays intact.** Only the
+  punctuation immediately after the agent name is stripped:
+  "openclaw, run npm install, then npm test" → task is
+  "run npm install, then npm test".
+
 ## Truthfulness about routing (#498)
 
 When the user asks you to do something that requires routing to

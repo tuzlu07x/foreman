@@ -287,6 +287,44 @@ describe("DEFAULT_FOREMAN_SOUL — orchestrator routing (#431)", () => {
     );
   });
 
+  // #524 — Chat-native agent invocation. The user types "OpenClaw, foo"
+  // without the `foreman write` prefix; the agent SOUL must recognise
+  // peer-agent ids and relay via submit_command(command=<agentId>, …).
+  it("documents the free-form agent invocation routing (#524)", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/Free-form agent invocation.*#524/);
+  });
+
+  it("instructs the agent to route '<peer> <task>' via submit_command (#524)", () => {
+    // The agent must call submit_command with the lower-cased agent id
+    // as the verb so Foreman's router catches it via its new
+    // `findByCommandToken` fallback.
+    const section = DEFAULT_FOREMAN_SOUL.split("Free-form agent invocation")[1] ?? "";
+    expect(section).toContain("`submit_command`");
+    expect(section).toMatch(/lower-cased agent id/);
+  });
+
+  it("requires exact-match (no substring) for the agent name (#524)", () => {
+    // The "Code → claude-code" footgun the issue body explicitly calls
+    // out. Pin the SOUL guidance against accidental relaxation.
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/[Ee]xact match only/);
+    expect(DEFAULT_FOREMAN_SOUL).toContain("claude-code");
+  });
+
+  it("strips a single run of leading punctuation after the agent name (#524)", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/Strip whatever leading punctuation/);
+  });
+
+  it("falls through when the first token is the agent's OWN id (#524)", () => {
+    // self-target sanity — the same self-target guard the writeHandler
+    // enforces, restated at the agent level so the SOUL doesn't even
+    // round-trip to Foreman in the first place.
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/Don't route the chat owner's own name/);
+  });
+
+  it("falls through when the task body is empty (#524)", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/Empty task body falls through/);
+  });
+
   // #451 — Hermes / OpenClaw filter unknown slash commands at the
   // parser level before the LLM sees the message. The no-slash
   // alias works around this until wrap mode (#445) lands.

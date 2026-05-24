@@ -169,4 +169,57 @@ describe('RegistryService', () => {
       expect(() => registry.unblock('ghost')).toThrow(AgentNotFoundError)
     })
   })
+
+  // #524 — Free-form chat invocation. Foreman's command router calls
+  // this from its unknown-verb fallback to decide whether "OpenClaw, foo"
+  // should route to `write openclaw "foo"` or fall through to the LLM.
+  describe('findByCommandToken (#524)', () => {
+    it('matches an active agent by exact (case-folded) id', () => {
+      registry.register({ id: 'openclaw', displayName: 'OpenClaw', transport: 'stdio' })
+      const result = registry.findByCommandToken('OPENCLAW')
+      expect(result.kind).toBe('match')
+      if (result.kind === 'match') expect(result.agent.id).toBe('openclaw')
+    })
+
+    it('matches by displayName when id and displayName diverge', () => {
+      registry.register({ id: 'oc', displayName: 'OpenClaw', transport: 'stdio' })
+      const result = registry.findByCommandToken('openclaw')
+      expect(result.kind).toBe('match')
+      if (result.kind === 'match') expect(result.agent.id).toBe('oc')
+    })
+
+    it('returns none for an unknown token', () => {
+      registry.register({ id: 'openclaw', displayName: 'OpenClaw', transport: 'stdio' })
+      expect(registry.findByCommandToken('supernova').kind).toBe('none')
+    })
+
+    it('returns none for an empty / whitespace-only token', () => {
+      expect(registry.findByCommandToken('').kind).toBe('none')
+      expect(registry.findByCommandToken('   ').kind).toBe('none')
+    })
+
+    it('does NOT substring-match — "Code" must not hit "claude-code"', () => {
+      // The substring footgun the issue body calls out explicitly.
+      // Surprise routing is worse than "unknown command".
+      registry.register({ id: 'claude-code', displayName: 'Claude Code', transport: 'stdio' })
+      expect(registry.findByCommandToken('code').kind).toBe('none')
+      expect(registry.findByCommandToken('claude').kind).toBe('none')
+    })
+
+    it('returns ambiguous when two active agents share a case-folded displayName', () => {
+      registry.register({ id: 'code-a', displayName: 'Code', transport: 'stdio' })
+      registry.register({ id: 'code-b', displayName: 'Code', transport: 'stdio' })
+      const result = registry.findByCommandToken('code')
+      expect(result.kind).toBe('ambiguous')
+      if (result.kind === 'ambiguous') {
+        expect(result.candidates.sort()).toEqual(['code-a', 'code-b'])
+      }
+    })
+
+    it('skips blocked agents (none result, not match)', () => {
+      registry.register({ id: 'openclaw', displayName: 'OpenClaw', transport: 'stdio' })
+      registry.block('openclaw')
+      expect(registry.findByCommandToken('openclaw').kind).toBe('none')
+    })
+  })
 })
