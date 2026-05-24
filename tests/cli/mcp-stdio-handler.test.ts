@@ -464,6 +464,214 @@ describe("mcp-stdio handleMessage", () => {
       expect(out.error.message).toMatch(/option_id/);
     });
 
+    // ============================================================================
+    // #528 — ask_user_with_options + submit_user_answer.
+    // ============================================================================
+    it("advertises ask_user_with_options + submit_user_answer in tools/list (#528)", async () => {
+      const out = (await handleMessage(makeServices("allowed"), "hermes", {
+        jsonrpc: "2.0",
+        id: 40,
+        method: "tools/list",
+      } as JSONRPCMessage)) as unknown as {
+        result: { tools: { name: string }[] };
+      };
+      const names = out.result.tools.map((t) => t.name);
+      expect(names).toContain("ask_user_with_options");
+      expect(names).toContain("submit_user_answer");
+    });
+
+    it("ask_user_with_options validates 2-6 options (#528)", async () => {
+      const services = makeServices("allowed");
+      // Stub the pending-questions service so the handler has something
+      // to dispatch to. Each test overrides as needed.
+      (services as unknown as { pendingQuestions: unknown }).pendingQuestions = {
+        ask: vi.fn(),
+      };
+      const out = (await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 41,
+        method: "tools/call",
+        params: {
+          name: "ask_user_with_options",
+          arguments: {
+            question: "yes?",
+            options: [{ id: "opt-a", label: "a" }], // only 1 — invalid
+          },
+        },
+      } as JSONRPCMessage)) as unknown as {
+        error: { code: number; message: string };
+      };
+      expect(out.error.code).toBe(-32602);
+      expect(out.error.message).toMatch(/2-6 options/);
+    });
+
+    it("ask_user_with_options requires args.question (#528)", async () => {
+      const out = (await handleMessage(makeServices("allowed"), "hermes", {
+        jsonrpc: "2.0",
+        id: 42,
+        method: "tools/call",
+        params: {
+          name: "ask_user_with_options",
+          arguments: {
+            options: [
+              { id: "a", label: "A" },
+              { id: "b", label: "B" },
+            ],
+          },
+        },
+      } as JSONRPCMessage)) as unknown as {
+        error: { code: number; message: string };
+      };
+      expect(out.error.code).toBe(-32602);
+      expect(out.error.message).toMatch(/question/);
+    });
+
+    it("ask_user_with_options forwards to pendingQuestions.ask + returns JSON resolution (#528)", async () => {
+      const services = makeServices("allowed");
+      const askSpy = vi.fn(async () => ({
+        questionId: "q-1",
+        outcome: "answered" as const,
+        chosenOptionId: "opt-shadcn",
+        label: "shadcn/ui",
+        payload: { variant: "recommended" },
+        answeredAt: 1_700_000_000_000,
+      }));
+      (services as unknown as { pendingQuestions: unknown }).pendingQuestions = {
+        ask: askSpy,
+      };
+      const out = (await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 43,
+        method: "tools/call",
+        params: {
+          name: "ask_user_with_options",
+          arguments: {
+            question: "shadcn/ui or custom?",
+            options: [
+              { id: "opt-shadcn", label: "shadcn/ui (recommended)" },
+              { id: "opt-custom", label: "Custom" },
+            ],
+            timeout_seconds: 60,
+            session_id: "sess-abc",
+          },
+        },
+      } as JSONRPCMessage)) as unknown as {
+        result: { content: { text: string }[] };
+      };
+      expect(askSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceAgent: "hermes",
+          sessionId: "sess-abc",
+          question: "shadcn/ui or custom?",
+          allowFreeText: true,
+          timeoutMs: 60_000,
+        }),
+      );
+      const body = JSON.parse(out.result.content[0]!.text) as Record<
+        string,
+        unknown
+      >;
+      expect(body.chosen).toBe("opt-shadcn");
+      expect(body.label).toBe("shadcn/ui");
+      expect(body.outcome).toBe("answered");
+    });
+
+    it("submit_user_answer forwards to pendingQuestions.answer + echoes the label (#528)", async () => {
+      const services = makeServices("allowed");
+      const answerSpy = vi.fn(() => ({
+        ok: true,
+        resolution: {
+          questionId: "q-1",
+          outcome: "answered" as const,
+          chosenOptionId: "opt-shadcn",
+          label: "shadcn/ui",
+          answeredAt: 0,
+        },
+      }));
+      (services as unknown as { pendingQuestions: unknown }).pendingQuestions = {
+        answer: answerSpy,
+      };
+      const out = (await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 44,
+        method: "tools/call",
+        params: {
+          name: "submit_user_answer",
+          arguments: {
+            question_id: "q-1",
+            option_id: "opt-shadcn",
+            source_user: "tg-user-1",
+          },
+        },
+      } as JSONRPCMessage)) as unknown as {
+        result: { content: { text: string }[] };
+      };
+      expect(answerSpy).toHaveBeenCalledWith({
+        questionId: "q-1",
+        chosenOptionId: "opt-shadcn",
+        answeredBy: "tg-user-1",
+      });
+      expect(out.result.content[0]?.text).toContain("Answer submitted: q-1");
+      expect(out.result.content[0]?.text).toContain("shadcn/ui");
+    });
+
+    it("submit_user_answer rejects without question_id or any answer (#528)", async () => {
+      const out1 = (await handleMessage(makeServices("allowed"), "hermes", {
+        jsonrpc: "2.0",
+        id: 45,
+        method: "tools/call",
+        params: {
+          name: "submit_user_answer",
+          arguments: { option_id: "opt-a" },
+        },
+      } as JSONRPCMessage)) as unknown as {
+        error: { code: number; message: string };
+      };
+      expect(out1.error.code).toBe(-32602);
+      expect(out1.error.message).toMatch(/question_id/);
+
+      const services = makeServices("allowed");
+      (services as unknown as { pendingQuestions: unknown }).pendingQuestions = {
+        answer: vi.fn(),
+      };
+      const out2 = (await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 46,
+        method: "tools/call",
+        params: {
+          name: "submit_user_answer",
+          arguments: { question_id: "q-1" },
+        },
+      } as JSONRPCMessage)) as unknown as {
+        error: { code: number; message: string };
+      };
+      expect(out2.error.code).toBe(-32602);
+      expect(out2.error.message).toMatch(/option_id or args.free_text/);
+    });
+
+    it("submit_user_answer returns isError when the service rejects (#528)", async () => {
+      const services = makeServices("allowed");
+      (services as unknown as { pendingQuestions: unknown }).pendingQuestions = {
+        answer: vi.fn(() => ({
+          ok: false,
+          error: "question q-1 already answered",
+        })),
+      };
+      const out = (await handleMessage(services, "hermes", {
+        jsonrpc: "2.0",
+        id: 47,
+        method: "tools/call",
+        params: {
+          name: "submit_user_answer",
+          arguments: { question_id: "q-1", option_id: "opt-a" },
+        },
+      } as JSONRPCMessage)) as unknown as {
+        result: { content: { text: string }[]; isError: boolean };
+      };
+      expect(out.result.isError).toBe(true);
+      expect(out.result.content[0]?.text).toContain("already answered");
+    });
+
     it("echoes the policy rule id back when submitFromAgent returns one (#526)", async () => {
       const services = makeServices("allowed", "policy:7", undefined, {
         ok: true,

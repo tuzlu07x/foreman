@@ -969,3 +969,95 @@ describe('NotificationBridge — session resolution prompt (#527)', () => {
     expect(channel.sendCalls).toHaveLength(1)
   })
 })
+
+// =============================================================================
+// #528 — Agent ask_user_with_options. The bridge subscribes to
+// `question:asked` and pushes a warning-level message with option
+// buttons; muted source agents + silence windows drop the push.
+// =============================================================================
+describe('NotificationBridge — ask_user_with_options dispatch (#528)', () => {
+  let db: ForemanDb
+  let sqlite: Database.Database
+  let bus: EventBus<ForemanEventMap>
+  let channel: FakeChannel
+  let service: NotificationService
+  let bridge: NotificationBridge
+
+  beforeEach(() => {
+    const handle = createInMemoryDb()
+    db = handle.db
+    sqlite = handle.sqlite
+    bus = new EventBus<ForemanEventMap>()
+    channel = new FakeChannel('telegram')
+    service = new NotificationService({
+      db,
+      config: configWithTelegram(),
+      channels: new Map<ChannelId, NotificationChannel>([['telegram', channel]]),
+    })
+    bridge = new NotificationBridge(service, { bus })
+  })
+
+  afterEach(async () => {
+    await bridge.stop()
+    sqlite.close()
+  })
+
+  function emitQuestion(): void {
+    bus.emit('question:asked', {
+      questionId: 'q-01',
+      sourceAgent: 'hermes',
+      question: 'shadcn/ui or custom?',
+      options: [
+        { id: 'opt-shadcn', label: 'shadcn/ui' },
+        { id: 'opt-custom', label: 'Custom' },
+      ],
+      allowFreeText: true,
+      deadlineMs: Date.now() + 5 * 60_000,
+      requestedAt: Date.now(),
+    })
+  }
+
+  it('dispatches the question at warning level with option buttons', async () => {
+    await bridge.start()
+    emitQuestion()
+    await tick()
+    expect(channel.sendCalls).toHaveLength(1)
+    const sent = channel.sendCalls[0]!
+    expect(sent.level).toBe('warning')
+    expect(sent.body).toContain('shadcn/ui or custom?')
+    const ids = sent.actions.map((a) => a.id)
+    expect(ids).toEqual(['ask_q-01_opt-shadcn', 'ask_q-01_opt-custom'])
+  })
+
+  it('start()/stop() registers + clears the question listener', async () => {
+    expect(bus.listenerCount('question:asked')).toBe(0)
+    await bridge.start()
+    expect(bus.listenerCount('question:asked')).toBe(1)
+    await bridge.stop()
+    expect(bus.listenerCount('question:asked')).toBe(0)
+  })
+
+  it('skips when the source agent is muted', async () => {
+    await bridge.stop()
+    bridge = new NotificationBridge(service, {
+      bus,
+      getState: () => ({ silencedUntil: null, mutedAgents: ['hermes'] }),
+    })
+    await bridge.start()
+    emitQuestion()
+    await tick()
+    expect(channel.sendCalls).toHaveLength(0)
+  })
+
+  it('skips during a silence window (warning level respects silence)', async () => {
+    await bridge.stop()
+    bridge = new NotificationBridge(service, {
+      bus,
+      getState: () => ({ silencedUntil: Date.now() + 60_000, mutedAgents: [] }),
+    })
+    await bridge.start()
+    emitQuestion()
+    await tick()
+    expect(channel.sendCalls).toHaveLength(0)
+  })
+})

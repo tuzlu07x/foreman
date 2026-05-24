@@ -159,6 +159,44 @@ export interface ForemanEventMap {
     providedBy?: string;
     resumedAt: number;
   };
+  /** #528 — Agent called the `ask_user_with_options` MCP tool. The
+   *  notification bridge picks this up, dispatches the question to
+   *  the user's chat with inline option buttons, and the agent's
+   *  blocking tool call resolves when the user picks (or the
+   *  deadline expires). */
+  "question:asked": {
+    /** Pending-questions row id — round-tripped via the callback_data
+     *  + the `submit_user_answer` MCP tool so a tap can find the row. */
+    questionId: string;
+    sourceAgent: string;
+    sessionId?: string;
+    question: string;
+    /** Optional context paragraph shown above the question — same
+     *  Markdown rules as the body. */
+    context?: string;
+    options: Array<{
+      id: string;
+      label: string;
+      payload?: Record<string, unknown>;
+    }>;
+    /** When `true`, the agent SOUL is also instructed to relay any
+     *  free-form text the user types after this question into
+     *  `submit_user_answer` with `free_text` set. */
+    allowFreeText: boolean;
+    deadlineMs: number;
+    requestedAt: number;
+  };
+  /** #528 — Question resolved: tap, free-text reply, timeout, or
+   *  user dismiss. The MCP tool handler is polling and unblocks on
+   *  this event (via the pending_questions row update). */
+  "question:answered": {
+    questionId: string;
+    outcome: "answered" | "timeout" | "abandoned";
+    chosenOptionId?: string;
+    freeText?: string;
+    answeredBy?: string;
+    answeredAt: number;
+  };
   "approval:requested": {
     requestId: string;
     sourceAgent: string;

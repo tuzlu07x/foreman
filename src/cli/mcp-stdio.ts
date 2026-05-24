@@ -14,6 +14,7 @@ import {
 } from "../core/llm/config.js";
 import { MediatorService } from "../core/mediator.js";
 import { OrchestratorChat } from "../core/orchestrator-chat.js";
+import { PendingQuestionsService } from "../core/pending-questions.js";
 import { PolicyEngine } from "../core/policy-engine.js";
 import { RegistryService } from "../core/registry.js";
 import { RiskScorer } from "../core/risk-scorer.js";
@@ -76,6 +77,11 @@ interface Services {
   /** #440 — Cross-process control queue. mcp-stdio is the writer
    *  side; the reader (foreman start) drains pending rows. */
   controlChannel: ControlChannel;
+  /** #528 — `ask_user_with_options` MCP tool backend. The agent's
+   *  blocking tool call inserts a pending_questions row + polls;
+   *  the chat listener in `foreman start` writes the user's pick
+   *  back via submit_user_answer. */
+  pendingQuestions: PendingQuestionsService;
 }
 
 function bootServices(): Services {
@@ -132,6 +138,7 @@ function bootServices(): Services {
   // foreman start TUI) still goes through the SQLite poll in
   // useDashboardState — bus events don't cross process boundaries.
   const controlChannel = new ControlChannel(db, bus);
+  const pendingQuestions = new PendingQuestionsService(db, { bus });
   return {
     registry,
     policy,
@@ -142,6 +149,7 @@ function bootServices(): Services {
     audit,
     secretStore,
     commandRouter,
+    pendingQuestions,
     llmConfigPath: paths.llmConfigPath,
     configDir: paths.configDir,
     orchestratorChat,
@@ -293,6 +301,111 @@ export async function handleMessage(
           },
         },
         {
+          // #528 — Agent-driven structured question. The agent calls
+          // this tool to ask the user a multiple-choice question;
+          // Foreman dispatches the question to their chat channel
+          // with inline option buttons + blocks until the user picks
+          // (or the timeout fires). The agent then sees the chosen
+          // option (or free-form text) as the tool result.
+          name: "ask_user_with_options",
+          description:
+            "Ask the human user a structured question with pre-defined options. Foreman pushes the question to the user's chat channel (Telegram) with tap-to-select buttons and blocks until the user answers, the timeout fires, or the user dismisses. Use for clear product decisions the user has to make (\"shadcn/ui or custom?\"). Returns `{ chosen, freeText, label, payload, outcome, answeredAt }`. Do NOT use for free-form Q&A — for that, just say what you need in chat.",
+          inputSchema: {
+            type: "object",
+            required: ["question", "options"],
+            properties: {
+              question: {
+                type: "string",
+                description:
+                  "The question shown to the user. Keep concise (≤ 200 chars).",
+              },
+              context: {
+                type: "string",
+                description:
+                  "Optional context paragraph above the question. Markdown supported. Use for the 'why am I asking' framing.",
+              },
+              options: {
+                type: "array",
+                minItems: 2,
+                maxItems: 6,
+                description:
+                  "2-6 options the user picks from. Each option is rendered as a tap-to-select button.",
+                items: {
+                  type: "object",
+                  required: ["id", "label"],
+                  properties: {
+                    id: {
+                      type: "string",
+                      description:
+                        "Stable id returned to you in the response's `chosen` field.",
+                    },
+                    label: {
+                      type: "string",
+                      description: "Button label the user sees.",
+                    },
+                    payload: {
+                      type: "object",
+                      description:
+                        "Optional opaque payload echoed back in the response when this option is chosen.",
+                    },
+                  },
+                },
+              },
+              session_id: {
+                type: "string",
+                description:
+                  "Optional session id this question belongs to. Surfaces in `foreman log` + future session-thread views.",
+              },
+              timeout_seconds: {
+                type: "number",
+                description:
+                  "How long to wait before returning a timeout response. Default 300 (5 min).",
+              },
+              allow_free_text: {
+                type: "boolean",
+                description:
+                  "Default true. When true, the user can also type a free-text reply instead of tapping; the text is returned in `freeText`. Set false for strict-choice questions.",
+              },
+            },
+          },
+        },
+        {
+          // #528 — Agent-routed answer relay. User tapped an
+          // `ask_<question_id>_<option_id>` inline-keyboard button OR
+          // (when allow_free_text=true) typed a reply. The agent calls
+          // this tool to deliver the answer back to Foreman, which
+          // resolves the original ask_user_with_options call.
+          name: "submit_user_answer",
+          description:
+            "Submit the user's answer to an open ask_user_with_options question. Call this when the user taps an inline-keyboard button on an `🤖 <agent> asks` message (callback_data `fa:ask_<question_id>_<option_id>:<chat_id>`) — pass `question_id` + `option_id`. When the user types a free-text reply AND `allow_free_text` was true on the original question, pass `question_id` + `free_text` instead. Do NOT call on your own initiative — only when the user tapped or replied.",
+          inputSchema: {
+            type: "object",
+            required: ["question_id"],
+            properties: {
+              question_id: {
+                type: "string",
+                description:
+                  "Question id Foreman included in its prompt (the part between `ask_` and `_<option_id>` in the callback_data).",
+              },
+              option_id: {
+                type: "string",
+                description:
+                  "When the user tapped a button, the option id (e.g. 'opt-shadcn').",
+              },
+              free_text: {
+                type: "string",
+                description:
+                  "When the user typed a reply instead of tapping (and the question allowed free text), the verbatim message text.",
+              },
+              source_user: {
+                type: "string",
+                description:
+                  "Telegram numeric `from.id` of the user. Recorded in the audit log.",
+              },
+            },
+          },
+        },
+        {
           // #527 — Agent-routed session resolution. User tapped a
           // "Skip / Let PM decide / I'll decide / Abandon" button on
           // a halt prompt; the agent's getUpdates consumer parses the
@@ -356,6 +469,176 @@ export async function handleMessage(
         });
       }
       return replyError(id, -32603, `Denied by ${result.decidedBy}`);
+    }
+
+    if (toolName === "ask_user_with_options") {
+      // #528 — Agent-driven structured question. Create a pending row,
+      // emit `question:asked` (NotificationBridge picks it up), block
+      // until the user picks / types / dismisses / the deadline fires.
+      const args = params?.arguments ?? {};
+      const question =
+        typeof args.question === "string" ? args.question.trim() : "";
+      const rawOptions = Array.isArray(args.options) ? args.options : [];
+      const context =
+        typeof args.context === "string" ? args.context : undefined;
+      const sessionId =
+        typeof args.session_id === "string" && args.session_id.length > 0
+          ? args.session_id
+          : undefined;
+      const allowFreeText =
+        typeof args.allow_free_text === "boolean" ? args.allow_free_text : true;
+      const timeoutSeconds =
+        typeof args.timeout_seconds === "number" &&
+        Number.isFinite(args.timeout_seconds) &&
+        args.timeout_seconds > 0
+          ? args.timeout_seconds
+          : 300;
+      if (!question) {
+        return replyError(
+          id,
+          -32602,
+          "ask_user_with_options requires args.question (string)",
+        );
+      }
+      if (rawOptions.length < 2 || rawOptions.length > 6) {
+        return replyError(
+          id,
+          -32602,
+          "ask_user_with_options requires 2-6 options",
+        );
+      }
+      // Validate every option shape early so the agent sees a clear
+      // error instead of a deeper "options malformed" failure later.
+      const options: Array<{
+        id: string;
+        label: string;
+        payload?: Record<string, unknown>;
+      }> = [];
+      for (const raw of rawOptions) {
+        if (
+          typeof raw !== "object" ||
+          raw === null ||
+          typeof (raw as { id?: unknown }).id !== "string" ||
+          typeof (raw as { label?: unknown }).label !== "string"
+        ) {
+          return replyError(
+            id,
+            -32602,
+            "every ask_user_with_options option needs { id: string, label: string }",
+          );
+        }
+        const r = raw as { id: string; label: string; payload?: unknown };
+        options.push({
+          id: r.id,
+          label: r.label,
+          ...(r.payload && typeof r.payload === "object"
+            ? { payload: r.payload as Record<string, unknown> }
+            : {}),
+        });
+      }
+      if (!services.pendingQuestions) {
+        return replyError(
+          id,
+          -32603,
+          "ask_user_with_options not supported by this Foreman build (pending-questions service not wired)",
+        );
+      }
+      const resolution = await services.pendingQuestions.ask({
+        sourceAgent,
+        ...(sessionId !== undefined ? { sessionId } : {}),
+        question,
+        ...(context !== undefined ? { context } : {}),
+        options,
+        allowFreeText,
+        timeoutMs: timeoutSeconds * 1000,
+      });
+      services.audit.logEvent("question:answered", {
+        questionId: resolution.questionId,
+        outcome: resolution.outcome,
+        chosen: resolution.chosenOptionId ?? null,
+        freeText: resolution.freeText ?? null,
+        sourceAgent,
+        sessionId: sessionId ?? null,
+      });
+      // Return the resolution as a single JSON-text content block so the
+      // agent's tool-result parser can JSON.parse it. Same convention
+      // the OpenAI MCP client + Anthropic MCP client both handle.
+      const body = {
+        questionId: resolution.questionId,
+        chosen: resolution.chosenOptionId ?? null,
+        freeText: resolution.freeText ?? null,
+        label: resolution.label ?? null,
+        payload: resolution.payload ?? null,
+        outcome: resolution.outcome,
+        answeredAt: resolution.answeredAt,
+      };
+      return reply(id, {
+        content: [{ type: "text", text: JSON.stringify(body) }],
+      });
+    }
+
+    if (toolName === "submit_user_answer") {
+      // #528 — Agent-routed answer relay. Resolves the pending question
+      // either by option pick or free-text. ask_user_with_options's
+      // polling loop sees the row flip + returns to the original
+      // tool caller.
+      const args = params?.arguments ?? {};
+      const questionId =
+        typeof args.question_id === "string" ? args.question_id : "";
+      const optionId =
+        typeof args.option_id === "string" && args.option_id.length > 0
+          ? args.option_id
+          : undefined;
+      const freeText =
+        typeof args.free_text === "string" && args.free_text.length > 0
+          ? args.free_text
+          : undefined;
+      const sourceUser =
+        typeof args.source_user === "string" && args.source_user.length > 0
+          ? args.source_user
+          : undefined;
+      if (!questionId) {
+        return replyError(
+          id,
+          -32602,
+          "submit_user_answer requires args.question_id (string)",
+        );
+      }
+      if (!optionId && !freeText) {
+        return replyError(
+          id,
+          -32602,
+          "submit_user_answer requires args.option_id or args.free_text",
+        );
+      }
+      if (!services.pendingQuestions) {
+        return replyError(
+          id,
+          -32603,
+          "submit_user_answer not supported by this Foreman build",
+        );
+      }
+      const result = services.pendingQuestions.answer({
+        questionId,
+        ...(optionId !== undefined ? { chosenOptionId: optionId } : {}),
+        ...(freeText !== undefined ? { freeText } : {}),
+        ...(sourceUser !== undefined ? { answeredBy: sourceUser } : {}),
+      });
+      if (!result.ok) {
+        return reply(id, {
+          content: [
+            { type: "text", text: result.error ?? "submit_user_answer failed" },
+          ],
+          isError: true,
+        });
+      }
+      const label = result.resolution?.label;
+      const tail = label ? ` → ${label}` : freeText ? ` → "${freeText}"` : "";
+      return reply(id, {
+        content: [
+          { type: "text", text: `Answer submitted: ${questionId}${tail}` },
+        ],
+      });
     }
 
     if (toolName === "submit_approval") {

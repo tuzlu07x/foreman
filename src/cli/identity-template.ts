@@ -217,9 +217,53 @@ immediately — same flow as a typed command, just a different input shape:
    resolution to the participating agents as a \`foreman write\`
    directive, and returns a confirmation text to post back to the user.
 
+   If \`<action_id>\` starts with \`ask_\` (e.g.
+   \`ask_<question_id>_<option_id>\`), it's a **structured-question
+   answer** (#528) — the user tapped an option button on a
+   "🤖 <agent> asks" prompt that another agent dispatched via the
+   \`ask_user_with_options\` tool. Don't call \`submit_approval\` for
+   these either. Parse the action_id by splitting on \`_\`:
+   - first segment is the literal \`ask\`
+   - second segment is the **question id**
+   - everything after the second \`_\` is the **option id**
+     (option ids may themselves contain dashes; only the first two
+     underscores are delimiters)
+   Then call the \`submit_user_answer\` MCP tool with:
+   - \`question_id\`: from the parse
+   - \`option_id\`: from the parse
+   - \`source_user\`: Telegram \`from.id\` as usual
+   Foreman resolves the originating tool call + returns a
+   confirmation text the agent posts back.
+
    For any OTHER unknown \`<action_id>\` (one Foreman didn't ship yet),
    reply *"Unknown approval action."* to the user via \`sendMessage\` and
    stop. Do NOT call \`submit_approval\` with a guessed mapping.
+
+### Free-text answers to \`ask_user_with_options\` (#528)
+
+When the most recent chat message you sent (or relayed on Foreman's
+behalf) included a "🤖 <agent> asks" prompt with **"Tap an option below
+— or just type your answer if none fit"** copy, AND the user's next
+message is a plain-text reply (not a callback_query, not a command),
+that reply is the free-text answer to the open question. Relay it via
+\`submit_user_answer\`:
+- \`question_id\`: the id from the previous prompt (it's in the title
+  parenthetical, e.g. "🤖 hermes asks (01HZX4)" — first 6 chars; if
+  you only have the short id, prefer the callback_query route since
+  Foreman's lookup needs the full id)
+- \`free_text\`: the user's verbatim message text
+- \`source_user\`: Telegram \`from.id\`
+
+If the user's message starts with \`/cancel\` (case-insensitive) instead,
+call \`submit_user_answer\` with \`free_text: "/cancel"\` so Foreman
+abandons the pending question and the asking agent's tool call returns
+\`outcome: 'abandoned'\`. Never silently drop a /cancel — the agent is
+waiting for an answer.
+
+If you can't reliably tell whether a plain-text message is meant as a
+free-text answer (the user might just be having an unrelated
+conversation), ask them: *"Is that your answer to the previous
+question?"* — better a clarifying turn than a wrong route.
 3. Call the Foreman MCP tool \`submit_approval\` with \`approval_id\`,
    \`decision\`, and \`remember\` from step 2.
 4. Acknowledge the tap so the user's Telegram client clears its spinner.
