@@ -416,3 +416,64 @@ export function renderSessionResolutionPrompt(
     agentBlocking: false,
   }
 }
+
+// =============================================================================
+// ask_user_with_options prompt (#528)
+// =============================================================================
+//
+// Renders the `question:asked` event into a Notification with one
+// ChannelAction per option. The agent's tool call is blocking — the
+// user's tap (or free-text reply, when allowed) feeds back via the
+// `submit_user_answer` MCP tool which resolves the pending_questions
+// row.
+
+export function renderUserQuestion(
+  e: ForemanEventMap['question:asked'],
+): Omit<Notification, 'id'> {
+  const idShort = e.questionId.slice(0, 6)
+  const lines: string[] = []
+  lines.push(`🤖 ${e.sourceAgent} asks:`)
+  lines.push('')
+  lines.push(e.question)
+  if (e.context && e.context.trim().length > 0) {
+    lines.push('')
+    lines.push(e.context.trim())
+  }
+  lines.push('')
+  if (e.allowFreeText) {
+    lines.push(
+      `Tap an option below — or just type your answer if none fit. ` +
+        `Foreman waits up to ${formatRemaining(e.deadlineMs - e.requestedAt)}.`,
+    )
+  } else {
+    lines.push(
+      `Pick one — Foreman waits up to ${formatRemaining(
+        e.deadlineMs - e.requestedAt,
+      )}.`,
+    )
+  }
+
+  // Each option becomes a ChannelAction. Action id encodes the question
+  // id so the agent's callback_query handler routes to submit_user_answer
+  // even when several questions are open in the same chat at once.
+  const actions: NotificationAction[] = e.options.map((opt) => ({
+    id: `ask_${e.questionId}_${opt.id}`,
+    label: opt.label,
+    intent: 'custom' as const,
+    payload: {
+      action: 'answer-question',
+      questionId: e.questionId,
+      optionId: opt.id,
+    },
+    style: 'primary' as const,
+  }))
+
+  return {
+    level: 'warning',
+    requestId: null,
+    title: `🤖 ${e.sourceAgent} asks (${idShort})`,
+    body: lines.join('\n'),
+    actions,
+    agentBlocking: false,
+  }
+}
