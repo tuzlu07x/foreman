@@ -346,6 +346,36 @@ describe("spawnAgentTask", () => {
     }
   });
 
+  it("splits a multi-token skip flag into separate argv elements (codex `--sandbox workspace-write`)", async () => {
+    // QA finding 2026-05-24: codex deprecated --full-auto in favour of
+    // --sandbox workspace-write. The catalog field stores both tokens
+    // as one string for ergonomics; the spawn engine MUST split on
+    // whitespace so each token lands as its own argv element. Without
+    // this, codex sees a single "--sandbox workspace-write" arg and
+    // rejects it as an unknown flag.
+    const cmd = makeScript(
+      "args-dump.sh",
+      '#!/bin/sh\nfor a in "$@"; do echo "ARG:$a"; done\n',
+    );
+    const result = await spawnAgentTask({
+      entry: agent({
+        task_command_template: `${cmd} "{task}"`,
+        task_skip_permissions_flag: "--sandbox workspace-write",
+      }),
+      task: "hi",
+      taskSkipPermissions: true,
+    });
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.stdout).toContain("ARG:hi");
+      // Both tokens land as separate args — NOT a single combined string.
+      expect(result.stdout).toContain("ARG:--sandbox");
+      expect(result.stdout).toContain("ARG:workspace-write");
+      // Sanity: the combined string should NOT appear (would mean a no-split bug).
+      expect(result.stdout).not.toContain("ARG:--sandbox workspace-write");
+    }
+  });
+
   it("is a no-op when catalog has no task_skip_permissions_flag (no-skip agent)", async () => {
     const cmd = makeScript(
       "args-dump.sh",
