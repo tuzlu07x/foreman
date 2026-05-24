@@ -160,6 +160,59 @@ the same id Foreman sent), do this immediately:
 user types the literal command (slash or no-slash). Never use it to
 "test the system" or as part of a chained reasoning sequence.
 
+### Inline keyboard taps (#522)
+
+Foreman approval messages also include native Telegram \`reply_markup\`
+inline-keyboard buttons (\`Allow once\`, \`Deny\`, plus \`Always deny\` /
+\`Always allow\` for higher-risk asks). The user may tap a button instead
+of typing the command. The tap arrives in your \`getUpdates\` consumer as a
+\`callback_query\` update — *not* a \`message\` update — with this shape:
+
+\`\`\`
+update.callback_query.id        ← opaque id; pass back to answerCallbackQuery
+update.callback_query.data      ← "fa:<action_id>:<approval_id>"
+update.callback_query.from.id   ← Telegram numeric user id (use as source_user)
+\`\`\`
+
+The \`data\` field is the literal string \`fa:<action_id>:<approval_id>\`
+where the \`fa:\` prefix marks it as a Foreman approval callback (the bot
+may receive other callback_query updates from unrelated keyboards — those
+do NOT start with \`fa:\`; leave them alone). \`<action_id>\` is one of:
+
+- \`allow\`          → \`decision: "allow"\`, \`remember: false\`
+- \`deny\`           → \`decision: "deny"\`,  \`remember: false\`
+- \`allow_always\`   → \`decision: "allow"\`, \`remember: true\`
+- \`deny_always\`    → \`decision: "deny"\`,  \`remember: true\`
+
+When a \`callback_query\` whose \`data\` starts with \`fa:\` arrives, do this
+immediately — same flow as a typed command, just a different input shape:
+
+1. Split \`data\` on \`:\` into \`["fa", <action_id>, <approval_id>]\`.
+   If the split doesn't produce exactly 3 parts or the first isn't \`fa\`,
+   leave it alone — it's not a Foreman approval.
+2. Map \`<action_id>\` to \`decision\` + \`remember\` per the table above.
+   An unknown \`<action_id>\` (one Foreman didn't ship yet) means a newer
+   custom button you don't have routing for — reply *"Unknown approval
+   action."* to the user via \`sendMessage\` and stop. Do NOT call
+   \`submit_approval\` with a guessed mapping.
+3. Call the Foreman MCP tool \`submit_approval\` with \`approval_id\`,
+   \`decision\`, and \`remember\` from step 2.
+4. Acknowledge the tap so the user's Telegram client clears its spinner.
+   Call Telegram's \`answerCallbackQuery\` with:
+   - \`callback_query_id\`: the \`update.callback_query.id\` from step 1
+   - \`text\`: \`"Submitted."\` on success, or the error text Foreman
+     returned on failure (e.g. \`"approval abc123 not found"\`).
+   If your runtime can't reach Telegram's HTTP API directly, skip this
+   step — the user will see Foreman's follow-up message either way.
+5. Do NOT also post a chat message duplicating the result; the
+   answerCallbackQuery toast is the user feedback, and Foreman edits the
+   original approval message to show the outcome.
+
+The text-command path (\`approve <id>\` / \`/approve <id>\` etc.) stays
+the primary fallback. If a user tap fails to round-trip (network blip),
+they can always retype the command — both paths converge on the same
+\`submit_approval\` MCP tool.
+
 ## Orchestrator Routing (#431 / #451)
 
 You are also the relay for orchestrator commands the user types into

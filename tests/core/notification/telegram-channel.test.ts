@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   escapeMd,
+  renderInlineKeyboard,
   TelegramChannel,
   type TelegramFetch,
 } from '../../../src/core/notification/channels/telegram.js'
-import type { Notification } from '../../../src/core/notification/types.js'
+import {
+  intentForActionId,
+  type ChannelAction,
+  type Notification,
+} from '../../../src/core/notification/types.js'
 
 // =============================================================================
 // #406 — TelegramChannel is outbound-only. Polling was removed because it
@@ -122,20 +127,48 @@ describe('TelegramChannel — send (outbound only, #406)', () => {
     expect(body.text).toContain('/deny_remember notif-abc123')
   })
 
-  it('does NOT render a reply_markup field (no inline keyboard — Foreman never polls)', async () => {
+  // #522 — Foreman now attaches an inline keyboard. The no-polling rule
+  // from #406 still holds: Foreman doesn't getUpdates. The agent's own
+  // getUpdates consumer sees the callback_query and relays it via
+  // submit_approval, the same MCP tool the typed slash command uses.
+  it('renders a reply_markup inline_keyboard for the standard allow/deny actions (#522)', async () => {
     const { channel, calls } = setupChannel()
     await channel.send(makeNotification())
-    const body = calls[0]!.body as Record<string, unknown>
-    expect(body.reply_markup).toBeUndefined()
+    const body = calls[0]!.body as { reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } }
+    expect(body.reply_markup).toBeDefined()
+    const buttons = body.reply_markup!.inline_keyboard.flat()
+    expect(buttons.map((b) => b.text)).toEqual(['Allow once', 'Deny'])
+  })
+
+  it('encodes callback_data as `fa:<id>:<notifId>` so the agent can parse it (#522)', async () => {
+    const { channel, calls } = setupChannel()
+    await channel.send(makeNotification())
+    const body = calls[0]!.body as { reply_markup?: { inline_keyboard: Array<Array<{ callback_data: string }>> } }
+    const data = body.reply_markup!.inline_keyboard.flat().map((b) => b.callback_data)
+    expect(data).toEqual(['fa:allow:notif-abc123', 'fa:deny:notif-abc123'])
+  })
+
+  it('keeps the text-command fallback alive alongside the inline keyboard (#522)', async () => {
+    // Older clients drop callback taps; forwarded messages strip reply_markup.
+    // The typed-command path must keep working in both cases.
+    const { channel, calls } = setupChannel()
+    await channel.send(makeNotification())
+    const body = calls[0]!.body as { text: string; reply_markup?: unknown }
+    expect(body.reply_markup).toBeDefined()
+    expect(body.text).toContain('/approve notif-abc123')
+    expect(body.text).toContain('/deny notif-abc123')
   })
 
   it('renders body only (no slash-command block) when actions is empty (info-only alert)', async () => {
     const { channel, calls } = setupChannel()
     await channel.send(makeNotification({ actions: [] }))
-    const body = calls[0]!.body as { text: string }
+    const body = calls[0]!.body as { text: string; reply_markup?: unknown }
     expect(body.text).not.toContain('/approve')
     expect(body.text).not.toContain('/deny')
     expect(body.text).toContain('Phishing pattern')
+    // Also no reply_markup when there are no actions — info-only alerts
+    // don't need a keyboard, and Telegram complains about empty rows.
+    expect(body.reply_markup).toBeUndefined()
   })
 
   it('skips inspect actions in the command list (no slash command for inspect)', async () => {
@@ -144,15 +177,23 @@ describe('TelegramChannel — send (outbound only, #406)', () => {
       makeNotification({
         actions: [
           { id: 'allow', label: 'Allow once' },
-          { id: 'inspect', label: 'Inspect' },
+          { id: 'inspect', label: 'Inspect', intent: 'custom' },
           { id: 'deny', label: 'Deny' },
         ],
       }),
     )
-    const body = calls[0]!.body as { text: string }
+    const body = calls[0]!.body as {
+      text: string
+      reply_markup?: { inline_keyboard: Array<Array<{ text: string }>> }
+    }
     expect(body.text).toContain('/approve notif-abc123')
     expect(body.text).toContain('/deny notif-abc123')
     expect(body.text).not.toContain('/inspect')
+    // Inspect is render-only (intent: 'custom' with no payload). It must
+    // also be excluded from the inline keyboard so the user can't tap a
+    // button that has no round-trip. See #522 isInteractiveAction.
+    const labels = body.reply_markup!.inline_keyboard.flat().map((b) => b.text)
+    expect(labels).toEqual(['Allow once', 'Deny'])
   })
 
   it('escapes MarkdownV2 reserved chars in title + body', async () => {
@@ -244,5 +285,125 @@ describe('TelegramChannel — isReady + updateMessage', () => {
     const body = f.calls[0]!.body as { text: string; message_id: number }
     expect(body.message_id).toBe(7)
     expect(body.text).toBe('Resolved at 14:18\\.')
+  })
+})
+
+// =============================================================================
+// #522 — Inline keyboard helper (renderInlineKeyboard).
+//
+// These tests target the pure helper independently so future channels
+// (Discord components, Slack block_actions) can reuse the same shaping
+// rules without re-implementing the layout / filter logic.
+// =============================================================================
+describe('renderInlineKeyboard (#522)', () => {
+  it('returns undefined when there are no actions', () => {
+    expect(renderInlineKeyboard([], 'n-1')).toBeUndefined()
+  })
+
+  it('returns undefined when every action is non-interactive', () => {
+    // inspect = intent 'custom' with no payload → render-only.
+    const actions: ChannelAction[] = [
+      { id: 'inspect', label: 'Inspect', intent: 'custom' },
+    ]
+    expect(renderInlineKeyboard(actions, 'n-1')).toBeUndefined()
+  })
+
+  it('lays out 2 actions as a single row', () => {
+    const out = renderInlineKeyboard(
+      [
+        { id: 'allow', label: 'Allow' },
+        { id: 'deny', label: 'Deny' },
+      ],
+      'n-1',
+    )!
+    expect(out.inline_keyboard).toHaveLength(1)
+    expect(out.inline_keyboard[0]).toHaveLength(2)
+  })
+
+  it('lays out 4 actions as two rows of two (2-up grid)', () => {
+    const out = renderInlineKeyboard(
+      [
+        { id: 'allow', label: 'Allow' },
+        { id: 'allow_always', label: 'Allow + remember' },
+        { id: 'deny', label: 'Deny' },
+        { id: 'deny_always', label: 'Deny + remember' },
+      ],
+      'n-1',
+    )!
+    expect(out.inline_keyboard).toHaveLength(2)
+    expect(out.inline_keyboard[0]).toHaveLength(2)
+    expect(out.inline_keyboard[1]).toHaveLength(2)
+  })
+
+  it('encodes callback_data as fa:<id>:<notifId> for every button', () => {
+    const out = renderInlineKeyboard(
+      [
+        { id: 'allow', label: 'Allow' },
+        { id: 'deny_always', label: 'Always deny' },
+      ],
+      'notif-xyz',
+    )!
+    const data = out.inline_keyboard.flat().map((b) => b.callback_data)
+    expect(data).toEqual(['fa:allow:notif-xyz', 'fa:deny_always:notif-xyz'])
+  })
+
+  it('keeps callback_data well under Telegram\'s 64-byte cap even with ULID notif ids', () => {
+    // 26-char ULID + 11-char id ('deny_always') + 'fa:' + 2 colons = 42 bytes.
+    const out = renderInlineKeyboard(
+      [{ id: 'deny_always', label: 'Always deny' }],
+      '01HZXY4MNJK8N9P3Q7R5T6V2WB',
+    )!
+    const data = out.inline_keyboard.flat()[0]!.callback_data
+    expect(Buffer.byteLength(data, 'utf8')).toBeLessThan(64)
+  })
+
+  it('drops inspect (custom intent without payload) but keeps custom WITH payload', () => {
+    // The custom-with-payload case is the downstream extension point
+    // (#526 block-pattern, #527 resolution choice, #528 option choice).
+    const out = renderInlineKeyboard(
+      [
+        { id: 'allow', label: 'Allow' },
+        { id: 'inspect', label: 'Inspect', intent: 'custom' },
+        {
+          id: 'block_pattern',
+          label: 'Block pattern',
+          intent: 'custom',
+          payload: { rule: 'deny Bash(rm:*)' },
+        },
+      ],
+      'n-1',
+    )!
+    const labels = out.inline_keyboard.flat().map((b) => b.text)
+    expect(labels).toEqual(['Allow', 'Block pattern'])
+  })
+
+  it('derives intent from id when omitted (backward compat)', () => {
+    // Legacy callsites pass { id: 'allow', label: '…' } without intent.
+    // The keyboard still includes them — intentForActionId fills the gap.
+    const out = renderInlineKeyboard(
+      [
+        { id: 'allow', label: 'Allow' },
+        { id: 'allow_always', label: 'Allow + remember' },
+      ],
+      'n-1',
+    )!
+    expect(out.inline_keyboard.flat()).toHaveLength(2)
+  })
+})
+
+describe('intentForActionId (#522)', () => {
+  it.each([
+    ['allow', 'allow'],
+    ['deny', 'deny'],
+    ['allow_always', 'remember-allow'],
+    ['deny_always', 'remember-deny'],
+  ] as const)('maps legacy id %s → intent %s', (id, expected) => {
+    expect(intentForActionId(id)).toBe(expected)
+  })
+
+  it('falls through to custom for any unknown id (forward-compat for #526/#527/#528)', () => {
+    expect(intentForActionId('block_pattern')).toBe('custom')
+    expect(intentForActionId('inspect')).toBe('custom')
+    expect(intentForActionId('')).toBe('custom')
   })
 })

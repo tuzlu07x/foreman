@@ -31,13 +31,65 @@ export function isKnownChannel(id: string): id is ChannelId {
   return (KNOWN_CHANNELS as readonly string[]).includes(id)
 }
 
-export interface NotificationAction {
-  /** Stable id for callback verification — e.g. "allow", "deny", "allow_always". */
-  id: 'allow' | 'deny' | 'allow_always' | 'deny_always' | 'inspect'
+/** Semantic intent of an action — what a click MEANS to the approval /
+ *  session bus, decoupled from the stable `id` channels round-trip in
+ *  their native callback payload. Downstream features add custom
+ *  buttons that resolve outside the allow/deny ladder (#526 policy
+ *  injection, #527 session resume, #528 ask_user_with_options) using
+ *  `intent: 'custom'` + a free-form `payload`. */
+export type ActionIntent =
+  | 'allow'
+  | 'deny'
+  | 'remember-allow'
+  | 'remember-deny'
+  | 'custom'
+
+/** Channel-agnostic interactive button (#522). Channels that support a
+ *  native primitive (Telegram inline_keyboard, Discord components, Slack
+ *  block_actions) round-trip the `id` via their callback payload back to
+ *  Foreman. Channels that don't support buttons fall back to text-command
+ *  rendering — no breakage. */
+export interface ChannelAction {
+  /** Stable id sent back when the user clicks. Used to look up the
+   *  approval + dispatch the decision. Must be unique within a single
+   *  notification's action set. */
+  id: string
   /** Human-readable label rendered on the button. */
   label: string
+  /** What the click means semantically. Optional for backward compat:
+   *  when omitted, derived from `id` via `intentForActionId` (allow /
+   *  deny / allow_always / deny_always map to their natural intents,
+   *  anything else falls through to `custom`). */
+  intent?: ActionIntent
+  /** Optional payload for `intent: 'custom'` — e.g. a policy predicate
+   *  for #526's "Block pattern" button, an option id for #528's
+   *  ask_user_with_options. Channels just round-trip it via their
+   *  native callback mechanism; the approval bridge unpacks it. */
+  payload?: Record<string, unknown>
   /** Visual hint — channels render this as a colour where supported. */
   style?: 'primary' | 'success' | 'danger' | 'neutral'
+}
+
+/** @deprecated Alias kept during the rename — prefer `ChannelAction`.
+ *  Re-exported as the historical name so existing imports keep working. */
+export type NotificationAction = ChannelAction
+
+/** Map a legacy action id to its semantic intent. The approval bridge
+ *  uses this when a channel callback only carries `id` (e.g. the older
+ *  4-id ladder predates the #522 ChannelAction shape). */
+export function intentForActionId(id: string): ActionIntent {
+  switch (id) {
+    case 'allow':
+      return 'allow'
+    case 'deny':
+      return 'deny'
+    case 'allow_always':
+      return 'remember-allow'
+    case 'deny_always':
+      return 'remember-deny'
+    default:
+      return 'custom'
+  }
 }
 
 export interface Notification {
@@ -51,7 +103,7 @@ export interface Notification {
   title: string
   /** Body text — channels may transform / truncate per their limits. */
   body: string
-  actions: NotificationAction[]
+  actions: ChannelAction[]
   /** When true, the caller (mediator) will await the channel's decision
    *  callback. C11a-2 wires this in. */
   agentBlocking: boolean
