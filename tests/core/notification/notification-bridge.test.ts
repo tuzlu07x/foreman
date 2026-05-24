@@ -615,3 +615,149 @@ describe('NotificationBridge — bus.on(request:decided) → risk_deny alert (#3
     expect(channel.sendCalls).toHaveLength(0)
   })
 })
+
+// =============================================================================
+// #523 — Session lifecycle dispatch.
+//
+// Pins three things: the bus subscriptions exist + route through the
+// session_lifecycle level + respect the silence window. Mute checks
+// are intentionally NOT applied (lifecycle events describe a session,
+// not a single agent's request flow).
+// =============================================================================
+describe('NotificationBridge — session lifecycle dispatch (#523)', () => {
+  let db: ForemanDb
+  let sqlite: Database.Database
+  let bus: EventBus<ForemanEventMap>
+  let channel: FakeChannel
+  let service: NotificationService
+  let bridge: NotificationBridge
+
+  beforeEach(() => {
+    const handle = createInMemoryDb()
+    db = handle.db
+    sqlite = handle.sqlite
+    bus = new EventBus<ForemanEventMap>()
+    channel = new FakeChannel('telegram')
+    service = new NotificationService({
+      db,
+      config: configWithTelegram(),
+      channels: new Map<ChannelId, NotificationChannel>([['telegram', channel]]),
+    })
+    bridge = new NotificationBridge(service, { bus })
+  })
+
+  afterEach(async () => {
+    await bridge.stop()
+    sqlite.close()
+  })
+
+  it('dispatches session:started on the session_lifecycle level', async () => {
+    await bridge.start()
+    bus.emit('session:started', {
+      sessionId: 'sess-1',
+      participants: ['openclaw', 'hermes'],
+      trigger: 'user_command:write',
+      startedAt: Date.now(),
+    })
+    await tick()
+    expect(channel.sendCalls).toHaveLength(1)
+    expect(channel.sendCalls[0]!.level).toBe('session_lifecycle')
+    expect(channel.sendCalls[0]!.body).toContain('▶️ openclaw + hermes')
+  })
+
+  it('dispatches session:progress with turn / token / recent action', async () => {
+    await bridge.start()
+    bus.emit('session:progress', {
+      sessionId: '01HZX4N5YJK2P8Q3R6V7T9W2WB',
+      turnCount: 14,
+      tokenCount: 12_345,
+      recentDecisions: [
+        { sourceAgent: 'hermes', targetTool: 'read_file', decision: 'allowed' },
+      ],
+      elapsedMs: 78 * 60 * 1000,
+      emittedAt: Date.now(),
+    })
+    await tick()
+    expect(channel.sendCalls).toHaveLength(1)
+    expect(channel.sendCalls[0]!.body).toContain('14 turn')
+    expect(channel.sendCalls[0]!.body).toContain('1h 18m')
+    expect(channel.sendCalls[0]!.body).toContain('Son: hermes → read_file')
+  })
+
+  it('dispatches session:completed with the outcome icon', async () => {
+    await bridge.start()
+    bus.emit('session:completed', {
+      sessionId: 'sess-abc-12345',
+      outcome: 'success',
+      turnCount: 4,
+      tokenCount: 1500,
+      costUsd: 0.04,
+      durationMs: 23_000,
+      completedAt: Date.now(),
+    })
+    await tick()
+    expect(channel.sendCalls).toHaveLength(1)
+    expect(channel.sendCalls[0]!.body).toContain('✓ sess-a success')
+    expect(channel.sendCalls[0]!.body).toContain('$0.04')
+  })
+
+  it('mutes lifecycle pushes entirely when session_lifecycle.channels is []', async () => {
+    // Empty channels list on session_lifecycle is the user's "I don't want
+    // a ping every 15 min" knob. The bridge still receives the event, but
+    // the service short-circuits because no channel is routed.
+    await bridge.stop()
+    const c = configWithTelegram()
+    c.routing.session_lifecycle = { channels: [], timeout_seconds: 0, default_action: 'deny' }
+    const mutedService = new NotificationService({
+      db: createInMemoryDb().db,
+      config: c,
+      channels: new Map<ChannelId, NotificationChannel>([['telegram', channel]]),
+    })
+    bridge = new NotificationBridge(mutedService, { bus })
+    await bridge.start()
+    bus.emit('session:started', {
+      sessionId: 'sess-1',
+      participants: ['a'],
+      trigger: 't',
+      startedAt: Date.now(),
+    })
+    await tick()
+    expect(channel.sendCalls).toHaveLength(0)
+  })
+
+  it('skips lifecycle pushes during a silence window (informational, not critical)', async () => {
+    await bridge.stop()
+    const service2 = new NotificationService({
+      db: createInMemoryDb().db,
+      config: configWithTelegram(),
+      channels: new Map<ChannelId, NotificationChannel>([['telegram', channel]]),
+    })
+    bridge = new NotificationBridge(service2, {
+      bus,
+      getState: () => ({ silencedUntil: Date.now() + 60_000, mutedAgents: [] }),
+    })
+    await bridge.start()
+    bus.emit('session:started', {
+      sessionId: 'sess-1',
+      participants: ['a'],
+      trigger: 't',
+      startedAt: Date.now(),
+    })
+    await tick()
+    expect(channel.sendCalls).toHaveLength(0)
+  })
+
+  it('start()/stop() registers + clears the three lifecycle listeners', async () => {
+    expect(bus.listenerCount('session:started')).toBe(0)
+    expect(bus.listenerCount('session:progress')).toBe(0)
+    expect(bus.listenerCount('session:completed')).toBe(0)
+    await bridge.start()
+    expect(bus.listenerCount('session:started')).toBe(1)
+    expect(bus.listenerCount('session:progress')).toBe(1)
+    expect(bus.listenerCount('session:completed')).toBe(1)
+    await bridge.stop()
+    expect(bus.listenerCount('session:started')).toBe(0)
+    expect(bus.listenerCount('session:progress')).toBe(0)
+    expect(bus.listenerCount('session:completed')).toBe(0)
+  })
+})

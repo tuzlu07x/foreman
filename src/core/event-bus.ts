@@ -71,6 +71,48 @@ export interface ForemanEventMap {
     tokenCount: number;
     haltedAt: number;
   };
+  /** #523 — Lifecycle pushes so the user gets a live feed of what their
+   *  agents are doing without having to call `/foreman activity`. Routed
+   *  via the `session_lifecycle` notification route. */
+  "session:started": {
+    sessionId: string;
+    /** Agent ids in the session. */
+    participants: string[];
+    /** Free-form trigger string — e.g. "user_command:write". */
+    trigger: string;
+    /** Optional hint from the planner agent when it can predict turn count. */
+    estimatedTurns?: number;
+    startedAt: number;
+  };
+  "session:progress": {
+    sessionId: string;
+    turnCount: number;
+    tokenCount: number;
+    /** Last ~3 mediator decisions on this session, newest first. */
+    recentDecisions: Array<{
+      sourceAgent: string;
+      targetTool?: string;
+      targetAgent?: string;
+      decision: "allowed" | "denied" | "asked";
+    }>;
+    /** Wall-clock ms since the session started. */
+    elapsedMs: number;
+    emittedAt: number;
+  };
+  "session:completed": {
+    sessionId: string;
+    outcome: "success" | "halted" | "abandoned" | "error";
+    /** Optional human-readable reason — required for non-success outcomes
+     *  so the completion message can explain what happened. */
+    reason?: string;
+    turnCount: number;
+    tokenCount: number;
+    /** Sum of `llm_usage.cost_usd` rows tagged with this session. Placeholder
+     *  `0` until #530 wires the per-session cost rollup column. */
+    costUsd: number;
+    durationMs: number;
+    completedAt: number;
+  };
   "approval:requested": {
     requestId: string;
     sourceAgent: string;
