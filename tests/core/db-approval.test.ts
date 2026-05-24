@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ApprovalBridge,
@@ -481,6 +482,79 @@ describe("ApprovalBridge", () => {
       });
       expect(out.ok).toBe(false);
       expect(out.error).toMatch(/policy injection not wired/);
+    });
+
+    // #525 — Deadline column persistence + bridge re-emit. The pending
+    // row keeps the deadline so the bridge that re-emits approval:requested
+    // events to other processes (TUI, NotificationBridge) carries the same
+    // value the service will enforce on timeout.
+    it('writes deadlineMs onto the pending row (#525)', async () => {
+      const fixedTimeout = 4 * 60_000;
+      const service = new DbApprovalService(db, {
+        bus,
+        timeoutMs: fixedTimeout,
+        pollIntervalMs: 200,
+      });
+      const before = Date.now();
+      const promise = service.request(req({ requestId: "deadline-1" }));
+      await new Promise((r) => setTimeout(r, 30));
+      const row = db
+        .select()
+        .from(pendingApprovals)
+        .where(eq(pendingApprovals.requestId, "deadline-1"))
+        .get();
+      expect(row?.deadlineMs).toBeGreaterThanOrEqual(before + fixedTimeout);
+      expect(row?.deadlineMs).toBeLessThanOrEqual(Date.now() + fixedTimeout);
+      // Resolve the pending row so service.request returns + the test
+      // doesn't leave a dangling polling promise.
+      db.update(pendingApprovals)
+        .set({
+          status: "resolved",
+          decision: "denied",
+          resolvedBy: "user",
+          resolvedAt: Date.now(),
+        })
+        .where(eq(pendingApprovals.requestId, "deadline-1"))
+        .run();
+      await promise;
+    });
+
+    it('caller-supplied deadlineMs wins over the service default (#525)', async () => {
+      const service = new DbApprovalService(db, {
+        bus,
+        timeoutMs: 60 * 60_000,
+        pollIntervalMs: 200,
+      });
+      const customDeadline = Date.now() + 90_000;
+      const promise = service.request(
+        req({ requestId: "deadline-custom-1", deadlineMs: customDeadline }),
+      );
+      await new Promise((r) => setTimeout(r, 30));
+      const row = db
+        .select()
+        .from(pendingApprovals)
+        .where(eq(pendingApprovals.requestId, "deadline-custom-1"))
+        .get();
+      expect(row?.deadlineMs).toBe(customDeadline);
+      db.update(pendingApprovals)
+        .set({
+          status: "resolved",
+          decision: "denied",
+          resolvedBy: "user",
+          resolvedAt: Date.now(),
+        })
+        .where(eq(pendingApprovals.requestId, "deadline-custom-1"))
+        .run();
+      await promise;
+    });
+
+    it('computeDeadline() returns now + timeoutMs (#525)', () => {
+      const service = new DbApprovalService(db, {
+        bus,
+        timeoutMs: 5 * 60_000,
+      });
+      const fixedNow = 1_700_000_000_000;
+      expect(service.computeDeadline(fixedNow)).toBe(fixedNow + 5 * 60_000);
     });
 
     it('plain allow/deny path is unchanged when action_id is absent (#526 backward-compat)', async () => {

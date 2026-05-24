@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { ForemanEventMap } from '../../../src/core/event-bus.js'
 import {
+  formatCountdownLine,
   formatElapsed,
+  formatRemaining,
   levelForBucket,
   renderApprovalNotification,
   renderResolvedFooter,
@@ -457,5 +459,84 @@ describe('formatElapsed (#523)', () => {
 
   it('clamps negative durations to 0s (clock skew safety)', () => {
     expect(formatElapsed(-500)).toBe('0s')
+  })
+})
+
+// =============================================================================
+// #525 — Approval countdown helpers.
+//
+// formatRemaining is the building block (pure conversion); formatCountdownLine
+// composes the user-facing tail with "Auto-{decision} in …" + the "tap [Deny]
+// to block now" nudge. Tests pin the user-visible fragments so the per-minute
+// ticker edits stay reproducible across CI / local runs.
+// =============================================================================
+
+describe('formatRemaining (#525)', () => {
+  it.each([
+    [0, '0s'],
+    [-100, '0s'],
+    [500, '0s'],
+    [1000, '1s'],
+    [59_000, '59s'],
+    [60_000, '1m'],
+    [60_500, '1m'],
+    [90_000, '1m 30s'],
+    [5 * 60_000, '5m'],
+    [5 * 60_000 + 17_000, '5m 17s'],
+    [10 * 60_000, '10m'],
+  ])('formats %i ms as %s', (ms, expected) => {
+    expect(formatRemaining(ms)).toBe(expected)
+  })
+})
+
+describe('formatCountdownLine (#525)', () => {
+  const NOW = 1_700_000_000_000
+
+  it('renders minute granularity when more than a minute remains', () => {
+    expect(formatCountdownLine(NOW + 10 * 60_000, NOW)).toBe(
+      '⏱ Auto-deny in 10m — tap [Deny] to block now.',
+    )
+  })
+
+  it('renders second granularity in the last minute', () => {
+    expect(formatCountdownLine(NOW + 30_000, NOW)).toBe(
+      '⏱ Auto-deny in 30s — tap [Deny] to block now.',
+    )
+  })
+
+  it('rounds up sub-second deadlines so the user never sees "0s"', () => {
+    expect(formatCountdownLine(NOW + 1, NOW)).toBe(
+      '⏱ Auto-deny in 1s — tap [Deny] to block now.',
+    )
+  })
+
+  it('switches to the timed-out template once the deadline passes', () => {
+    expect(formatCountdownLine(NOW - 1, NOW)).toBe('⏱ Timed out — auto-deny.')
+  })
+
+  it('honours a custom default decision (e.g. allow)', () => {
+    // Per-route override path — v0.1.0 always denies, but the helper
+    // takes the decision so a future config change just flips the
+    // string.
+    expect(formatCountdownLine(NOW + 5 * 60_000, NOW, 'allow')).toContain(
+      'Auto-allow in 5m',
+    )
+  })
+})
+
+// #525 — `renderApprovalNotification` bakes the first countdown line into the
+// body so the initial send already shows a timer. Subsequent edits go through
+// the CountdownTicker.
+describe('renderApprovalNotification — countdown line (#525)', () => {
+  it('appends a countdown tail when deadlineMs is set', () => {
+    const future = Date.now() + 10 * 60_000
+    const n = renderApprovalNotification(approvalEvent({ deadlineMs: future }))
+    expect(n.body).toMatch(/⏱ Auto-deny in \d+m/)
+    expect(n.body).toContain('tap [Deny] to block now')
+  })
+
+  it('omits the countdown tail when deadlineMs is absent (backward compat)', () => {
+    const n = renderApprovalNotification(approvalEvent({ deadlineMs: undefined }))
+    expect(n.body).not.toContain('⏱')
   })
 })

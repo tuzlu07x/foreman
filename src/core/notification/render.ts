@@ -117,7 +117,53 @@ function formatBody(req: ForemanEventMap['approval:requested']): string {
     lines.push(`Args: ${args}`)
   }
 
+  // #525 — Countdown line at the bottom: "⏱ Auto-deny in 4m 12s — tap
+  // [Deny] to block now." Channels that re-render every minute (Telegram
+  // via CountdownTicker) call `formatCountdownLine` directly to produce
+  // an updated tail; the initial body bakes the first value in.
+  if (req.deadlineMs != null) {
+    lines.push('')
+    lines.push(formatCountdownLine(req.deadlineMs, Date.now()))
+  }
+
   return lines.join('\n')
+}
+
+/** #525 — Render the countdown tail. The "default action" is the
+ *  channel's auto-resolve outcome — Foreman always falls back to
+ *  `deny` when no human decides in time, so the label is fixed for
+ *  v0.1.0. (A per-route override lands later if needed.) Exported
+ *  so the per-minute ticker (Telegram editMessageText) can produce
+ *  matching updated tails without re-rendering the whole body. */
+export function formatCountdownLine(
+  deadlineMs: number,
+  nowMs: number = Date.now(),
+  decision: 'allow' | 'deny' = 'deny',
+): string {
+  const remaining = deadlineMs - nowMs
+  if (remaining <= 0) {
+    return `⏱ Timed out — auto-${decision}.`
+  }
+  // Under-60s mode: show seconds + a stronger nudge so the last-minute
+  // tick lands while the user is looking. Above 60s: minute granularity
+  // (Telegram rate-limits message edits; minute resolution is enough).
+  if (remaining < 60_000) {
+    const seconds = Math.max(1, Math.ceil(remaining / 1000))
+    return `⏱ Auto-${decision} in ${seconds}s — tap [Deny] to block now.`
+  }
+  return `⏱ Auto-${decision} in ${formatRemaining(remaining)} — tap [Deny] to block now.`
+}
+
+/** Format a remaining-time delta as "Xm Ys" (or "Xm" when seconds=0).
+ *  Exposed so tests don't reach into formatCountdownLine for the
+ *  formatting check; reused if other channels add their own tail. */
+export function formatRemaining(ms: number): string {
+  if (ms <= 0) return '0s'
+  const totalSeconds = Math.floor(ms / 1000)
+  if (totalSeconds < 60) return `${totalSeconds}s`
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`
 }
 
 function buildActions(

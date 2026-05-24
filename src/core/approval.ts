@@ -30,6 +30,12 @@ export interface ApprovalRequest {
   /** When set + a `loop` factor fires, the modal exposes `[k] halt session`. */
   sessionId?: string;
   context?: string;
+  /** #525 — Absolute Unix ms timestamp when this approval auto-resolves to
+   *  its default decision (typically deny). Used by channels (Telegram
+   *  countdown) to render a live "X minutes left" line. The DB-backed
+   *  service writes this onto pending_approvals so cross-process consumers
+   *  see the same deadline the writer set. */
+  deadlineMs?: number;
 }
 
 export interface ApprovalDecision {
@@ -94,6 +100,13 @@ export interface ApprovalService {
   submitFromAgent?(
     opts: SubmitApprovalFromAgentOpts,
   ): Promise<SubmitApprovalResult>;
+  /** #525 — When the service has a configured timeout, return the
+   *  absolute Unix ms deadline a `request()` call made right now would
+   *  use. Lets the mediator stamp `approval:requested` events with
+   *  `deadlineMs` so channels (Telegram countdown) render the same
+   *  deadline the service will enforce. Optional — services without
+   *  a meaningful timeout (DenyAllApprovalService) leave it out. */
+  computeDeadline?(now?: number): number;
 }
 
 export class DenyAllApprovalService implements ApprovalService {
@@ -202,6 +215,11 @@ export class BusApprovalService implements ApprovalService {
     this.timeoutMs = opts.timeoutMs ?? envTimeoutMs() ?? DEFAULT_TIMEOUT_MS;
   }
 
+  /** #525 — Deadline a `request()` made right now would enforce. */
+  computeDeadline(now: number = Date.now()): number {
+    return now + this.timeoutMs;
+  }
+
   async request(req: ApprovalRequest): Promise<ApprovalDecision> {
     return new Promise((resolve) => {
       let settled = false;
@@ -294,8 +312,22 @@ export class DbApprovalService implements ApprovalService {
     this.injectPredicateRule = opts.injectPredicateRule;
   }
 
+  /** #525 — Deadline a `request()` made right now would enforce. The
+   *  mediator stamps this onto `approval:requested` events so channels
+   *  render the same deadline the bridge later writes to the
+   *  pending_approvals row. */
+  computeDeadline(now: number = Date.now()): number {
+    return now + this.timeoutMs;
+  }
+
   async request(req: ApprovalRequest): Promise<ApprovalDecision> {
     const requestedAt = Date.now();
+    // #525 — Persist the absolute deadline so the bridge re-emits a
+    // matching value to TUI / Telegram consumers without needing to
+    // know the service's timeoutMs. Callers can override (e.g. when a
+    // per-route timeout via notify.yaml shortens this approval) by
+    // pre-populating req.deadlineMs.
+    const deadlineMs = req.deadlineMs ?? requestedAt + this.timeoutMs;
     this.db
       .insert(pendingApprovals)
       .values({
@@ -310,6 +342,7 @@ export class DbApprovalService implements ApprovalService {
         riskBucket: req.riskBucket,
         status: "pending",
         requestedAt,
+        deadlineMs,
       })
       .run();
 
@@ -596,6 +629,11 @@ export class ApprovalBridge {
         riskBucket: row.riskBucket ?? "medium",
         llmVerification: null,
         securityReport: null,
+        // #525 — Propagate the deadline so Telegram (and other channels
+        // that subscribe via NotificationBridge) can render a countdown.
+        // Legacy rows without a deadline_ms column value pass undefined,
+        // which the channel render path treats as "no countdown line".
+        ...(row.deadlineMs != null ? { deadlineMs: row.deadlineMs } : {}),
       });
     }
     // Forget seen ids that have left the table (resolved + cleared later).
