@@ -256,3 +256,65 @@ Build pipeline (`tsup`): one ESM bundle at `dist/cli/index.js`; migrations copie
 | The cross-process approval bridge | `src/core/approval.ts` (DbApprovalService + ApprovalBridge) |
 
 See also: `feedback_manual_qa_catalog.md` in the user's auto-memory for the full ~75-scenario manual QA matrix.
+
+---
+
+## 12. What Foreman does NOT do
+
+Foreman is a **pre-execution gate**, not a post-execution monitor. The
+distinction is load-bearing for the threat model + how the user-facing
+narrative is written ([scenario doc](./scenario-pazartesi-sabahi.md),
+README, demo asciinema all lean into "stopped before disaster" rather
+than "cleaned up after").
+
+What Foreman **does**:
+
+- See every MCP tool call request an agent emits — `read_file`,
+  `write_file`, `bash`, `WebFetch`, every inter-agent `write`.
+- Score it heuristically + (optionally) verify the call chain with an
+  LLM.
+- Evaluate against the user's policy (allow / ask / deny).
+- On `ask`, pause the call and surface an approval — modal in the
+  TUI, inline keyboard in Telegram. The agent is blocked until the
+  user decides (or the timeout fires the default).
+- Record the request + decision + risk reasons in the audit log.
+
+What Foreman **does not** do:
+
+- **Observe side effects.** Once a call is allowed, Foreman doesn't
+  re-read the filesystem to verify what changed. It records the call
+  + args + decision; the side effects are the agent's business.
+- **Undo writes.** Foreman cannot un-write a file, un-`git push` a
+  commit, un-send an email, un-call a webhook. If a call was
+  allowed and it ran, the side effects exist.
+- **Roll back git operations** or filesystem changes.
+- **Intercept the agent's internal LLM calls.** The agent talks to
+  its provider directly (Anthropic / OpenAI / Gemini / local). Only
+  the MCP tool calls the agent makes go through Foreman.
+- **Per-shell-command interception.** When an agent runs
+  `bash:rm -rf …`, Foreman sees the *agent calling its `bash` MCP
+  tool* with that command string. Foreman doesn't shim the agent's
+  internal shell to ask before each subcommand. That granularity
+  needs PreToolUse hooks inside the agent process — tracked under
+  the [agent permission gateway epic](https://github.com/tuzlu07x/foreman/issues/517)
+  Faz 4 (v0.2). Faz 1 (`foreman agent permissions <id>` defaults,
+  PR #532) is the v0.1.0 mitigation: a curated `~/.claude/settings.json`
+  allowlist that lets the agent succeed on safe commands without
+  Foreman in the loop, so the cases that DO surface to Foreman are
+  the genuinely-risky ones.
+
+The trade-off is intentional:
+
+- **Pre-execution gate gives 100% guarantee.** If the user denies,
+  the call never runs. The bad thing did not happen.
+- **Post-execution cleanup is best-effort.** Sent email can't be
+  unsent; a write to a remote API can't be revoked; cleaning up a
+  partial git commit while the agent is mid-flight is racy.
+
+Foreman picks the stronger guarantee. The narrative everywhere
+("Hermes was about to read `.env`. Foreman caught it before
+anything ran.") matches what the code actually does.
+
+For observability into what an allowed call *did* — `foreman log
+tail`, the Logs TUI page, the audit row's `result` field. The
+allowed-but-watched mode exists; it's just not the gate.

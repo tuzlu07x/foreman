@@ -107,6 +107,8 @@ cd examples/phishing-scenario
 
 See [`examples/phishing-scenario/STORYBOARD.md`](examples/phishing-scenario/STORYBOARD.md) for the scene-by-scene script.
 
+For the longer "Pazartesi sabahı, todo-app from scratch" product narrative — the one the launch demo + onboarding hints draw from — see [`docs/scenario-pazartesi-sabahi.md`](docs/scenario-pazartesi-sabahi.md). It pins how Foreman behaves as a **pre-execution gate** (stops a `.env` leak before the call runs; doesn't undo afterwards) so the marketing copy + the code stay in sync.
+
 ## How is this different from…?
 
 |                              | Foreman         | LangSmith / Helicone | Vanilla MCP               |
