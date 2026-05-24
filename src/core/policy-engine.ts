@@ -116,12 +116,36 @@ const ResponsibilityPolicySchema = z
 
 export type ResponsibilityPolicy = z.infer<typeof ResponsibilityPolicySchema>;
 
+// #529 — Session enforcement limits. `token_limit` is the hard halt boundary
+// SessionManager checks every turn (mirrors the existing turn-limit pattern).
+// `token_budget_warning_pct` is the advisory threshold the loop-detection
+// risk rule uses to surface a "session is filling up" factor before the halt
+// itself fires. Both default to the prior hardcoded values (100K / 80%) so
+// deployments without `session_limits:` in policy.yaml keep working.
+const SessionLimitsSchema = z
+  .object({
+    token_limit: z.number().int().positive().optional(),
+    token_budget_warning_pct: z.number().int().min(1).max(100).optional(),
+  })
+  .strict();
+
+export interface SessionLimits {
+  tokenLimit: number;
+  tokenBudgetWarningPct: number;
+}
+
+export const DEFAULT_SESSION_LIMITS: SessionLimits = {
+  tokenLimit: 100_000,
+  tokenBudgetWarningPct: 80,
+};
+
 const PolicyDocSchema = z
   .object({
     agents: z.record(z.string(), AgentEntrySchema).optional(),
     rules: z.array(RulesArrayItemSchema).optional(),
     buckets: BucketOverridesSchema.optional(),
     responsibility_policies: z.array(ResponsibilityPolicySchema).optional(),
+    session_limits: SessionLimitsSchema.optional(),
   })
   .strict();
 
@@ -146,6 +170,10 @@ export class PolicyEngine {
   // getResponsibilityPolicies() per call so a YAML reload takes effect
   // without a restart.
   private responsibilityPolicies: ResponsibilityPolicy[] = [];
+  // #529 — Session enforcement limits. Read by SessionManager (halt
+  // boundary) + the loop-detection rule (advisory warning). Per-call
+  // accessor so YAML reload applies without a restart.
+  private sessionLimits: SessionLimits = { ...DEFAULT_SESSION_LIMITS };
 
   constructor(
     private readonly db: ForemanDb,
@@ -165,6 +193,17 @@ export class PolicyEngine {
     const now = Date.now();
     this.bucketOverrides = doc.buckets ?? {};
     this.responsibilityPolicies = doc.responsibility_policies ?? [];
+    // #529 — Merge with defaults so a partial `session_limits:` block (only
+    // `token_limit:` set) keeps the warning pct at 80 instead of becoming
+    // undefined. Omitting the block entirely also restores defaults — a
+    // hot reload that removes the override goes back to 100K / 80%.
+    const sl = doc.session_limits;
+    this.sessionLimits = {
+      tokenLimit: sl?.token_limit ?? DEFAULT_SESSION_LIMITS.tokenLimit,
+      tokenBudgetWarningPct:
+        sl?.token_budget_warning_pct ??
+        DEFAULT_SESSION_LIMITS.tokenBudgetWarningPct,
+    };
 
     const rows: (typeof policies.$inferInsert)[] = [];
     for (const [agentId, entry] of Object.entries(doc.agents ?? {})) {
@@ -346,6 +385,15 @@ export class PolicyEngine {
   // caller can't mutate engine state.
   getResponsibilityPolicies(): ResponsibilityPolicy[] {
     return this.responsibilityPolicies.map((p) => ({ ...p }));
+  }
+
+  /** #529 — Snapshot of the session_limits block from the most recent YAML
+   *  load. `SessionManager` reads `tokenLimit` per `recordTurn` and the
+   *  loop-detection rule reads `tokenBudgetWarningPct` per assess() so a
+   *  YAML reload takes effect mid-session. Returns a shallow copy so
+   *  callers can't mutate engine state by accident. */
+  getSessionLimits(): SessionLimits {
+    return { ...this.sessionLimits };
   }
 
   setEnabled(ruleId: number, enabled: boolean): void {

@@ -1,5 +1,5 @@
 import type { ForemanDb } from '../../db/client.js'
-import type { ResponsibilityPolicy } from '../policy-engine.js'
+import type { ResponsibilityPolicy, SessionLimits } from '../policy-engine.js'
 
 export interface RiskRequest {
   sourceAgent: string
@@ -23,6 +23,12 @@ export interface RiskContext {
    *  block (#299). Per-call closure so a YAML reload takes effect without
    *  rebuilding the RiskScorer. */
   responsibilityPolicies?: () => ResponsibilityPolicy[]
+  /** #529 — Snapshot of the policy engine's session_limits block. The
+   *  loop-detection rule reads `tokenLimit` + `tokenBudgetWarningPct`
+   *  through this closure so a policy.yaml reload moves the advisory
+   *  threshold without rebuilding the scorer. When absent the rule
+   *  falls back to its hardcoded 100K / 80% defaults. */
+  sessionLimits?: () => SessionLimits
 }
 
 export type RiskCategory =
