@@ -274,6 +274,32 @@ describe("DEFAULT_FOREMAN_SOUL — inline keyboard callbacks (#522)", () => {
     // mapping for a `block_*` button.
     expect(DEFAULT_FOREMAN_SOUL).toMatch(/custom block actions always deny/i);
   });
+
+  // #527 — Session-resume actions (`resolve_*`) route through a SEPARATE
+  // MCP tool (`submit_resolution`) instead of submit_approval. Pin that
+  // the SOUL routes them correctly so an agent never tries to send a
+  // session id as an approval id (or vice-versa).
+  it("documents the resolve_* custom action handling (#527)", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toContain("resolve_");
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/session-resume action.*#527/);
+  });
+
+  it("routes resolve_* taps to submit_resolution, NOT submit_approval (#527)", () => {
+    // Critical contract: the callback_data tail for a `resolve_*` action
+    // is a session id, not an approval id. Sending it to submit_approval
+    // would fail "approval not found" — surface the right tool. The
+    // "Don't" + "call" may straddle a soft line break, so allow whitespace
+    // (including newlines) between them.
+    const section = DEFAULT_FOREMAN_SOUL.split("session-resume action")[1] ?? "";
+    expect(section).toContain("`submit_resolution`");
+    expect(section).toMatch(/[Dd]on'?t[\s\S]*?call[\s\S]*?submit_approval/);
+  });
+
+  it("instructs the agent to strip the resolve_ prefix before sending option_id (#527)", () => {
+    // The option_id parameter expects the raw id (e.g. opt-skip), not
+    // the full action_id with the resolve_ prefix.
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/strip the.*resolve_.*prefix/i);
+  });
 });
 
 // #431 — Orchestrator routing section. Mirrors the approval-routing

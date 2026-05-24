@@ -9,6 +9,7 @@ import {
   renderResolvedFooter,
   renderSessionCompleted,
   renderSessionProgress,
+  renderSessionResolutionPrompt,
   renderSessionStarted,
 } from '../../../src/core/notification/render.js'
 import type { RiskFactor } from '../../../src/core/risk-rules/types.js'
@@ -538,5 +539,97 @@ describe('renderApprovalNotification — countdown line (#525)', () => {
   it('omits the countdown tail when deadlineMs is absent (backward compat)', () => {
     const n = renderApprovalNotification(approvalEvent({ deadlineMs: undefined }))
     expect(n.body).not.toContain('⏱')
+  })
+})
+
+// =============================================================================
+// #527 — Interactive session resume prompt. Critical-level notification
+// with option buttons (intent: 'custom') the user taps to choose how to
+// resume / abandon a halted session.
+// =============================================================================
+describe('renderSessionResolutionPrompt (#527)', () => {
+  const baseEvent = {
+    sessionId: '01HZX4N5YJK2P8Q3R6V7T9W2WB',
+    reason: 'loop_detection' as const,
+    contextSummary:
+      'openclaw + hermes kept arguing over "tags field" — Foreman halted the session to ask you which way to break the loop.',
+    options: [
+      {
+        id: 'opt-skip',
+        label: 'Skip — decide later',
+        payload: { kind: 'skip' as const, note: 'user: skip the disputed item' },
+      },
+      {
+        id: 'opt-delegate-pm',
+        label: 'Let PM (OpenClaw) decide',
+        payload: {
+          kind: 'delegate-to' as const,
+          target: 'openclaw',
+          note: 'user: OpenClaw makes the call',
+        },
+      },
+      {
+        id: 'opt-user-decide',
+        label: "I'll decide — ask me",
+        payload: {
+          kind: 'user-input-needed' as const,
+          prompt: 'How should the agents resolve this?',
+        },
+      },
+      {
+        id: 'opt-abandon',
+        label: 'Abandon session',
+        payload: { kind: 'abandon' as const },
+      },
+    ],
+    deadlineMs: Date.parse('2026-05-24T08:55:00.000Z'),
+    requestedAt: Date.parse('2026-05-24T08:45:00.000Z'),
+  }
+
+  it('renders at critical level with the short session id in the title', () => {
+    const n = renderSessionResolutionPrompt(baseEvent)
+    expect(n.level).toBe('critical')
+    expect(n.title).toContain('01HZX4')
+    expect(n.requestId).toBeNull()
+    expect(n.agentBlocking).toBe(false)
+  })
+
+  it('includes the LLM context summary + every option label in the body', () => {
+    const n = renderSessionResolutionPrompt(baseEvent)
+    expect(n.body).toContain('Foreman halted the session')
+    for (const opt of baseEvent.options) {
+      expect(n.body).toContain(opt.label)
+    }
+  })
+
+  it('renders one ChannelAction per option with the resolve_<id> action id', () => {
+    const n = renderSessionResolutionPrompt(baseEvent)
+    expect(n.actions).toHaveLength(4)
+    const ids = n.actions.map((a) => a.id)
+    expect(ids).toEqual([
+      'resolve_opt-skip',
+      'resolve_opt-delegate-pm',
+      'resolve_opt-user-decide',
+      'resolve_opt-abandon',
+    ])
+    for (const a of n.actions) {
+      expect(a.intent).toBe('custom')
+      const payload = a.payload as Record<string, unknown>
+      expect(payload.action).toBe('resolve-session')
+      expect(payload.sessionId).toBe(baseEvent.sessionId)
+    }
+  })
+
+  it('marks the abandon button with danger styling', () => {
+    const n = renderSessionResolutionPrompt(baseEvent)
+    const abandon = n.actions.find((a) => a.id === 'resolve_opt-abandon')
+    expect(abandon?.style).toBe('danger')
+    const skip = n.actions.find((a) => a.id === 'resolve_opt-skip')
+    expect(skip?.style).toBe('neutral')
+  })
+
+  it('includes a UTC deadline line so the user sees when auto-abandon fires', () => {
+    const n = renderSessionResolutionPrompt(baseEvent)
+    expect(n.body).toContain('Auto-abandon at 08:55:00 UTC')
   })
 })
