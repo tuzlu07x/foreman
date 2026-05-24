@@ -129,26 +129,128 @@ describe('renderApprovalNotification', () => {
     expect(argsLine.endsWith('…')).toBe(true)
   })
 
+  // Helper — strip `block_*` custom actions (#526) so bucket assertions
+  // focus on the standard ladder. Custom buttons depend on the request's
+  // risk factors, not the bucket itself; they're covered in a separate
+  // describe block below.
+  const standardIds = (actions: { id: string }[]): string[] =>
+    actions.map((a) => a.id).filter((id) => !id.startsWith('block_'))
+
   it('critical bucket gets the full action ladder (allow / deny / deny_always / inspect)', () => {
     const n = renderApprovalNotification(
       approvalEvent({ riskBucket: 'critical' }),
     )
-    const ids = n.actions.map((a) => a.id)
-    expect(ids).toEqual(['allow', 'deny', 'deny_always', 'inspect'])
+    expect(standardIds(n.actions)).toEqual([
+      'allow',
+      'deny',
+      'deny_always',
+      'inspect',
+    ])
   })
 
   it('high bucket gets allow + deny + inspect (no deny_always)', () => {
     const n = renderApprovalNotification(approvalEvent({ riskBucket: 'high' }))
-    const ids = n.actions.map((a) => a.id)
-    expect(ids).toEqual(['allow', 'deny', 'inspect'])
+    expect(standardIds(n.actions)).toEqual(['allow', 'deny', 'inspect'])
   })
 
   it('medium bucket gets just allow + deny', () => {
     const n = renderApprovalNotification(
       approvalEvent({ riskBucket: 'medium' }),
     )
-    const ids = n.actions.map((a) => a.id)
-    expect(ids).toEqual(['allow', 'deny'])
+    expect(standardIds(n.actions)).toEqual(['allow', 'deny'])
+  })
+})
+
+// =============================================================================
+// #526 — Custom "block this pattern" actions.
+//
+// When the request hit a recognisable risk factor (secret_path, shell
+// destructive, network exfil, …) the modal offers a one-tap button to
+// inject a permanent deny rule alongside the standard ladder. These
+// tests pin the button shape so the agent SOUL + the policy injector
+// stay in sync.
+// =============================================================================
+describe('renderApprovalNotification — custom policy-injection actions (#526)', () => {
+  it('offers a block_secret_path button when the secret_path factor matched', () => {
+    const n = renderApprovalNotification(
+      approvalEvent({
+        targetTool: 'read_file',
+        args: { path: '.env' },
+        riskFactors: [
+          factor({
+            rule: 'secret_path',
+            category: 'secret',
+            points: 60,
+            reason: '.env-style file',
+          }),
+        ],
+      }),
+    )
+    const custom = n.actions.find((a) => a.id === 'block_secret_path')
+    expect(custom).toBeDefined()
+    expect(custom!.intent).toBe('custom')
+    expect(custom!.style).toBe('danger')
+    expect(custom!.label).toContain('.env*')
+    expect(custom!.label).toContain('hermes')
+    expect(custom!.payload).toMatchObject({
+      action: 'add-deny-rule',
+      sourceAgent: 'hermes',
+      target: 'tool:read_file',
+      reason: 'secret_path',
+    })
+    expect(
+      (custom!.payload as { predicate?: { pathMatch?: string[] } }).predicate?.pathMatch,
+    ).toEqual(['\\.env(\\..*)?$'])
+  })
+
+  it('omits custom buttons when no factor produces a clean predicate', () => {
+    const n = renderApprovalNotification(
+      approvalEvent({
+        targetTool: 'read_file',
+        args: { path: '.env' },
+        riskFactors: [
+          factor({
+            rule: 'first_agent_to_agent',
+            category: 'structural',
+            points: 20,
+            reason: 'first hermes → claude-code call',
+          }),
+        ],
+      }),
+    )
+    expect(n.actions.find((a) => a.id.startsWith('block_'))).toBeUndefined()
+  })
+
+  it('omits custom buttons when targetTool is absent (no binding possible)', () => {
+    const n = renderApprovalNotification(
+      approvalEvent({
+        targetTool: undefined,
+        riskFactors: [
+          factor({
+            rule: 'secret_path',
+            category: 'secret',
+            points: 60,
+            reason: '.env',
+          }),
+        ],
+      }),
+    )
+    expect(n.actions.find((a) => a.id.startsWith('block_'))).toBeUndefined()
+  })
+
+  it('dedupes by actionId so two factors with the same rule produce one button', () => {
+    const n = renderApprovalNotification(
+      approvalEvent({
+        targetTool: 'read_file',
+        args: { path: '.env' },
+        riskFactors: [
+          factor({ rule: 'secret_path', category: 'secret', points: 60, reason: 'a' }),
+          factor({ rule: 'secret_path', category: 'secret', points: 60, reason: 'b' }),
+        ],
+      }),
+    )
+    const matches = n.actions.filter((a) => a.id === 'block_secret_path')
+    expect(matches).toHaveLength(1)
   })
 })
 

@@ -231,7 +231,7 @@ export async function handleMessage(
           // routing rules.
           name: "submit_approval",
           description:
-            "Submit the user's decision on a pending Foreman approval. Call this when a user message in your chat is the literal slash command `/approve <id>`, `/approve_remember <id>`, `/deny <id>`, or `/deny_remember <id>`. The approval id comes from a Foreman notification message in the same chat. Pass `decision: \"allow\"` or `\"deny\"`, and `remember: true` only for the `_remember` variants. Do NOT call this on your own initiative — only when the user types the literal command.",
+            "Submit the user's decision on a pending Foreman approval. Call this when a user message in your chat is the literal slash command `/approve <id>`, `/approve_remember <id>`, `/deny <id>`, or `/deny_remember <id>` — OR when the user taps an inline-keyboard button on a Foreman approval message (the agent receives a `callback_query` with `data: \"fa:<action_id>:<approval_id>\"`). The approval id comes from a Foreman notification message in the same chat. Pass `decision: \"allow\"` or `\"deny\"`, and `remember: true` only for the `_remember` variants. For custom action buttons (action_id starts with `block_`), pass the `action_id` so Foreman can resolve which predicate to inject + automatically deny the call. Do NOT call this on your own initiative — only when the user typed the command or tapped a Foreman button.",
           inputSchema: {
             type: "object",
             required: ["approval_id", "decision"],
@@ -245,12 +245,17 @@ export async function handleMessage(
                 type: "string",
                 enum: ["allow", "deny"],
                 description:
-                  "User's choice — 'allow' permits the pending tool call; 'deny' blocks it.",
+                  "User's choice — 'allow' permits the pending tool call; 'deny' blocks it. For custom action buttons (e.g. `block_secret_path`), pass `\"deny\"` — Foreman both denies the current call AND injects a permanent policy rule from the `action_id`.",
               },
               remember: {
                 type: "boolean",
                 description:
                   "When true, Foreman remembers this decision for the same source/target/tool combination and auto-resolves future identical calls.",
+              },
+              action_id: {
+                type: "string",
+                description:
+                  "Optional. When the user tapped a custom action button (callback_data `fa:<action_id>:<approval_id>` where action_id starts with `block_`), pass the action_id so Foreman can look up the proposed predicate from the approval row + inject the corresponding deny rule into policy.yaml. The standard `allow` / `deny` / `allow_always` / `deny_always` actions don't need this field — they're inferred from `decision` + `remember`.",
               },
             },
           },
@@ -323,11 +328,21 @@ export async function handleMessage(
       // #406 — Agent-routed approval relay. Validates approval id +
       // pending status, emits the resolution event so the in-flight
       // mediator request unblocks.
+      // #526 — Optional `action_id` parameter for custom approval
+      // buttons (e.g. "Block .env* reads from hermes"). When set,
+      // Foreman both denies the current call AND injects a permanent
+      // predicate-based deny rule derived from the approval's risk
+      // factors. Plain decision: allow|deny still works for the
+      // standard 4-action ladder.
       const args = params?.arguments ?? {};
       const approvalId =
         typeof args.approval_id === "string" ? args.approval_id : "";
       const decision = args.decision;
       const remember = args.remember === true;
+      const actionId =
+        typeof args.action_id === "string" && args.action_id.length > 0
+          ? args.action_id
+          : undefined;
       if (!approvalId) {
         return replyError(
           id,
@@ -354,13 +369,19 @@ export async function handleMessage(
         decision,
         remember,
         sourceAgent,
+        actionId,
       });
       if (result.ok) {
+        const tail = result.policyRuleId
+          ? ` + policy rule #${result.policyRuleId} added`
+          : remember
+            ? " (remembered)"
+            : "";
         return reply(id, {
           content: [
             {
               type: "text",
-              text: `Submitted: ${approvalId} → ${decision}${remember ? " (remembered)" : ""}`,
+              text: `Submitted: ${approvalId} → ${decision}${tail}`,
             },
           ],
         });

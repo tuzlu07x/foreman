@@ -191,10 +191,21 @@ immediately — same flow as a typed command, just a different input shape:
    If the split doesn't produce exactly 3 parts or the first isn't \`fa\`,
    leave it alone — it's not a Foreman approval.
 2. Map \`<action_id>\` to \`decision\` + \`remember\` per the table above.
-   An unknown \`<action_id>\` (one Foreman didn't ship yet) means a newer
-   custom button you don't have routing for — reply *"Unknown approval
-   action."* to the user via \`sendMessage\` and stop. Do NOT call
-   \`submit_approval\` with a guessed mapping.
+   If \`<action_id>\` starts with \`block_\` (e.g. \`block_secret_path\`,
+   \`block_shell_rm_rf_general\`, \`block_network_paste_share\`), it's a
+   **custom policy-injection action** (#526). Don't try to map it to a
+   standard decision — instead call \`submit_approval\` with:
+   - \`approval_id\`: the id from the callback_data
+   - \`decision\`: \`"deny"\`  (custom block actions always deny)
+   - \`action_id\`: the \`block_*\` string verbatim
+   Foreman uses the action_id to look up the predicate proposal it
+   originally sent + injects the matching deny rule into policy.yaml.
+   The chat reply Foreman returns includes the new rule id so the user
+   sees what was added.
+
+   For any OTHER unknown \`<action_id>\` (one Foreman didn't ship yet),
+   reply *"Unknown approval action."* to the user via \`sendMessage\` and
+   stop. Do NOT call \`submit_approval\` with a guessed mapping.
 3. Call the Foreman MCP tool \`submit_approval\` with \`approval_id\`,
    \`decision\`, and \`remember\` from step 2.
 4. Acknowledge the tap so the user's Telegram client clears its spinner.
