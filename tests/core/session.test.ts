@@ -230,4 +230,77 @@ describe('SessionManager', () => {
       }),
     )
   })
+
+  // ============================================================================
+  // #529 — Token-budget enforcement via runtime tokenLimitProvider.
+  //
+  // The static `tokenLimit` option keeps working for callers without a
+  // policy engine wired. The provider wins when both are present so a
+  // `policy.yaml` reload moves the cap mid-session without rebuilding the
+  // manager.
+  // ============================================================================
+
+  it('tokenLimitProvider takes precedence over the static tokenLimit option (#529)', () => {
+    const halted = vi.fn()
+    bus.on('session:halted', halted)
+    const m = new SessionManager(db, {
+      bus,
+      turnLimit: 999,
+      tokenLimit: 1000,
+      tokenLimitProvider: () => 200,
+    })
+    const id = m.startSession(['a', 'b'])
+    m.recordTurn(id, 100)
+    const result = m.recordTurn(id, 150) // cumulative 250 > 200
+    expect(result.allowed).toBe(false)
+    expect(result.reason).toBe('token_limit')
+    expect(halted).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'token_limit' }),
+    )
+  })
+
+  it('tokenLimitProvider is invoked per recordTurn so live config changes apply (#529)', () => {
+    // First call returns 500; the second returns 50 — the same session
+    // that was previously allowed at 200 tokens should now be over budget
+    // on the very next turn without rebuilding the manager.
+    let limit = 500
+    const m = new SessionManager(db, {
+      bus,
+      turnLimit: 999,
+      tokenLimitProvider: () => limit,
+    })
+    const id = m.startSession(['a', 'b'])
+    expect(m.recordTurn(id, 200).allowed).toBe(true)
+    limit = 50 // policy.yaml reload simulated
+    expect(m.recordTurn(id, 1).allowed).toBe(false)
+  })
+
+  it('falls back to the static tokenLimit when the provider throws (#529)', () => {
+    // Defensive: a misconfigured provider must not crash recordTurn — the
+    // existing static limit is the safe fallback.
+    const m = new SessionManager(db, {
+      bus,
+      turnLimit: 999,
+      tokenLimit: 100,
+      tokenLimitProvider: () => {
+        throw new Error('boom')
+      },
+    })
+    const id = m.startSession(['a', 'b'])
+    expect(m.recordTurn(id, 50).allowed).toBe(true)
+    expect(m.recordTurn(id, 60).allowed).toBe(false) // 110 > 100
+  })
+
+  it('falls back when the provider returns a non-positive value (#529)', () => {
+    // Zero / negative / NaN limits would otherwise lock the session out on
+    // turn 1. Treat them as "use the static fallback" instead.
+    const m = new SessionManager(db, {
+      bus,
+      turnLimit: 999,
+      tokenLimit: 100,
+      tokenLimitProvider: () => 0,
+    })
+    const id = m.startSession(['a', 'b'])
+    expect(m.recordTurn(id, 50).allowed).toBe(true)
+  })
 })

@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { eq } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   LOOP_THRESHOLDS,
@@ -275,6 +276,68 @@ describe('loop-detection — token budget', () => {
       sessionId: 'does-not-exist',
     })
     expect(ruleIds(factors)).not.toContain('loop_token_budget')
+  })
+
+  // #529 — Limit + warning_pct are now policy-engine driven (with the
+  // hardcoded 100K / 80% defaults as fallback). These tests bypass the
+  // top-level `assess` helper to pass a `sessionLimits` closure on the
+  // RiskContext directly.
+  it('honours a custom tokenLimit from RiskContext.sessionLimits (#529)', () => {
+    // Limit halved to 50K → 41K (82%) now crosses the 80% advisory.
+    seedSession('s-custom', 41_000)
+    const factors = loopDetectionRule.evaluate(
+      { sourceAgent: 'hermes', targetAgent: 'claude', sessionId: 's-custom' },
+      {
+        db,
+        sessionLimits: () => ({
+          tokenLimit: 50_000,
+          tokenBudgetWarningPct: 80,
+        }),
+      },
+    )
+    const tb = factors.find((f) => f.rule === 'loop_token_budget')
+    expect(tb).toBeDefined()
+    expect(tb!.reason).toMatch(/50K/)
+  })
+
+  it('honours a custom tokenBudgetWarningPct from RiskContext (#529)', () => {
+    // 50% threshold + 60K used / 100K limit → above threshold, must fire.
+    seedSession('s-warn', 60_000)
+    const factors = loopDetectionRule.evaluate(
+      { sourceAgent: 'hermes', targetAgent: 'claude', sessionId: 's-warn' },
+      {
+        db,
+        sessionLimits: () => ({
+          tokenLimit: 100_000,
+          tokenBudgetWarningPct: 50,
+        }),
+      },
+    )
+    expect(ruleIds(factors)).toContain('loop_token_budget')
+  })
+
+  it('keeps the rule advisory — does NOT halt the session (#529 enforcement is in SessionManager)', () => {
+    // Pin the rule's role: it scores, it never mutates session state. The
+    // halt happens in SessionManager.recordTurn; this test guards against
+    // a regression that accidentally turns the risk rule into the halt
+    // mechanism.
+    seedSession('s-advisory', 95_000)
+    const before = db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, 's-advisory'))
+      .get()
+    loopDetectionRule.evaluate(
+      { sourceAgent: 'hermes', targetAgent: 'claude', sessionId: 's-advisory' },
+      { db },
+    )
+    const after = db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, 's-advisory'))
+      .get()
+    expect(after?.status).toBe(before?.status)
+    expect(after?.status).toBe('active')
   })
 })
 
