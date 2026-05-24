@@ -233,6 +233,12 @@ export class MediatorService {
       policyResult.decision === "ask" || assessment.recommendation === "ask";
 
     if (needsApproval) {
+      // #525 — Stamp the absolute auto-resolve deadline on the event so
+      // channels (Telegram countdown) render the same value the approval
+      // service will enforce. Services without a meaningful timeout
+      // (DenyAllApprovalService in tests) leave the field undefined and
+      // the channel skips the countdown line.
+      const deadlineMs = this.deps.approval.computeDeadline?.();
       this.bus.emit("approval:requested", {
         requestId,
         sourceAgent: input.sourceAgent,
@@ -246,6 +252,7 @@ export class MediatorService {
         llmVerification: assessment.llmVerification,
         securityReport,
         sessionId: input.sessionId,
+        ...(deadlineMs != null ? { deadlineMs } : {}),
       });
       const approval = await this.deps.approval.request({
         requestId,
@@ -257,6 +264,7 @@ export class MediatorService {
         riskReasons,
         riskFactors: assessment.factors,
         riskBucket: assessment.bucket,
+        ...(deadlineMs != null ? { deadlineMs } : {}),
         llmVerification: assessment.llmVerification,
         securityReport,
         sessionId: input.sessionId,

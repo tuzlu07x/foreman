@@ -190,6 +190,14 @@ export const pendingApprovals = sqliteTable(
     resolvedBy: text("resolved_by", { enum: ["user", "timeout"] }),
     requestedAt: integer("requested_at").notNull(),
     resolvedAt: integer("resolved_at"),
+    // #525 — Absolute Unix ms timestamp when the approval auto-resolves to
+    // its default decision (typically "deny"). Channels render this as a
+    // countdown ("⏱ Auto-deny in 4m 12s"); the bridge re-emits the value
+    // on approval:requested so cross-process consumers (the TUI modal,
+    // Telegram channel) see the same deadline the writer set.
+    // Nullable for legacy rows + callers that don't compute a deadline
+    // (BusApprovalService unit tests).
+    deadlineMs: integer("deadline_ms"),
   },
   (t) => ({
     statusIdx: index("pending_approvals_status_idx").on(
