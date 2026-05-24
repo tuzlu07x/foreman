@@ -223,3 +223,115 @@ describe("resolveAgentSettingsPath", () => {
     expect(() => resolveAgentSettingsPath([])).toThrow(/no config_paths/);
   });
 });
+
+// =============================================================================
+// #517 Faz 2 — Multi-agent permission defaults (openclaw + skeleton for
+// codex / hermes / zeroclaw). JSON-config agents share the same writer
+// path; TOML / YAML agents land in Faz 4 alongside the unified PreToolUse
+// hook approach.
+// =============================================================================
+
+describe("DEFAULT_PERMISSIONS — Faz 2 coverage (#517)", () => {
+  it.each(["claude-code", "openclaw", "codex", "hermes", "zeroclaw"])(
+    "ships a default allowlist for %s",
+    (agentId) => {
+      const set = DEFAULT_PERMISSIONS[agentId];
+      expect(set).toBeDefined();
+      expect(set!.allow.length).toBeGreaterThan(0);
+    },
+  );
+
+  it.each(["claude-code", "openclaw", "codex", "hermes", "zeroclaw"])(
+    "never auto-adds destructive commands to the %s default set",
+    (agentId) => {
+      const set = DEFAULT_PERMISSIONS[agentId]!;
+      for (const forbidden of DESTRUCTIVE_FORBIDDEN) {
+        expect(set.allow).not.toContain(forbidden);
+      }
+    },
+  );
+
+  it("openclaw covers the same coding-essential commands as claude-code", () => {
+    const o = DEFAULT_PERMISSIONS.openclaw!;
+    // Spot-check the commands a user's first OpenClaw coding session would
+    // hit — the same set Faz 1 unblocked for claude-code.
+    expect(o.allow).toContain("Bash(git clone:*)");
+    expect(o.allow).toContain("Bash(gh:*)");
+    expect(o.allow).toContain("Bash(npm:*)");
+    expect(o.allow).toContain("Bash(pytest:*)");
+  });
+
+  it("codex + zeroclaw default sets use the TOML format marker", () => {
+    expect(DEFAULT_PERMISSIONS.codex!.format).toBe("toml");
+    expect(DEFAULT_PERMISSIONS.zeroclaw!.format).toBe("toml");
+  });
+
+  it("hermes uses the YAML format marker + a thinner allowlist (LLM chat agent)", () => {
+    const h = DEFAULT_PERMISSIONS.hermes!;
+    expect(h.format).toBe("yaml");
+    // Hermes is Python LLM on Telegram/Discord — narrow shell footprint.
+    expect(h.allow).not.toContain("Bash(npm:*)");
+    expect(h.allow).not.toContain("Bash(git clone:*)");
+    // The few it does have are read-only.
+    expect(h.allow).toContain("Bash(cat:*)");
+    expect(h.allow).toContain("Bash(grep:*)");
+  });
+
+  it("claude-code defaults still imply json format (back-compat)", () => {
+    const c = DEFAULT_PERMISSIONS["claude-code"]!;
+    // Either explicitly 'json' or undefined (defaulted to json by
+    // applyPermissions). Pinning that the legacy entry wasn't broken
+    // by the new field.
+    expect(c.format === "json" || c.format === undefined).toBe(true);
+  });
+});
+
+describe("applyPermissions — format dispatch (#517 Faz 2)", () => {
+  let tmp: string;
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "foreman-perms-faz2-"));
+  });
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("writes the openclaw allowlist to JSON cleanly (the new JSON agent)", () => {
+    const settingsPath = join(tmp, "openclaw.json");
+    const result = applyPermissions("openclaw", settingsPath);
+    expect(result.unchanged).toBe(false);
+    expect(existsSync(settingsPath)).toBe(true);
+    const written = JSON.parse(readFileSync(settingsPath, "utf-8")) as {
+      permissions: { allow: string[] };
+    };
+    expect(written.permissions.allow).toContain("Bash(git clone:*)");
+    expect(written.permissions.allow).toContain("Bash(gh:*)");
+  });
+
+  it.each([
+    ["codex", "TOML"],
+    ["zeroclaw", "TOML"],
+    ["hermes", "YAML"],
+  ])(
+    "refuses to write a %s config (format=%s) and points at Faz 4",
+    (agentId, label) => {
+      const settingsPath = join(tmp, `${agentId}.cfg`);
+      expect(() => applyPermissions(agentId, settingsPath)).toThrow(
+        new RegExp(`${label}.*Faz 4`),
+      );
+    },
+  );
+
+  it("the unknown-agent error message now lists the full set of supported ids", () => {
+    try {
+      applyPermissions("not-a-real-agent", join(tmp, "x.json"));
+      throw new Error("expected applyPermissions to throw");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      expect(msg).toMatch(/Supported:/);
+      // Every Faz 1 + Faz 2 agent shows up in the supported list.
+      for (const id of ["claude-code", "openclaw", "codex", "hermes", "zeroclaw"]) {
+        expect(msg).toContain(id);
+      }
+    }
+  });
+});
