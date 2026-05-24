@@ -47,7 +47,12 @@ const sampleAgent: RegisteredAgent = {
   lastSeenAt: Date.now() - 5_000,
   metadata: null,
   llmProvider: null,
+  providerVariant: null,
+  modelVersion: null,
   responsibilityNote: null,
+  taskSkipPermissions: false,
+  role: null,
+  handoffRules: null,
 }
 
 const samplePolicy: PolicyRow = {
