@@ -252,6 +252,28 @@ describe("DEFAULT_FOREMAN_SOUL — inline keyboard callbacks (#522)", () => {
     // tell the user instead.
     expect(DEFAULT_FOREMAN_SOUL).toMatch(/[Uu]nknown[\s\S]*action_id[\s\S]*NOT call/);
   });
+
+  // #526 — Custom policy-injection action_ids (block_*) need their own
+  // SOUL instruction: don't try to mimic the standard 4-action mapping;
+  // call submit_approval with decision:"deny" + action_id verbatim so
+  // Foreman can look up the predicate proposal + inject the deny rule.
+  it("documents the block_* custom action handling (#526)", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toContain("`block_`");
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/custom policy-injection action.*#526/);
+  });
+
+  it("instructs the agent to pass action_id verbatim for block_* taps (#526)", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(
+      /action_id[\s\S]*block_\*[\s\S]*verbatim/i,
+    );
+  });
+
+  it("forces decision=deny for block_* actions (never allow) (#526)", () => {
+    // The SOUL pins "custom block actions always deny" inline with the
+    // submit_approval call template so the agent never tries an `allow`
+    // mapping for a `block_*` button.
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/custom block actions always deny/i);
+  });
 });
 
 // #431 — Orchestrator routing section. Mirrors the approval-routing
