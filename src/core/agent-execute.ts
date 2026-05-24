@@ -39,6 +39,15 @@ export interface ExecuteDirectiveInput {
    *  CLI flag (e.g. `--model claude-sonnet-4-6`). NULL/undefined =
    *  the agent's own config default. */
   modelVersion?: string | null;
+  /** #517 Faz 3 — Operator has trusted this agent via
+   *  `foreman agent trust <id>`. When true AND the catalog entry has
+   *  `task_skip_permissions_flag`, the spawn engine appends the flag
+   *  (e.g. `--full-auto` for codex, `--dangerously-skip-permissions`
+   *  for claude-code) so the agent runs without its own per-call
+   *  prompt. Drain handler reads `registry.get(agentId).taskSkipPermissions`
+   *  + forwards it here; without this wiring the trust CLI's DB flag
+   *  was a silent no-op (#544 out-of-scope finished here). */
+  taskSkipPermissions?: boolean;
 }
 
 export interface ExecuteDeliveryDeps {
@@ -95,6 +104,10 @@ export async function executeWriteDirective(
     entry: input.entry,
     task: input.message,
     modelVersion: input.modelVersion ?? null,
+    // #517 Faz 3 wiring — forward the trust flag so codex / claude-code
+    // get their respective `--full-auto` / `--dangerously-skip-permissions`
+    // appended when the operator ran `foreman agent trust <id>`.
+    taskSkipPermissions: input.taskSkipPermissions === true,
     spawnImpl: deps.spawnImpl,
   });
   const text = renderOutputText(input, spawn, deps.maxOutputLength);
