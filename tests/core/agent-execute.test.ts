@@ -1,12 +1,15 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   executeWriteDirective,
   renderOutputText,
 } from "../../src/core/agent-execute.js";
+import { EventBus, type ForemanEventMap } from "../../src/core/event-bus.js";
 import type { AgentEntry } from "../../src/core/registry-catalog.js";
+import { SessionManager } from "../../src/core/session.js";
+import { createInMemoryDb } from "../../src/db/client.js";
 
 // =============================================================================
 // Foreman → Agent task execution + output relay — PR D of the multi-agent
@@ -444,6 +447,233 @@ describe("executeWriteDirective", () => {
         .filter((l) => l.startsWith("ARG:"));
       // Just the task; no phantom flag.
       expect(argLines).toEqual(["ARG:ping"]);
+    }
+  });
+});
+
+// =============================================================================
+// QA-fix 2026-05-24 (Wiring 4) — SessionManager wired around executeWriteDirective.
+//
+// Before: drain handler called `executeWriteDirective(...)` directly. No
+// session row was opened, so:
+//   - TUI Sessions panel showed "0 active" while real work happened
+//   - `agents: last seen` heartbeat never advanced
+//   - #523 lifecycle pushes ("▶️ codex started" / "✓ codex finished")
+//     never fired
+//   - #530 per-session cost rollup was always $0.00
+//
+// After: the executor opens a session BEFORE the spawn (so the started
+// event fires while work is in flight) + closes it AFTER on outcome
+// (`complete` on ok, `halt('manual')` on failure/timeout/spawn-error).
+// Both terminal paths emit `session:completed` which the notification
+// bridge routes as the lifecycle push. Best-effort throughout: a session
+// throw must NEVER kill the spawn — the agent's work matters more than
+// our bookkeeping.
+// =============================================================================
+
+describe("executeWriteDirective — SessionManager wiring", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "foreman-session-exec-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function makeScript(name: string, body: string): string {
+    const path = join(dir, name);
+    writeFileSync(path, body);
+    chmodSync(path, 0o755);
+    return path;
+  }
+
+  function makeManager(): {
+    bus: EventBus<ForemanEventMap>;
+    manager: SessionManager;
+    cleanup: () => void;
+    events: Array<{ name: string; payload: unknown }>;
+  } {
+    const handle = createInMemoryDb();
+    const bus = new EventBus<ForemanEventMap>();
+    const manager = new SessionManager(handle.db, { bus });
+    const events: Array<{ name: string; payload: unknown }> = [];
+    bus.on("session:started", (p) => events.push({ name: "started", payload: p }));
+    bus.on("session:completed", (p) =>
+      events.push({ name: "completed", payload: p }),
+    );
+    bus.on("session:halted", (p) => events.push({ name: "halted", payload: p }));
+    return { bus, manager, events, cleanup: () => handle.sqlite.close() };
+  }
+
+  it("opens a session with the user_command:write trigger + completes it on ok spawn", async () => {
+    const { manager, events, cleanup } = makeManager();
+    try {
+      const echo = makeScript("echo.sh", "#!/bin/sh\necho done\n");
+      const result = await executeWriteDirective(
+        {
+          agentId: "codex",
+          message: "do the thing",
+          entry: agent({ task_command_template: echo }),
+          sessionManager: manager,
+        },
+        {},
+      );
+      expect(result.spawn.kind).toBe("ok");
+
+      // The session row landed + transitioned active → completed.
+      const allSessions = manager.list();
+      expect(allSessions).toHaveLength(1);
+      expect(allSessions[0]!.status).toBe("completed");
+      expect(allSessions[0]!.participants).toEqual(["codex"]);
+
+      // The lifecycle bridge needs both ends: started (so the user
+      // gets the "▶️ codex started" push) and completed{outcome:
+      // 'success'} (the "✓ codex finished" push).
+      const started = events.find((e) => e.name === "started");
+      expect(started).toBeDefined();
+      expect((started!.payload as { trigger: string }).trigger).toBe(
+        "user_command:write",
+      );
+      expect(
+        (started!.payload as { participants: string[] }).participants,
+      ).toEqual(["codex"]);
+
+      const completed = events.find((e) => e.name === "completed");
+      expect(completed).toBeDefined();
+      expect((completed!.payload as { outcome: string }).outcome).toBe(
+        "success",
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("tags the session with projectTag = basename(cwd) so completion push shows '(todo-app)' (#530)", async () => {
+    const { manager, events, cleanup } = makeManager();
+    try {
+      const echo = makeScript("echo.sh", "#!/bin/sh\necho ok\n");
+      // The cwd basename becomes the project tag — directly visible
+      // to the user in the lifecycle push's parens suffix.
+      const result = await executeWriteDirective(
+        {
+          agentId: "codex",
+          message: "task",
+          entry: agent({ task_command_template: echo }),
+          cwd: dir,
+          sessionManager: manager,
+        },
+        {},
+      );
+      expect(result.spawn.kind).toBe("ok");
+      const completed = events.find((e) => e.name === "completed");
+      expect(completed).toBeDefined();
+      expect((completed!.payload as { projectTag?: string }).projectTag).toBe(
+        basename(dir),
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("halts the session ('manual') when the spawn fails so the user sees a 'halted' lifecycle push", async () => {
+    const { manager, events, cleanup } = makeManager();
+    try {
+      const fail = makeScript("fail.sh", "#!/bin/sh\necho 'broke' >&2\nexit 5\n");
+      const result = await executeWriteDirective(
+        {
+          agentId: "codex",
+          message: "x",
+          entry: agent({ task_command_template: fail }),
+          sessionManager: manager,
+        },
+        {},
+      );
+      expect(result.spawn.kind).toBe("failed");
+
+      // halt() fires session:halted AND session:completed{outcome:
+      // 'halted'} (manual halts terminate immediately, no resolution
+      // wait). Both are needed: notification bridge listens for
+      // completed to push the "⚠ halted" lifecycle.
+      const halted = events.find((e) => e.name === "halted");
+      expect(halted).toBeDefined();
+      expect((halted!.payload as { reason: string }).reason).toBe("manual");
+
+      const completed = events.find((e) => e.name === "completed");
+      expect(completed).toBeDefined();
+      expect((completed!.payload as { outcome: string }).outcome).toBe(
+        "halted",
+      );
+
+      // DB transitioned active → halted (not completed).
+      const sessions = manager.list();
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]!.status).toBe("halted");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("does NOT open a session when sessionManager is omitted (preserves old behavior for test paths)", async () => {
+    // The drain handler always passes sessionManager in production, but
+    // executeWriteDirective is also called from unit tests and from
+    // tools that don't need lifecycle tracking. Sanity check: no
+    // bookkeeping happens when the caller doesn't ask for it.
+    const { manager, events, cleanup } = makeManager();
+    try {
+      const echo = makeScript("echo.sh", "#!/bin/sh\necho done\n");
+      const result = await executeWriteDirective(
+        {
+          agentId: "codex",
+          message: "x",
+          entry: agent({ task_command_template: echo }),
+          // sessionManager intentionally omitted
+        },
+        {},
+      );
+      expect(result.spawn.kind).toBe("ok");
+      expect(manager.list()).toEqual([]);
+      expect(events).toEqual([]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("survives a startSession throw — spawn still runs, no crash, no session row", async () => {
+    // SessionManager bookkeeping is best-effort. If the DB write blows
+    // up (locked, disk full, migration mismatch, whatever) the agent's
+    // task still needs to run — Foreman's job is to spawn the work,
+    // not to gate it behind bookkeeping. Verify by handing in a
+    // broken-on-startSession manager.
+    const { manager, cleanup } = makeManager();
+    try {
+      const echo = makeScript("echo.sh", "#!/bin/sh\necho done\n");
+      // Stub startSession to throw; spawn must proceed anyway.
+      const startSpy = vi
+        .spyOn(manager, "startSession")
+        .mockImplementation(() => {
+          throw new Error("simulated db failure");
+        });
+      const stderrSpy = vi
+        .spyOn(process.stderr, "write")
+        .mockImplementation(() => true);
+      const result = await executeWriteDirective(
+        {
+          agentId: "codex",
+          message: "x",
+          entry: agent({ task_command_template: echo }),
+          sessionManager: manager,
+        },
+        {},
+      );
+      expect(result.spawn.kind).toBe("ok");
+      expect(startSpy).toHaveBeenCalledOnce();
+      // The failure was logged to stderr (operator-visible diagnostic)
+      // but the spawn outcome is what callers see.
+      expect(stderrSpy).toHaveBeenCalled();
+      stderrSpy.mockRestore();
+      startSpy.mockRestore();
+    } finally {
+      cleanup();
     }
   });
 });
