@@ -163,12 +163,23 @@ export async function spawnAgentTask(
   // `task_skip_permissions_flag`, append it so the agent bypasses its
   // own shell allowlist gate. The decision is the user's; Foreman's
   // MCP mediation remains active either way.
+  //
+  // QA-fix 2026-05-24 — Codex deprecated its single-token `--full-auto`
+  // in favour of the two-token `--sandbox workspace-write`. The flag
+  // value can now carry multiple whitespace-separated tokens; split
+  // them so each lands as its own argv element (otherwise the agent
+  // sees a single string like "--sandbox workspace-write" and the
+  // CLI parser rejects it). Single-token flags (claude-code's
+  // --dangerously-skip-permissions) pass through unchanged.
   if (
     options.taskSkipPermissions &&
     options.entry.task_skip_permissions_flag &&
     options.entry.task_skip_permissions_flag.trim().length > 0
   ) {
-    args.push(options.entry.task_skip_permissions_flag);
+    const tokens = options.entry.task_skip_permissions_flag
+      .trim()
+      .split(/\s+/);
+    for (const token of tokens) args.push(token);
   }
 
   const timeoutMs =
