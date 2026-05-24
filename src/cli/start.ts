@@ -50,7 +50,7 @@ import { SetupWizard, type WizardOauthRunStep } from "../tui/setup-wizard.js";
 import { runOauthFlows } from "./run-oauth-flow.js";
 import { SecretStore, SecretNotFoundError } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
-import { recordUsageAndCheckBudget } from "../core/llm/budget.js";
+import { costBySession, recordUsageAndCheckBudget } from "../core/llm/budget.js";
 import { isFeatureEnabled, loadLlmConfig } from "../core/llm/config.js";
 import {
   buildLlmClient,
@@ -194,7 +194,14 @@ export function startForeman(
       registry.get(agentId)?.responsibilityNote ?? null,
     responsibilityPolicies: () => policy.getResponsibilityPolicies(),
   });
-  const sessionManager = new SessionManager(db, { bus });
+  // QA-fix 2026-05-24 — wire the cost provider (#530 out-of-scope) so
+  // session:completed events ship the real $X.XX instead of the
+  // placeholder $0.00. costBySession does a sum query over
+  // llm_usage.session_id — fast, no extra book-keeping.
+  const sessionManager = new SessionManager(db, {
+    bus,
+    costProvider: (sid) => costBySession(db, sid).totalUsd,
+  });
   // Optional LLM verifier (#231 / C8) — only built when llm.yaml has the
   // verification feature on AND credentials resolve. Failures are silent so
   // the heuristic-only flow stays unaffected.
@@ -595,6 +602,14 @@ export function startForeman(
             // user actually mentioned. Without this, codex landed in
             // Foreman's own cwd and refused to write outside it.
             const derivedCwd = extractCwdFromTask(message);
+            // QA-fix 2026-05-24 (Wiring 4) — heartbeat the agent so its
+            // status flips from "never seen" to a real timestamp.
+            // Best-effort; ignore if the row was racey-removed.
+            try {
+              registry.heartbeat(agentId);
+            } catch {
+              /* ignore — agent might have been removed mid-drain */
+            }
             const exec = await executeWriteDirective(
               {
                 agentId,
@@ -605,6 +620,11 @@ export function startForeman(
                 taskSkipPermissions:
                   registryRow?.taskSkipPermissions === true,
                 ...(derivedCwd ? { cwd: derivedCwd } : {}),
+                // QA-fix 2026-05-24 (Wiring 4) — hand the session
+                // manager to the executor so it opens/closes a session
+                // around the spawn. Lights up #523 lifecycle pushes,
+                // #530 cost rollup, and the TUI Sessions panel.
+                sessionManager,
               },
               { telegramBotToken, telegramChatId },
             );
