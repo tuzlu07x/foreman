@@ -67,6 +67,12 @@ export const NotifyConfigSchema = z
          *  `activity_summary: { channels: ['telegram'], schedule: 'daily 20:00' }`.
          *  Requires `features.orchestrator_chat: true` in llm.yaml. */
         activity_summary: RouteSchema.optional(),
+        /** #523 — Session lifecycle pushes (started / progress / completed).
+         *  Default route: telegram on, channels: []. Users who don't want
+         *  a ping every 15 min while a long agent job runs can drop the
+         *  channels: `session_lifecycle: { channels: [] }` mutes lifecycle
+         *  pushes completely without affecting approvals or alerts. */
+        session_lifecycle: RouteSchema.optional(),
       })
       .default({}),
   })
@@ -98,6 +104,10 @@ export function defaultNotifyConfig(): NotifyConfig {
       // #383 — auto-deny alerts ("Foreman caught X attempting Y") default
       // to telegram so the user knows their guardian is actually working.
       risk_deny: { channels: ['telegram'], timeout_seconds: 0 },
+      // #523 — session lifecycle pushes default to telegram. Power users
+      // running long-form agent jobs that don't want a ping every 15 min
+      // can override to `session_lifecycle: { channels: [] }` to mute.
+      session_lifecycle: { channels: ['telegram'], timeout_seconds: 0 },
     },
   })
 }

@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { ForemanEventMap } from '../../../src/core/event-bus.js'
 import {
+  formatElapsed,
   levelForBucket,
   renderApprovalNotification,
   renderResolvedFooter,
+  renderSessionCompleted,
+  renderSessionProgress,
+  renderSessionStarted,
 } from '../../../src/core/notification/render.js'
 import type { RiskFactor } from '../../../src/core/risk-rules/types.js'
 
@@ -175,5 +179,181 @@ describe('renderResolvedFooter', () => {
       resolvedBy: 'timeout',
     })
     expect(out).toContain('timeout default')
+  })
+})
+
+// =============================================================================
+// #523 — Session lifecycle renderers.
+//
+// Templates carry the Turkish scenario tone — the same shape the daily
+// summary uses. Tests pin the user-visible fragments so a future template
+// tweak doesn't silently break the scenario.
+// =============================================================================
+
+describe('renderSessionStarted (#523)', () => {
+  it('joins participants with " + " and labels with the trigger', () => {
+    const n = renderSessionStarted({
+      sessionId: 'sess-abc',
+      participants: ['openclaw', 'hermes'],
+      trigger: 'user_command:write',
+      startedAt: 1_700_000_000_000,
+    })
+    expect(n.level).toBe('session_lifecycle')
+    expect(n.actions).toEqual([])
+    expect(n.agentBlocking).toBe(false)
+    expect(n.body).toContain('▶️ openclaw + hermes çalışmaya başladı.')
+    expect(n.body).toContain('Trigger: user_command:write')
+  })
+
+  it('renders the estimated-turn hint when the planner provides one', () => {
+    const n = renderSessionStarted({
+      sessionId: 'sess-abc',
+      participants: ['a'],
+      trigger: 't',
+      estimatedTurns: 8,
+      startedAt: 0,
+    })
+    expect(n.body).toContain('Plan: 8 turn')
+  })
+
+  it('omits the plan line when estimatedTurns is absent', () => {
+    const n = renderSessionStarted({
+      sessionId: 'sess-abc',
+      participants: ['a'],
+      trigger: 't',
+      startedAt: 0,
+    })
+    expect(n.body).not.toContain('Plan:')
+  })
+})
+
+describe('renderSessionProgress (#523)', () => {
+  it('uses the first 6 chars of the sessionId as a stable short label', () => {
+    const n = renderSessionProgress({
+      sessionId: '01HZX4N5YJK2P8Q3R6V7T9W2WB',
+      turnCount: 14,
+      tokenCount: 12_345,
+      recentDecisions: [],
+      elapsedMs: 78 * 60 * 1000,
+      emittedAt: 0,
+    })
+    expect(n.title).toContain('01HZX4')
+    expect(n.body).toContain('14 turn')
+    expect(n.body).toContain('12,345 token')
+    expect(n.body).toContain('1h 18m')
+  })
+
+  it('quotes the most recent decision when one is present', () => {
+    const n = renderSessionProgress({
+      sessionId: 'sess-abc-12345',
+      turnCount: 3,
+      tokenCount: 500,
+      recentDecisions: [
+        {
+          sourceAgent: 'hermes',
+          targetTool: 'read_file',
+          decision: 'allowed',
+        },
+        { sourceAgent: 'old', targetTool: 'older', decision: 'allowed' },
+      ],
+      elapsedMs: 30_000,
+      emittedAt: 0,
+    })
+    expect(n.body).toContain('Son: hermes → read_file')
+  })
+
+  it('falls back to targetAgent when targetTool is absent', () => {
+    const n = renderSessionProgress({
+      sessionId: 'sess-abc-12345',
+      turnCount: 1,
+      tokenCount: 0,
+      recentDecisions: [
+        {
+          sourceAgent: 'openclaw',
+          targetAgent: 'claude-code',
+          decision: 'allowed',
+        },
+      ],
+      elapsedMs: 5_000,
+      emittedAt: 0,
+    })
+    expect(n.body).toContain('Son: openclaw → claude-code')
+  })
+
+  it('omits the "Son:" line when there are no recent decisions yet', () => {
+    const n = renderSessionProgress({
+      sessionId: 'sess-abc-12345',
+      turnCount: 0,
+      tokenCount: 0,
+      recentDecisions: [],
+      elapsedMs: 5_000,
+      emittedAt: 0,
+    })
+    expect(n.body).not.toContain('Son:')
+  })
+})
+
+describe('renderSessionCompleted (#523)', () => {
+  it('renders the success outcome with ✓ + cost + duration', () => {
+    const n = renderSessionCompleted({
+      sessionId: 'sess-abc-12345',
+      outcome: 'success',
+      turnCount: 4,
+      tokenCount: 1500,
+      costUsd: 0.04,
+      durationMs: 23_000,
+      completedAt: 0,
+    })
+    expect(n.body).toContain('✓ sess-a success')
+    expect(n.body).toContain('4 turn · 23s · $0.04')
+    expect(n.body).not.toContain('Sebep:')
+  })
+
+  it('renders non-success outcomes with ⚠ and the reason', () => {
+    const n = renderSessionCompleted({
+      sessionId: 'sess-abc-12345',
+      outcome: 'halted',
+      reason: 'token_limit',
+      turnCount: 12,
+      tokenCount: 100_000,
+      costUsd: 0.42,
+      durationMs: 5 * 60 * 1000,
+      completedAt: 0,
+    })
+    expect(n.body).toContain('⚠ sess-a halted')
+    expect(n.body).toContain('Sebep: token_limit')
+  })
+
+  it('still reports $0.00 when costUsd is 0 (placeholder before #530)', () => {
+    const n = renderSessionCompleted({
+      sessionId: 'sess-abc-12345',
+      outcome: 'success',
+      turnCount: 1,
+      tokenCount: 10,
+      costUsd: 0,
+      durationMs: 1000,
+      completedAt: 0,
+    })
+    expect(n.body).toContain('$0.00')
+  })
+})
+
+describe('formatElapsed (#523)', () => {
+  it.each([
+    [0, '0s'],
+    [999, '0s'],
+    [1000, '1s'],
+    [59_000, '59s'],
+    [60_000, '1m'],
+    [90_000, '1m 30s'],
+    [60 * 60 * 1000, '1h'],
+    [78 * 60 * 1000, '1h 18m'],
+    [24 * 60 * 60 * 1000, '24h'],
+  ])('formats %i ms as %s', (ms, expected) => {
+    expect(formatElapsed(ms)).toBe(expected)
+  })
+
+  it('clamps negative durations to 0s (clock skew safety)', () => {
+    expect(formatElapsed(-500)).toBe('0s')
   })
 })

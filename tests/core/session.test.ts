@@ -130,4 +130,104 @@ describe('SessionManager', () => {
   it('recordTurn() on an unknown session throws SessionNotFoundError', () => {
     expect(() => manager.recordTurn('nope')).toThrow(SessionNotFoundError)
   })
+
+  // ============================================================================
+  // #523 — Lifecycle events: session:started + session:completed.
+  //
+  // The new bridge in this PR subscribes to these to push "▶️ openclaw
+  // çalışmaya başladı" / "✓ done in 23s" to Telegram. Pinning the emission
+  // shape here keeps the bridge tests focused on routing, not parsing.
+  // ============================================================================
+
+  it('startSession emits session:started with participants + trigger', () => {
+    const started = vi.fn()
+    bus.on('session:started', started)
+    const id = manager.startSession(['openclaw', 'hermes'], {
+      trigger: 'user_command:write',
+      estimatedTurns: 8,
+    })
+    expect(started).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: id,
+        participants: ['openclaw', 'hermes'],
+        trigger: 'user_command:write',
+        estimatedTurns: 8,
+      }),
+    )
+    const payload = started.mock.calls[0]![0]
+    expect(payload.startedAt).toBeGreaterThan(0)
+  })
+
+  it('startSession without opts defaults trigger to "unknown"', () => {
+    // Legacy callsites that haven't been updated yet must still produce a
+    // coherent event payload — the notification template doesn't crash on
+    // missing fields.
+    const started = vi.fn()
+    bus.on('session:started', started)
+    manager.startSession(['a', 'b'])
+    expect(started).toHaveBeenCalledWith(
+      expect.objectContaining({ trigger: 'unknown' }),
+    )
+    expect(started.mock.calls[0]![0].estimatedTurns).toBeUndefined()
+  })
+
+  it('complete() emits session:completed with outcome=success + duration', () => {
+    const completed = vi.fn()
+    bus.on('session:completed', completed)
+    const id = manager.startSession(['a', 'b'])
+    manager.recordTurn(id, 150)
+    manager.recordTurn(id, 250)
+    manager.complete(id)
+    expect(completed).toHaveBeenCalledOnce()
+    const payload = completed.mock.calls[0]![0]
+    expect(payload).toMatchObject({
+      sessionId: id,
+      outcome: 'success',
+      turnCount: 2,
+      tokenCount: 400,
+      costUsd: 0, // placeholder until #530
+    })
+    expect(payload.durationMs).toBeGreaterThanOrEqual(0)
+    expect(payload.completedAt).toBeGreaterThan(0)
+  })
+
+  it('complete() on already-completed/halted session is a no-op (no double emit)', () => {
+    const completed = vi.fn()
+    bus.on('session:completed', completed)
+    const id = manager.startSession(['a', 'b'])
+    manager.halt(id) // emits completed once (outcome: 'halted')
+    manager.complete(id) // already halted → no-op, no second emit
+    expect(completed).toHaveBeenCalledOnce()
+  })
+
+  it('halt() emits session:completed with outcome=halted + reason alongside session:halted', () => {
+    const halted = vi.fn()
+    const completed = vi.fn()
+    bus.on('session:halted', halted)
+    bus.on('session:completed', completed)
+    const id = manager.startSession(['a', 'b'])
+    manager.halt(id, 'loop_detection')
+    expect(halted).toHaveBeenCalledOnce()
+    expect(completed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: id,
+        outcome: 'halted',
+        reason: 'loop_detection',
+      }),
+    )
+  })
+
+  it('turn-limit auto-halt also fires session:completed (outcome=halted)', () => {
+    const completed = vi.fn()
+    bus.on('session:completed', completed)
+    const id = manager.startSession(['a', 'b'])
+    for (let i = 0; i < 5; i++) manager.recordTurn(id)
+    manager.recordTurn(id) // 6th → halts via turn_limit
+    expect(completed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: 'halted',
+        reason: 'turn_limit',
+      }),
+    )
+  })
 })

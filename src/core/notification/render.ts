@@ -172,3 +172,100 @@ export function renderResolvedFooter(
       : '(resolved elsewhere)'
   return `${verb} ${source} at ${new Date().toISOString().slice(11, 19)}`
 }
+
+// =============================================================================
+// Session lifecycle notifications (#523)
+// =============================================================================
+//
+// Three small renderers turn the session:* events into Notification payloads
+// the bridge can dispatch. Kept in this file (alongside the approval renderer)
+// so the templates evolve together — same tone, same truncation rules, same
+// channel-agnostic shape.
+
+export function renderSessionStarted(
+  e: ForemanEventMap['session:started'],
+): Omit<Notification, 'id'> {
+  const participants = e.participants.join(' + ')
+  const lines = [`▶️ ${participants} çalışmaya başladı.`]
+  lines.push(`Trigger: ${e.trigger}`)
+  if (typeof e.estimatedTurns === 'number') {
+    lines.push(`Plan: ${e.estimatedTurns} turn`)
+  }
+  return {
+    level: 'session_lifecycle',
+    requestId: null,
+    title: `▶️ ${participants}`,
+    body: lines.join('\n'),
+    actions: [],
+    agentBlocking: false,
+  }
+}
+
+export function renderSessionProgress(
+  e: ForemanEventMap['session:progress'],
+): Omit<Notification, 'id'> {
+  const idShort = e.sessionId.slice(0, 6)
+  const lines = [`⏳ İlerleme raporu — ${idShort}`]
+  lines.push(
+    `${e.turnCount} turn · ${formatTokenCount(e.tokenCount)} token · ${formatElapsed(e.elapsedMs)}`,
+  )
+  const last = e.recentDecisions[0]
+  if (last) {
+    const target = last.targetTool ?? last.targetAgent ?? '(unknown target)'
+    lines.push(`Son: ${last.sourceAgent} → ${target}`)
+  }
+  return {
+    level: 'session_lifecycle',
+    requestId: null,
+    title: `⏳ ${idShort} · ${e.turnCount} turn`,
+    body: lines.join('\n'),
+    actions: [],
+    agentBlocking: false,
+  }
+}
+
+export function renderSessionCompleted(
+  e: ForemanEventMap['session:completed'],
+): Omit<Notification, 'id'> {
+  const idShort = e.sessionId.slice(0, 6)
+  const icon = e.outcome === 'success' ? '✓' : '⚠'
+  const lines = [`${icon} ${idShort} ${e.outcome}`]
+  lines.push(
+    `${e.turnCount} turn · ${formatElapsed(e.durationMs)} · $${e.costUsd.toFixed(2)}`,
+  )
+  if (e.reason) {
+    lines.push(`Sebep: ${e.reason}`)
+  }
+  return {
+    level: 'session_lifecycle',
+    requestId: null,
+    title: `${icon} ${idShort} ${e.outcome}`,
+    body: lines.join('\n'),
+    actions: [],
+    agentBlocking: false,
+  }
+}
+
+/** Compact elapsed-time formatter — picks the largest unit so users
+ *  scanning a Telegram push at a glance see "1h 18m" not "78m" or
+ *  "4680000ms". */
+export function formatElapsed(ms: number): string {
+  if (ms < 0) ms = 0
+  const totalSeconds = Math.floor(ms / 1000)
+  if (totalSeconds < 60) return `${totalSeconds}s`
+  const totalMinutes = Math.floor(totalSeconds / 60)
+  if (totalMinutes < 60) {
+    const seconds = totalSeconds % 60
+    return seconds === 0 ? `${totalMinutes}m` : `${totalMinutes}m ${seconds}s`
+  }
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`
+}
+
+function formatTokenCount(n: number): string {
+  // Telegram pushes look cleaner with thin-comma separators (no toLocaleString
+  // locale guessing — the format must be stable across CI + the user's
+  // machine to make snapshot diffs meaningful).
+  return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+}

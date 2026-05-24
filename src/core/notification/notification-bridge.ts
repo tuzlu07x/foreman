@@ -5,8 +5,14 @@ import {
   isSilenced,
   type NotifyState,
 } from './notify-state.js'
-import { renderApprovalNotification, renderResolvedFooter } from './render.js'
-import type { ChannelId, UserDecision } from './types.js'
+import {
+  renderApprovalNotification,
+  renderResolvedFooter,
+  renderSessionCompleted,
+  renderSessionProgress,
+  renderSessionStarted,
+} from './render.js'
+import type { ChannelId, Notification, UserDecision } from './types.js'
 
 // =============================================================================
 // NotificationBridge (#235 / C11a-2)
@@ -36,6 +42,12 @@ export class NotificationBridge {
   private offRequested: (() => void) | null = null
   private offResolved: (() => void) | null = null
   private offDecided: (() => void) | null = null
+  // #523 — Session lifecycle subscriptions. Each handler dispatches a
+  // single notification on the `session_lifecycle` level. Mute/silence
+  // checks reuse the existing notify-state helpers for consistency.
+  private offSessionStarted: (() => void) | null = null
+  private offSessionProgress: (() => void) | null = null
+  private offSessionCompleted: (() => void) | null = null
   /** Maps requestId → notificationIds we've sent, so the resolved handler
    *  knows which messages to update. Cleared once a resolution lands. */
   private readonly outstanding = new Map<string, Set<string>>()
@@ -83,6 +95,26 @@ export class NotificationBridge {
       await this.handleOobDecision(d)
     })
 
+    // 5. #523 — session lifecycle pushes. Three subscriptions so the user
+    //    sees "started / progress / completed" in the same channel as
+    //    approvals. Routed via `session_lifecycle` (separate route key so
+    //    power users can mute it without losing the approval pipeline).
+    this.offSessionStarted = this.bus.on('session:started', (e) => {
+      this.handleSessionLifecycle(renderSessionStarted(e)).catch(() => {
+        // best-effort — lifecycle pushes are informational
+      })
+    })
+    this.offSessionProgress = this.bus.on('session:progress', (e) => {
+      this.handleSessionLifecycle(renderSessionProgress(e)).catch(() => {
+        // best-effort
+      })
+    })
+    this.offSessionCompleted = this.bus.on('session:completed', (e) => {
+      this.handleSessionLifecycle(renderSessionCompleted(e)).catch(() => {
+        // best-effort
+      })
+    })
+
     await this.service.startListening()
   }
 
@@ -98,6 +130,18 @@ export class NotificationBridge {
     if (this.offDecided) {
       this.offDecided()
       this.offDecided = null
+    }
+    if (this.offSessionStarted) {
+      this.offSessionStarted()
+      this.offSessionStarted = null
+    }
+    if (this.offSessionProgress) {
+      this.offSessionProgress()
+      this.offSessionProgress = null
+    }
+    if (this.offSessionCompleted) {
+      this.offSessionCompleted()
+      this.offSessionCompleted = null
     }
     this.outstanding.clear()
     await this.service.shutdown()
@@ -190,6 +234,20 @@ export class NotificationBridge {
       actions: [],
       agentBlocking: false,
     })
+  }
+
+  /** #523 — Common dispatch path for session:started / progress / completed.
+   *  Routed via `session_lifecycle` so users can mute lifecycle pushes
+   *  without affecting approvals. Silence window still drops these (they
+   *  are informational, not critical). Agent mute is intentionally NOT
+   *  checked: lifecycle events aren't tied to a single agent's request
+   *  flow — they describe the session as a whole. */
+  private async handleSessionLifecycle(
+    payload: Omit<Notification, 'id'>,
+  ): Promise<void> {
+    const state = this.getState()
+    if (isSilenced(state)) return
+    await this.service.send('session_lifecycle', payload)
   }
 
   private async handleOobDecision(d: UserDecision): Promise<void> {
