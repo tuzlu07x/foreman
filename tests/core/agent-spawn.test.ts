@@ -305,6 +305,68 @@ describe("spawnAgentTask", () => {
     }
   });
 
+  // #517 Faz 3 — taskSkipPermissions option + catalog flag dispatch.
+  it("appends task_skip_permissions_flag when trusted + catalog has the flag", async () => {
+    const cmd = makeScript(
+      "args-dump.sh",
+      '#!/bin/sh\nfor a in "$@"; do echo "ARG:$a"; done\n',
+    );
+    const result = await spawnAgentTask({
+      entry: agent({
+        task_command_template: `${cmd} "{task}"`,
+        task_skip_permissions_flag: "--dangerously-skip-permissions",
+      }),
+      task: "hi",
+      taskSkipPermissions: true,
+    });
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.stdout).toContain("ARG:hi");
+      expect(result.stdout).toContain("ARG:--dangerously-skip-permissions");
+    }
+  });
+
+  it("skips the trust flag when taskSkipPermissions=false (default)", async () => {
+    const cmd = makeScript(
+      "args-dump.sh",
+      '#!/bin/sh\nfor a in "$@"; do echo "ARG:$a"; done\n',
+    );
+    const result = await spawnAgentTask({
+      entry: agent({
+        task_command_template: `${cmd} "{task}"`,
+        task_skip_permissions_flag: "--dangerously-skip-permissions",
+      }),
+      task: "hi",
+      // taskSkipPermissions intentionally omitted — defaults to false.
+    });
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.stdout).toContain("ARG:hi");
+      expect(result.stdout).not.toContain("ARG:--dangerously-skip-permissions");
+    }
+  });
+
+  it("is a no-op when catalog has no task_skip_permissions_flag (no-skip agent)", async () => {
+    const cmd = makeScript(
+      "args-dump.sh",
+      '#!/bin/sh\nfor a in "$@"; do echo "ARG:$a"; done\n',
+    );
+    const result = await spawnAgentTask({
+      entry: agent({
+        task_command_template: `${cmd} "{task}"`,
+        // no task_skip_permissions_flag — Hermes-style daemon agent
+      }),
+      task: "hi",
+      taskSkipPermissions: true,
+    });
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      // No phantom flag appended; just the task arg.
+      const argLines = result.stdout.split("\n").filter((l) => l.startsWith("ARG:"));
+      expect(argLines).toEqual(["ARG:hi"]);
+    }
+  });
+
   // QA round 13 bug 3 defensive: set env vars so a recursive Foreman
   // mcp-stdio (spawned by the child agent's MCP wiring) can detect
   // it's running inside a Foreman spawn and skip behavior that would

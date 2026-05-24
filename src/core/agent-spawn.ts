@@ -58,6 +58,13 @@ export interface SpawnAgentTaskOptions {
    *  picks up the user-chosen model. Without the registry-side flag,
    *  this is a no-op. Sourced from the registry row (`agents.model_version`). */
   modelVersion?: string | null;
+  /** #517 Faz 3 — Operator has trusted this agent via
+   *  `foreman agent trust <id>`. When true AND the catalog entry has
+   *  `task_skip_permissions_flag` set, the engine appends the flag
+   *  (e.g. `--dangerously-skip-permissions`) to the argv so the agent
+   *  runs without its own per-call shell prompt. Foreman's MCP-level
+   *  mediation remains the gate. Defaults to false. */
+  taskSkipPermissions?: boolean;
   /** Override the spawn implementation — tests inject a stub. */
   spawnImpl?: SpawnLike;
 }
@@ -149,6 +156,19 @@ export async function spawnAgentTask(
     options.modelVersion.trim().length > 0
   ) {
     args.push(options.entry.task_model_flag, options.modelVersion);
+  }
+
+  // #517 Faz 3 — Trusted-skip flag. When the operator ran
+  // `foreman agent trust <id>` + the catalog entry declares a
+  // `task_skip_permissions_flag`, append it so the agent bypasses its
+  // own shell allowlist gate. The decision is the user's; Foreman's
+  // MCP mediation remains active either way.
+  if (
+    options.taskSkipPermissions &&
+    options.entry.task_skip_permissions_flag &&
+    options.entry.task_skip_permissions_flag.trim().length > 0
+  ) {
+    args.push(options.entry.task_skip_permissions_flag);
   }
 
   const timeoutMs =
