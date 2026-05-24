@@ -497,6 +497,115 @@ agentsCommand
     closeDb();
   });
 
+// ============================================================================
+// trust / untrust — #517 Faz 3
+// ============================================================================
+//
+// Operator opts the agent out of its own shell-tool allowlist gate via
+// `foreman agent trust <id>`. The spawn engine then appends the catalog's
+// `task_skip_permissions_flag` (e.g. `--dangerously-skip-permissions` for
+// claude-code) so the agent doesn't prompt on individual shell calls.
+// Foreman's MCP-level mediation remains the security boundary.
+//
+// `untrust` flips it back. `show` (existing) surfaces the flag.
+
+agentsCommand
+  .command("trust <agentId>")
+  .description(
+    "Skip the agent's own shell-tool allowlist on every spawn — trust " +
+      "Foreman's MCP-level mediation as the only boundary. The agent's " +
+      "catalog entry must declare `task_skip_permissions_flag` for this " +
+      "to take effect.",
+  )
+  .action((agentId: string) => {
+    const registry = getRegistry();
+    const agent = registry.get(agentId);
+    if (!agent) {
+      console.error(
+        red("error: ") +
+          `Unknown agent '${agentId}'. Run \`foreman agent list\` for ` +
+          `the installed agents.`,
+      );
+      closeDb();
+      process.exit(1);
+    }
+    // Warn (but don't refuse) when the catalog entry doesn't declare a
+    // skip flag — the DB row flips fine, but the spawn engine will be
+    // a no-op until the catalog adds one. Better to surface this now
+    // than leave the operator confused why their trust call had no
+    // visible effect.
+    let catalogFlag: string | null = null;
+    try {
+      const catalogEntry = safeFindAgent(loadActiveRegistry().doc, agentId);
+      catalogFlag = catalogEntry?.task_skip_permissions_flag ?? null;
+    } catch {
+      catalogFlag = null;
+    }
+    try {
+      registry.setTaskSkipPermissions(agentId, true);
+    } catch (err) {
+      handleAgentError(err);
+    }
+    console.log(
+      `${green("✓")} ${bold(agentId)} trusted — spawns will skip the ` +
+        `agent's shell allowlist`,
+    );
+    if (catalogFlag) {
+      console.log(
+        `  ${dim("flag")}      ${catalogFlag} (appended to every \`foreman write ${agentId}\` argv)`,
+      );
+    } else {
+      console.log(
+        `  ${red("!")}  this agent's catalog entry has no \`task_skip_permissions_flag\` —`,
+      );
+      console.log(
+        `      the DB flag is set but the spawn engine has nothing to append.`,
+      );
+      console.log(
+        `      Either the agent has no skip-permissions mode, or the catalog`,
+      );
+      console.log(`      needs an update (PR welcome).`);
+    }
+    console.log(
+      `  ${dim("safety")}    Foreman's MCP mediation is now the ONLY gate ` +
+        `on this agent's shell tool calls. Audit + per-call risk scoring`,
+    );
+    console.log(`            stay active.`);
+    console.log(
+      `  ${dim("revoke")}    \`foreman agent untrust ${agentId}\``,
+    );
+    closeDb();
+  });
+
+agentsCommand
+  .command("untrust <agentId>")
+  .description(
+    "Re-enable the agent's own shell-tool allowlist gate (revoke " +
+      "`foreman agent trust`).",
+  )
+  .action((agentId: string) => {
+    const registry = getRegistry();
+    const agent = registry.get(agentId);
+    if (!agent) {
+      console.error(
+        red("error: ") +
+          `Unknown agent '${agentId}'. Run \`foreman agent list\`.`,
+      );
+      closeDb();
+      process.exit(1);
+    }
+    try {
+      registry.setTaskSkipPermissions(agentId, false);
+    } catch (err) {
+      handleAgentError(err);
+    }
+    console.log(
+      `${green("✓")} ${bold(agentId)} no longer trusted — spawns will respect ` +
+        `the agent's shell allowlist`,
+    );
+    closeDb();
+  });
+
 function safeFindAgent(
   doc: ReturnType<typeof loadActiveRegistry>["doc"],
   id: string,

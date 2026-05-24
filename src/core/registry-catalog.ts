@@ -176,6 +176,16 @@ export const AgentEntrySchema = z
      *  this field, model overrides are no-ops (the agent uses its
      *  config). Only honored when `task_command_template` is set. */
     task_model_flag: z.string().min(1).optional(),
+    /** #517 Faz 3 — CLI flag that bypasses the agent's shell-tool
+     *  allowlist gate. For claude-code this is
+     *  `--dangerously-skip-permissions`. Appended to argv when the
+     *  agent's DB row has `task_skip_permissions=1` (set by
+     *  `foreman agent trust <id>`). Operator opts into "MCP-level
+     *  mediation is the only boundary" via that command; the catalog
+     *  field declares HOW to actually skip per agent. Agents without
+     *  this field can't be trusted-skipped — the CLI surfaces a
+     *  clear error and the row stays at 0. */
+    task_skip_permissions_flag: z.string().min(1).optional(),
     /** MCP config block shape (#385). `flat` writes `{<mcp_servers_key>:
      *  {foreman: ...}}` (Claude Code / Hermes / Codex). `nested` writes
      *  `{mcp: {enabled: true, servers: {foreman: ...}}}` (OpenClaw).

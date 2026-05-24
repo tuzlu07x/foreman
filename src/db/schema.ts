@@ -32,6 +32,12 @@ export const agents = sqliteTable("agents", {
   // uses the variant's default model from registry/agents.json.
   modelVersion: text("model_version"),
   responsibilityNote: text("responsibility_note"),
+  // #517 Faz 3 — operator opts out of the agent's shell-tool allowlist
+  // gate (e.g. `claude --dangerously-skip-permissions`) and accepts
+  // Foreman's MCP-level mediation as the only security boundary.
+  // 0 = honour the allowlist (default + safe); 1 = skip. Flipped via
+  // `foreman agent trust <id>` / `foreman agent untrust <id>`.
+  taskSkipPermissions: integer("task_skip_permissions").notNull().default(0),
 });
 
 export const policies = sqliteTable(
