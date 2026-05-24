@@ -1,9 +1,11 @@
-import type {
-  ChannelMessageRef,
-  Notification,
-  NotificationAction,
-  NotificationChannel,
-  UserDecision,
+import {
+  intentForActionId,
+  type ChannelAction,
+  type ChannelMessageRef,
+  type Notification,
+  type NotificationAction,
+  type NotificationChannel,
+  type UserDecision,
 } from '../types.js'
 
 // =============================================================================
@@ -22,6 +24,13 @@ import type {
 // reply and relays the decision via the `submit_approval` MCP tool. No
 // polling here. `listen()` and `shutdown()` are kept as interface no-ops
 // so NotificationService doesn't branch per-channel.
+//
+// #522 — Foreman now also attaches a native `reply_markup` (inline keyboard)
+// to approval messages. The agent's `getUpdates` consumer sees `callback_query`
+// updates alongside `message` updates and routes both forms (button tap +
+// typed slash command) into `submit_approval` per the SOUL.md instructions.
+// Foreman itself still doesn't poll — the no-polling invariant from #406
+// is preserved.
 
 export interface TelegramFetch {
   (url: string, init?: RequestInit): Promise<{
@@ -67,16 +76,21 @@ export class TelegramChannel implements NotificationChannel {
   }
 
   async send(n: Notification): Promise<ChannelMessageRef> {
-    // #406 — No `reply_markup`. The approval id + the action commands are
-    // embedded in the message body so the agent's `getUpdates` consumer
-    // can route the user's `/approve <id>` reply back through MCP.
+    // #406 + #522 — Body still embeds the slash-command fallback so users on
+    // older clients (or those who prefer typing) keep working. On top of that,
+    // attach an inline keyboard so a tap also resolves the approval. The
+    // agent's existing `getUpdates` consumer sees both `message` and
+    // `callback_query` updates and routes each into `submit_approval`.
     const text = this.renderText(n)
-    const res = (await this.call('sendMessage', {
+    const body: Record<string, unknown> = {
       chat_id: this.chatId,
       text,
       parse_mode: 'MarkdownV2',
       disable_web_page_preview: true,
-    })) as TelegramSendResponse
+    }
+    const reply_markup = renderInlineKeyboard(n.actions, n.id)
+    if (reply_markup) body.reply_markup = reply_markup
+    const res = (await this.call('sendMessage', body)) as TelegramSendResponse
 
     if (!res?.ok || !res.result) {
       throw new TelegramApiError(res?.description ?? 'sendMessage failed')
@@ -182,6 +196,73 @@ function renderActionCommands(n: Notification): string {
     lines.push(`\`${cmd}\`  ${escapeMd('→')} ${escapeMd(a.label)}`)
   }
   return lines.join('\n')
+}
+
+// =============================================================================
+// Inline keyboard (#522)
+// =============================================================================
+//
+// Telegram caps `callback_data` at 64 bytes. We use the format
+// `fa:<id>:<notifId>` (fa = "foreman approval"). With the longest id we ship
+// today (`deny_always`, 11 chars) plus a ULID notification id (26 chars) we
+// land at 41 bytes — comfortably under the cap and leaves headroom for the
+// downstream features that introduce custom action ids (#526, #527, #528).
+//
+// Why we keep the text-command fallback alive even when buttons render:
+//   1. Older Telegram clients on weak connections silently drop callback
+//      taps; the typed command still works.
+//   2. Forwarded notification messages strip `reply_markup` — the typed
+//      command is the only path on a forwarded copy.
+//   3. The agent's existing `submit_approval` handler is the same on both
+//      paths, so there's no extra surface area to maintain.
+
+const CALLBACK_DATA_PREFIX = 'fa'
+
+interface InlineKeyboardButton {
+  text: string
+  callback_data: string
+}
+
+interface InlineKeyboardMarkup {
+  inline_keyboard: InlineKeyboardButton[][]
+}
+
+/** Build a Telegram inline_keyboard payload from a ChannelAction set.
+ *  Returns `undefined` when there are no actionable buttons so callers
+ *  can omit `reply_markup` entirely. Exported for tests. */
+export function renderInlineKeyboard(
+  actions: ChannelAction[],
+  notifId: string,
+): InlineKeyboardMarkup | undefined {
+  const buttons: InlineKeyboardButton[] = []
+  for (const a of actions) {
+    if (!isInteractiveAction(a)) continue
+    buttons.push({
+      text: a.label,
+      callback_data: `${CALLBACK_DATA_PREFIX}:${a.id}:${notifId}`,
+    })
+  }
+  if (buttons.length === 0) return undefined
+  // 2-up rows keep buttons big enough to tap reliably on mobile while still
+  // letting a full 4-action ladder (allow / deny / allow_always / deny_always)
+  // fit in two clean rows.
+  const rows: InlineKeyboardButton[][] = []
+  for (let i = 0; i < buttons.length; i += 2) {
+    rows.push(buttons.slice(i, i + 2))
+  }
+  return { inline_keyboard: rows }
+}
+
+/** A ChannelAction is "interactive" when a tap can be routed back to a
+ *  decision. The legacy `inspect` action (intent: 'custom' with no
+ *  payload) is render-only — we drop it from the keyboard. Custom intents
+ *  WITH a payload (#526 block-pattern, #527 resolution choice, #528
+ *  option choice) ARE interactive — the agent's bridge looks up the
+ *  payload by action id and dispatches. */
+function isInteractiveAction(a: ChannelAction): boolean {
+  const intent = a.intent ?? intentForActionId(a.id)
+  if (intent === 'custom') return Boolean(a.payload)
+  return true
 }
 
 // Telegram MarkdownV2 reserves these chars and rejects messages with unescaped

@@ -210,6 +210,50 @@ describe("DEFAULT_FOREMAN_SOUL — approval routing (#406)", () => {
   });
 });
 
+// #522 — Inline keyboard callbacks. The Telegram channel now attaches a
+// reply_markup; agents must know how to parse the callback_query data
+// and route it through the same submit_approval MCP tool.
+describe("DEFAULT_FOREMAN_SOUL — inline keyboard callbacks (#522)", () => {
+  it("contains the inline keyboard section header", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/Inline keyboard taps.*#522/);
+  });
+
+  it("documents the callback_data prefix the channel emits", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toContain("fa:<action_id>:<approval_id>");
+  });
+
+  it("instructs the agent to ignore callback_query whose data lacks the fa: prefix", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/do NOT start with[\s\S]*fa:[\s\S]*leave them alone/);
+  });
+
+  it("maps every action_id to its decision + remember pair", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/`allow`[\s\S]*decision: "allow"[\s\S]*remember: false/);
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/`deny`[\s\S]*decision: "deny"[\s\S]*remember: false/);
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/`allow_always`[\s\S]*decision: "allow"[\s\S]*remember: true/);
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/`deny_always`[\s\S]*decision: "deny"[\s\S]*remember: true/);
+  });
+
+  it("routes the tap into the same submit_approval MCP tool as typed commands", () => {
+    // The callback_query handler must converge on submit_approval — not
+    // a separate tool — so the audit shape is identical regardless of
+    // input form. Pin this so a future refactor doesn't introduce a
+    // parallel tool by mistake.
+    const inlineSection = DEFAULT_FOREMAN_SOUL.split("Inline keyboard taps")[1] ?? "";
+    expect(inlineSection).toContain("`submit_approval`");
+  });
+
+  it("instructs the agent to acknowledge the tap via answerCallbackQuery", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toContain("answerCallbackQuery");
+  });
+
+  it("does NOT instruct the agent to call submit_approval for unknown action ids", () => {
+    // Forward-compat: when Foreman ships a new custom button id the
+    // agent doesn't know yet, it must NOT guess a mapping — it must
+    // tell the user instead.
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/[Uu]nknown[\s\S]*action_id[\s\S]*NOT call/);
+  });
+});
+
 // #431 — Orchestrator routing section. Mirrors the approval-routing
 // rules but for `/foreman <verb>` commands; the agent relays them via
 // the `submit_command` MCP tool.

@@ -87,14 +87,27 @@ function buildActions(
   // look spammy for low-stakes asks.
   const hasInspect = bucket === 'critical' || bucket === 'high'
   const actions: NotificationAction[] = [
-    { id: 'allow', label: 'Allow once', style: 'primary' },
-    { id: 'deny', label: 'Deny', style: 'danger' },
+    { id: 'allow', label: 'Allow once', intent: 'allow', style: 'primary' },
+    { id: 'deny', label: 'Deny', intent: 'deny', style: 'danger' },
   ]
   if (bucket === 'critical') {
-    actions.push({ id: 'deny_always', label: 'Always deny', style: 'danger' })
+    actions.push({
+      id: 'deny_always',
+      label: 'Always deny',
+      intent: 'remember-deny',
+      style: 'danger',
+    })
   }
   if (hasInspect) {
-    actions.push({ id: 'inspect', label: 'Inspect', style: 'neutral' })
+    // Inspect is render-only — no round-trip action. Carries `intent: 'custom'`
+    // with no payload so #522 channels (Telegram inline keyboard) can drop it
+    // from the button row while keeping it in text-command fallbacks if any.
+    actions.push({
+      id: 'inspect',
+      label: 'Inspect',
+      intent: 'custom',
+      style: 'neutral',
+    })
   }
   // A loop factor surfaced via OOB benefits from an explicit "halt session"
   // option in the modal — but Telegram has no session-halt verb yet (C11b
