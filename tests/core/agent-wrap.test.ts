@@ -15,7 +15,8 @@
  *   - child exit promise resolves with the exit code/signal.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import type Database from 'better-sqlite3'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { Readable, Writable } from 'node:stream'
 import type { ChildProcess } from 'node:child_process'
@@ -25,11 +26,13 @@ import {
   startAgentWrap,
   type WrapSpawnLike,
 } from '../../src/core/agent-wrap.js'
+import { ControlChannel } from '../../src/core/control-channel.js'
 import type { AgentEntry } from '../../src/core/registry-catalog.js'
 import type {
   PollerFetchLike,
   TelegramUpdate,
 } from '../../src/core/telegram-poller.js'
+import { createInMemoryDb, type ForemanDb } from '../../src/db/client.js'
 
 // =============================================================================
 // Harness — fake child + fake fetch in one bundle
@@ -331,6 +334,21 @@ describe('startAgentWrap — shutdown', () => {
 // =============================================================================
 
 describe('startAgentWrap — failure modes', () => {
+  it('handle.directiveSource is null when no controlChannel is supplied (PR 2 behaviour preserved)', () => {
+    const childH = makeFakeChild()
+    const fetchH = makeFakeFetch()
+    const handle = startAgentWrap({
+      entry: entryWithInputProtocol(),
+      botToken: 'TEST',
+      ownerChatId: OWNER,
+      childArgv: { command: 'fake-agent', args: [] },
+      spawnImpl: childH.spawn,
+      fetchImpl: fetchH.fetch,
+    })
+    expect(handle.directiveSource).toBeNull()
+    void handle.shutdown()
+  })
+
   it('drops updates silently when the child stdin is destroyed (no crash)', async () => {
     const childH = makeFakeChild()
     const fetchH = makeFakeFetch()
@@ -355,6 +373,199 @@ describe('startAgentWrap — failure modes', () => {
     expect(childH.stdinLines).toHaveLength(0)
     // No error was raised — we drop on destroyed-stdin path silently.
     expect(errors).toHaveLength(0)
+
+    await handle.shutdown()
+  })
+})
+
+// =============================================================================
+// PR 3 — directive injection from #440 control_commands
+// =============================================================================
+
+describe('startAgentWrap — directive injection (#445 PR 3)', () => {
+  let db: ForemanDb
+  let sqlite: Database.Database
+  let channel: ControlChannel
+
+  beforeEach(() => {
+    const h = createInMemoryDb()
+    db = h.db
+    sqlite = h.sqlite
+    channel = new ControlChannel(db)
+  })
+
+  afterEach(() => {
+    sqlite.close()
+  })
+
+  it('renders the synthetic_update_template + writes the directive as JSONL to child stdin', async () => {
+    const childH = makeFakeChild()
+    const fetchH = makeFakeFetch()
+    // Enqueue a write directive BEFORE starting the wrap so the
+    // first drain picks it up.
+    channel.enqueue({
+      command: 'write',
+      args: ['fixture-agent', 'focus on issue Y'],
+      sourceAgent: 'cli',
+    })
+
+    const handle = startAgentWrap({
+      entry: entryWithInputProtocol({
+        synthetic_update_template: {
+          update_id: '{auto}',
+          message: {
+            from: { id: '{ownerChatId}', is_bot: false },
+            chat: { id: '{ownerChatId}', type: 'private' },
+            text: '{directive}',
+          },
+        },
+      }),
+      botToken: 'TEST',
+      ownerChatId: OWNER,
+      childArgv: { command: 'fake-agent', args: [] },
+      spawnImpl: childH.spawn,
+      fetchImpl: fetchH.fetch,
+      controlChannel: channel,
+      directivePollIntervalMs: 60_000, // never tick; drive via drainOnce
+    })
+
+    // The directive source drains immediately on start; tick to let
+    // the async handler resolve.
+    await tick(5)
+
+    expect(handle.directiveSource).not.toBeNull()
+    expect(childH.stdinLines).toHaveLength(1)
+    const parsed = JSON.parse(childH.stdinLines[0]!)
+    expect(parsed.message.from.id).toBe(OWNER)
+    expect(parsed.message.chat.id).toBe(OWNER)
+    expect(parsed.message.text).toBe('focus on issue Y')
+    expect(typeof parsed.update_id).toBe('number')
+
+    await handle.shutdown()
+  })
+
+  it('marks the directive row applied after successful injection', async () => {
+    const childH = makeFakeChild()
+    const fetchH = makeFakeFetch()
+    const { id } = channel.enqueue({
+      command: 'write',
+      args: ['fixture-agent', 'ack me'],
+      sourceAgent: 'cli',
+    })
+
+    const handle = startAgentWrap({
+      entry: entryWithInputProtocol(),
+      botToken: 'TEST',
+      ownerChatId: OWNER,
+      childArgv: { command: 'fake-agent', args: [] },
+      spawnImpl: childH.spawn,
+      fetchImpl: fetchH.fetch,
+      controlChannel: channel,
+      directivePollIntervalMs: 60_000,
+    })
+    await tick(5)
+    expect(channel.get(id)?.status).toBe('applied')
+
+    await handle.shutdown()
+  })
+
+  it('directive rows for OTHER agents are ignored', async () => {
+    const childH = makeFakeChild()
+    const fetchH = makeFakeFetch()
+    const { id: otherId } = channel.enqueue({
+      command: 'write',
+      args: ['some-other-agent', 'not for me'],
+      sourceAgent: 'cli',
+    })
+
+    const handle = startAgentWrap({
+      entry: entryWithInputProtocol(),
+      botToken: 'TEST',
+      ownerChatId: OWNER,
+      childArgv: { command: 'fake-agent', args: [] },
+      spawnImpl: childH.spawn,
+      fetchImpl: fetchH.fetch,
+      controlChannel: channel,
+      directivePollIntervalMs: 60_000,
+    })
+    await tick(5)
+
+    expect(childH.stdinLines).toHaveLength(0)
+    expect(channel.get(otherId)?.status).toBe('pending')
+
+    await handle.shutdown()
+  })
+
+  it('marks directive failed when child stdin is closed', async () => {
+    const childH = makeFakeChild()
+    const fetchH = makeFakeFetch()
+    childH.child.stdin.destroy()
+
+    const { id } = channel.enqueue({
+      command: 'write',
+      args: ['fixture-agent', 'will fail'],
+      sourceAgent: 'cli',
+    })
+
+    const handle = startAgentWrap({
+      entry: entryWithInputProtocol(),
+      botToken: 'TEST',
+      ownerChatId: OWNER,
+      childArgv: { command: 'fake-agent', args: [] },
+      spawnImpl: childH.spawn,
+      fetchImpl: fetchH.fetch,
+      controlChannel: channel,
+      directivePollIntervalMs: 60_000,
+    })
+    await tick(5)
+
+    const row = channel.get(id)
+    expect(row?.status).toBe('failed')
+    expect(row?.error).toContain('stdin closed')
+
+    await handle.shutdown()
+  })
+
+  it('Telegram updates AND directives both write to child stdin (the same path)', async () => {
+    const childH = makeFakeChild()
+    const fetchH = makeFakeFetch()
+    fetchH.enqueueUpdates([ownerMessage('from user', 1)])
+    channel.enqueue({
+      command: 'write',
+      args: ['fixture-agent', 'from foreman'],
+      sourceAgent: 'cli',
+    })
+
+    const handle = startAgentWrap({
+      // Use a real telegram-update-shaped template so both paths
+      // produce frames with `message.text`.
+      entry: entryWithInputProtocol({
+        synthetic_update_template: {
+          update_id: '{auto}',
+          message: {
+            from: { id: '{ownerChatId}', is_bot: false },
+            chat: { id: '{ownerChatId}', type: 'private' },
+            text: '{directive}',
+          },
+        },
+      }),
+      botToken: 'TEST',
+      ownerChatId: OWNER,
+      childArgv: { command: 'fake-agent', args: [] },
+      spawnImpl: childH.spawn,
+      fetchImpl: fetchH.fetch,
+      controlChannel: channel,
+      directivePollIntervalMs: 60_000,
+    })
+    await tick(10)
+
+    expect(childH.stdinLines).toHaveLength(2)
+    // Both reach the child — order isn't guaranteed because directive
+    // drain happens in start() before the Telegram fetch settles, but
+    // both messages MUST land.
+    const texts = childH.stdinLines.map((l) => JSON.parse(l).message.text)
+    expect(texts).toContain('from user')
+    expect(texts).toContain('from foreman')
 
     await handle.shutdown()
   })
