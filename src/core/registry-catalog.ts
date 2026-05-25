@@ -196,6 +196,64 @@ export const AgentEntrySchema = z
      *  v<n>` (e.g. `codex-exec-server-v1`, `claude-code-pretooluse-v1`)
      *  so multi-version migrations stay legible. */
     approval_adapter: z.string().min(1).optional(),
+    /** #445 PR 1 — Input-direction transport declaration for chat-only
+     *  daemon agents (Hermes / OpenClaw / ZeroClaw). When set, the
+     *  `foreman wrap <agent>` process spawns the agent's gateway as a
+     *  child, owns the Telegram getUpdates poller, and renders the
+     *  `synthetic_update_template` to inject Foreman directives into
+     *  the agent's input stream — making `/foreman write <agent>`
+     *  land as a user-originated message from the agent's filter's
+     *  point of view.
+     *
+     *  MUTUALLY EXCLUSIVE with `approval_adapter`. An agent declares
+     *  one transport model OR the other:
+     *    - `approval_adapter` — programmable bidirectional transport
+     *      (codex exec-server JSON-RPC). Bridge handles both
+     *      directions; no wrap needed.
+     *    - `input_protocol` — chat-only daemon. Wrap handles input
+     *      direction; output mediation falls back to the legacy MCP
+     *      path.
+     *  The registry validator rejects entries that declare both.
+     *
+     *  See #445 for the full design and phasing. Agents that declare
+     *  neither field continue to use today's hybrid push (#433) —
+     *  no change. */
+    input_protocol: z
+      .object({
+        /** Transport method the wrap uses to feed the child. Today
+         *  only `stdin_jsonl` is supported (newline-delimited JSON
+         *  on the child's stdin); future entries will add
+         *  `http_jsonrpc` and `websocket` once an agent that needs
+         *  them ships. */
+        method: z.enum(["stdin_jsonl"]),
+        /** Wire schema of each frame the wrap writes. Drives which
+         *  substitution tokens the template understands and which
+         *  shape validation runs at wrap-spawn time. Today only
+         *  Telegram-update-shaped frames; Discord / Slack land as
+         *  follow-ups once the wrap pattern proves out. */
+        schema: z.enum(["telegram-update"]),
+        /** JSON template the wrap renders for each Foreman directive
+         *  pulled from the #440 `control_commands` queue. Three
+         *  substitution tokens are reserved (the wrap substitutes
+         *  them at runtime; the registry validator does NOT inspect
+         *  the template's shape — that's the wrap's job at spawn
+         *  time so errors surface against a concrete agent context):
+         *
+         *    `{auto}`         — wrap allocates a monotonic update_id
+         *                       per session.
+         *    `{ownerChatId}`  — primary chat user id from #426 so
+         *                       the agent's `from.id === ownerChatId`
+         *                       filter passes.
+         *    `{directive}`    — the user-supplied directive body
+         *                       from `/foreman write`.
+         *
+         *  Template is intentionally typed as `record(unknown)` so a
+         *  wider schema can fit (e.g. future telegram-update fields
+         *  like `entities`, `reply_to_message`) without a parser
+         *  release. */
+        synthetic_update_template: z.record(z.unknown()),
+      })
+      .optional(),
     /** MCP config block shape (#385). `flat` writes `{<mcp_servers_key>:
      *  {foreman: ...}}` (Claude Code / Hermes / Codex). `nested` writes
      *  `{mcp: {enabled: true, servers: {foreman: ...}}}` (OpenClaw).
@@ -544,7 +602,25 @@ export const AgentEntrySchema = z
       })
       .optional(),
   })
-  .strict();
+  .strict()
+  // #445 PR 1 — Mutual exclusion between the two transport models. An
+  // agent declares EITHER `approval_adapter` (programmable bidirectional
+  // transport — bridge handles both directions, no wrap needed) OR
+  // `input_protocol` (chat-only daemon — wrap handles input direction;
+  // output mediation falls back to legacy MCP). Declaring both is a
+  // contradiction: the two paths describe fundamentally different
+  // transport models that cannot coexist, and silently picking one over
+  // the other would surprise the agent author. Reject early with an
+  // actionable message.
+  .refine(
+    (entry) =>
+      !(entry.approval_adapter !== undefined && entry.input_protocol !== undefined),
+    {
+      message:
+        "agent entry cannot declare both `approval_adapter` (programmable bidirectional transport, e.g. codex exec-server) and `input_protocol` (chat-only daemon wrap mode). These are two distinct transport models — pick one. See #445 for the decision matrix.",
+      path: ["approval_adapter"],
+    },
+  );
 
 export const RegistryDocSchema = z
   .object({
