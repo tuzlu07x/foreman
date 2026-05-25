@@ -298,6 +298,24 @@ export async function runAgentAddScripted(
       green("✓") +
         ` ${entry.name} is registered as "${agentId}" and ready. Run 'foreman start' to see it in action.`,
     );
+    // #445 / #552 — Surface the transport so the operator knows what
+    // they just signed up for. Bridge agents auto-execute via
+    // `foreman write`; legacy hybrid agents queue + relay (the
+    // human is still the relay). Quiet for legacy to avoid noise on
+    // every install; loud for bridge so operators know about the
+    // new behavior.
+    if (entry.approval_adapter === "acp-stdio-v1") {
+      log(
+        `  ${green("→")} ${entry.name} runs in ACP-mediated mode. ` +
+          `\`foreman write ${agentId} <task>\` spawns it via \`${entry.acp_command?.command ?? agentId} acp\` ` +
+          `and routes every approval through Foreman's mediator.`,
+      );
+    } else if (entry.approval_adapter === "codex-exec-server-v1") {
+      log(
+        `  ${green("→")} ${entry.name} runs through Foreman's codex exec-server bridge ` +
+          `(every shell / file / network action passes risk rules first).`,
+      );
+    }
     return 0;
   } catch (err) {
     if (err instanceof AgentAlreadyRegisteredError) {
