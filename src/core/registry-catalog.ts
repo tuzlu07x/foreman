@@ -186,6 +186,16 @@ export const AgentEntrySchema = z
      *  this field can't be trusted-skipped — the CLI surfaces a
      *  clear error and the row stays at 0. */
     task_skip_permissions_flag: z.string().min(1).optional(),
+    /** #552 — Names the adapter that maps this agent's approval-request
+     *  wire payload onto Foreman's normalised mediator shape (and the
+     *  resolved decision back onto the agent's wire response). Resolved
+     *  at runtime through `src/core/adapters/index.ts` `getAdapter()`.
+     *  When omitted, the agent's actions are NOT routed through the
+     *  generic mediation pipeline — only legacy claude-code-style
+     *  PreToolUse handling applies. Convention: `<agent>-<surface>-
+     *  v<n>` (e.g. `codex-exec-server-v1`, `claude-code-pretooluse-v1`)
+     *  so multi-version migrations stay legible. */
+    approval_adapter: z.string().min(1).optional(),
     /** MCP config block shape (#385). `flat` writes `{<mcp_servers_key>:
      *  {foreman: ...}}` (Claude Code / Hermes / Codex). `nested` writes
      *  `{mcp: {enabled: true, servers: {foreman: ...}}}` (OpenClaw).
