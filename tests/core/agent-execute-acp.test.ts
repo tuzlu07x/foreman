@@ -168,7 +168,10 @@ describe('executeWriteDirective — ACP routing branch', () => {
     await tick()
     const prompt = JSON.parse(h.lines[2]!)
     expect(prompt.method).toBe('session/prompt')
-    expect(prompt.params.prompt).toBe('plan my morning')
+    // ACP spec: prompt is ContentBlock[], not raw string.
+    expect(prompt.params.prompt).toEqual([
+      { type: 'text', text: 'plan my morning' },
+    ])
     h.emit({
       jsonrpc: '2.0',
       id: prompt.id,
