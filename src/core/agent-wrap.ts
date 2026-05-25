@@ -27,6 +27,9 @@ import {
   type ChildProcess,
 } from 'node:child_process'
 
+import type { ControlChannel } from './control-channel.js'
+import { DirectiveSource } from './directive-source.js'
+import { renderSyntheticUpdate } from './synthetic-update-renderer.js'
 import {
   TelegramPoller,
   serializeUpdateAsJsonl,
@@ -80,18 +83,34 @@ export interface AgentWrapOptions {
   /** Diagnostic sink — fired for spawn / poller / forward errors so
    *  the CLI can log them. Defaults to no-op. */
   onError?(err: Error): void
+  /** #445 PR 3 — Optional ControlChannel handle. When supplied, the
+   *  wrap also drains `command='write'` rows from the #440
+   *  control_commands queue targeted at this agent, renders the
+   *  agent's `synthetic_update_template` per directive, and writes
+   *  the rendered JSON as a JSONL frame to child stdin (same path
+   *  Telegram updates use). When omitted, the wrap only forwards
+   *  real Telegram updates — directive injection is off. */
+  controlChannel?: ControlChannel
+  /** Polling interval (ms) for the directive source. Forwarded to
+   *  DirectiveSource; defaults to 1000. */
+  directivePollIntervalMs?: number
+  /** Optional timer overrides forwarded to DirectiveSource (tests). */
+  setIntervalImpl?: (cb: () => void, ms: number) => unknown
+  clearIntervalImpl?: (handle: unknown) => void
 }
 
 /** Live handle to a running wrap process. */
 export interface AgentWrapHandle {
-  /** The active poller (exposed so PR 3's directive injection can
-   *  reset offset if needed). */
+  /** The active Telegram poller. */
   poller: TelegramPoller
+  /** The active directive source (#445 PR 3). Null when no
+   *  ControlChannel was supplied — wrap operates in user-only mode. */
+  directiveSource: DirectiveSource | null
   /** The active child. */
   process: ChildProcess
   /** Resolves once the child exits. Useful for the CLI's main loop. */
   exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>
-  /** Stop the poller + SIGTERM the child + await its exit. Idempotent. */
+  /** Stop the poller(s) + SIGTERM the child + await its exit. Idempotent. */
   shutdown(): Promise<void>
 }
 
@@ -189,11 +208,67 @@ export function startAgentWrap(opts: AgentWrapOptions): AgentWrapHandle {
 
   poller.start()
 
+  // #445 PR 3 — Directive source wiring. When the caller supplied a
+  // ControlChannel, the wrap also drains `write` directives from the
+  // #440 queue. Each directive renders against the agent's declared
+  // synthetic_update_template (with `{auto}` allocated from a wrap-
+  // local counter, `{ownerChatId}` from options, `{directive}` from
+  // the row's args) and the rendered JSON is written as a JSONL
+  // frame to the child's stdin — identical to the Telegram-update
+  // path so the agent's input parser handles both uniformly.
+  let directiveSource: DirectiveSource | null = null
+  if (opts.controlChannel) {
+    // Wrap-local update_id counter — independent of Telegram's offset
+    // because Telegram never sees these synthetic frames. Start at a
+    // large negative-ish offset so synthetic ids cannot collide with
+    // real Telegram update_ids the agent's downstream filter might
+    // cache. (Telegram's update_id space is unsigned 32-bit; we use
+    // the negative half so the two streams never alias.)
+    let nextSyntheticUpdateId = -1
+    directiveSource = new DirectiveSource({
+      channel: opts.controlChannel,
+      agentId: opts.entry.id,
+      pollIntervalMs: opts.directivePollIntervalMs,
+      setIntervalImpl: opts.setIntervalImpl,
+      clearIntervalImpl: opts.clearIntervalImpl,
+      onError: errorSink,
+      async onDirective({ body }) {
+        const rendered = renderSyntheticUpdate(
+          protocol.synthetic_update_template,
+          {
+            autoUpdateId: nextSyntheticUpdateId,
+            ownerChatId: opts.ownerChatId,
+            directive: body,
+          },
+        )
+        nextSyntheticUpdateId -= 1
+
+        const stdin = child.stdin
+        if (!stdin || stdin.destroyed) {
+          return { ok: false, error: 'child stdin closed before directive could be injected' }
+        }
+        try {
+          const json = JSON.stringify(rendered) + '\n'
+          stdin.write(json)
+          return { ok: true }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          return { ok: false, error: message }
+        }
+      },
+    })
+    directiveSource.start()
+    // Kick off an immediate drain so callers (and tests) don't have
+    // to wait the full pollIntervalMs for the first directive.
+    void directiveSource.drainOnce()
+  }
+
   let stopped = false
   const shutdown = async (): Promise<void> => {
     if (stopped) return
     stopped = true
     poller.stop()
+    directiveSource?.stop()
     try {
       child.kill('SIGTERM')
     } catch {
@@ -204,5 +279,5 @@ export function startAgentWrap(opts: AgentWrapOptions): AgentWrapHandle {
     // hang.
   }
 
-  return { poller, process: child, exited, shutdown }
+  return { poller, directiveSource, process: child, exited, shutdown }
 }
