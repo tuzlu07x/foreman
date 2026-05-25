@@ -205,4 +205,69 @@ describe('registry-catalog — bundled registry still validates', () => {
     )
     expect(() => loadBundledRegistry()).not.toThrow()
   })
+
+  it('Hermes / OpenClaw / ZeroClaw declare approval_adapter=acp-stdio-v1 + acp_command', async () => {
+    const { loadBundledRegistry } = await import(
+      '../../src/core/registry-catalog.js'
+    )
+    const doc = loadBundledRegistry()
+    for (const id of ['hermes', 'openclaw', 'zeroclaw']) {
+      const entry = doc.agents.find((a) => a.id === id)
+      expect(entry, `${id} present`).toBeDefined()
+      expect(entry!.approval_adapter, `${id} declares ACP adapter`).toBe(
+        'acp-stdio-v1',
+      )
+      expect(entry!.acp_command, `${id} declares acp_command`).toBeDefined()
+      expect(entry!.acp_command!.command).toBe(id)
+      expect(entry!.acp_command!.args).toEqual(['acp'])
+    }
+  })
+})
+
+// =============================================================================
+// ACP-specific schema rules — acp_command requirement
+// =============================================================================
+
+describe('registry-catalog — acp_command field', () => {
+  it('accepts an acp_command block alongside approval_adapter=acp-stdio-v1', () => {
+    const entry = baseEntry({
+      approval_adapter: 'acp-stdio-v1',
+      acp_command: { command: 'fixture', args: ['acp'] },
+    })
+    expect(() => AgentEntrySchema.parse(entry)).not.toThrow()
+  })
+
+  it('REJECTS approval_adapter=acp-stdio-v1 WITHOUT an acp_command', () => {
+    const entry = baseEntry({ approval_adapter: 'acp-stdio-v1' })
+    const result = AgentEntrySchema.safeParse(entry)
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message)
+      expect(
+        messages.some((m) => m.includes('acp_command')),
+        'error mentions acp_command',
+      ).toBe(true)
+    }
+  })
+
+  it('allows approval_adapter=codex-exec-server-v1 without an acp_command (codex uses task_command_template instead)', () => {
+    const entry = baseEntry({ approval_adapter: 'codex-exec-server-v1' })
+    expect(() => AgentEntrySchema.parse(entry)).not.toThrow()
+  })
+
+  it('rejects acp_command without a command field', () => {
+    const entry = baseEntry({
+      approval_adapter: 'acp-stdio-v1',
+      acp_command: { args: ['acp'] },
+    })
+    expect(() => AgentEntrySchema.parse(entry)).toThrow()
+  })
+
+  it('accepts acp_command with args omitted (some agents have no flags)', () => {
+    const entry = baseEntry({
+      approval_adapter: 'acp-stdio-v1',
+      acp_command: { command: 'minimal-agent' },
+    })
+    expect(() => AgentEntrySchema.parse(entry)).not.toThrow()
+  })
 })
