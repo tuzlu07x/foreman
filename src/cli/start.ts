@@ -606,7 +606,19 @@ export function startForeman(
           // response; this is the follow-up post with the result.
           // Agents without the template fall back to the v0.1 queue+
           // relay path (Telegram visible post + inbound_dir file).
-          if (entry?.task_command_template) {
+          //
+          // #445 / #552 (post-launch fix) — ACP agents (Hermes/OpenClaw/
+          // ZeroClaw) declare `approval_adapter='acp-stdio-v1'` +
+          // `acp_command` instead of `task_command_template`. Without
+          // this extension they were silently falling through to the
+          // legacy hybrid path, breaking the integration shipped in
+          // #568. The `executeWriteDirective` ACP branch handles the
+          // actual spawn via runAcpMediatedTask; we just need the
+          // dispatch gate to include them.
+          const isAcpAgent =
+            entry?.approval_adapter === "acp-stdio-v1" &&
+            entry.acp_command !== undefined;
+          if (entry?.task_command_template || isAcpAgent) {
             // Pick up the per-agent model override stored in `agents.
             // model_version` so the spawn engine can append the
             // registry's `task_model_flag` argv pair (e.g. `--model
@@ -695,7 +707,16 @@ export function startForeman(
                 sessionManager,
                 ...(flowContext ? { flowContext } : {}),
               },
-              { telegramBotToken, telegramChatId },
+              {
+                telegramBotToken,
+                telegramChatId,
+                // #445 / #552 — Required by the ACP path so every
+                // approval the agent emits during the prompt routes
+                // through Foreman's risk + approval pipeline. The
+                // codex / task_command_template path ignores this
+                // option — only the ACP branch reads it.
+                mediator,
+              },
             );
             // #498 — Always audit the spawn outcome. control_commands.error
             // only stores a one-liner (e.g. "agent exited 1"); the real
@@ -706,7 +727,14 @@ export function startForeman(
             audit.logEvent("control_write_outcome", {
               id: row.id,
               agentId,
-              command: entry.task_command_template,
+              // task_command_template for codex/claude-code; for ACP
+              // agents we record the acp_command argv so the audit
+              // row still tells the operator what got spawned.
+              command:
+                entry.task_command_template ??
+                (entry.acp_command
+                  ? `${entry.acp_command.command} ${(entry.acp_command.args ?? []).join(" ")}`.trim()
+                  : null),
               spawnKind: exec.spawn.kind,
               exitCode:
                 exec.spawn.kind === "ok" || exec.spawn.kind === "failed"
