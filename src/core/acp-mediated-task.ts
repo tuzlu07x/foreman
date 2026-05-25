@@ -169,8 +169,17 @@ export async function runAcpMediatedTask(
     await Promise.race([session.ready, timeoutPromise])
 
     stage = 'session'
+    // ACP `session/new` requires:
+    //   - cwd: absolute path (the session's working directory)
+    //   - mcpServers: array of MCP server configs (empty is fine — we
+    //     don't bridge agent-side MCP servers from here)
+    // (https://agentclientprotocol.com/protocol/schema.md)
+    const sessionCwd = opts.cwd ?? process.cwd()
     const newSessionResp = (await Promise.race([
-      session.bridge.request('session/new', {}),
+      session.bridge.request('session/new', {
+        cwd: sessionCwd,
+        mcpServers: [],
+      }),
       timeoutPromise,
     ])) as { sessionId?: string }
     sessionId = newSessionResp.sessionId
@@ -179,10 +188,14 @@ export async function runAcpMediatedTask(
     }
 
     stage = 'prompt'
+    // ACP `session/prompt` requires `prompt: ContentBlock[]`. The
+    // simplest block is `{ type: 'text', text: '...' }` — agents must
+    // support text blocks at minimum per the spec. Wrap the user's
+    // raw prompt string accordingly.
     const promptResult = await Promise.race([
       session.bridge.request('session/prompt', {
         sessionId,
-        prompt: opts.prompt,
+        prompt: [{ type: 'text', text: opts.prompt }],
       }),
       timeoutPromise,
     ])
