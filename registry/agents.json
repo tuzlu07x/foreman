@@ -29,6 +29,11 @@
       "optional_services": ["telegram", "discord"],
       "mcp_compatible": true,
       "chat_capable": true,
+      "approval_adapter": "acp-stdio-v1",
+      "acp_command": {
+        "command": "hermes",
+        "args": ["acp"]
+      },
       "supported_versions": ">=2.0.0",
       "min_foreman_version": "0.1.2",
       "provider_mapping": {
@@ -210,6 +215,11 @@
       "mcp_compatible": true,
       "mcp_format": "nested",
       "chat_capable": true,
+      "approval_adapter": "acp-stdio-v1",
+      "acp_command": {
+        "command": "openclaw",
+        "args": ["acp"]
+      },
       "supported_versions": ">=1.4.0",
       "min_foreman_version": "0.1.2",
       "provider_mapping": {
@@ -535,6 +545,11 @@
       "llm_compat": ["anthropic", "openai", "gemini"],
       "mcp_compatible": true,
       "chat_capable": true,
+      "approval_adapter": "acp-stdio-v1",
+      "acp_command": {
+        "command": "zeroclaw",
+        "args": ["acp"]
+      },
       "supported_versions": ">=0.3.0",
       "min_foreman_version": "0.1.2",
       "provider_mapping": {
