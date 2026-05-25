@@ -391,6 +391,7 @@
       "task_env_strip": ["OPENAI_API_KEY"],
       "task_model_flag": "-m",
       "task_skip_permissions_flag": "--dangerously-bypass-approvals-and-sandbox",
+      "approval_adapter": "codex-exec-server-v1",
       "supported_versions": ">=0.100.0",
       "min_foreman_version": "0.1.2",
       "provider_mapping": {
