@@ -12,6 +12,12 @@ import {
   defaultLlmConfig,
   loadLlmConfig,
 } from "../core/llm/config.js";
+import {
+  AdapterDecodeError,
+  getAdapter,
+  listAdapterIds,
+  type NormalisedDecision,
+} from "../core/adapters/index.js";
 import { MediatorService } from "../core/mediator.js";
 import { OrchestratorChat } from "../core/orchestrator-chat.js";
 import { PendingQuestionsService } from "../core/pending-questions.js";
@@ -455,6 +461,36 @@ export async function handleMessage(
             },
           },
         },
+        {
+          // #552 — Generic approval-mediation tool. Any agent (or, more
+          // commonly, a transport bridge sitting between an agent and
+          // Foreman — e.g. the codex exec-server bridge in PR 3) can
+          // call this to ask: "I'm about to do X — is that OK?"
+          // Foreman runs the call through its adapter → risk → approval
+          // pipeline (auto-allows low-risk, surfaces high-risk in chat)
+          // and returns the agent's wire-shaped decision. The tool
+          // surface is intentionally agent-agnostic: the adapter named
+          // in `adapter_id` knows how to decode the opaque `wire`
+          // payload and encode the resolved decision back.
+          name: "request_action_approval",
+          description:
+            "Ask Foreman to mediate an agent action before it runs. Pass the agent's native approval-request payload as `wire` and the matching adapter id (e.g. 'codex-exec-server-v1', 'claude-code-pretooluse-v1'). Foreman decodes, scores risk, escalates to the operator when needed, and returns a `structuredContent` with both the normalised decision ('allow' | 'deny') and the adapter-encoded wire response your transport bridge can send back to the agent verbatim. Fail-closed: any decode error or unknown adapter id yields deny.",
+          inputSchema: {
+            type: "object",
+            required: ["adapter_id", "wire"],
+            properties: {
+              adapter_id: {
+                type: "string",
+                description:
+                  "Stable id of the adapter that knows this agent's wire shape — see `src/core/adapters/index.ts` `listAdapterIds()`.",
+              },
+              wire: {
+                description:
+                  "The agent's native approval-request payload. Adapter-specific shape. For codex-exec-server-v1: `{ method, params }` where method is one of `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, `item/permissions/requestApproval`. For claude-code-pretooluse-v1: the PreToolUse hook stdin JSON object.",
+              },
+            },
+          },
+        },
       ],
     });
   }
@@ -841,6 +877,127 @@ export async function handleMessage(
             text: `Resolution submitted: ${option.label}`,
           },
         ],
+      });
+    }
+
+    if (toolName === "request_action_approval") {
+      // #552 — Generic agent-action mediation entry point. Adapter
+      // decodes the agent's wire payload, mediator runs risk + approval,
+      // adapter encodes the resolved decision back. Fail-closed at every
+      // step so a malformed payload or a mis-registered adapter cannot
+      // silently let actions through.
+      const args = params?.arguments ?? {};
+      const adapterId =
+        typeof args.adapter_id === "string" ? args.adapter_id : "";
+      const wire = (args as { wire?: unknown }).wire;
+      if (!adapterId) {
+        return replyError(
+          id,
+          -32602,
+          "request_action_approval requires args.adapter_id (string)",
+        );
+      }
+      if (wire === undefined || wire === null) {
+        return replyError(
+          id,
+          -32602,
+          "request_action_approval requires args.wire (the adapter's native payload)",
+        );
+      }
+      const adapter = getAdapter(adapterId);
+      if (!adapter) {
+        const known = listAdapterIds().join(", ");
+        return replyError(
+          id,
+          -32602,
+          `Unknown adapter '${adapterId}' (known: ${known})`,
+        );
+      }
+
+      // Decode — fail-closed deny on any malformed payload. We still go
+      // through the adapter's encodeDecision so the wire shape is correct
+      // for the agent's transport. `approvalId: "unknown"` because we
+      // don't have the agent's id yet — the adapter is allowed to use it
+      // or ignore it.
+      let normalised;
+      try {
+        normalised = adapter.decodeRequest(wire, sourceAgent);
+      } catch (err) {
+        const reason =
+          err instanceof AdapterDecodeError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : "adapter decode failure";
+        const wireResp = adapter.encodeDecision(
+          { kind: "deny", reason },
+          "unknown",
+        );
+        return reply(id, {
+          content: [
+            {
+              type: "text",
+              text: `Denied (decode error): ${reason}`,
+            },
+          ],
+          structuredContent: {
+            decision: "deny",
+            reason,
+            wire: wireResp,
+          },
+          isError: true,
+        });
+      }
+
+      // Route through the existing mediator. The synthetic JSON-RPC
+      // message gives the mediator's `argsFromMessage` exactly what it
+      // would have parsed from a real tools/call so risk + audit + LLM
+      // verifier paths are unchanged.
+      const mediatorResult = await services.mediator.handleRequest({
+        sourceAgent: normalised.sourceAgent,
+        targetTool: normalised.targetTool,
+        sessionId: normalised.sessionId,
+        message: {
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            name: normalised.targetTool,
+            arguments: normalised.args,
+          },
+        } as JSONRPCMessage,
+      });
+
+      const decision: NormalisedDecision =
+        mediatorResult.decision === "allowed"
+          ? { kind: "allow" }
+          : {
+              kind: "deny",
+              reason:
+                mediatorResult.riskReasons?.[0] ??
+                `denied by ${mediatorResult.decidedBy}`,
+            };
+
+      const wireResponse = adapter.encodeDecision(
+        decision,
+        normalised.approvalId,
+      );
+
+      return reply(id, {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(wireResponse),
+          },
+        ],
+        structuredContent: {
+          decision: decision.kind === "allow" ? "allow" : "deny",
+          reason: decision.kind === "deny" ? decision.reason : undefined,
+          approval_id: mediatorResult.requestId,
+          decided_by: mediatorResult.decidedBy,
+          risk_score: mediatorResult.riskScore,
+          risk_bucket: mediatorResult.riskBucket,
+          wire: wireResponse,
+        },
       });
     }
 
