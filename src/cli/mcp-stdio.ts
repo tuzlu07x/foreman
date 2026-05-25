@@ -18,6 +18,10 @@ import {
   listAdapterIds,
   type NormalisedDecision,
 } from "../core/adapters/index.js";
+import {
+  approvalIdMissHint,
+  classifyApprovalIdInput,
+} from "../core/approval-id.js";
 import { MediatorService } from "../core/mediator.js";
 import { OrchestratorChat } from "../core/orchestrator-chat.js";
 import { PendingQuestionsService } from "../core/pending-questions.js";
@@ -704,7 +708,7 @@ export async function handleMessage(
       // factors. Plain decision: allow|deny still works for the
       // standard 4-action ladder.
       const args = params?.arguments ?? {};
-      const approvalId =
+      const rawApprovalId =
         typeof args.approval_id === "string" ? args.approval_id : "";
       const decision = args.decision;
       const remember = args.remember === true;
@@ -712,7 +716,7 @@ export async function handleMessage(
         typeof args.action_id === "string" && args.action_id.length > 0
           ? args.action_id
           : undefined;
-      if (!approvalId) {
+      if (!rawApprovalId) {
         return replyError(
           id,
           -32602,
@@ -733,6 +737,13 @@ export async function handleMessage(
           "submit_approval not supported by this Foreman build",
         );
       }
+      // #552 PR 5 — Strip the visible `aprv_` prefix (added by the chat
+      // surface so operators can distinguish Foreman approval ids from
+      // agent session/thread ids) and classify the residual shape so a
+      // "not found" reply can point the user at the right id source
+      // instead of just saying "not found".
+      const classification = classifyApprovalIdInput(rawApprovalId);
+      const approvalId = classification.stripped;
       const result = await services.approval.submitFromAgent({
         approvalId,
         decision,
@@ -756,11 +767,14 @@ export async function handleMessage(
         });
       }
       // isError lets the agent's LLM see the message text and surface
-      // it back to the user (e.g. "approval abc123 not found" → user
-      // types the right id).
+      // it back to the user. PR 5 enriches the "not found" case with a
+      // shape-aware hint so a user who pasted a codex thread id sees
+      // "looks like a session id" instead of a flat "not found".
+      const storeError = result.error ?? "submit_approval failed";
+      const hint = approvalIdMissHint(classification);
       return reply(id, {
         content: [
-          { type: "text", text: result.error ?? "submit_approval failed" },
+          { type: "text", text: `${storeError}\n\n${hint}` },
         ],
         isError: true,
       });
