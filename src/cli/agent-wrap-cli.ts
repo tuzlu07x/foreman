@@ -20,7 +20,9 @@ import { existsSync } from 'node:fs'
 import { Command } from 'commander'
 
 import { startAgentWrap } from '../core/agent-wrap.js'
+import { ControlChannel } from '../core/control-channel.js'
 import { loadBundledRegistry } from '../core/registry-catalog.js'
+import { getDb } from '../db/client.js'
 import { getForemanPaths } from '../utils/config.js'
 import { orange, red } from './colors.js'
 
@@ -108,12 +110,21 @@ export const agentWrapCommand = new Command('agent-wrap')
       `[agent-wrap] launching ${agentId} (${childArgv.command} ${childArgv.args.join(' ')})\n`,
     )
 
+    // #445 PR 3 — Hook the wrap into the #440 control_commands queue
+    // so `/foreman write <agent> "msg"` directives flow into the
+    // child's stdin as synthesised user updates. The CLI process
+    // shares the Foreman DB with mcp-stdio (writer) + foreman start
+    // (legacy drain); PR 5 coordinates the two drain paths.
+    const db = getDb()
+    const controlChannel = new ControlChannel(db)
+
     const handle = startAgentWrap({
       entry: catalogEntry,
       botToken,
       ownerChatId,
       childArgv,
       childCwd: options.cwd,
+      controlChannel,
       onError(err) {
         process.stderr.write(orange('[agent-wrap warn] ') + err.message + '\n')
       },
