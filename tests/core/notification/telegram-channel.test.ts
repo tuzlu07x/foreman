@@ -100,15 +100,17 @@ describe('TelegramChannel — send (outbound only, #406)', () => {
     expect(body.parse_mode).toBe('MarkdownV2')
   })
 
-  it('embeds /approve <id> and /deny <id> slash commands in the body', async () => {
+  it('embeds /approve <id> and /deny <id> slash commands in the body — with the aprv_ prefix (#552 PR 5)', async () => {
     const { channel, calls } = setupChannel()
     await channel.send(makeNotification())
     const body = calls[0]!.body as { text: string }
-    expect(body.text).toContain('/approve notif-abc123')
-    expect(body.text).toContain('/deny notif-abc123')
+    // PR 5 surfaces the approval id with a visible aprv_ prefix so
+    // operators distinguish Foreman approval ids from agent session ids.
+    expect(body.text).toContain('/approve aprv_notif-abc123')
+    expect(body.text).toContain('/deny aprv_notif-abc123')
   })
 
-  it('embeds /approve_remember and /deny_remember for allow_always / deny_always actions', async () => {
+  it('embeds /approve_remember and /deny_remember (with aprv_ prefix) for allow_always / deny_always actions', async () => {
     const { channel, calls } = setupChannel()
     await channel.send(
       makeNotification({
@@ -121,10 +123,10 @@ describe('TelegramChannel — send (outbound only, #406)', () => {
       }),
     )
     const body = calls[0]!.body as { text: string }
-    expect(body.text).toContain('/approve notif-abc123')
-    expect(body.text).toContain('/approve_remember notif-abc123')
-    expect(body.text).toContain('/deny notif-abc123')
-    expect(body.text).toContain('/deny_remember notif-abc123')
+    expect(body.text).toContain('/approve aprv_notif-abc123')
+    expect(body.text).toContain('/approve_remember aprv_notif-abc123')
+    expect(body.text).toContain('/deny aprv_notif-abc123')
+    expect(body.text).toContain('/deny_remember aprv_notif-abc123')
   })
 
   // #522 — Foreman now attaches an inline keyboard. The no-polling rule
@@ -155,8 +157,9 @@ describe('TelegramChannel — send (outbound only, #406)', () => {
     await channel.send(makeNotification())
     const body = calls[0]!.body as { text: string; reply_markup?: unknown }
     expect(body.reply_markup).toBeDefined()
-    expect(body.text).toContain('/approve notif-abc123')
-    expect(body.text).toContain('/deny notif-abc123')
+    // PR 5: ids surface with the aprv_ display prefix.
+    expect(body.text).toContain('/approve aprv_notif-abc123')
+    expect(body.text).toContain('/deny aprv_notif-abc123')
   })
 
   it('renders body only (no slash-command block) when actions is empty (info-only alert)', async () => {
@@ -186,8 +189,8 @@ describe('TelegramChannel — send (outbound only, #406)', () => {
       text: string
       reply_markup?: { inline_keyboard: Array<Array<{ text: string }>> }
     }
-    expect(body.text).toContain('/approve notif-abc123')
-    expect(body.text).toContain('/deny notif-abc123')
+    expect(body.text).toContain('/approve aprv_notif-abc123')
+    expect(body.text).toContain('/deny aprv_notif-abc123')
     expect(body.text).not.toContain('/inspect')
     // Inspect is render-only (intent: 'custom' with no payload). It must
     // also be excluded from the inline keyboard so the user can't tap a
