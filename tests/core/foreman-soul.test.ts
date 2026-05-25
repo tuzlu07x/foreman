@@ -632,3 +632,64 @@ describe("applyForemanSoul — multi-agent input shape (#multi-agent)", () => {
     );
   });
 });
+
+// Multi-agent autonomous loop — this is the product's core mental
+// model. Every agent that gets the Foreman identity injected must see
+// the same instruction: when a peer's output comes back, don't go
+// idle — act on it based on your role. Without this section the
+// product feels like a stateless RPC ("send to codex, wait for user
+// re-prompt, send to hermes") instead of a coordinated team.
+describe("DEFAULT_FOREMAN_SOUL — autonomous loop (multi-agent default)", () => {
+  it("contains the Autonomous loop section header", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toContain("## Autonomous loop");
+  });
+
+  it("explicitly tells the agent the peer-output message is FOR them", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(
+      /finished your task[\s\S]*for you/i,
+    );
+  });
+
+  it("documents the coordinator / reviewer / PM branch with explicit actions", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(
+      /coordinate.*review.*supervise/i,
+    );
+    // Concrete next-step actions, not just abstract advice.
+    expect(DEFAULT_FOREMAN_SOUL).toContain("gh pr view");
+    expect(DEFAULT_FOREMAN_SOUL).toContain("gh pr merge");
+    expect(DEFAULT_FOREMAN_SOUL).toContain("gh pr comment");
+  });
+
+  it("documents the executor / implementer branch", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(
+      /execute.*implement.*build/i,
+    );
+    expect(DEFAULT_FOREMAN_SOUL).toContain("Surface blockers explicitly");
+  });
+
+  it("documents the 'other roles' fallback so non-PM/non-executor agents still act", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/role is something else/i);
+  });
+
+  it("includes the universal guard rails (don't loop forever, respect budget, audit on)", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/Don't loop forever/i);
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/Respect budget/i);
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/Audit trail is on/i);
+  });
+
+  it("includes explicit stop conditions for the coordinator loop", () => {
+    expect(DEFAULT_FOREMAN_SOUL).toMatch(/Stop conditions/i);
+  });
+
+  it("references foreman write as the delegation primitive throughout the loop section", () => {
+    // The whole point — agents continue the chain via foreman write.
+    const loopSection = DEFAULT_FOREMAN_SOUL
+      .split("## Autonomous loop")[1]
+      ?.split("## Tone")[0] ?? "";
+    expect(loopSection).toContain("foreman write");
+    // Should appear at least twice — once for re-delegation, once for
+    // the next-step chain.
+    const matches = loopSection.match(/foreman write/g) ?? [];
+    expect(matches.length).toBeGreaterThanOrEqual(2);
+  });
+});
