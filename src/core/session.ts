@@ -34,11 +34,7 @@ export type HaltReason =
 /** #527 — Sub-state of `halted`. NULL on the SessionInfo means the halt
  *  isn't waiting for a user resolution (manual halts, halts that have
  *  already been resolved + consumed). */
-export type ResolutionStatus =
-  | "needed"
-  | "provided"
-  | "consumed"
-  | "expired";
+export type ResolutionStatus = "needed" | "provided" | "consumed" | "expired";
 
 /** #527 — Persisted record of a user's resolution choice. Stored on
  *  sessions.resolution_payload so audits + the bridge can replay what
@@ -200,10 +196,6 @@ export class SessionManager {
     if (opts.projectTag && opts.projectTag.length > 0) {
       this.projectTags.set(id, opts.projectTag);
     }
-    // #523 — lifecycle push so the notification bridge can tell the user
-    // "▶️ openclaw çalışmaya başladı" without polling. Trigger defaults to
-    // "unknown" so callers that haven't been updated still get a coherent
-    // event payload.
     this.bus.emit("session:started", {
       sessionId: id,
       participants,
@@ -358,7 +350,11 @@ export class SessionManager {
     if (wantsResolution && current) {
       this.bus.emit("session:resolution-needed", {
         sessionId,
-        reason: reason as "loop_detection" | "turn_limit" | "token_limit" | "manual",
+        reason: reason as
+          | "loop_detection"
+          | "turn_limit"
+          | "token_limit"
+          | "manual",
         contextSummary: fallbackContextSummary(reason, current.participants),
         options: template.options,
         deadlineMs: resolutionDeadlineMs!,
@@ -505,8 +501,8 @@ export class SessionManager {
       // agent. The drain handler routes "write" rows to whichever
       // agent the user is currently chatting with — for v0.1.1 that
       // means the first participant.
-      const target = participants[0]
-      if (!target) return
+      const target = participants[0];
+      if (!target) return;
       this.controlChannel.enqueue({
         command: "write",
         args: [
