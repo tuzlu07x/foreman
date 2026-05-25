@@ -1,3 +1,4 @@
+import { formatApprovalIdForDisplay } from '../../approval-id.js'
 import {
   intentForActionId,
   type ChannelAction,
@@ -168,15 +169,21 @@ export class TelegramApiError extends Error {
 // decision, remember?)`.
 
 function actionToCommand(a: NotificationAction, notifId: string): string | null {
+  // #552 PR 5 — Surface the approval id with a visible `aprv_` prefix so
+  // operators don't confuse it with codex / claude-code session/thread
+  // ids (those are UUIDs; ours are ULIDs, but at a glance they can both
+  // look like "long random string"). submit_approval strips the prefix
+  // back off so the underlying DB id stays unchanged.
+  const displayId = formatApprovalIdForDisplay(notifId)
   switch (a.id) {
     case 'allow':
-      return `/approve ${notifId}`
+      return `/approve ${displayId}`
     case 'deny':
-      return `/deny ${notifId}`
+      return `/deny ${displayId}`
     case 'allow_always':
-      return `/approve_remember ${notifId}`
+      return `/approve_remember ${displayId}`
     case 'deny_always':
-      return `/deny_remember ${notifId}`
+      return `/deny_remember ${displayId}`
     case 'inspect':
       // Inspect doesn't resolve the approval — surfaced as a hint only.
       return null
