@@ -1016,7 +1016,61 @@ export function checkChafa(env: NodeJS.ProcessEnv = process.env): CheckResult {
   }
 }
 
-const CHECKS: (() => CheckResult)[] = [
+/**
+ * #445 / #552 — Verify ACP-mediated agents have their binaries on
+ * PATH. The registry declares Hermes / OpenClaw / ZeroClaw with
+ * `approval_adapter='acp-stdio-v1'` + `acp_command`, but `foreman
+ * write <agent>` won't actually run if the binary isn't installed.
+ * Each ACP agent gets its own check row so the operator sees
+ * exactly which one is missing.
+ */
+export function checkAcpAgents(
+  env: NodeJS.ProcessEnv = process.env,
+): CheckResult[] {
+  let doc: ReturnType<typeof loadActiveRegistry>["doc"] | null = null;
+  try {
+    doc = loadActiveRegistry().doc;
+  } catch {
+    // Registry load failures are surfaced by checkAgentsRegistered;
+    // we don't want this check to double-report.
+    return [];
+  }
+  const acpAgents = doc.agents.filter(
+    (a) => a.approval_adapter === "acp-stdio-v1" && a.acp_command,
+  );
+  if (acpAgents.length === 0) {
+    return [
+      {
+        name: "acp-agents",
+        status: "ok",
+        message: "no ACP-mediated agents declared",
+      },
+    ];
+  }
+  const out: CheckResult[] = [];
+  for (const agent of acpAgents) {
+    const cmd = agent.acp_command!.command;
+    const resolved = whichOnPath(cmd, env);
+    if (resolved) {
+      out.push({
+        name: `acp:${agent.id}`,
+        status: "ok",
+        message: `${agent.name ?? agent.id} ACP binary at ${resolved} (\`${cmd} ${(agent.acp_command!.args ?? []).join(" ")}\`)`,
+      });
+    } else {
+      out.push({
+        name: `acp:${agent.id}`,
+        status: "warn",
+        message: `${agent.name ?? agent.id} declares acp_command="${cmd}" but the binary is not on PATH`,
+        remediation:
+          `Install ${agent.name ?? agent.id} (see ${agent.homepage ?? "the agent's docs"}) and confirm \`${cmd} --version\` works. Until then, \`foreman write ${agent.id} ...\` will fail.`,
+      });
+    }
+  }
+  return out;
+}
+
+const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkNodeVersion,
   checkPaths,
   checkForemanHome,
@@ -1033,6 +1087,7 @@ const CHECKS: (() => CheckResult)[] = [
   checkSecretSlotDuplicates,
   checkVoiceConfig,
   checkAgentsRegistered,
+  checkAcpAgents,
   checkProviderMapping,
   checkMcpGateway,
   checkLegacyHome,
@@ -1044,7 +1099,15 @@ export function runDoctor(_options: DoctorOptions = {}): DoctorReport {
   const checks: CheckResult[] = [];
   for (const fn of CHECKS) {
     try {
-      checks.push(fn());
+      const result = fn();
+      // #445 / #552 — checkAcpAgents fans out one row per declared
+      // ACP agent (so each missing binary surfaces individually). Other
+      // checks return a single row. Accept either shape.
+      if (Array.isArray(result)) {
+        for (const r of result) checks.push(r);
+      } else {
+        checks.push(result);
+      }
     } catch (err) {
       checks.push({
         name: "doctor",

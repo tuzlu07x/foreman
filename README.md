@@ -92,6 +92,16 @@ Foreman ships three bundled catalogs that drive the wizard, the TUI management p
 
 **Agents** ([docs/agent-lifecycle.md](docs/agent-lifecycle.md)) — Claude Code · Codex · Hermes · OpenClaw · ZeroClaw · Generic MCP
 
+> **Action mediation transport** (#552 / #445): every integration falls into one of three categories Foreman handles uniformly.
+>
+> | Transport | Agents | How it works |
+> | --- | --- | --- |
+> | **Bridge (JSON-RPC stdio)** | Codex (`codex exec-server`), Hermes / OpenClaw / ZeroClaw (`<binary> acp` — ACP standard) | Foreman spawns the agent as a child process and mediates every approval the agent emits over JSON-RPC. Bidirectional: Foreman injects user directives via `session/prompt` (ACP) or `turn/start` (codex). Risk rules fire before each shell / file / network action runs. |
+> | **Wrap (synthetic Telegram updates)** | Reserved for hypothetical chat-only daemon agents | Replaces the agent's Telegram poller with a Foreman-controlled wrap process that injects synthetic owner-originated updates. Documented + tested; no current agent needs it (all three target daemons support ACP). |
+> | **Legacy hybrid** | Claude Code (via PreToolUse hook), Generic MCP | PreToolUse hook for claude-code; chat-post relay for everything else. Pre-bridge baseline that still works for agents without a programmable transport. |
+>
+> Operators can audit which transport each agent uses via `foreman agents show <id>` (transport line). The wizard surfaces the transport at install time; `foreman doctor` flags missing ACP binaries.
+
 **Services** ([docs/services.md](docs/services.md)) — Telegram · Discord · Slack · GitHub · Atlassian (Jira / Confluence) · Notion
 
 Adding entries to the bundled catalogs is documented in [docs/registry-maintenance.md](docs/registry-maintenance.md). A user-editable upstream registry URL is on the v0.2 roadmap.

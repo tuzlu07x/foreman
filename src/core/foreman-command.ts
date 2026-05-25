@@ -815,7 +815,15 @@ function writeHandler(
   try {
     const catalog = loadActiveRegistry();
     const entry = catalog.doc.agents.find((a) => a.id === targetAgent);
-    isCallable = Boolean(entry?.task_command_template);
+    // #445 / #552 — ACP agents (Hermes/OpenClaw/ZeroClaw with
+    // `approval_adapter='acp-stdio-v1'` + `acp_command`) are also
+    // callable: the drain handler spawns them via `runAcpMediatedTask`.
+    // Without this branch the success text falsely says "Directive
+    // queued" even though we DO auto-execute them.
+    isCallable = Boolean(
+      entry?.task_command_template ||
+        (entry?.approval_adapter === "acp-stdio-v1" && entry?.acp_command),
+    );
   } catch {
     isCallable = false;
   }

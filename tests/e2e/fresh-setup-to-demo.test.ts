@@ -181,17 +181,24 @@ describe('#308 — fresh setup to demo (E2E gate)', () => {
     expect(voice.proactive_notifications.pattern_detection.enabled).toBe(true)
   })
 
-  it('phase 3: foreman doctor reports every required check ok (only chafa may warn)', () => {
+  it('phase 3: foreman doctor reports every required check ok (only chafa / acp:* may warn)', () => {
     const report = runDoctor()
     const failed = report.checks.filter((c) => c.status === 'fail')
     expect(failed).toEqual([])
-    // chafa is the only acceptable warn (cosmetic — terminal mascot
-    // rendering); everything else must be ok.
+    // Acceptable warnings:
+    //   - chafa: cosmetic, terminal mascot rendering
+    //   - acp:<agentId>: ACP-mediated agent's binary not on PATH —
+    //     means the agent itself isn't installed yet (Hermes /
+    //     OpenClaw / ZeroClaw all warn in a vanilla setup). Not a
+    //     regression in Foreman; the check tells the operator which
+    //     install to run.
     const otherWarns = report.checks.filter(
-      (c) => c.status === 'warn' && c.name !== 'chafa',
+      (c) =>
+        c.status === 'warn' &&
+        c.name !== 'chafa' &&
+        !c.name.startsWith('acp:'),
     )
     if (otherWarns.length > 0) {
-      // Surface which checks warned so the failure message is actionable.
       const msgs = otherWarns
         .map((w) => `  - ${w.name}: ${w.message}`)
         .join('\n')
