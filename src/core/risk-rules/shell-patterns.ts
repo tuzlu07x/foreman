@@ -18,17 +18,12 @@ import type { RiskFactor, RiskRule } from './types.js'
 // Shell tool detection — which targetTool names mean "agent wants to shell out"
 // =============================================================================
 
-const SHELL_TOOL_NAMES = new Set([
-  'shell_exec',
-  'execute_code',
-  'run_command',
-  'run_shell',
-  'execute',
-  'bash',
-  'sh',
-  'zsh',
-  'exec',
-])
+// #552 PR 6 — Tool name set lives in canonical-tools.ts so adapters
+// (codex-exec-server-v1, claude-code-pretooluse-v1) and this rule share
+// one source of truth. The canonical id every adapter SHOULD emit is
+// `shell_exec`; the rest are legacy / partner-agent aliases kept as a
+// back-compat safety net for callers that bypass the adapter layer.
+import { SHELL_TOOL_NAMES } from './canonical-tools.js'
 
 function isShellTool(name: string | undefined): boolean {
   return name !== undefined && SHELL_TOOL_NAMES.has(name.toLowerCase())
