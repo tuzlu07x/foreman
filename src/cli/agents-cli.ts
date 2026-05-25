@@ -5,6 +5,7 @@ import {
   findAgent,
   loadActiveRegistry,
   AgentNotInRegistryError,
+  type AgentEntry,
 } from "../core/registry-catalog.js";
 import {
   AgentNotFoundError,
@@ -300,6 +301,16 @@ agentsCommand
       if (agent.responsibilityNote) {
         console.log(
           `  ${dim("note:")}        ${agent.responsibilityNote}`,
+        );
+      }
+      // #552 / #445 — surface the action-mediation transport so
+      // operators can audit which agents go through Foreman's
+      // bridge (programmable JSON-RPC), which run under wrap mode
+      // (synthetic-update injection), and which fall back to the
+      // legacy chat-post hybrid.
+      if (registryEntry) {
+        console.log(
+          `  ${dim("transport:")}   ${formatTransportLine(registryEntry)}`,
         );
       }
       if (registryEntry) {
@@ -979,6 +990,28 @@ function safeFindAgent(
     if (err instanceof AgentNotInRegistryError) return null;
     throw err;
   }
+}
+
+// #552 / #445 — Render the action-mediation transport for `foreman agent
+// show <id>`. Three top-level cases:
+//
+//   bridge    — agent declares `approval_adapter`; Foreman talks the
+//               adapter's wire protocol (codex exec-server JSON-RPC,
+//               ACP, …) and mediates approvals + directives over it.
+//   wrap      — agent declares `input_protocol` (chat-only daemon, no
+//               programmable transport). Foreman runs `foreman
+//               agent-wrap` to inject synthetic user updates.
+//   legacy    — neither declared; the agent goes through the
+//               PreToolUse hook (claude-code) or the #433 hybrid
+//               chat-post path. No structured mediation.
+export function formatTransportLine(entry: AgentEntry): string {
+  if (entry.approval_adapter) {
+    return `bridge (${entry.approval_adapter})`;
+  }
+  if (entry.input_protocol) {
+    return `wrap (${entry.input_protocol.schema} via ${entry.input_protocol.method})`;
+  }
+  return "legacy hybrid (PreToolUse hook for claude-code; chat-post fallback otherwise)";
 }
 
 async function runAgentUpdateOne(
