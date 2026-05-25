@@ -137,13 +137,22 @@ describe('runAcpMediatedTask — happy path', () => {
 
     await walkToSessionReady(h, 'sess-1')
 
+    // session/new frame (2nd written) carries cwd + mcpServers per
+    // ACP spec — required fields, agent rejects empty params.
+    const newSessionFrame = parseFrame(h.fromForeman[1]!)
+    expect(newSessionFrame.method).toBe('session/new')
+    expect(newSessionFrame.params).toHaveProperty('cwd')
+    expect(newSessionFrame.params).toHaveProperty('mcpServers')
+    expect((newSessionFrame.params as { mcpServers: unknown[] }).mcpServers).toEqual([])
+
     // session/prompt frame is the 3rd written frame
     const promptFrame = parseFrame(h.fromForeman[2]!)
     expect(promptFrame.method).toBe('session/prompt')
     expect((promptFrame.params as { sessionId: string }).sessionId).toBe('sess-1')
-    expect((promptFrame.params as { prompt: string }).prompt).toBe(
-      'plan my morning',
-    )
+    // ACP spec: prompt is ContentBlock[], not raw string.
+    expect((promptFrame.params as { prompt: Array<{ type: string; text: string }> }).prompt).toEqual([
+      { type: 'text', text: 'plan my morning' },
+    ])
 
     h.emit({
       jsonrpc: '2.0',
