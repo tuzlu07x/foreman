@@ -21,6 +21,7 @@
  */
 
 import type { AgentAdapter } from './types.js'
+import { acpStdioV1Adapter } from './acp-stdio-v1.js'
 import { codexExecServerV1Adapter } from './codex-exec-server-v1.js'
 import { claudeCodePreToolUseV1Adapter } from './claude-code-pretooluse-v1.js'
 
@@ -58,11 +59,28 @@ export type {
 } from './claude-code-pretooluse-v1.js'
 export { claudeCodePreToolUseV1Adapter } from './claude-code-pretooluse-v1.js'
 
+export type {
+  AcpApprovalMethod,
+  AcpPermissionOption,
+  AcpPermissionOptionKind,
+  AcpRequestPermissionOutcome,
+  AcpRequestPermissionParams,
+  AcpRequestPermissionResponse,
+  AcpToolCall,
+  AcpToolCallKind,
+  AcpToolCallLocation,
+  AcpToolCallStatus,
+} from './acp-approval-types.js'
+export { ACP_APPROVAL_METHODS } from './acp-approval-types.js'
+export type { AcpWireRequest, AcpWireResponse } from './acp-stdio-v1.js'
+export { acpStdioV1Adapter } from './acp-stdio-v1.js'
+
 /**
  * Registered adapters keyed by stable id. Keep entries alphabetical for
  * easier review and to make conflict-on-add obvious.
  */
 const ADAPTER_REGISTRY: Record<string, AgentAdapter> = {
+  [acpStdioV1Adapter.id]: acpStdioV1Adapter,
   [claudeCodePreToolUseV1Adapter.id]: claudeCodePreToolUseV1Adapter,
   [codexExecServerV1Adapter.id]: codexExecServerV1Adapter,
 }
