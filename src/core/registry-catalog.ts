@@ -196,6 +196,19 @@ export const AgentEntrySchema = z
      *  v<n>` (e.g. `codex-exec-server-v1`, `claude-code-pretooluse-v1`)
      *  so multi-version migrations stay legible. */
     approval_adapter: z.string().min(1).optional(),
+    /** Argv used to spawn the agent in mediated transport mode.
+     *  Required when `approval_adapter === "acp-stdio-v1"` so
+     *  `runAcpMediatedTask` / `spawnAcpMediated` know how to launch
+     *  the ACP-mode child (typically `<binary> acp`). Codex's
+     *  mediated transport already has its own `task_command_template`
+     *  pattern, so this field is ACP-specific today; future bridges
+     *  can adopt it or define their own. */
+    acp_command: z
+      .object({
+        command: z.string().min(1),
+        args: z.array(z.string()).optional(),
+      })
+      .optional(),
     /** #445 PR 1 — Input-direction transport declaration for chat-only
      *  daemon agents (Hermes / OpenClaw / ZeroClaw). When set, the
      *  `foreman wrap <agent>` process spawns the agent's gateway as a
@@ -619,6 +632,20 @@ export const AgentEntrySchema = z
       message:
         "agent entry cannot declare both `approval_adapter` (programmable bidirectional transport, e.g. codex exec-server) and `input_protocol` (chat-only daemon wrap mode). These are two distinct transport models — pick one. See #445 for the decision matrix.",
       path: ["approval_adapter"],
+    },
+  )
+  // ACP agents need an `acp_command` so the spawn helper knows how to
+  // launch them. The check is conditional on `approval_adapter` being
+  // exactly `"acp-stdio-v1"` — codex agents use their own
+  // `task_command_template` for the equivalent role; future adapters
+  // can define their own argv source if they need one.
+  .refine(
+    (entry) =>
+      entry.approval_adapter !== "acp-stdio-v1" || entry.acp_command !== undefined,
+    {
+      message:
+        "agent entry with `approval_adapter: \"acp-stdio-v1\"` must also declare `acp_command` (the argv to spawn the agent in ACP mode, typically `{ command: \"<binary>\", args: [\"acp\"] }`). Without it, `runAcpMediatedTask` has nothing to launch.",
+      path: ["acp_command"],
     },
   );
 
