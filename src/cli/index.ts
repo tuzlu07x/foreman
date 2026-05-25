@@ -24,6 +24,7 @@ import { registryCommand } from "./registry-cli.js";
 import { secretsCommand } from "./secrets-cli.js";
 import { setupCommand } from "./setup.js";
 import { startCommand } from "./start.js";
+import { agentWrapCommand } from "./agent-wrap-cli.js";
 import { wrapCommand } from "./wrap.js";
 import { writeCommand } from "./write-cli.js";
 
@@ -47,6 +48,7 @@ program.addCommand(writeCommand);
 program.addCommand(reportCommand);
 program.addCommand(llmCommand);
 program.addCommand(agentsCommand);
+program.addCommand(agentWrapCommand);
 program.addCommand(flowCommand);
 program.addCommand(providerCommand);
 program.addCommand(codexLoginCommand);
