@@ -11,6 +11,11 @@ import {
 import { AgentDaemonManager } from "../core/agent-daemon-manager.js";
 import { AuditLogger } from "../core/audit.js";
 import { bus } from "../core/event-bus.js";
+import {
+  composeEscalationText,
+  composeNudgeText,
+  DelegationTracker,
+} from "../core/delegation-tracker.js";
 import { MediatorService } from "../core/mediator.js";
 import { PolicyEngine } from "../core/policy-engine.js";
 import { buildAgentActivityDigest } from "../core/agent-activity-summary.js";
@@ -240,6 +245,12 @@ export function startForeman(
   // fires for cross-process requests too (#117).
   const approvalBridge = new ApprovalBridge(db, { bus });
   approvalBridge.start();
+
+  // Autonomous loop tracker — records every `foreman write` delegation
+  // and lets the watchdog nudge initiators that go idle after the peer
+  // finishes. See `src/core/delegation-tracker.ts` for the lifecycle.
+  // Watchdog timer is set up below the drain loop wiring.
+  const delegationTracker = new DelegationTracker({ db });
 
   // OOB notification bridge (#235 / C11a-2). Best-effort: any failure here
   // (notify.yaml malformed, secret missing, etc.) is logged but does NOT
@@ -690,6 +701,25 @@ export function startForeman(
                 /* ignore — step might have been racey-removed */
               }
             }
+            // Autonomous loop tracker — when an LLM agent (Hermes,
+            // OpenClaw, …) issues a new `foreman write`, that's our
+            // heuristic for "they're acting on whatever peer output
+            // they last received." Close their open awaiting/nudged
+            // delegations before recording the new one. Skip for
+            // `sourceAgent === 'cli'` (terminal user; no chat to
+            // nudge).
+            const initiator = row.sourceAgent ?? "cli";
+            if (initiator && initiator !== "cli") {
+              try {
+                delegationTracker.closeOpenInitiatorRows(initiator);
+              } catch (err) {
+                process.stderr.write(
+                  `foreman: tracker.closeOpenInitiatorRows failed: ${
+                    err instanceof Error ? err.message : String(err)
+                  }\n`,
+                );
+              }
+            }
             const exec = await executeWriteDirective(
               {
                 agentId,
@@ -716,6 +746,11 @@ export function startForeman(
                 // codex / task_command_template path ignores this
                 // option — only the ACP branch reads it.
                 mediator,
+                // Autonomous loop tracker — executor records the
+                // delegation lifecycle for the watchdog below.
+                tracker: delegationTracker,
+                initiatorAgent: initiator,
+                controlCommandId: row.id,
               },
             );
             // #498 — Always audit the spawn outcome. control_commands.error
@@ -807,6 +842,41 @@ export function startForeman(
     controlHandlers,
   );
   controlPoller.start();
+
+  // Autonomous loop watchdog — periodically scan delegations where
+  // the peer's output arrived but the initiator hasn't followed up.
+  // Push a chat nudge per row; after `maxNudges` consecutive nudges
+  // without an initiator reaction, escalate to the user. Checked
+  // every 15s — tighter than the 30s default threshold so a nudge
+  // doesn't have to wait a full extra interval after it becomes
+  // due.
+  //
+  // Quiet when neither Telegram credentials are configured nor
+  // there's anywhere to send the nudge: the row stays awaiting,
+  // watchdog wakes again next tick.
+  const nudgeBotToken = secretStore.exists("telegram-bot-token")
+    ? secretStore.get("telegram-bot-token")
+    : undefined;
+  const nudgeChatId = secretStore.exists("telegram-chat-id")
+    ? secretStore.get("telegram-chat-id")
+    : undefined;
+  const watchdogTimer = setInterval(() => {
+    void runDelegationWatchdog({
+      tracker: delegationTracker,
+      telegramBotToken: nudgeBotToken,
+      telegramChatId: nudgeChatId,
+    }).catch((err) => {
+      process.stderr.write(
+        `foreman: delegation watchdog tick failed: ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
+    });
+  }, 15_000);
+  // Avoid keeping Node alive purely on the timer when the rest of
+  // the process is winding down (e.g. CLI test runners) — the
+  // signal handler at the top of run() handles graceful exit.
+  watchdogTimer.unref();
 
   return {
     registry,
@@ -1210,6 +1280,111 @@ async function promptStartChoice(): Promise<StartChoice> {
       resolveChoice(parseStartChoice(answer));
     });
   });
+}
+
+// =============================================================================
+// Delegation watchdog — runs on a 15s timer (see runForeman above).
+// Pulls pending nudges from the tracker + posts each to Telegram.
+// Pure helper so unit tests can drive it deterministically.
+// =============================================================================
+
+const TELEGRAM_API_URL = "https://api.telegram.org";
+
+export interface DelegationWatchdogDeps {
+  tracker: DelegationTracker;
+  telegramBotToken?: string | undefined;
+  telegramChatId?: string | undefined;
+  /** Override the network call for tests. Defaults to global fetch. */
+  fetchImpl?: typeof fetch;
+  /** Override the clock for tests. Defaults to Date.now via the tracker. */
+  nowMs?: () => number;
+}
+
+/**
+ * One tick of the watchdog: query pending nudges, push each one to
+ * Telegram, record the nudge (or escalation if past max). Returns the
+ * count of nudges + escalations dispatched for observability +
+ * test assertions.
+ */
+export async function runDelegationWatchdog(
+  deps: DelegationWatchdogDeps,
+): Promise<{ nudged: number; escalated: number }> {
+  const pending = deps.tracker.pendingNudges();
+  let nudged = 0;
+  let escalated = 0;
+  if (pending.length === 0) return { nudged, escalated };
+
+  // No chat configured → record-only mode: the tracker still flips
+  // status awaiting → nudged so the row doesn't sit forever, but no
+  // outbound message is dispatched. Operator can see the state via
+  // the CLI (PR B adds `foreman delegations list`).
+  const canPush = Boolean(deps.telegramBotToken && deps.telegramChatId);
+  for (const row of pending) {
+    // Initiators that aren't LLM agents (e.g. `cli` for terminal users)
+    // have nothing to nudge — they SEE the output in their own context.
+    if (row.initiatorAgent === "cli") continue;
+
+    const isLastNudge = row.nudgeCount + 1 >= deps.tracker.maxNudges;
+    const text = isLastNudge
+      ? composeEscalationText(row)
+      : composeNudgeText(row);
+
+    if (canPush) {
+      try {
+        await pushTelegramNudge({
+          text,
+          botToken: deps.telegramBotToken!,
+          chatId: deps.telegramChatId!,
+          fetchImpl: deps.fetchImpl,
+        });
+      } catch (err) {
+        process.stderr.write(
+          `foreman: nudge push failed for ${row.id}: ${
+            err instanceof Error ? err.message : String(err)
+          }\n`,
+        );
+        // Keep going — DB state still advances so we don't spin on
+        // the same row forever.
+      }
+    }
+
+    if (isLastNudge) {
+      deps.tracker.recordEscalation(row.id);
+      escalated += 1;
+    } else {
+      deps.tracker.recordNudge(row.id);
+      nudged += 1;
+    }
+  }
+  return { nudged, escalated };
+}
+
+interface PushTelegramNudgeInput {
+  text: string;
+  botToken: string;
+  chatId: string;
+  fetchImpl?: typeof fetch;
+}
+
+async function pushTelegramNudge(input: PushTelegramNudgeInput): Promise<void> {
+  const fetchFn = input.fetchImpl ?? fetch;
+  const url = `${TELEGRAM_API_URL}/bot${input.botToken}/sendMessage`;
+  const res = await fetchFn(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      chat_id: input.chatId,
+      text: input.text,
+      // Plain text — keep parse-mode off so the message renders
+      // regardless of markdown characters in the prompt summary.
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `Telegram sendMessage ${res.status}: ${body.slice(0, 300)}`,
+    );
+  }
 }
 
 export const startCommand = new Command("start")
