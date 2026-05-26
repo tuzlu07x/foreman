@@ -482,6 +482,54 @@ export type NewFlow = typeof flows.$inferInsert;
 export type FlowStep = typeof flowSteps.$inferSelect;
 export type NewFlowStep = typeof flowSteps.$inferInsert;
 
+// Delegation tracker — autonomous loop enforcement (PR A of the
+// multi-agent UX epic). One row per `foreman write <peer> <task>`
+// directive. The lifecycle is open → output_received → (closed by
+// initiator action | nudged repeatedly | escalated to user).
+//
+// Watchdog query in start.ts polls rows where status in ('awaiting',
+// 'nudged') older than the threshold, pushes a nudge to the
+// initiator's chat. See `src/core/delegation-tracker.ts`.
+export const delegations = sqliteTable(
+  "delegations",
+  {
+    id: text("id").primaryKey().notNull(),
+    initiatorAgent: text("initiator_agent").notNull(),
+    targetAgent: text("target_agent").notNull(),
+    promptSummary: text("prompt_summary").notNull(),
+    controlCommandId: integer("control_command_id"),
+    startedAt: integer("started_at").notNull(),
+    outputReceivedAt: integer("output_received_at"),
+    followUpAt: integer("follow_up_at"),
+    nudgeCount: integer("nudge_count").notNull().default(0),
+    lastNudgeAt: integer("last_nudge_at"),
+    status: text("status", {
+      enum: [
+        "open",
+        "awaiting",
+        "nudged",
+        "escalated",
+        "closed",
+        "abandoned",
+      ],
+    })
+      .notNull()
+      .default("open"),
+    spawnOutcome: text("spawn_outcome"),
+  },
+  (t) => ({
+    statusOutputIdx: index("delegations_status_output_idx").on(
+      t.status,
+      t.outputReceivedAt,
+    ),
+    initiatorIdx: index("delegations_initiator_idx").on(t.initiatorAgent),
+    targetIdx: index("delegations_target_idx").on(t.targetAgent),
+  }),
+);
+
+export type Delegation = typeof delegations.$inferSelect;
+export type NewDelegation = typeof delegations.$inferInsert;
+
 // FTS5 virtual table and triggers live in a hand-written migration
 // (drizzle-kit cannot emit virtual tables). See:
 // src/db/migrations/0001_fts5_requests.sql
