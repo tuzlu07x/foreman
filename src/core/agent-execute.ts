@@ -124,6 +124,36 @@ export interface ExecuteDeliveryDeps {
   mediator?: MediatorLike;
   /** Spawn impl override forwarded into runAcpMediatedTask (tests). */
   acpSpawnImpl?: Parameters<typeof runAcpMediatedTask>[0]["spawnImpl"];
+  /** Autonomous loop tracker. When set, the executor records the
+   *  delegation lifecycle so the watchdog in `foreman start` can
+   *  nudge stuck initiators. Production wires this; tests can omit
+   *  it (the executor falls back to no-op tracking). */
+  tracker?: DelegationTrackerLike;
+  /** Identity of the agent that issued this directive (sourceAgent
+   *  on the control_commands row). Used by the tracker to record
+   *  "Hermes delegated to codex" so the nudge can target Hermes
+   *  later. Tests can omit; production drain handler always wires
+   *  it. */
+  initiatorAgent?: string;
+  /** Optional id of the control_commands row carrying this directive.
+   *  Recorded on the delegation row for audit correlation. */
+  controlCommandId?: number;
+}
+
+/** Slim interface the executor uses for the tracker — keeps the
+ *  full DelegationTracker class out of agent-execute's type graph
+ *  (and lets tests pass a doubles without booting an SQLite db). */
+export interface DelegationTrackerLike {
+  recordDelegation(input: {
+    initiatorAgent: string;
+    targetAgent: string;
+    prompt: string;
+    controlCommandId?: number | null;
+  }): string;
+  recordOutputReceived(input: {
+    delegationId: string;
+    spawnOutcome?: string;
+  }): void;
 }
 
 export interface ExecuteDirectiveOutcome {
@@ -158,6 +188,29 @@ export async function executeWriteDirective(
   input: ExecuteDirectiveInput,
   deps: ExecuteDeliveryDeps = {},
 ): Promise<ExecuteDirectiveOutcome> {
+  // Autonomous loop tracker — record the delegation BEFORE the spawn
+  // so the lifecycle row exists no matter which path we take below.
+  // recordOutputReceived later updates the row with the spawn outcome.
+  let trackerId: string | null = null;
+  if (deps.tracker && deps.initiatorAgent) {
+    try {
+      trackerId = deps.tracker.recordDelegation({
+        initiatorAgent: deps.initiatorAgent,
+        targetAgent: input.agentId,
+        prompt: input.message,
+        controlCommandId: deps.controlCommandId ?? null,
+      });
+    } catch (err) {
+      // Tracking failures must not break execution. Surface to stderr
+      // for visibility; the spawn continues.
+      process.stderr.write(
+        `foreman: delegation tracker recordDelegation failed: ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
+    }
+  }
+
   // #445 / #552 — ACP routing branch. When the target declares
   // `approval_adapter: "acp-stdio-v1"` + `acp_command`, the agent
   // speaks the Agent Client Protocol over stdio (Hermes, OpenClaw,
@@ -170,10 +223,31 @@ export async function executeWriteDirective(
     input.entry.approval_adapter === "acp-stdio-v1" &&
     input.entry.acp_command
   ) {
-    return await executeAcpDirective(input, deps);
+    const outcome = await executeAcpDirective(input, deps);
+    if (trackerId && deps.tracker) {
+      try {
+        deps.tracker.recordOutputReceived({
+          delegationId: trackerId,
+          spawnOutcome: outcome.spawn.kind,
+        });
+      } catch {
+        /* best-effort */
+      }
+    }
+    return outcome;
   }
 
   if (!input.entry.task_command_template) {
+    if (trackerId && deps.tracker) {
+      try {
+        deps.tracker.recordOutputReceived({
+          delegationId: trackerId,
+          spawnOutcome: "unsupported",
+        });
+      } catch {
+        /* best-effort */
+      }
+    }
     return {
       spawn: {
         kind: "unsupported",
@@ -316,6 +390,20 @@ export async function executeWriteDirective(
       status: "skipped",
       reason: `flow ${routing!.kind === "forward" ? "forward" : "noop"} — output handed to ${routing!.kind === "forward" ? routing!.targetAgent : "—"}`,
     };
+  }
+
+  // Tracker: record output_received_at + spawn outcome so the
+  // watchdog can start considering this row for nudging if the
+  // initiator stays idle.
+  if (trackerId && deps.tracker) {
+    try {
+      deps.tracker.recordOutputReceived({
+        delegationId: trackerId,
+        spawnOutcome: spawn.kind,
+      });
+    } catch {
+      /* best-effort */
+    }
   }
 
   return { spawn, outputRelay, routing };
