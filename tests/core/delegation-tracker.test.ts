@@ -464,6 +464,223 @@ describe("composeEscalationText", () => {
 // Schema-level sanity — does the DB enforce what we expect?
 // =============================================================================
 
+// =============================================================================
+// Runaway-loop guard (PR B)
+// =============================================================================
+
+describe("DelegationTracker — runaway-loop guard", () => {
+  let db: ForemanDb;
+  let sqlite: Database.Database;
+  let now: number;
+  let tracker: DelegationTracker;
+
+  beforeEach(() => {
+    const h = createInMemoryDb();
+    db = h.db;
+    sqlite = h.sqlite;
+    now = 1_700_000_000_000;
+    tracker = new DelegationTracker({
+      db,
+      nowMs: () => now,
+      runawayMaxActive: 3, // small for testability
+      runawayWindowMs: 60_000,
+    });
+  });
+
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it("returns ok when no prior delegations exist", () => {
+    expect(tracker.checkRunawayLoop("hermes", "codex")).toEqual({ ok: true });
+  });
+
+  it("returns ok when prior delegations are under the trigger count", () => {
+    for (let i = 0; i < 2; i++) {
+      tracker.recordDelegation({
+        initiatorAgent: "hermes",
+        targetAgent: "codex",
+        prompt: `task-${i}`,
+      });
+    }
+    expect(tracker.checkRunawayLoop("hermes", "codex").ok).toBe(true);
+  });
+
+  it("blocks when active rows reach the trigger count", () => {
+    for (let i = 0; i < 3; i++) {
+      tracker.recordDelegation({
+        initiatorAgent: "hermes",
+        targetAgent: "codex",
+        prompt: `task-${i}`,
+      });
+    }
+    const result = tracker.checkRunawayLoop("hermes", "codex");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.activeCount).toBe(3);
+      expect(result.reason).toContain("hermes");
+      expect(result.reason).toContain("codex");
+      expect(result.reason).toContain("3");
+      expect(result.reason).toMatch(/pause and ask/i);
+    }
+  });
+
+  it("does NOT count closed rows toward the runaway trigger", () => {
+    // 3 delegations, but they're all closed → chain is healthy
+    for (let i = 0; i < 3; i++) {
+      const id = tracker.recordDelegation({
+        initiatorAgent: "hermes",
+        targetAgent: "codex",
+        prompt: `done-${i}`,
+      });
+      tracker.recordOutputReceived({ delegationId: id });
+      tracker.recordFollowUp(id);
+    }
+    expect(tracker.checkRunawayLoop("hermes", "codex").ok).toBe(true);
+  });
+
+  it("does NOT count abandoned rows toward the runaway trigger", () => {
+    for (let i = 0; i < 3; i++) {
+      const id = tracker.recordDelegation({
+        initiatorAgent: "hermes",
+        targetAgent: "codex",
+        prompt: `aban-${i}`,
+      });
+      // Simulate manual halt — flip status directly via the DB.
+      db.update(delegations)
+        .set({ status: "abandoned" })
+        .where(eq(delegations.id, id))
+        .run();
+    }
+    expect(tracker.checkRunawayLoop("hermes", "codex").ok).toBe(true);
+  });
+
+  it("counts escalated rows AS active — escalation is precisely the unresolved chain", () => {
+    for (let i = 0; i < 3; i++) {
+      const id = tracker.recordDelegation({
+        initiatorAgent: "hermes",
+        targetAgent: "codex",
+        prompt: `esc-${i}`,
+      });
+      tracker.recordOutputReceived({ delegationId: id });
+      tracker.recordEscalation(id);
+    }
+    expect(tracker.checkRunawayLoop("hermes", "codex").ok).toBe(false);
+  });
+
+  it("ignores delegations OUTSIDE the runaway window", () => {
+    for (let i = 0; i < 3; i++) {
+      tracker.recordDelegation({
+        initiatorAgent: "hermes",
+        targetAgent: "codex",
+        prompt: `old-${i}`,
+      });
+    }
+    // Advance past the window
+    now += 120_000;
+    expect(tracker.checkRunawayLoop("hermes", "codex").ok).toBe(true);
+  });
+
+  it("is per-target — hermes→codex saturation does NOT block hermes→openclaw", () => {
+    for (let i = 0; i < 3; i++) {
+      tracker.recordDelegation({
+        initiatorAgent: "hermes",
+        targetAgent: "codex",
+        prompt: `t-${i}`,
+      });
+    }
+    expect(tracker.checkRunawayLoop("hermes", "codex").ok).toBe(false);
+    expect(tracker.checkRunawayLoop("hermes", "openclaw").ok).toBe(true);
+  });
+});
+
+// =============================================================================
+// Visibility surface — activeAcrossAgents / recent (PR B)
+// =============================================================================
+
+describe("DelegationTracker — visibility queries", () => {
+  let db: ForemanDb;
+  let sqlite: Database.Database;
+  let now: number;
+  let tracker: DelegationTracker;
+
+  beforeEach(() => {
+    const h = createInMemoryDb();
+    db = h.db;
+    sqlite = h.sqlite;
+    now = 1_700_000_000_000;
+    tracker = new DelegationTracker({ db, nowMs: () => now });
+  });
+
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it("activeAcrossAgents excludes closed + abandoned, sorts newest first", () => {
+    const closed = tracker.recordDelegation({
+      initiatorAgent: "hermes",
+      targetAgent: "codex",
+      prompt: "old-closed",
+    });
+    tracker.recordOutputReceived({ delegationId: closed });
+    tracker.recordFollowUp(closed);
+
+    now += 5_000;
+    const open = tracker.recordDelegation({
+      initiatorAgent: "openclaw",
+      targetAgent: "hermes",
+      prompt: "live",
+    });
+    now += 1_000;
+    const awaiting = tracker.recordDelegation({
+      initiatorAgent: "hermes",
+      targetAgent: "codex",
+      prompt: "awaiting-rev",
+    });
+    tracker.recordOutputReceived({ delegationId: awaiting });
+
+    const rows = tracker.activeAcrossAgents();
+    const ids = rows.map((r) => r.id);
+    expect(ids).not.toContain(closed);
+    expect(ids).toContain(open);
+    expect(ids).toContain(awaiting);
+    expect(ids[0]).toBe(awaiting); // newest first
+  });
+
+  it("recent returns ALL rows regardless of status, newest first", () => {
+    const closed = tracker.recordDelegation({
+      initiatorAgent: "hermes",
+      targetAgent: "codex",
+      prompt: "old-closed",
+    });
+    tracker.recordOutputReceived({ delegationId: closed });
+    tracker.recordFollowUp(closed);
+    now += 1_000;
+    const live = tracker.recordDelegation({
+      initiatorAgent: "openclaw",
+      targetAgent: "hermes",
+      prompt: "live",
+    });
+    const rows = tracker.recent();
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(closed);
+    expect(ids).toContain(live);
+    expect(ids[0]).toBe(live);
+  });
+
+  it("recent respects limit", () => {
+    for (let i = 0; i < 60; i++) {
+      tracker.recordDelegation({
+        initiatorAgent: "hermes",
+        targetAgent: "codex",
+        prompt: `${i}`,
+      });
+      now += 10;
+    }
+    expect(tracker.recent(25)).toHaveLength(25);
+  });
+});
+
 describe("delegations table — schema constraints", () => {
   it("status defaults to 'open' when not specified", () => {
     const h = createInMemoryDb();
