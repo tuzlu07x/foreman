@@ -103,6 +103,7 @@ import {
   ModelDiscoveryError,
   type DiscoveredModel,
 } from "../core/llm/models-discovery.js";
+import { oauthSecretName } from "../core/llm/oauth/token-store.js";
 import { planOllamaInstall } from "../core/ollama-installer.js";
 import { RegistryService } from "../core/registry.js";
 import { SecretStore } from "../core/secret-store.js";
@@ -2750,8 +2751,13 @@ export function SetupWizard({
     const storedNames = new Set(
       services.secretStore.list().map((s) => s.name),
     );
-    const configured = new Set(
-      configuredProviderIds(providerCatalog, storedNames),
+    // #575 — count API keys AND OAuth subscriptions (ChatGPT → Codex,
+    // Claude). A subscription-only user has no key slot but can still run
+    // Foreman's brain, so the picker must not grey those rows out.
+    const configured = configuredBrainProviderIds(
+      providerCatalog,
+      storedNames,
+      providersSignedIn,
     );
 
     if (foremanLlmPhase === "picker") {
@@ -2773,16 +2779,18 @@ export function SetupWizard({
         {
           value: "anthropic",
           label: "Anthropic",
-          sub: "cloud · ~$2/mo at default budget · model picked next",
+          sub: "cloud · API key or Claude subscription · model picked next",
           disabled: !configured.has("anthropic"),
-          disabledReason: "needs Anthropic key in Step 1 — Esc to go back",
+          disabledReason:
+            "needs an Anthropic key or Claude sign-in in Step 1 — Esc to go back",
         },
         {
           value: "openai",
           label: "OpenAI",
-          sub: "cloud · ~$1/mo at default budget · model picked next",
+          sub: "cloud · API key or ChatGPT (Codex) subscription · model picked next",
           disabled: !configured.has("openai"),
-          disabledReason: "needs OpenAI key in Step 1 — Esc to go back",
+          disabledReason:
+            "needs an OpenAI key or ChatGPT sign-in in Step 1 — Esc to go back",
         },
         {
           value: "gemini",
@@ -4661,6 +4669,38 @@ export function configuredProviderIds(
       return false;
     })
     .map((p) => p.id);
+}
+
+/**
+ * #575 — Provider ids usable as **Foreman's brain**, counting BOTH API keys
+ * and OAuth subscriptions.
+ *
+ * A user with a ChatGPT or Claude subscription can run Foreman's brain with
+ * no API key at all: `openai` + `auth_mode: oauth` routes to the Codex client
+ * (chatgpt.com/backend-api), `anthropic` + `auth_mode: oauth` to the Claude
+ * subscription client — see `src/core/llm/factory.ts`. The brain picker used
+ * to gate on API-key secret slots only (`configuredProviderIds`), so a
+ * subscription-only user saw OpenAI/Anthropic greyed out even though those
+ * are exactly the paths they can use.
+ *
+ * A provider counts as configured when ANY of these hold:
+ *   - an API key (or required endpoint) is stored → `configuredProviderIds`
+ *   - the user chose "sign in with subscription" earlier this wizard run
+ *     (`signedInThisSession`, before the queued `foreman llm login` runs)
+ *   - OAuth tokens are already on disk from a previous `foreman llm login`
+ *     (`llm-oauth-<provider>` secret slot)
+ */
+export function configuredBrainProviderIds(
+  providers: ProviderEntry[],
+  storedNames: Set<string>,
+  signedInThisSession: readonly ("anthropic" | "openai")[] = [],
+): Set<string> {
+  const ids = new Set(configuredProviderIds(providers, storedNames));
+  for (const pid of signedInThisSession) ids.add(pid);
+  for (const pid of OAUTH_CAPABLE_WIZARD_PROVIDERS) {
+    if (storedNames.has(oauthSecretName(pid))) ids.add(pid);
+  }
+  return ids;
 }
 
 export function configuredServiceIds(
