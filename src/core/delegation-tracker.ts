@@ -53,6 +53,17 @@ export const DEFAULT_MAX_NUDGES = 3;
  *  fires faster than the initiator can react. */
 export const DEFAULT_NUDGE_COOLDOWN_MS = 30_000;
 
+/** Default runaway-loop guard window: how recent the suspicious
+ *  delegations have to be to count. 10 minutes captures the kind
+ *  of LLM-driven retry storm we want to catch without flagging
+ *  legitimate sequential work over a longer day. */
+export const DEFAULT_RUNAWAY_WINDOW_MS = 10 * 60_000;
+
+/** Default runaway-loop trigger: more than this many active (not
+ *  successfully closed) delegations from one initiator to one
+ *  target inside the runaway window → hard stop + escalation. */
+export const DEFAULT_RUNAWAY_MAX_ACTIVE = 5;
+
 /** How long the prompt summary can be before truncation. Keep short
  *  so the nudge text isn't an essay. */
 const PROMPT_SUMMARY_MAX = 200;
@@ -96,7 +107,20 @@ export interface DelegationTrackerOptions {
   /** Minimum gap (ms) between two nudges on the same delegation.
    *  Default 30000. */
   nudgeCooldownMs?: number;
+  /** Runaway-loop guard window (ms). Default 600000 (10 minutes). */
+  runawayWindowMs?: number;
+  /** Max number of active (not successfully closed) delegations
+   *  from one initiator to one target inside the runaway window
+   *  before the guard fires. Default 5. */
+  runawayMaxActive?: number;
 }
+
+/** Result of a runaway-loop check. `ok` means the new delegation is
+ *  safe to record; `blocked` means the writeHandler should reject the
+ *  directive with the supplied reason. */
+export type RunawayCheckResult =
+  | { ok: true }
+  | { ok: false; reason: string; activeCount: number };
 
 // =============================================================================
 // Service
@@ -108,6 +132,8 @@ export class DelegationTracker {
   readonly nudgeThresholdMs: number;
   readonly maxNudges: number;
   readonly nudgeCooldownMs: number;
+  readonly runawayWindowMs: number;
+  readonly runawayMaxActive: number;
 
   constructor(opts: DelegationTrackerOptions) {
     this.db = opts.db;
@@ -116,6 +142,60 @@ export class DelegationTracker {
       opts.nudgeThresholdMs ?? DEFAULT_NUDGE_THRESHOLD_MS;
     this.maxNudges = opts.maxNudges ?? DEFAULT_MAX_NUDGES;
     this.nudgeCooldownMs = opts.nudgeCooldownMs ?? DEFAULT_NUDGE_COOLDOWN_MS;
+    this.runawayWindowMs =
+      opts.runawayWindowMs ?? DEFAULT_RUNAWAY_WINDOW_MS;
+    this.runawayMaxActive =
+      opts.runawayMaxActive ?? DEFAULT_RUNAWAY_MAX_ACTIVE;
+  }
+
+  /**
+   * Runaway-loop guard. Counts the active (not successfully closed)
+   * delegations from `initiator` to `target` started inside the
+   * runaway window. If the count is at or above the trigger, return
+   * a blocked result with an explanatory reason for the writeHandler
+   * to surface. Calling this BEFORE recordDelegation so the bad
+   * directive never makes it into the queue.
+   *
+   * "Active" = status NOT in ('closed', 'abandoned'). 'escalated'
+   * counts as active because nothing has resolved — the escalated
+   * row is precisely the kind of unresolved chain we're trying to
+   * prevent from snowballing.
+   */
+  checkRunawayLoop(
+    initiator: string,
+    target: string,
+  ): RunawayCheckResult {
+    const now = this.nowMs();
+    const cutoff = now - this.runawayWindowMs;
+    const rows = this.db
+      .select()
+      .from(delegations)
+      .where(
+        and(
+          eq(delegations.initiatorAgent, initiator.toLowerCase()),
+          eq(delegations.targetAgent, target.toLowerCase()),
+        ),
+      )
+      .all();
+    const active = rows.filter(
+      (r) =>
+        r.startedAt >= cutoff &&
+        r.status !== "closed" &&
+        r.status !== "abandoned",
+    );
+    if (active.length >= this.runawayMaxActive) {
+      const minutes = Math.round(this.runawayWindowMs / 60_000);
+      return {
+        ok: false,
+        activeCount: active.length,
+        reason:
+          `Runaway-loop guard blocked: ${initiator} has ${active.length} ` +
+          `unresolved delegations to ${target} in the last ${minutes} ` +
+          `minutes (max ${this.runawayMaxActive}). The chain looks stuck — ` +
+          `pause and ask the user before re-delegating to the same target.`,
+      };
+    }
+    return { ok: true };
   }
 
   /**
@@ -320,6 +400,43 @@ export class DelegationTracker {
     }
     merged.sort((a, b) => b.startedAt - a.startedAt);
     return merged.slice(0, limit);
+  }
+
+  /**
+   * Return active delegations across all agents — TUI Active
+   * Delegations panel + `foreman delegations list` CLI both read
+   * from here. "Active" = status NOT in ('closed', 'abandoned').
+   * Ordered most-recent-first so live rows show at the top.
+   */
+  activeAcrossAgents(limit = 50): Delegation[] {
+    // Drizzle's `inArray` would make this cleaner, but the simple
+    // filter on the in-memory result is plenty for a watchdog-scale
+    // table (rows are never huge in practice — closed delegations
+    // age out of the active window quickly).
+    const rows = this.db
+      .select()
+      .from(delegations)
+      .orderBy(asc(delegations.startedAt))
+      .all();
+    const active = rows.filter(
+      (r) => r.status !== "closed" && r.status !== "abandoned",
+    );
+    active.sort((a, b) => b.startedAt - a.startedAt);
+    return active.slice(0, limit);
+  }
+
+  /**
+   * Return the N most recent delegations regardless of status —
+   * useful for `foreman delegations list --recent` and audit
+   * lookups.
+   */
+  recent(limit = 50): Delegation[] {
+    return this.db
+      .select()
+      .from(delegations)
+      .all()
+      .sort((a, b) => b.startedAt - a.startedAt)
+      .slice(0, limit);
   }
 }
 

@@ -40,6 +40,7 @@ import {
 import { AgentsPage } from "./pages/agents-page.js";
 import { ProvidersPage } from "./pages/providers-page.js";
 import { ServicesPage } from "./pages/services-page.js";
+import { DelegationsPage } from "./pages/delegations-page.js";
 import { SessionsPage } from "./pages/sessions-page.js";
 import { buildSettingsItems, SettingsPage } from "./pages/settings-page.js";
 import { launchEditor } from "./launch-editor.js";
@@ -51,6 +52,7 @@ export type Page =
   | "logs"
   | "policy"
   | "sessions"
+  | "delegations"
   | "agents"
   | "providers"
   | "services"
@@ -185,6 +187,14 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const [sessionSelectedIdx, setSessionSelectedIdx] = useState(0);
   const [sessionExpanded, setSessionExpanded] = useState(false);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
+  // Delegations page state — mirrors the sessions page shape so the
+  // selected-row / expanded / notice patterns stay uniform across
+  // pages.
+  const [delegationsSelectedIdx, setDelegationsSelectedIdx] = useState(0);
+  const [delegationsExpanded, setDelegationsExpanded] = useState(false);
+  const [delegationsNotice, setDelegationsNotice] = useState<string | null>(
+    null,
+  );
 
   const [chatAgentIdx, setChatAgentIdx] = useState(0);
   const [chatInputMode, setChatInputMode] = useState(false);
@@ -811,6 +821,11 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           sessionExpanded={sessionExpanded}
           setSessionExpanded={setSessionExpanded}
           onSessionHalt={onSessionHalt}
+          delegationsSelectedIdx={delegationsSelectedIdx}
+          setDelegationsSelectedIdx={setDelegationsSelectedIdx}
+          delegationsExpanded={delegationsExpanded}
+          setDelegationsExpanded={setDelegationsExpanded}
+          setDelegationsNotice={setDelegationsNotice}
           chatAgentIdx={chatAgentIdx}
           setChatAgentIdx={setChatAgentIdx}
           chatInputMode={chatInputMode}
@@ -923,6 +938,12 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           expanded={sessionExpanded}
           notice={sessionNotice}
         />
+      ) : page === "delegations" ? (
+        <DelegationsPage
+          selectedIdx={delegationsSelectedIdx}
+          expanded={delegationsExpanded}
+          notice={delegationsNotice}
+        />
       ) : page === "chat" ? (
         <ChatPage
           selectedAgentIdx={chatAgentIdx}
@@ -1013,6 +1034,11 @@ interface KeyboardHandlerProps {
   sessionExpanded: boolean;
   setSessionExpanded: (v: boolean) => void;
   onSessionHalt: () => void;
+  delegationsSelectedIdx: number;
+  setDelegationsSelectedIdx: (next: number) => void;
+  delegationsExpanded: boolean;
+  setDelegationsExpanded: (v: boolean) => void;
+  setDelegationsNotice: (v: string | null) => void;
   chatAgentIdx: number;
   setChatAgentIdx: (next: number | ((prev: number) => number)) => void;
   chatInputMode: boolean;
@@ -1098,6 +1124,11 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     sessionExpanded,
     setSessionExpanded,
     onSessionHalt,
+    delegationsSelectedIdx,
+    setDelegationsSelectedIdx,
+    delegationsExpanded,
+    setDelegationsExpanded,
+    setDelegationsNotice,
     chatAgentIdx,
     setChatAgentIdx,
     chatInputMode,
@@ -1264,6 +1295,26 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "q") exit();
       return;
     }
+    if (page === "delegations") {
+      if (key.escape) {
+        setPage("dashboard");
+        setDelegationsExpanded(false);
+        setDelegationsNotice(null);
+        return;
+      }
+      if (key.upArrow) {
+        setDelegationsSelectedIdx(Math.max(0, delegationsSelectedIdx - 1));
+        setDelegationsExpanded(false);
+      } else if (key.downArrow) {
+        setDelegationsSelectedIdx(delegationsSelectedIdx + 1);
+        setDelegationsExpanded(false);
+      } else if (key.return) {
+        setDelegationsExpanded(!delegationsExpanded);
+      } else if (input === "q") {
+        exit();
+      }
+      return;
+    }
     if (page === "chat") {
       if (chatInputMode) {
         if (key.escape) setChatInputMode(false);
@@ -1407,6 +1458,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     else if (input === "l") setPage("logs");
     else if (input === "p") setPage("policy");
     else if (input === "s") setPage("sessions");
+    else if (input === "d") setPage("delegations");
   });
   return null;
 }
