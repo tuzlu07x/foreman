@@ -123,7 +123,7 @@ These are not v0.1.0 blockers; they're release-day prep that's outside the QA-pa
 1. **npm publish** of `foreman-agent` so `install.sh`'s `npm install -g foreman-agent` path resolves. Pre-publish, the documented `curl … | bash` path 404s because the repo is private.
 2. **Make the repo public** before any external user runs `curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash`.
 3. **GitHub Release v0.1.0** with the standalone binaries attached, so `FOREMAN_USE_BINARY=1 install.sh` works.
-4. **Homebrew tap** `tuzlu07x/foreman` published with `homebrew/foreman.rb`.
+4. **Homebrew tap** `tuzlu07x/foreman` published with `homebrew/foreman-agent.rb`.
 5. **Phase D verification** after items 1–4 land — re-run A1.5, A1.6, D1, D2 from the catalog.
 6. **Interactive TUI re-verify** of A9.13–A9.18 (approval modal hotkeys, timer color shifts, inspect view) — these need a real TTY-driving owner. The cross-process plumbing is proven; the visual layer is owner-eyeball.
 7. **Telegram hero shot** on the Linux server — Hermes is wired through Foreman; a rotated bot token and a 30-second video would close the marketing loop. *Partially attempted during this QA pass — see "Known limitations" below.*
