@@ -62,7 +62,7 @@ Fish reloads completions automatically on next launch — no `source` required.
 
 ## Homebrew
 
-`brew install tuzlu07x/foreman/foreman` drops the bash + zsh + fish completion scripts into Homebrew's standard completion directories. No extra steps; reload your shell after install.
+`brew install tuzlu07x/foreman/foreman-agent` drops the bash + zsh + fish completion scripts into Homebrew's standard completion directories. No extra steps; reload your shell after install.
 
 ## Troubleshooting
 

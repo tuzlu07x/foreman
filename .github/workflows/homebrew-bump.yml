@@ -65,9 +65,9 @@ jobs:
           sed \
             -e "s|https://registry.npmjs.org/foreman-agent/-/foreman-agent-[0-9.]*\\.tgz|${{ steps.sha.outputs.url }}|" \
             -e "s|^  sha256 \"[0-9a-f]\\{64\\}\"|  sha256 \"${{ steps.sha.outputs.value }}\"|" \
-            homebrew/foreman.rb > _render/Formula/foreman.rb
+            homebrew/foreman-agent.rb > _render/Formula/foreman-agent.rb
           echo "--- rendered formula ---"
-          cat _render/Formula/foreman.rb
+          cat _render/Formula/foreman-agent.rb
 
       - name: Checkout tap repository
         if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
@@ -90,19 +90,19 @@ jobs:
           git config user.name "foreman-release-bot"
           git config user.email "foreman-release-bot@users.noreply.github.com"
           mkdir -p Formula
-          cp ../_render/Formula/foreman.rb Formula/foreman.rb
-          branch="bump/foreman-${v}"
+          cp ../_render/Formula/foreman-agent.rb Formula/foreman-agent.rb
+          branch="bump/foreman-agent-${v}"
           git checkout -B "${branch}"
-          git add Formula/foreman.rb
+          git add Formula/foreman-agent.rb
           if git diff --cached --quiet; then
             echo "formula already up to date for ${v}"
             exit 0
           fi
-          git commit -m "foreman ${v}"
+          git commit -m "foreman-agent ${v}"
           git push --force-with-lease origin "${branch}"
           gh pr create \
             --repo tuzlu07x/homebrew-foreman \
-            --title "foreman ${v}" \
+            --title "foreman-agent ${v}" \
             --body "Auto-bump from release of foreman-agent ${v} (sha256 \`${{ steps.sha.outputs.value }}\`)." \
             --head "${branch}" \
             --base main || true
@@ -118,4 +118,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: foreman-formula
-          path: _render/Formula/foreman.rb
+          path: _render/Formula/foreman-agent.rb

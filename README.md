@@ -63,7 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | 
 
 ```bash
 brew tap tuzlu07x/foreman
-brew install foreman
+brew install foreman-agent
 ```
 
 **npm** (if you already manage Node yourself, `>= 20` required):

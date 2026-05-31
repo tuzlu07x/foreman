@@ -1,6 +1,6 @@
 require "language/node"
 
-class Foreman < Formula
+class ForemanAgent < Formula
   desc "Local AI agent gateway — mediates, scores, asks, and audits"
   homepage "https://github.com/tuzlu07x/foreman"
   url "https://registry.npmjs.org/foreman-agent/-/foreman-agent-0.1.0.tgz"
