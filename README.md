@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/tuzlu07x/foreman/main/assets/mascot/foreman-beaver-256.png" alt="Foreman the Beaver" width="180" />
+<img src="https://raw.githubusercontent.com/tuzlu07x/foreman/main/assets/mascot/foreman-beaver-256.png" alt="Foreman the Beaver" width="160" />
 
-# Foreman
+<img src="https://raw.githubusercontent.com/tuzlu07x/foreman/main/assets/foreman-banner.svg" alt="FOREMAN" width="520" />
 
 ### Your local AI agents talk to each other. You should know what they're saying.
 
