@@ -502,7 +502,8 @@ const QUICK_MODELS: Record<string, Array<{ id: string; hint: string }>> = {
   anthropic: [
     { id: "claude-haiku-4-5", hint: "cheapest" },
     { id: "claude-sonnet-4-6", hint: "balanced" },
-    { id: "claude-opus-4-7", hint: "top tier" },
+    { id: "claude-opus-4-8", hint: "top tier" },
+    { id: "claude-opus-4-7", hint: "previous top tier" },
   ],
 };
 

@@ -62,6 +62,7 @@ interface AnthropicMessageResponse {
 
 const PRICING_USD_PER_MTOK: Record<string, { input: number; output: number }> =
   {
+    "claude-opus-4-8": { input: 15, output: 75 },
     "claude-opus-4-7": { input: 15, output: 75 },
     "claude-sonnet-4-6": { input: 3, output: 15 },
     "claude-haiku-4-5": { input: 1, output: 5 },
