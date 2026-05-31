@@ -61,6 +61,7 @@ const PAGE_LABELS: Record<Page, string> = {
   logs: "Logs",
   policy: "Policy",
   sessions: "Sessions",
+  delegations: "Delegations",
   agents: "Agents",
   providers: "Providers",
   services: "Services",

@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import type { ForemanDb } from "../db/client.js";
+import { DelegationTracker } from "./delegation-tracker.js";
 import {
   ControlChannel,
   isOwner,
@@ -112,7 +113,15 @@ export interface ForemanCommandResult {
    *  fit ~4000 chars on Telegram, less on Discord. Keep replies tight. */
   text: string;
   /** Stable code for failures so callers can branch on category. */
-  errorCode?: "UNKNOWN_COMMAND" | "UNKNOWN_SUBCOMMAND" | "NOT_AUTHORIZED" | "NOT_AVAILABLE";
+  errorCode?:
+    | "UNKNOWN_COMMAND"
+    | "UNKNOWN_SUBCOMMAND"
+    | "NOT_AUTHORIZED"
+    | "NOT_AVAILABLE"
+    // Runaway-loop guard fires: this agent has too many unresolved
+    // delegations to the same target inside the runaway window.
+    // Caller surfaces this as a hard stop, not a retry signal.
+    | "RUNAWAY_LOOP";
 }
 
 export type ForemanCommandHandler = (
@@ -803,6 +812,39 @@ function writeHandler(
       errorCode: "UNKNOWN_SUBCOMMAND",
     };
   }
+  // Runaway-loop guard. When an LLM-driven agent (or even the user
+  // via CLI) keeps firing delegations to the same target without
+  // closing earlier ones, the chain is likely stuck. Block the new
+  // directive so the operator gets a clear "stop and think" signal
+  // instead of a runaway token bill.
+  //
+  // Skip for sourceAgent='cli' (terminal user issuing back-to-back
+  // commands by hand is fine — they see each result) and for
+  // initiators that don't have a sourceAgent (rare path, but it
+  // means there's no chain context to evaluate).
+  if (ctx.sourceAgent && ctx.sourceAgent.toLowerCase() !== "cli") {
+    try {
+      const tracker = new DelegationTracker({ db: ctx.db });
+      const check = tracker.checkRunawayLoop(ctx.sourceAgent, targetAgent);
+      if (!check.ok) {
+        return {
+          ok: false,
+          text: check.reason,
+          errorCode: "RUNAWAY_LOOP",
+        };
+      }
+    } catch (err) {
+      // Tracker failures must not break legitimate writes. Log to
+      // stderr + let the directive through; PR A's watchdog catches
+      // the eventual stall anyway.
+      process.stderr.write(
+        `foreman: runaway check failed (continuing): ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
+    }
+  }
+
   // PR D — when the target agent declares task_command_template,
   // the drain handler will spawn it and post the output back to chat.
   // Tailor the success text so users know to wait for the follow-up
