@@ -15,6 +15,7 @@
   ],
   "scripts": {
     "build": "tsup",
+    "prepublishOnly": "npm run build && npm test",
     "build:binaries": "node scripts/build-binaries.mjs",
     "dev": "tsup --watch --onSuccess \"node dist/cli/index.js\"",
     "test": "vitest run",
