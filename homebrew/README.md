@@ -9,7 +9,7 @@ This directory hosts the canonical Foreman formula. The actual tap users `brew t
    ```
    homebrew-foreman/
      Formula/
-       foreman.rb       # copy of this directory's foreman.rb, version-bumped
+       foreman-agent.rb # copy of this directory's foreman-agent.rb, version-bumped
      README.md          # short note pointing at github.com/tuzlu07x/foreman
    ```
 3. Mint a fine-grained personal access token with `contents: write` + `pull-requests: write` on the tap repo, save it as the `HOMEBREW_TAP_TOKEN` secret on the _foreman_ repo.
@@ -21,8 +21,8 @@ After that the release workflow handles everything.
 On every published GitHub release:
 
 1. The workflow downloads the npm tarball for that version from `registry.npmjs.org` and computes its sha256.
-2. Re-renders `Formula/foreman.rb` with the new `url`, `sha256`, and version.
-3. Pushes a branch + opens a PR against the tap repo. Auto-merge is enabled if the tap's own CI (`brew test foreman`) passes.
+2. Re-renders `Formula/foreman-agent.rb` with the new `url`, `sha256`, and version.
+3. Pushes a branch + opens a PR against the tap repo. Auto-merge is enabled if the tap's own CI (`brew test foreman-agent`) passes.
 
 If the tap CI fails the PR stays open for manual review.
 
@@ -34,9 +34,9 @@ If the workflow is broken or you want to push a hotfix manually:
 # 1. compute sha256 of the published tarball
 curl -fsSL "https://registry.npmjs.org/foreman-agent/-/foreman-agent-${VERSION}.tgz" \
   | shasum -a 256 | cut -d' ' -f1
-# 2. edit Formula/foreman.rb in the tap repo, update url + sha256 + version
-# 3. brew audit --strict --new-formula --online tuzlu07x/foreman/foreman
-# 4. brew test tuzlu07x/foreman/foreman
+# 2. edit Formula/foreman-agent.rb in the tap repo, update url + sha256 + version
+# 3. brew audit --strict --new-formula --online tuzlu07x/foreman/foreman-agent
+# 4. brew test tuzlu07x/foreman/foreman-agent
 # 5. commit + push to main
 ```
 

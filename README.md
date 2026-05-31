@@ -55,7 +55,7 @@ curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | 
 ```
 
 <details>
-<summary><b>Other ways to install</b> — Homebrew · standalone binary · npm</summary>
+<summary><b>Other ways to install</b> — Homebrew · npm</summary>
 
 <br/>
 
@@ -63,16 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | 
 
 ```bash
 brew tap tuzlu07x/foreman
-brew install foreman
-```
-
-**Standalone binary** (no Node required — single ~75 MB file). Covers `darwin-arm64`,
-`darwin-x64`, `linux-x64`, and `linux-arm64`:
-
-```bash
-FOREMAN_USE_BINARY=1 \
-  curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash
-# or grab it directly from https://github.com/tuzlu07x/foreman/releases/latest
+brew install foreman-agent
 ```
 
 **npm** (if you already manage Node yourself, `>= 20` required):
