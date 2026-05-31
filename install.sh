@@ -6,7 +6,6 @@ REPO="tuzlu07x/foreman"
 PACKAGE="foreman-agent"
 MIN_NODE_MAJOR=20
 NVM_VERSION="${FOREMAN_NVM_VERSION:-v0.40.1}"
-BINARY_FALLBACK_DIR="${FOREMAN_BINARY_DIR:-/usr/local/bin}"
 
 # Colours (TTY only).
 if [ -t 2 ]; then
@@ -42,9 +41,6 @@ ${c_bold}ENVIRONMENT${c_reset}
   FOREMAN_INSTALL_PREFIX    npm prefix override
   FOREMAN_VERSION           specific version (default: latest published)
   FOREMAN_SKIP_NVM          set to 1 to refuse the nvm bootstrap path
-  FOREMAN_USE_BINARY        set to 1 to download the standalone binary instead
-                            of bootstrapping Node + npm (no Node required)
-  FOREMAN_BINARY_DIR        target directory for the binary (default: /usr/local/bin)
 EOF
 }
 
@@ -161,58 +157,6 @@ uninstall_foreman() {
   printf "Run %sforeman doctor%s before uninstalling to see its location, then remove it manually for a clean slate.\n" "${c_bold}" "${c_reset}"
 }
 
-detect_target() {
-  local os arch
-  os=$(uname -s | tr '[:upper:]' '[:lower:]')
-  arch=$(uname -m)
-  case "${arch}" in
-    arm64|aarch64) arch="arm64";;
-    x86_64|amd64)  arch="x64";;
-    *) err "unsupported architecture: ${arch}"; return 1;;
-  esac
-  case "${os}" in
-    darwin) echo "darwin-${arch}";;
-    linux)  echo "linux-${arch}";;
-    *) err "unsupported os: ${os}"; return 1;;
-  esac
-}
-
-install_binary() {
-  local target version url tmp dest
-  target=$(detect_target) || exit 1
-  version="${FOREMAN_VERSION:-latest}"
-  if [ "${version}" = "latest" ]; then
-    if ! command -v curl >/dev/null 2>&1; then
-      err "curl is required to discover the latest release"
-      exit 1
-    fi
-    version=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-      | grep -E '"tag_name":' | head -1 | sed -E 's/.*"v?([^"]+)".*/\1/') \
-      || { err "failed to discover latest version"; exit 1; }
-  fi
-  url="https://github.com/${REPO}/releases/download/v${version}/foreman-${target}"
-  step "Downloading foreman ${version} for ${target}"
-  tmp=$(mktemp -t foreman-XXXXXX)
-  if ! curl -fsSL "${url}" -o "${tmp}"; then
-    err "download failed: ${url}"
-    err "Try a different FOREMAN_VERSION or fall back to: curl ... | bash  (without FOREMAN_USE_BINARY)"
-    rm -f "${tmp}"
-    exit 1
-  fi
-  chmod +x "${tmp}"
-  mkdir -p "${BINARY_FALLBACK_DIR}"
-  dest="${BINARY_FALLBACK_DIR}/foreman"
-  if mv "${tmp}" "${dest}" 2>/dev/null; then
-    ok "installed to ${dest}"
-  elif sudo mv "${tmp}" "${dest}" 2>/dev/null; then
-    ok "installed to ${dest} (with sudo)"
-  else
-    err "failed to move binary to ${dest} — set FOREMAN_BINARY_DIR to a writable dir"
-    rm -f "${tmp}"
-    exit 1
-  fi
-}
-
 main() {
   case "${1:-}" in
     --uninstall)  uninstall_foreman; exit 0;;
@@ -222,13 +166,6 @@ main() {
   esac
 
   printf "%sForeman installer%s\n" "${c_orange}${c_bold}" "${c_reset}"
-
-  if [ "${FOREMAN_USE_BINARY:-0}" = "1" ]; then
-    install_binary
-    verify_install
-    next_steps
-    return
-  fi
 
   step "Checking Node"
   ensure_node
