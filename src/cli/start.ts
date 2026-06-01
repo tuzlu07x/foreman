@@ -57,6 +57,7 @@ import {
 } from "../tui/setup-state.js";
 import { SetupWizard, type WizardOauthRunStep } from "../tui/setup-wizard.js";
 import { runOauthFlows } from "./run-oauth-flow.js";
+import { runLoginWithSuspendedTui } from "../tui/run-login-in-tui.js";
 import { SecretStore, SecretNotFoundError } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import {
@@ -156,10 +157,6 @@ export function startForeman(
     : new ReadlineApprovalService({ bus });
   const policy = new PolicyEngine(db, bus);
   if (existsSync(paths.policyPath)) policy.loadFromYaml(paths.policyPath);
-  // #349 — auto-launch every registered agent that declares a `daemon` block
-  // in registry/agents.json (Hermes gateway, OpenClaw daemon, etc). Interactive
-  // agents (Codex, Claude Code) have `daemon: null` and are skipped silently;
-  // the TUI surfaces them as "interactive — launch manually".
   const daemonManager = new AgentDaemonManager({
     paths,
     registry,
@@ -391,6 +388,14 @@ export function startForeman(
   })();
 
   if (withTui) {
+    // #tui-login — Suspend the live Ink frame while an interactive auth CLI
+    // takes over the terminal, then restore. The closure reads `instance`
+    // lazily (it's assigned on the next line) so the runner always sees the
+    // mounted render handle.
+    const runInteractiveLogin = (
+      steps: WizardOauthRunStep[],
+    ): ReturnType<typeof runOauthFlows> =>
+      runLoginWithSuspendedTui(steps, instance);
     instance = render(
       React.createElement(App, {
         bootInfo,
@@ -405,6 +410,7 @@ export function startForeman(
           soulPath: paths.soulPath,
           sessionManager,
           secretStore,
+          runInteractiveLogin,
         },
       }),
       { exitOnCtrlC: false },

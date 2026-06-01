@@ -10,6 +10,7 @@ import {
   loadActiveProviders,
   type ProviderEntry,
 } from "../../core/registry-catalog.js";
+import { isOAuthProviderId } from "../../core/llm/oauth/oauth-providers.js";
 import type { SecretStore } from "../../core/secret-store.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { singleBorder, theme } from "../theme.js";
@@ -22,12 +23,14 @@ interface Row {
   configured: boolean;
 }
 
-// Page-local operation state. Kept in the component (not threaded through
-// app.tsx like Secrets does) so the page is self-contained — each new TUI
-// page doesn't keep ballooning the App keyboard handler.
 type Op =
   | { kind: "list" }
-  | { kind: "adding"; prompts: ProviderPrompt[]; idx: number; warning: string | null }
+  | {
+      kind: "adding";
+      prompts: ProviderPrompt[];
+      idx: number;
+      warning: string | null;
+    }
   | { kind: "rotating"; secretName: string }
   | { kind: "removing"; provider: ProviderEntry; dependents: string[] }
   | { kind: "revealed"; secretName: string; value: string };
@@ -37,7 +40,8 @@ export interface ProvidersPageProps {
 }
 
 export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
-  const { registry, secretStore, bus } = useDashboardServices();
+  const { registry, secretStore, bus, runInteractiveLogin } =
+    useDashboardServices();
   const catalog = useMemo(() => loadActiveProviders().doc.providers, []);
   const [rows, setRows] = useState<Row[]>(() =>
     secretStore ? buildRows(catalog, secretStore) : [],
@@ -60,7 +64,6 @@ export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
     };
   }, [catalog, secretStore, bus]);
 
-  // Auto-hide revealed value after the configured TTL.
   useEffect(() => {
     if (op.kind !== "revealed") return;
     const t = setTimeout(() => {
@@ -109,8 +112,6 @@ export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
       return;
     }
     if (key.return) {
-      // Enter toggles expansion of the selected row — matches every other
-      // list page (#280) so the muscle memory is consistent.
       setExpanded((prev) => !prev);
       return;
     }
@@ -150,10 +151,32 @@ export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
         const value = secretStore.get(secretName);
         setOp({ kind: "revealed", secretName, value });
       } catch (err) {
-        setNotice(
-          `error: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        setNotice(`error: ${err instanceof Error ? err.message : String(err)}`);
       }
+      return;
+    }
+    if (input === "o" && isOAuthProviderId(selectedRow.provider.id)) {
+      if (!runInteractiveLogin) {
+        setNotice("interactive login is only available inside the TUI");
+        return;
+      }
+      const providerId = selectedRow.provider.id;
+      const results = runInteractiveLogin([
+        {
+          agentId: "foreman-llm",
+          command: `foreman llm login ${providerId}`,
+          verify: null,
+          mandatory: false,
+          reason: `Sign in to ${selectedRow.provider.name} so Foreman uses your subscription`,
+        },
+      ]);
+      const ok = results.every((r) => r.succeeded);
+      setRows(buildRows(catalog, secretStore));
+      setNotice(
+        ok
+          ? `✓ signed in to ${selectedRow.provider.name} (auth_mode → oauth)`
+          : `login did not complete — run 'foreman doctor' or retry [o]`,
+      );
       return;
     }
   });
@@ -167,9 +190,7 @@ export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
         paddingX={1}
         flexGrow={1}
       >
-        <Text color={theme.accent.danger}>
-          SecretStore not wired into App
-        </Text>
+        <Text color={theme.accent.danger}>SecretStore not wired into App</Text>
       </Box>
     );
   }
@@ -208,7 +229,15 @@ export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
         )}
       </Box>
 
-      {op.kind === "adding" && <AddingOverlay op={op} catalog={catalog} setOp={setOp} setNotice={setNotice} secretStore={secretStore} />}
+      {op.kind === "adding" && (
+        <AddingOverlay
+          op={op}
+          catalog={catalog}
+          setOp={setOp}
+          setNotice={setNotice}
+          secretStore={secretStore}
+        />
+      )}
       {op.kind === "rotating" && (
         <RotatingOverlay
           secretName={op.secretName}
@@ -256,17 +285,14 @@ export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
         <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>
       </Box>
       <Text color={theme.fg.muted}>
-        [↑↓] move · [n] new (on available) · [r] rotate · [d] remove · [s]
-        show 10s · [Esc] back
+        [↑↓] move · [n] new (on available) · [o] OAuth login (Claude/Codex) ·
+        [r] rotate · [d] remove · [s] show 10s · [Esc] back
       </Text>
     </Box>
   );
 }
 
-function buildRows(
-  catalog: ProviderEntry[],
-  secretStore: SecretStore,
-): Row[] {
+function buildRows(catalog: ProviderEntry[], secretStore: SecretStore): Row[] {
   return catalog.map((p) => {
     const configured = p.secret_name
       ? secretStore.exists(p.secret_name)
@@ -288,9 +314,7 @@ function ProviderRow({
 }): JSX.Element {
   const cursor = selected ? "▸ " : "  ";
   const dot = row.configured ? theme.symbols.activeDot : theme.symbols.idleDot;
-  const dotColor = row.configured
-    ? theme.accent.success
-    : theme.fg.muted;
+  const dotColor = row.configured ? theme.accent.success : theme.fg.muted;
   const consumers = row.configured
     ? registry
         .list()
@@ -312,30 +336,46 @@ function ProviderRow({
         </Text>
       </Text>
       {expanded ? (
-        <Box flexDirection="column" marginLeft={4} marginTop={1} marginBottom={1}>
+        <Box
+          flexDirection="column"
+          marginLeft={4}
+          marginTop={1}
+          marginBottom={1}
+        >
           <Text color={theme.fg.muted}>
-            id:           <Text color={theme.fg.default}>{row.provider.id}</Text>
+            id: <Text color={theme.fg.default}>{row.provider.id}</Text>
           </Text>
           <Text color={theme.fg.muted}>
-            secret_name:  <Text color={theme.fg.default}>{row.provider.secret_name ?? "—"}</Text>
+            secret_name:{" "}
+            <Text color={theme.fg.default}>
+              {row.provider.secret_name ?? "—"}
+            </Text>
           </Text>
           {row.provider.endpoint_required ? (
             <Text color={theme.fg.muted}>
-              endpoint:     <Text color={theme.fg.default}>required</Text>
+              endpoint: <Text color={theme.fg.default}>required</Text>
             </Text>
           ) : null}
           <Text color={theme.fg.muted}>
-            homepage:     <Text color={theme.accent.primary}>{row.provider.where_to_get}</Text>
+            homepage:{" "}
+            <Text color={theme.accent.primary}>
+              {row.provider.where_to_get}
+            </Text>
           </Text>
           {row.configured ? (
             <Text color={theme.fg.muted}>
-              consumers:    <Text color={theme.fg.default}>{consumers.length === 0 ? "(none)" : consumers.join(", ")}</Text>
+              consumers:{" "}
+              <Text color={theme.fg.default}>
+                {consumers.length === 0 ? "(none)" : consumers.join(", ")}
+              </Text>
             </Text>
           ) : null}
           <Text color={theme.fg.muted}>
-            actions:      {row.configured
+            actions:{" "}
+            {row.configured
               ? "[s] show · [r] rotate · [d] remove"
               : "[n] configure"}
+            {isOAuthProviderId(row.provider.id) ? " · [o] OAuth login" : ""}
           </Text>
         </Box>
       ) : null}
@@ -402,7 +442,12 @@ function AddingOverlay({
       setOp({ kind: "list" });
       setNotice(`✓ ${provider.name} configured`);
     } else {
-      setOp({ kind: "adding", prompts: op.prompts, idx: nextIdx, warning: null });
+      setOp({
+        kind: "adding",
+        prompts: op.prompts,
+        idx: nextIdx,
+        warning: null,
+      });
     }
   };
   return (
@@ -423,7 +468,9 @@ function AddingOverlay({
         </Text>
       )}
       {provider.format_hint && (
-        <Text color={theme.fg.muted}>Expected format: {provider.format_hint}</Text>
+        <Text color={theme.fg.muted}>
+          Expected format: {provider.format_hint}
+        </Text>
       )}
       {op.warning && <Text color={theme.accent.danger}>⚠ {op.warning}</Text>}
       {isEndpoint ? (
@@ -501,9 +548,7 @@ function RemovingOverlay({
       borderStyle={singleBorder()}
       borderColor={theme.accent.danger}
     >
-      <Text color={theme.accent.danger}>
-        Remove {provider.name}?
-      </Text>
+      <Text color={theme.accent.danger}>Remove {provider.name}?</Text>
       <Text color={theme.fg.muted}>
         This will delete {secretName} from the secret store.
       </Text>

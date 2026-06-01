@@ -133,16 +133,17 @@ export function isHeadlessEnvironment(
   return false;
 }
 
-// Commands whose default flow opens a local browser, paired with a rewrite
-// to their device-code equivalent (prints a URL + code you open on ANY
-// device). Only applied when `isHeadlessEnvironment()` is true.
 const HEADLESS_COMMAND_REWRITES: Array<(command: string) => string | null> = [
-  // codex's `login` defaults to a localhost browser-callback flow; codex
-  // itself tells headless users to pass `--device-auth`.
   (command) => {
     if (!/(^|\s)codex\s+login(\s|$)/.test(command)) return null;
-    if (/--device-auth/.test(command) || /\bstatus\b/.test(command)) return null;
+    if (/--device-auth/.test(command) || /\bstatus\b/.test(command))
+      return null;
     return `${command.trimEnd()} --device-auth`;
+  },
+  (command) => {
+    if (!/(^|\s)foreman\s+llm\s+login\s/.test(command)) return null;
+    if (/--headless/.test(command)) return null;
+    return `${command.trimEnd()} --headless`;
   },
 ];
 
@@ -163,35 +164,26 @@ export function runOauthFlows(steps: WizardOauthRunStep[]): OauthFlowResult[] {
   const results: OauthFlowResult[] = [];
   process.stdout.write("\n");
   process.stdout.write(
-    bold(`Running ${steps.length} OAuth setup step${steps.length === 1 ? "" : "s"}\n\n`),
+    bold(
+      `Running ${steps.length} OAuth setup step${steps.length === 1 ? "" : "s"}\n\n`,
+    ),
   );
   const headless = isHeadlessEnvironment();
   for (const step of steps) {
-    // On a headless box, swap a browser-callback command for its device-code
-    // equivalent so the flow completes without a local browser.
     const command = headless ? rewriteForHeadless(step.command) : step.command;
     const tag = step.mandatory ? orange("⚠ MUST") : dim("• optional");
-    process.stdout.write(
-      `${tag}  ${bold(step.agentId)} — ${command}\n`,
-    );
+    process.stdout.write(`${tag}  ${bold(step.agentId)} — ${command}\n`);
     if (step.reason) {
       process.stdout.write(dim(`        ${step.reason}\n`));
     }
     if (command !== step.command) {
       process.stdout.write(
-        dim(`        headless detected → using device-code flow (no local browser needed)\n`),
+        dim(
+          `        headless detected → using device-code flow (no local browser needed)\n`,
+        ),
       );
     }
     process.stdout.write(dim(`        running… (browser may open)\n`));
-    // QA round 8: setup MUST use full stdio:inherit. Earlier round 7
-    // captured stdout to scan for "command has been removed" markers,
-    // but piping stdout buffers output line-by-line — interactive prompts
-    // and browser-flow URLs that print without a trailing newline never
-    // make it to the user's terminal. Result: hermes auth add hangs at
-    // its first prompt with no visible output (`running…` then silence
-    // forever). We accept that we'll miss the "command-has-been-removed"
-    // signal at SETUP time; verify will catch the consequence (status
-    // says "logged out") and report the failure there.
     const setup = spawnSync(command, {
       shell: true,
       stdio: "inherit",
@@ -222,9 +214,6 @@ export function runOauthFlows(steps: WizardOauthRunStep[]): OauthFlowResult[] {
       continue;
     }
     process.stdout.write(dim(`        verifying: ${step.verify}\n`));
-    // Verify can safely capture — it's non-interactive (just prints
-    // status). Capture lets us classify "logged in" vs "logged out"
-    // even when exit code is 0 for both.
     const verifyCaptured = runWithCaptureAndEcho(step.verify);
     const verifyVerdict = classifyVerifyOutput(
       verifyCaptured.exitCode,
@@ -274,8 +263,6 @@ function runWithCaptureAndEcho(command: string): {
   });
   const stdout = typeof result.stdout === "string" ? result.stdout : "";
   const stderr = typeof result.stderr === "string" ? result.stderr : "";
-  // Echo back so the user sees the same content they would have under
-  // stdio:inherit (browser URL, "Successfully logged in", etc).
   if (stdout) process.stdout.write(stdout);
   if (stderr) process.stderr.write(stderr);
   return {

@@ -25,9 +25,9 @@ describe("isHeadlessEnvironment", () => {
 
   it("is not headless on Linux with a display", () => {
     expect(isHeadlessEnvironment({ DISPLAY: ":0" }, "linux")).toBe(false);
-    expect(isHeadlessEnvironment({ WAYLAND_DISPLAY: "wayland-0" }, "linux")).toBe(
-      false,
-    );
+    expect(
+      isHeadlessEnvironment({ WAYLAND_DISPLAY: "wayland-0" }, "linux"),
+    ).toBe(false);
   });
 
   it("is not headless on macOS / Windows by default", () => {
@@ -36,16 +36,22 @@ describe("isHeadlessEnvironment", () => {
   });
 
   it("treats an SSH session as headless on any platform", () => {
-    expect(isHeadlessEnvironment({ SSH_CONNECTION: "1.2.3.4 22" }, "darwin")).toBe(
+    expect(
+      isHeadlessEnvironment({ SSH_CONNECTION: "1.2.3.4 22" }, "darwin"),
+    ).toBe(true);
+    expect(isHeadlessEnvironment({ SSH_TTY: "/dev/pts/0" }, "darwin")).toBe(
       true,
     );
-    expect(isHeadlessEnvironment({ SSH_TTY: "/dev/pts/0" }, "darwin")).toBe(true);
   });
 
   it("honors the FOREMAN_HEADLESS override both ways", () => {
-    expect(isHeadlessEnvironment({ FOREMAN_HEADLESS: "1" }, "darwin")).toBe(true);
+    expect(isHeadlessEnvironment({ FOREMAN_HEADLESS: "1" }, "darwin")).toBe(
+      true,
+    );
     // explicit 0 wins even on Linux with no display
-    expect(isHeadlessEnvironment({ FOREMAN_HEADLESS: "0" }, "linux")).toBe(false);
+    expect(isHeadlessEnvironment({ FOREMAN_HEADLESS: "0" }, "linux")).toBe(
+      false,
+    );
   });
 });
 
@@ -65,9 +71,31 @@ describe("rewriteForHeadless", () => {
   });
 
   it("leaves unknown commands unchanged", () => {
-    expect(rewriteForHeadless("hermes auth add openai-codex --type oauth")).toBe(
-      "hermes auth add openai-codex --type oauth",
+    expect(
+      rewriteForHeadless("hermes auth add openai-codex --type oauth"),
+    ).toBe("hermes auth add openai-codex --type oauth");
+  });
+
+  it("adds --headless to `foreman llm login <provider>`", () => {
+    expect(rewriteForHeadless("foreman llm login anthropic")).toBe(
+      "foreman llm login anthropic --headless",
     );
+    expect(rewriteForHeadless("foreman llm login openai")).toBe(
+      "foreman llm login openai --headless",
+    );
+  });
+
+  it("is idempotent — does not double-add --headless", () => {
+    expect(rewriteForHeadless("foreman llm login openai --headless")).toBe(
+      "foreman llm login openai --headless",
+    );
+  });
+
+  it("does not touch `foreman llm logout` / `foreman llm status`", () => {
+    expect(rewriteForHeadless("foreman llm logout openai")).toBe(
+      "foreman llm logout openai",
+    );
+    expect(rewriteForHeadless("foreman llm status")).toBe("foreman llm status");
   });
 });
 
@@ -121,9 +149,7 @@ describe("runOauthFlows", () => {
   it("runs setup + verify when both succeed", () => {
     const cmd = makeScript("login.sh", "#!/bin/sh\nexit 0\n");
     const verify = makeScript("verify.sh", "#!/bin/sh\nexit 0\n");
-    const result = runOauthFlows([
-      step({ command: cmd, verify }),
-    ]);
+    const result = runOauthFlows([step({ command: cmd, verify })]);
     expect(result[0]?.setupExitCode).toBe(0);
     expect(result[0]?.verifyExitCode).toBe(0);
     expect(result[0]?.succeeded).toBe(true);
@@ -170,13 +196,9 @@ describe("runOauthFlows", () => {
         reason: "hermes routes openai through codex's OAuth",
       }),
     ]);
-    const allWrites = writeSpy.mock.calls
-      .map((c) => String(c[0]))
-      .join("");
+    const allWrites = writeSpy.mock.calls.map((c) => String(c[0])).join("");
     expect(allWrites).toContain("MUST");
-    expect(allWrites).toContain(
-      "hermes routes openai through codex's OAuth",
-    );
+    expect(allWrites).toContain("hermes routes openai through codex's OAuth");
   });
 
   it("prints a final summary line counting successes", () => {
@@ -189,10 +211,6 @@ describe("runOauthFlows", () => {
   });
 });
 
-// QA round 7: exit-code-only verification missed two failure modes both
-// caught against real Hermes binaries — status commands that exit 0 while
-// printing "logged out", and deprecated setup commands that exit 0 while
-// printing "command has been removed". Content-parsing safeguards each.
 describe("classifyVerifyOutput (#oauth-runner-smart-verify)", () => {
   it("passes when output mentions 'Logged in' even with exit 0", () => {
     const v = classifyVerifyOutput(0, "Logged in using ChatGPT\n");

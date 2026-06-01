@@ -71,6 +71,7 @@ const PAGE_SECTIONS: HelpSection[] = [
     title: "Agents page",
     rows: [
       { key: "↑ ↓ / Enter", label: "select / expand" },
+      { key: "o", label: "login (OAuth / interactive)" },
       { key: "N / L", label: "edit note / change LLM" },
       { key: "d / e", label: "disable / enable" },
       { key: "b / r", label: "block / remove" },
@@ -81,6 +82,7 @@ const PAGE_SECTIONS: HelpSection[] = [
     title: "Providers / Services",
     rows: [
       { key: "n", label: "configure selected" },
+      { key: "o", label: "OAuth login (Claude / Codex)" },
       { key: "r", label: "rotate value" },
       { key: "d", label: "remove" },
       { key: "s", label: "show value (10s)" },
@@ -142,8 +144,8 @@ export function HelpOverlay(): JSX.Element {
 
       <Box marginTop={1} justifyContent="center">
         <Text color={theme.fg.muted}>
-          docs: github.com/tuzlu07x/foreman {theme.symbols.bullet} press h / ?
-          / Esc to close
+          docs: github.com/tuzlu07x/foreman {theme.symbols.bullet} press h / ? /
+          Esc to close
         </Text>
       </Box>
     </Box>
