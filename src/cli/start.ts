@@ -67,6 +67,7 @@ import { isFeatureEnabled, loadLlmConfig } from "../core/llm/config.js";
 import {
   buildLlmClient,
   LlmCredentialMissingError,
+  LlmOAuthLoginRequiredError,
   LlmProviderUnavailableError,
 } from "../core/llm/factory.js";
 import { LlmVerifier } from "../core/llm/verifier.js";
@@ -103,7 +104,7 @@ import { getForemanPaths } from "../utils/config.js";
 import { runInit } from "./init.js";
 import { bold, dim, green, orange, red } from "./colors.js";
 
-const APP_VERSION = "0.1.2";
+const APP_VERSION = "0.1.3";
 
 export class NotInitialisedError extends Error {
   constructor(public readonly rootPath: string) {
@@ -917,8 +918,13 @@ function setupSummaryLlmClient(args: {
   } catch (err) {
     if (
       err instanceof LlmProviderUnavailableError ||
-      err instanceof LlmCredentialMissingError
+      err instanceof LlmCredentialMissingError ||
+      err instanceof LlmOAuthLoginRequiredError
     ) {
+      // OAuth configured but not logged in yet (e.g. `codex login` /
+      // `foreman llm login openai` not completed) is the same category as a
+      // missing credential: skip the optional LLM feature and keep running
+      // heuristic-only instead of crashing `foreman start`.
       return null;
     }
     throw err;
@@ -948,8 +954,13 @@ function setupLlmVerifier(args: {
   } catch (err) {
     if (
       err instanceof LlmProviderUnavailableError ||
-      err instanceof LlmCredentialMissingError
+      err instanceof LlmCredentialMissingError ||
+      err instanceof LlmOAuthLoginRequiredError
     ) {
+      // OAuth configured but not logged in yet (e.g. `codex login` /
+      // `foreman llm login openai` not completed) is the same category as a
+      // missing credential: skip the optional LLM feature and keep running
+      // heuristic-only instead of crashing `foreman start`.
       return null;
     }
     throw err;

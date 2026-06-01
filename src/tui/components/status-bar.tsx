@@ -154,7 +154,7 @@ export function buildStatusBarLayout(
 export function StatusBar({
   page = "dashboard",
   quitConfirm,
-  version = "0.1.2",
+  version = "0.1.3",
 }: StatusBarProps): JSX.Element {
   const layout = useLayout();
   if (quitConfirm) {
