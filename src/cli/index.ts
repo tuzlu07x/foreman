@@ -14,10 +14,7 @@ import { migrateCommand } from "./migrate.js";
 import { llmCommand } from "./llm-cli.js";
 import { migrateConfigCommand } from "./migrate-config.js";
 import { notifyCommand } from "./notify-cli.js";
-import {
-  claudeLoginCommand,
-  codexLoginCommand,
-} from "./oauth-wrapper.js";
+import { claudeLoginCommand, codexLoginCommand } from "./oauth-wrapper.js";
 import { policyCommand } from "./policy-cli.js";
 import { providerCommand } from "./provider-cli.js";
 import { registryCommand } from "./registry-cli.js";
@@ -35,7 +32,7 @@ program
   .description(
     "Your local AI agents talk to each other. You should know what they're saying.",
   )
-  .version("0.1.0");
+  .version("0.1.2");
 
 program.addCommand(initCommand);
 program.addCommand(setupCommand);

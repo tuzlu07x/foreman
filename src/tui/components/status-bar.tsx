@@ -154,7 +154,7 @@ export function buildStatusBarLayout(
 export function StatusBar({
   page = "dashboard",
   quitConfirm,
-  version = "0.1.0",
+  version = "0.1.2",
 }: StatusBarProps): JSX.Element {
   const layout = useLayout();
   if (quitConfirm) {
@@ -196,9 +196,7 @@ function StatusRow({
     return (
       <Box justifyContent="space-between">
         <Text color={theme.accent.primary}>{row.active}</Text>
-        {showVersion && (
-          <Text color={theme.fg.muted}>{`🦫 v${version}`}</Text>
-        )}
+        {showVersion && <Text color={theme.fg.muted}>{`🦫 v${version}`}</Text>}
       </Box>
     );
   }
@@ -269,7 +267,7 @@ function Hotkey({
           <Text color={theme.fg.muted}>{"  "}</Text>
         </>
       ) : (
-        <Text color={theme.fg.muted}>{" "}</Text>
+        <Text color={theme.fg.muted}> </Text>
       )}
     </Text>
   );
