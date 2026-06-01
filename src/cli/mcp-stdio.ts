@@ -8,10 +8,7 @@ import {
   ForemanCommandRouter,
   registerBuiltinCommands,
 } from "../core/foreman-command.js";
-import {
-  defaultLlmConfig,
-  loadLlmConfig,
-} from "../core/llm/config.js";
+import { defaultLlmConfig, loadLlmConfig } from "../core/llm/config.js";
 import {
   AdapterDecodeError,
   getAdapter,
@@ -39,7 +36,7 @@ import { red } from "./colors.js";
 
 const PROTOCOL_VERSION = "2024-11-05";
 const SERVER_NAME = "foreman";
-const SERVER_VERSION = "0.1.0";
+const SERVER_VERSION = "0.1.2";
 
 export const mcpStdioCommand = new Command("mcp-stdio")
   .description(
@@ -265,7 +262,7 @@ export async function handleMessage(
           // routing rules.
           name: "submit_approval",
           description:
-            "Submit the user's decision on a pending Foreman approval. Call this when a user message in your chat is the literal slash command `/approve <id>`, `/approve_remember <id>`, `/deny <id>`, or `/deny_remember <id>` — OR when the user taps an inline-keyboard button on a Foreman approval message (the agent receives a `callback_query` with `data: \"fa:<action_id>:<approval_id>\"`). The approval id comes from a Foreman notification message in the same chat. Pass `decision: \"allow\"` or `\"deny\"`, and `remember: true` only for the `_remember` variants. For custom action buttons (action_id starts with `block_`), pass the `action_id` so Foreman can resolve which predicate to inject + automatically deny the call. Do NOT call this on your own initiative — only when the user typed the command or tapped a Foreman button.",
+            'Submit the user\'s decision on a pending Foreman approval. Call this when a user message in your chat is the literal slash command `/approve <id>`, `/approve_remember <id>`, `/deny <id>`, or `/deny_remember <id>` — OR when the user taps an inline-keyboard button on a Foreman approval message (the agent receives a `callback_query` with `data: "fa:<action_id>:<approval_id>"`). The approval id comes from a Foreman notification message in the same chat. Pass `decision: "allow"` or `"deny"`, and `remember: true` only for the `_remember` variants. For custom action buttons (action_id starts with `block_`), pass the `action_id` so Foreman can resolve which predicate to inject + automatically deny the call. Do NOT call this on your own initiative — only when the user typed the command or tapped a Foreman button.',
           inputSchema: {
             type: "object",
             required: ["approval_id", "decision"],
@@ -316,7 +313,7 @@ export async function handleMessage(
                 type: "array",
                 items: { type: "string" },
                 description:
-                  "Remaining tokens after the verb, in order. Pass [] when none. For `/foreman llm status` this is [\"status\"].",
+                  'Remaining tokens after the verb, in order. Pass [] when none. For `/foreman llm status` this is ["status"].',
               },
               source_user: {
                 type: "string",
@@ -335,7 +332,7 @@ export async function handleMessage(
           // option (or free-form text) as the tool result.
           name: "ask_user_with_options",
           description:
-            "Ask the human user a structured question with pre-defined options. Foreman pushes the question to the user's chat channel (Telegram) with tap-to-select buttons and blocks until the user answers, the timeout fires, or the user dismisses. Use for clear product decisions the user has to make (\"shadcn/ui or custom?\"). Returns `{ chosen, freeText, label, payload, outcome, answeredAt }`. Do NOT use for free-form Q&A — for that, just say what you need in chat.",
+            'Ask the human user a structured question with pre-defined options. Foreman pushes the question to the user\'s chat channel (Telegram) with tap-to-select buttons and blocks until the user answers, the timeout fires, or the user dismisses. Use for clear product decisions the user has to make ("shadcn/ui or custom?"). Returns `{ chosen, freeText, label, payload, outcome, answeredAt }`. Do NOT use for free-form Q&A — for that, just say what you need in chat.',
           inputSchema: {
             type: "object",
             required: ["question", "options"],
@@ -773,9 +770,7 @@ export async function handleMessage(
       const storeError = result.error ?? "submit_approval failed";
       const hint = approvalIdMissHint(classification);
       return reply(id, {
-        content: [
-          { type: "text", text: `${storeError}\n\n${hint}` },
-        ],
+        content: [{ type: "text", text: `${storeError}\n\n${hint}` }],
         isError: true,
       });
     }
@@ -786,7 +781,8 @@ export async function handleMessage(
       // text via this tool, we dispatch + return the reply for the
       // agent to post back.
       const args = params?.arguments ?? {};
-      const command = typeof args.command === "string" ? args.command.trim() : "";
+      const command =
+        typeof args.command === "string" ? args.command.trim() : "";
       const argList = Array.isArray(args.args)
         ? args.args.filter((a): a is string => typeof a === "string")
         : [];
@@ -836,8 +832,7 @@ export async function handleMessage(
       const args = params?.arguments ?? {};
       const sessionId =
         typeof args.session_id === "string" ? args.session_id : "";
-      const optionId =
-        typeof args.option_id === "string" ? args.option_id : "";
+      const optionId = typeof args.option_id === "string" ? args.option_id : "";
       const sourceUser =
         typeof args.source_user === "string" ? args.source_user : undefined;
       if (!sessionId) {

@@ -59,7 +59,10 @@ import { SetupWizard, type WizardOauthRunStep } from "../tui/setup-wizard.js";
 import { runOauthFlows } from "./run-oauth-flow.js";
 import { SecretStore, SecretNotFoundError } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
-import { costBySession, recordUsageAndCheckBudget } from "../core/llm/budget.js";
+import {
+  costBySession,
+  recordUsageAndCheckBudget,
+} from "../core/llm/budget.js";
 import { isFeatureEnabled, loadLlmConfig } from "../core/llm/config.js";
 import {
   buildLlmClient,
@@ -86,7 +89,10 @@ import {
   routeFor,
 } from "../core/notification/notify-config.js";
 import { loadNotifyState } from "../core/notification/notify-state.js";
-import { DailyScheduler, parseSchedule } from "../core/notification/scheduler.js";
+import {
+  DailyScheduler,
+  parseSchedule,
+} from "../core/notification/scheduler.js";
 import { generateSmartSummaryPayload } from "../core/notification/summary-generator.js";
 import type {
   ChannelId,
@@ -97,7 +103,7 @@ import { getForemanPaths } from "../utils/config.js";
 import { runInit } from "./init.js";
 import { bold, dim, green, orange, red } from "./colors.js";
 
-const APP_VERSION = "0.1.0";
+const APP_VERSION = "0.1.2";
 
 export class NotInitialisedError extends Error {
   constructor(public readonly rootPath: string) {
@@ -286,8 +292,8 @@ export function startForeman(
       quietHours: voiceConfig.quiet_hours,
       throttleMs: {
         pattern_detection:
-          voiceConfig.proactive_notifications.pattern_detection.cooldown_minutes *
-          60_000,
+          voiceConfig.proactive_notifications.pattern_detection
+            .cooldown_minutes * 60_000,
       },
     });
     voice.start();
@@ -659,39 +665,40 @@ export function startForeman(
             // next step's directive into control_commands so the next
             // drain iteration spawns it (no recursive call from inside
             // the drain handler).
-            const flowContext = flowId && stepId
-              ? {
-                  flowId,
-                  stepId,
-                  flowManager,
-                  router: flowRouter,
-                  enqueueFollowUp: async (next: {
-                    targetAgent: string;
-                    prompt: string;
-                    flowId: string;
-                    stepId: string;
-                  }): Promise<number | null> => {
-                    const inserted = db
-                      .insert(controlCommands)
-                      .values({
-                        command: "write",
-                        args: JSON.stringify([
-                          next.targetAgent,
-                          next.prompt,
-                          next.flowId,
-                          next.stepId,
-                        ]),
-                        sourceAgent: "foreman:flow-router",
-                        sourceUser: row.sourceUser ?? null,
-                        status: "pending",
-                        createdAt: Date.now(),
-                      })
-                      .returning({ id: controlCommands.id })
-                      .get();
-                    return inserted?.id ?? null;
-                  },
-                }
-              : undefined;
+            const flowContext =
+              flowId && stepId
+                ? {
+                    flowId,
+                    stepId,
+                    flowManager,
+                    router: flowRouter,
+                    enqueueFollowUp: async (next: {
+                      targetAgent: string;
+                      prompt: string;
+                      flowId: string;
+                      stepId: string;
+                    }): Promise<number | null> => {
+                      const inserted = db
+                        .insert(controlCommands)
+                        .values({
+                          command: "write",
+                          args: JSON.stringify([
+                            next.targetAgent,
+                            next.prompt,
+                            next.flowId,
+                            next.stepId,
+                          ]),
+                          sourceAgent: "foreman:flow-router",
+                          sourceUser: row.sourceUser ?? null,
+                          status: "pending",
+                          createdAt: Date.now(),
+                        })
+                        .returning({ id: controlCommands.id })
+                        .get();
+                      return inserted?.id ?? null;
+                    },
+                  }
+                : undefined;
             // Mark the step running before the spawn so `foreman flow
             // show` reflects in-progress state in real time.
             if (flowId && stepId) {
@@ -727,8 +734,7 @@ export function startForeman(
                 sourceUser: row.sourceUser ?? undefined,
                 entry,
                 modelVersion: registryRow?.modelVersion ?? null,
-                taskSkipPermissions:
-                  registryRow?.taskSkipPermissions === true,
+                taskSkipPermissions: registryRow?.taskSkipPermissions === true,
                 ...(derivedCwd ? { cwd: derivedCwd } : {}),
                 // QA-fix 2026-05-24 (Wiring 4) — hand the session
                 // manager to the executor so it opens/closes a session
@@ -779,18 +785,12 @@ export function startForeman(
                 "durationMs" in exec.spawn ? exec.spawn.durationMs : null,
               timeoutMs:
                 exec.spawn.kind === "timeout" ? exec.spawn.timeoutMs : null,
-              stdoutLen:
-                "stdout" in exec.spawn ? exec.spawn.stdout.length : 0,
-              stderrLen:
-                "stderr" in exec.spawn ? exec.spawn.stderr.length : 0,
+              stdoutLen: "stdout" in exec.spawn ? exec.spawn.stdout.length : 0,
+              stderrLen: "stderr" in exec.spawn ? exec.spawn.stderr.length : 0,
               stdoutTail:
-                "stdout" in exec.spawn
-                  ? exec.spawn.stdout.slice(-2000)
-                  : null,
+                "stdout" in exec.spawn ? exec.spawn.stdout.slice(-2000) : null,
               stderrTail:
-                "stderr" in exec.spawn
-                  ? exec.spawn.stderr.slice(-2000)
-                  : null,
+                "stderr" in exec.spawn ? exec.spawn.stderr.slice(-2000) : null,
               spawnError:
                 exec.spawn.kind === "spawn-error" ? exec.spawn.error : null,
               unsupportedReason:
@@ -837,10 +837,7 @@ export function startForeman(
       },
     ],
   ]);
-  const controlPoller = new ControlDrainPoller(
-    controlChannel,
-    controlHandlers,
-  );
+  const controlPoller = new ControlDrainPoller(controlChannel, controlHandlers);
   controlPoller.start();
 
   // Autonomous loop watchdog — periodically scan delegations where
@@ -1204,8 +1201,7 @@ async function runOnboardingWizard(): Promise<void> {
   try {
     loadActiveRegistry();
   } catch (err) {
-    const detail =
-      err instanceof Error ? err.message : String(err);
+    const detail = err instanceof Error ? err.message : String(err);
     console.error(red("error: ") + detail);
     console.error("  → Run `foreman registry validate` to inspect.");
     console.error(
@@ -1397,60 +1393,58 @@ export const startCommand = new Command("start")
     "--skip-setup",
     "launch with default policy only, recording the choice so future runs don't re-prompt",
   )
-  .action(
-    async (options: { onboarding?: boolean; skipSetup?: boolean }) => {
-      // The dashboard is an Ink TUI — rendering it against a non-TTY pipe
-      // dumps escape-code soup into stdout and the interactive event loop
-      // never exits (CI hangs forever). Match `foreman setup`'s guard and
-      // refuse upfront with scripted alternatives (#278).
-      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+  .action(async (options: { onboarding?: boolean; skipSetup?: boolean }) => {
+    // The dashboard is an Ink TUI — rendering it against a non-TTY pipe
+    // dumps escape-code soup into stdout and the interactive event loop
+    // never exits (CI hangs forever). Match `foreman setup`'s guard and
+    // refuse upfront with scripted alternatives (#278).
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.error(
+        red("error: ") +
+          "foreman start requires an interactive terminal — the TUI cannot render to a pipe.",
+      );
+      console.error("  → Run it directly in a terminal.");
+      console.error(
+        "  → Or use `foreman mcp-stdio` (machine-readable) / `foreman wrap <cmd>` (audited subprocess) for scripted contexts.",
+      );
+      process.exit(1);
+    }
+    const flagSkip = options.onboarding === false || options.skipSetup;
+    if (!flagSkip && looksLikeFreshInstall()) {
+      const previousState = loadSetupState();
+      if (!hasUserOptedOut(previousState)) {
+        const choice = await promptStartChoice();
+        if (choice === "setup") {
+          await runOnboardingWizard();
+        } else if (choice === "skip") {
+          seedHomeIfMissing();
+          saveSetupState(markSetupSkipped(previousState));
+        } else {
+          process.exit(0);
+        }
+      } else {
+        // Already configured / previously skipped — seed home if it's
+        // missing so startForeman() doesn't throw NotInitialisedError on
+        // a fresh box that flag-skipped before.
+        seedHomeIfMissing();
+      }
+    } else if (flagSkip) {
+      // --no-onboarding / --skip-setup needs the home to exist.
+      seedHomeIfMissing();
+    }
+    let started: StartedForeman;
+    try {
+      started = startForeman();
+    } catch (err) {
+      if (err instanceof NotInitialisedError) {
         console.error(
           red("error: ") +
-            "foreman start requires an interactive terminal — the TUI cannot render to a pipe.",
-        );
-        console.error("  → Run it directly in a terminal.");
-        console.error(
-          "  → Or use `foreman mcp-stdio` (machine-readable) / `foreman wrap <cmd>` (audited subprocess) for scripted contexts.",
+            `${err.message} Tip: run 'foreman setup' to configure interactively, or 'foreman init' to seed the home and use defaults.`,
         );
         process.exit(1);
       }
-      const flagSkip = options.onboarding === false || options.skipSetup;
-      if (!flagSkip && looksLikeFreshInstall()) {
-        const previousState = loadSetupState();
-        if (!hasUserOptedOut(previousState)) {
-          const choice = await promptStartChoice();
-          if (choice === "setup") {
-            await runOnboardingWizard();
-          } else if (choice === "skip") {
-            seedHomeIfMissing();
-            saveSetupState(markSetupSkipped(previousState));
-          } else {
-            process.exit(0);
-          }
-        } else {
-          // Already configured / previously skipped — seed home if it's
-          // missing so startForeman() doesn't throw NotInitialisedError on
-          // a fresh box that flag-skipped before.
-          seedHomeIfMissing();
-        }
-      } else if (flagSkip) {
-        // --no-onboarding / --skip-setup needs the home to exist.
-        seedHomeIfMissing();
-      }
-      let started: StartedForeman;
-      try {
-        started = startForeman();
-      } catch (err) {
-        if (err instanceof NotInitialisedError) {
-          console.error(
-            red("error: ") +
-              `${err.message} Tip: run 'foreman setup' to configure interactively, or 'foreman init' to seed the home and use defaults.`,
-          );
-          process.exit(1);
-        }
-        throw err;
-      }
-      await started.waitForExit();
-      await started.shutdown();
-    },
-  );
+      throw err;
+    }
+    await started.waitForExit();
+    await started.shutdown();
+  });

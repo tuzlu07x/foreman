@@ -14,10 +14,7 @@ import { getBudgetStatus } from "./llm/budget.js";
 import { loadLlmConfig } from "./llm/config.js";
 import { isOAuthProviderId } from "./llm/oauth/oauth-providers.js";
 import { loadOAuthTokens } from "./llm/oauth/token-store.js";
-import {
-  loadActiveProviders,
-  loadActiveRegistry,
-} from "./registry-catalog.js";
+import { loadActiveProviders, loadActiveRegistry } from "./registry-catalog.js";
 import { detectProviderByPrefix } from "./key-prefix-detect.js";
 import { loadVoiceConfig } from "./notification/voice-config.js";
 import { findDuplicateSlots } from "./secret-slot-migration.js";
@@ -319,7 +316,8 @@ export function checkNotifyConfig(): CheckResult {
       };
     }
     const channels =
-      (parsed as { channels?: Record<string, { enabled?: boolean }> })?.channels ?? {};
+      (parsed as { channels?: Record<string, { enabled?: boolean }> })
+        ?.channels ?? {};
     const enabled = Object.entries(channels)
       .filter(([, v]) => v?.enabled === true)
       .map(([k]) => k);
@@ -328,7 +326,8 @@ export function checkNotifyConfig(): CheckResult {
         name: "notify_config",
         status: "warn",
         message: "notify.yaml present but no channels enabled",
-        remediation: "Run `foreman notify enable telegram` (or another channel).",
+        remediation:
+          "Run `foreman notify enable telegram` (or another channel).",
       };
     }
     return {
@@ -438,7 +437,8 @@ export function checkLlmCredentials(): CheckResult {
   const providerCred = (
     config.credentials as Record<
       string,
-      { auth_mode?: "api_key" | "oauth"; secret_name?: string | null } | undefined
+      | { auth_mode?: "api_key" | "oauth"; secret_name?: string | null }
+      | undefined
     >
   )[config.provider];
   if (providerCred?.auth_mode === "oauth") {
@@ -530,7 +530,9 @@ function checkOAuthCredentials(providerId: string): CheckResult {
         remediation: `Run \`foreman llm login ${providerId}\`.`,
       };
     }
-    const accountNote = tokens.accountId ? ` (account ${tokens.accountId})` : "";
+    const accountNote = tokens.accountId
+      ? ` (account ${tokens.accountId})`
+      : "";
     return {
       name: "llm_credentials",
       status: "ok",
@@ -679,8 +681,10 @@ export function checkVoiceConfig(): CheckResult {
     const enabled = [
       cfg.proactive_notifications.daily_summary.enabled && "daily_summary",
       cfg.proactive_notifications.weekly_summary.enabled && "weekly_summary",
-      cfg.proactive_notifications.pattern_detection.enabled && "pattern_detection",
-      cfg.proactive_notifications.agent_health_alerts.enabled && "agent_health_alerts",
+      cfg.proactive_notifications.pattern_detection.enabled &&
+        "pattern_detection",
+      cfg.proactive_notifications.agent_health_alerts.enabled &&
+        "agent_health_alerts",
       cfg.proactive_notifications.budget_alerts.enabled && "budget_alerts",
     ].filter(Boolean) as string[];
     const summary =
@@ -899,7 +903,7 @@ export function checkMcpGateway(): CheckResult {
   }
 }
 
-const APP_VERSION = "0.1.0";
+const APP_VERSION = "0.1.2";
 
 export function checkUpdate(): CheckResult {
   if (process.env.FOREMAN_NO_UPDATE_CHECK === "1") {
@@ -1062,8 +1066,7 @@ export function checkAcpAgents(
         name: `acp:${agent.id}`,
         status: "warn",
         message: `${agent.name ?? agent.id} declares acp_command="${cmd}" but the binary is not on PATH`,
-        remediation:
-          `Install ${agent.name ?? agent.id} (see ${agent.homepage ?? "the agent's docs"}) and confirm \`${cmd} --version\` works. Until then, \`foreman write ${agent.id} ...\` will fail.`,
+        remediation: `Install ${agent.name ?? agent.id} (see ${agent.homepage ?? "the agent's docs"}) and confirm \`${cmd} --version\` works. Until then, \`foreman write ${agent.id} ...\` will fail.`,
       });
     }
   }
