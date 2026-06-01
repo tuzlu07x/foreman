@@ -114,6 +114,50 @@ export function classifySetupOutput(
   };
 }
 
+/**
+ * Detect whether we're on a machine with no local browser, so a browser
+ * callback OAuth flow (e.g. `codex login` → localhost:1455) can't complete.
+ * Headless: explicit override, an SSH session, or Linux with no display
+ * server (Docker, headless servers, GUI-less WSL). macOS / Windows are
+ * assumed to have a browser unless `FOREMAN_HEADLESS=1` says otherwise.
+ * Pure (env/platform injectable) so it can be unit-tested.
+ */
+export function isHeadlessEnvironment(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (env.FOREMAN_HEADLESS === "1") return true;
+  if (env.FOREMAN_HEADLESS === "0") return false;
+  if (env.SSH_CONNECTION || env.SSH_TTY) return true;
+  if (platform === "linux" && !env.DISPLAY && !env.WAYLAND_DISPLAY) return true;
+  return false;
+}
+
+// Commands whose default flow opens a local browser, paired with a rewrite
+// to their device-code equivalent (prints a URL + code you open on ANY
+// device). Only applied when `isHeadlessEnvironment()` is true.
+const HEADLESS_COMMAND_REWRITES: Array<(command: string) => string | null> = [
+  // codex's `login` defaults to a localhost browser-callback flow; codex
+  // itself tells headless users to pass `--device-auth`.
+  (command) => {
+    if (!/(^|\s)codex\s+login(\s|$)/.test(command)) return null;
+    if (/--device-auth/.test(command) || /\bstatus\b/.test(command)) return null;
+    return `${command.trimEnd()} --device-auth`;
+  },
+];
+
+/**
+ * Rewrite a browser-callback setup command to its headless (device-code)
+ * form when one is known. Returns the command unchanged otherwise. Pure.
+ */
+export function rewriteForHeadless(command: string): string {
+  for (const rewrite of HEADLESS_COMMAND_REWRITES) {
+    const next = rewrite(command);
+    if (next) return next;
+  }
+  return command;
+}
+
 export function runOauthFlows(steps: WizardOauthRunStep[]): OauthFlowResult[] {
   if (steps.length === 0) return [];
   const results: OauthFlowResult[] = [];
@@ -121,13 +165,22 @@ export function runOauthFlows(steps: WizardOauthRunStep[]): OauthFlowResult[] {
   process.stdout.write(
     bold(`Running ${steps.length} OAuth setup step${steps.length === 1 ? "" : "s"}\n\n`),
   );
+  const headless = isHeadlessEnvironment();
   for (const step of steps) {
+    // On a headless box, swap a browser-callback command for its device-code
+    // equivalent so the flow completes without a local browser.
+    const command = headless ? rewriteForHeadless(step.command) : step.command;
     const tag = step.mandatory ? orange("⚠ MUST") : dim("• optional");
     process.stdout.write(
-      `${tag}  ${bold(step.agentId)} — ${step.command}\n`,
+      `${tag}  ${bold(step.agentId)} — ${command}\n`,
     );
     if (step.reason) {
       process.stdout.write(dim(`        ${step.reason}\n`));
+    }
+    if (command !== step.command) {
+      process.stdout.write(
+        dim(`        headless detected → using device-code flow (no local browser needed)\n`),
+      );
     }
     process.stdout.write(dim(`        running… (browser may open)\n`));
     // QA round 8: setup MUST use full stdio:inherit. Earlier round 7
@@ -139,14 +192,14 @@ export function runOauthFlows(steps: WizardOauthRunStep[]): OauthFlowResult[] {
     // forever). We accept that we'll miss the "command-has-been-removed"
     // signal at SETUP time; verify will catch the consequence (status
     // says "logged out") and report the failure there.
-    const setup = spawnSync(step.command, {
+    const setup = spawnSync(command, {
       shell: true,
       stdio: "inherit",
     });
     if (setup.status !== 0) {
       process.stdout.write(
         red(
-          `        ✗ exit ${setup.status ?? "?"} — run manually: ${step.command}\n\n`,
+          `        ✗ exit ${setup.status ?? "?"} — run manually: ${command}\n\n`,
         ),
       );
       results.push({

@@ -68,7 +68,7 @@ export class WebhookChannel implements NotificationChannel {
     const body = JSON.stringify(this.buildPayload(n));
     const headers: Record<string, string> = {
       "content-type": "application/json",
-      "user-agent": "foreman/0.1.2",
+      "user-agent": "foreman/0.1.3",
     };
     if (this.signingSecret) {
       headers["x-foreman-signature"] = `sha256=${this.sign(body)}`;

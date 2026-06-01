@@ -903,7 +903,7 @@ export function checkMcpGateway(): CheckResult {
   }
 }
 
-const APP_VERSION = "0.1.2";
+const APP_VERSION = "0.1.3";
 
 export function checkUpdate(): CheckResult {
   if (process.env.FOREMAN_NO_UPDATE_CHECK === "1") {

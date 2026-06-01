@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   classifySetupOutput,
   classifyVerifyOutput,
+  isHeadlessEnvironment,
+  rewriteForHeadless,
   runOauthFlows,
 } from "../../src/cli/run-oauth-flow.js";
 import type { WizardOauthRunStep } from "../../src/tui/setup-wizard.js";
@@ -15,6 +17,59 @@ import type { WizardOauthRunStep } from "../../src/tui/setup-wizard.js";
 // Tests use shell scripts in a tmpdir to simulate the real-world commands
 // (codex login, claude auth login) — no network, no actual browser.
 // =============================================================================
+
+describe("isHeadlessEnvironment", () => {
+  it("treats Linux with no display server as headless", () => {
+    expect(isHeadlessEnvironment({}, "linux")).toBe(true);
+  });
+
+  it("is not headless on Linux with a display", () => {
+    expect(isHeadlessEnvironment({ DISPLAY: ":0" }, "linux")).toBe(false);
+    expect(isHeadlessEnvironment({ WAYLAND_DISPLAY: "wayland-0" }, "linux")).toBe(
+      false,
+    );
+  });
+
+  it("is not headless on macOS / Windows by default", () => {
+    expect(isHeadlessEnvironment({}, "darwin")).toBe(false);
+    expect(isHeadlessEnvironment({}, "win32")).toBe(false);
+  });
+
+  it("treats an SSH session as headless on any platform", () => {
+    expect(isHeadlessEnvironment({ SSH_CONNECTION: "1.2.3.4 22" }, "darwin")).toBe(
+      true,
+    );
+    expect(isHeadlessEnvironment({ SSH_TTY: "/dev/pts/0" }, "darwin")).toBe(true);
+  });
+
+  it("honors the FOREMAN_HEADLESS override both ways", () => {
+    expect(isHeadlessEnvironment({ FOREMAN_HEADLESS: "1" }, "darwin")).toBe(true);
+    // explicit 0 wins even on Linux with no display
+    expect(isHeadlessEnvironment({ FOREMAN_HEADLESS: "0" }, "linux")).toBe(false);
+  });
+});
+
+describe("rewriteForHeadless", () => {
+  it("adds --device-auth to `codex login`", () => {
+    expect(rewriteForHeadless("codex login")).toBe("codex login --device-auth");
+  });
+
+  it("is idempotent — does not double-add --device-auth", () => {
+    expect(rewriteForHeadless("codex login --device-auth")).toBe(
+      "codex login --device-auth",
+    );
+  });
+
+  it("does not touch `codex login status` (verify command)", () => {
+    expect(rewriteForHeadless("codex login status")).toBe("codex login status");
+  });
+
+  it("leaves unknown commands unchanged", () => {
+    expect(rewriteForHeadless("hermes auth add openai-codex --type oauth")).toBe(
+      "hermes auth add openai-codex --type oauth",
+    );
+  });
+});
 
 describe("runOauthFlows", () => {
   let tmp: string;

@@ -55,7 +55,7 @@ export type CodexSpawnLike = (
 ) => ChildProcess;
 
 const DEFAULT_CLIENT_NAME = "foreman";
-const DEFAULT_CLIENT_VERSION = "0.1.2";
+const DEFAULT_CLIENT_VERSION = "0.1.3";
 
 export interface SpawnCodexMediatedOptions {
   /** Mediator (or test double) — runs risk + approval per request. */
