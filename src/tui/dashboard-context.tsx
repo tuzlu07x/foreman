@@ -7,6 +7,8 @@ import type { PolicyEngine } from "../core/policy-engine.js";
 import type { RegistryService } from "../core/registry.js";
 import type { SecretStore } from "../core/secret-store.js";
 import type { SessionManager } from "../core/session.js";
+import type { OauthFlowResult } from "../cli/run-oauth-flow.js";
+import type { WizardOauthRunStep } from "./setup-wizard.js";
 
 export interface DashboardServices {
   db: ForemanDb;
@@ -20,6 +22,7 @@ export interface DashboardServices {
   soulPath?: string;
   sessionManager?: SessionManager;
   secretStore?: SecretStore;
+  runInteractiveLogin?: (steps: WizardOauthRunStep[]) => OauthFlowResult[];
 }
 
 const DashboardContext = createContext<DashboardServices | null>(null);

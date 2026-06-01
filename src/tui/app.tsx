@@ -33,10 +33,7 @@ import {
   type ChatScrollbackEntry,
 } from "./pages/chat-page.js";
 import { PolicyPage } from "./pages/policy-page.js";
-import {
-  REVEAL_AUTO_HIDE_MS,
-  SecretsPage,
-} from "./pages/secrets-page.js";
+import { REVEAL_AUTO_HIDE_MS, SecretsPage } from "./pages/secrets-page.js";
 import { AgentsPage } from "./pages/agents-page.js";
 import { ProvidersPage } from "./pages/providers-page.js";
 import { ServicesPage } from "./pages/services-page.js";
@@ -44,6 +41,7 @@ import { DelegationsPage } from "./pages/delegations-page.js";
 import { SessionsPage } from "./pages/sessions-page.js";
 import { buildSettingsItems, SettingsPage } from "./pages/settings-page.js";
 import { launchEditor } from "./launch-editor.js";
+import { resolveAgentLoginSteps } from "../core/agent-login.js";
 
 const APPROVAL_TIMEOUT_MS = 60_000;
 
@@ -86,6 +84,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     soulPath,
     secretStore,
     registry,
+    runInteractiveLogin,
   } = useDashboardServices();
 
   const [page, setPage] = useState<Page>("dashboard");
@@ -113,11 +112,6 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     spentPct: number;
     daysUntilReset: number;
   } | null>(null);
-  // #378 — Daemon crash visibility. Without this, agents that fail to
-  // start (OpenClaw with invalid config, Hermes without keys) silently
-  // disappear; the user sees no daemon in `ps` and assumes Foreman never
-  // tried. We collect crash events from agent-daemon-manager and surface
-  // them as a top banner with the stderr first line + agent name.
   const [daemonCrashes, setDaemonCrashes] = useState<
     Array<{
       agentId: string;
@@ -148,10 +142,11 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     });
     const offDaemonCrashed = bus.on("agent:daemon-crashed", (e) => {
       // First non-empty line of stderr — keeps the banner narrow + actionable.
-      const stderrHint = (e.stderr ?? "")
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .find((l) => l.length > 0) ?? "";
+      const stderrHint =
+        (e.stderr ?? "")
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .find((l) => l.length > 0) ?? "";
       setDaemonCrashes((prev) => {
         // Dedupe by agentId — latest crash wins.
         const filtered = prev.filter((c) => c.agentId !== e.agentId);
@@ -167,7 +162,6 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
       });
     });
     const offDaemonStarted = bus.on("agent:daemon-started", (e) => {
-      // Clear any prior crash row for this agent — it's running again.
       setDaemonCrashes((prev) => prev.filter((c) => c.agentId !== e.agentId));
     });
     return () => {
@@ -605,9 +599,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
       try {
         if (secretStore.exists(name)) {
           secretStore.rotate(name, value);
-          setSecretsNotice(
-            `✓ ${name} already existed — value rotated instead`,
-          );
+          setSecretsNotice(`✓ ${name} already existed — value rotated instead`);
         } else {
           secretStore.add(name, value);
           setSecretsNotice(`✓ stored ${name}`);
@@ -699,7 +691,9 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     const target = all[agentsSelectedIdx];
     if (!target) return;
     if (target.status !== "disabled") {
-      setAgentsNotice(`${target.id} is not disabled (status: ${target.status})`);
+      setAgentsNotice(
+        `${target.id} is not disabled (status: ${target.status})`,
+      );
       return;
     }
     try {
@@ -711,6 +705,57 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
       );
     }
   }, [registry, agentsSelectedIdx]);
+
+  const onAgentLogin = useCallback((): void => {
+    const all = registry.listAll();
+    const target = all[agentsSelectedIdx];
+    if (!target) return;
+    if (!secretStore) {
+      setAgentsNotice("secret store unavailable — cannot resolve login");
+      return;
+    }
+    if (!runInteractiveLogin) {
+      setAgentsNotice("interactive login is only available inside the TUI");
+      return;
+    }
+    const registryId =
+      typeof target.metadata?.registryId === "string"
+        ? target.metadata.registryId
+        : target.id;
+    let steps;
+    try {
+      steps = resolveAgentLoginSteps(
+        { registryId, llmProvider: target.llmProvider ?? null },
+        secretStore,
+      );
+    } catch (err) {
+      setAgentsNotice(
+        `login lookup failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    if (steps.length === 0) {
+      setAgentsNotice(
+        target.llmProvider
+          ? `${target.id} authenticates via API key — add/rotate it on the Providers page [v]`
+          : `${target.id} has no LLM provider set — press [L] to choose one first`,
+      );
+      return;
+    }
+    const results = runInteractiveLogin(
+      steps.map((s) => ({
+        agentId: s.agentId,
+        command: s.command,
+        verify: s.verify,
+        mandatory: s.mandatory,
+        reason: s.reason,
+      })),
+    );
+    const ok = results.filter((r) => r.succeeded).length;
+    setAgentsNotice(
+      `login: ${ok}/${results.length} step(s) succeeded — run 'foreman doctor' to confirm`,
+    );
+  }, [registry, agentsSelectedIdx, secretStore, runInteractiveLogin]);
 
   const onAgentStartNoteEdit = useCallback((): void => {
     const all = registry.listAll();
@@ -860,6 +905,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           onAgentRemove={onAgentRemove}
           onAgentDisable={onAgentDisable}
           onAgentEnable={onAgentEnable}
+          onAgentLogin={onAgentLogin}
           agentsEditMode={agentsEditMode}
           onAgentStartNoteEdit={onAgentStartNoteEdit}
           onAgentStartLlmEdit={onAgentStartLlmEdit}
@@ -1056,10 +1102,7 @@ interface KeyboardHandlerProps {
   setSecretsExpanded: (v: boolean) => void;
   rotateMode: { name: string } | null;
   setRotateMode: (next: { name: string } | null) => void;
-  addSecretMode:
-    | { phase: "name" }
-    | { phase: "value"; name: string }
-    | null;
+  addSecretMode: { phase: "name" } | { phase: "value"; name: string } | null;
   setAddSecretMode: (
     next: { phase: "name" } | { phase: "value"; name: string } | null,
   ) => void;
@@ -1076,6 +1119,7 @@ interface KeyboardHandlerProps {
   onAgentRemove: () => void;
   onAgentDisable: () => void;
   onAgentEnable: () => void;
+  onAgentLogin: () => void;
   agentsEditMode: "none" | "note" | "llm";
   onAgentStartNoteEdit: () => void;
   onAgentStartLlmEdit: () => void;
@@ -1161,6 +1205,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     onAgentRemove,
     onAgentDisable,
     onAgentEnable,
+    onAgentLogin,
     agentsEditMode,
     onAgentStartNoteEdit,
     onAgentStartLlmEdit,
@@ -1430,6 +1475,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "R") onAgentRegenKey();
       else if (input === "N") onAgentStartNoteEdit();
       else if (input === "L") onAgentStartLlmEdit();
+      else if (input === "o") onAgentLogin();
       else if (input === "q") exit();
       return;
     }

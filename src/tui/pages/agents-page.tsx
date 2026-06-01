@@ -27,9 +27,6 @@ export interface AgentsPageProps {
   llmDraft?: string | null;
   onLlmDraftChange?: (value: string) => void;
   onNoteSubmit?: (value: string) => void;
-  /** #379 — Crash rows lifted from app.tsx so this page reflects daemon
-   *  health alongside `agent.status` (which only tracks MCP register
-   *  state, not the daemon process). */
   daemonCrashes?: DaemonCrashInfo[];
 }
 
@@ -130,9 +127,9 @@ export function AgentsPage({
         <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>
       </Box>
       <Text color={theme.fg.muted}>
-        [↑↓] move · [Enter] expand · [N] edit note · [L] change LLM · [d]
-        disable · [e] enable · [b] block/unblock · [r] remove · [R] regen-key
-        · [Esc] back
+        [↑↓] move · [Enter] expand · [o] login · [N] edit note · [L] change LLM
+        · [d] disable · [e] enable · [b] block/unblock · [r] remove · [R]
+        regen-key · [Esc] back
       </Text>
     </Box>
   );
@@ -162,9 +159,6 @@ function AgentRow({
   const isActive = agent.status === "active";
   const isBlocked = agent.status === "blocked";
   const isDisabled = agent.status === "disabled";
-  // #379 — Daemon crash trumps the registry status display. The DB still
-  // says "active" because the agent registered via MCP, but the gateway
-  // process exited; the row must reflect that.
   const isCrashed = !!crash;
   const dotColor = isCrashed
     ? theme.accent.danger
@@ -186,9 +180,7 @@ function AgentRow({
     typeof agent.metadata?.registryId === "string"
       ? agent.metadata.registryId
       : agent.id;
-  const lastSeen = agent.lastSeenAt
-    ? formatTime(agent.lastSeenAt)
-    : "never";
+  const lastSeen = agent.lastSeenAt ? formatTime(agent.lastSeenAt) : "never";
   return (
     <Box flexDirection="column">
       <Text>
