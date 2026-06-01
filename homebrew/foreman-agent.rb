@@ -3,7 +3,7 @@ require "language/node"
 class ForemanAgent < Formula
   desc "Local AI agent gateway — mediates, scores, asks, and audits"
   homepage "https://github.com/tuzlu07x/foreman"
-  url "https://registry.npmjs.org/foreman-agent/-/foreman-agent-0.1.0.tgz"
+  url "https://registry.npmjs.org/foreman-agent/-/foreman-agent-0.1.1.tgz"
   sha256 "58d21035f6e8561312d063a6115c249927209376c699072cd49bdf7bf1794ea2"
   license "MIT"
   head "https://github.com/tuzlu07x/foreman.git", branch: "main"
