@@ -37,6 +37,7 @@ import {
   wireBridgeToMediator,
   type MediatorLike,
 } from "./codex-mediator-connector.js";
+import { FOREMAN_VERSION } from "../version.js";
 
 /** Stub-able spawn type — mirrors the shape `agent-spawn.ts` exports so
  *  test doubles can be reused if useful. We require pipe stdin/stdout
@@ -55,7 +56,7 @@ export type CodexSpawnLike = (
 ) => ChildProcess;
 
 const DEFAULT_CLIENT_NAME = "foreman";
-const DEFAULT_CLIENT_VERSION = "0.1.3";
+const DEFAULT_CLIENT_VERSION = FOREMAN_VERSION;
 
 export interface SpawnCodexMediatedOptions {
   /** Mediator (or test double) — runs risk + approval per request. */

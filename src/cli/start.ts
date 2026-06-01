@@ -104,8 +104,9 @@ import { launchEditor } from "../tui/launch-editor.js";
 import { getForemanPaths } from "../utils/config.js";
 import { runInit } from "./init.js";
 import { bold, dim, green, orange, red } from "./colors.js";
+import { FOREMAN_VERSION } from "../version.js";
 
-const APP_VERSION = "0.1.3";
+const APP_VERSION = FOREMAN_VERSION;
 
 export class NotInitialisedError extends Error {
   constructor(public readonly rootPath: string) {

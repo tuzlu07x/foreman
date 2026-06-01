@@ -25,6 +25,7 @@ import { agentWrapCommand } from "./agent-wrap-cli.js";
 import { delegationsCommand } from "./delegations-cli.js";
 import { wrapCommand } from "./wrap.js";
 import { writeCommand } from "./write-cli.js";
+import { FOREMAN_VERSION } from "../version.js";
 
 const program = new Command();
 program
@@ -32,7 +33,7 @@ program
   .description(
     "Your local AI agents talk to each other. You should know what they're saying.",
   )
-  .version("0.1.3");
+  .version(FOREMAN_VERSION);
 
 program.addCommand(initCommand);
 program.addCommand(setupCommand);
