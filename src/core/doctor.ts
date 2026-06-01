@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { delimiter } from "node:path";
+import { FOREMAN_VERSION } from "../version.js";
 import { parse as parseYaml } from "yaml";
 import { createInMemoryDb, getDb } from "../db/client.js";
 import { getMigrationStatus } from "../db/migration-status.js";
@@ -903,7 +904,7 @@ export function checkMcpGateway(): CheckResult {
   }
 }
 
-const APP_VERSION = "0.1.3";
+const APP_VERSION = FOREMAN_VERSION;
 
 export function checkUpdate(): CheckResult {
   if (process.env.FOREMAN_NO_UPDATE_CHECK === "1") {

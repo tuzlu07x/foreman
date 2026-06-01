@@ -5,6 +5,7 @@ import type {
   NotificationChannel,
   UserDecision,
 } from "../types.js";
+import { FOREMAN_VERSION } from "../../../version.js";
 
 // =============================================================================
 // WebhookChannel — generic outbound HTTP POST (#235 / C11b-1)
@@ -68,7 +69,7 @@ export class WebhookChannel implements NotificationChannel {
     const body = JSON.stringify(this.buildPayload(n));
     const headers: Record<string, string> = {
       "content-type": "application/json",
-      "user-agent": "foreman/0.1.3",
+      "user-agent": `foreman/${FOREMAN_VERSION}`,
     };
     if (this.signingSecret) {
       headers["x-foreman-signature"] = `sha256=${this.sign(body)}`;

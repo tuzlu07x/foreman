@@ -3,30 +3,14 @@ import type { Page } from "../app.js";
 import { useLayout } from "../hooks.js";
 import { type Layout } from "../layout.js";
 import { theme } from "../theme.js";
-
-// =============================================================================
-// Status bar (#234 UX-4)
-// =============================================================================
-//
-// Three responsive layouts:
-//   - wide   (≥ 120 col):  active page label ▸ main hotkeys with words ...
-//                          right-aligned admin (help + quit)
-//   - medium (80–119):     active page ▸ single-letter hotkeys ... [h][q]
-//   - narrow (< 80):       two lines — first shows the active page, second
-//                          shows the minimal hotkey set
-//
-// The active page's letter is bolded + accent.primary so the user always knows
-// where they are without reading text.
+import { FOREMAN_VERSION } from "../../version.js";
 
 export interface StatusBarProps {
-  /** Active page so we can light up its letter. */
   page?: Page;
   quitConfirm?: boolean;
   version?: string;
 }
 
-// Logical key → label table. Single source so the responsive layouts pull
-// from the same data and we don't drift one but not the other.
 interface KeyEntry {
   page: Page | "help" | "quit";
   letter: string;
@@ -44,9 +28,6 @@ const MAIN_KEYS: KeyEntry[] = [
 ];
 
 const SECONDARY_KEYS: KeyEntry[] = [
-  // "chat" renamed to "test" (#293) — the page is a tool-call tester, not
-  // an LLM chat. The page key stays "chat" for state-machine compat; only
-  // the user-facing label changes.
   { page: "chat", letter: "c", label: "test" },
   { page: "settings", letter: "g", label: "settings" },
 ];
@@ -67,8 +48,6 @@ const PAGE_LABELS: Record<Page, string> = {
   services: "Services",
   secrets: "Secrets",
   settings: "Settings",
-  // Tab header for the page reached via [c] — renamed from "Chat" so users
-  // don't expect an LLM conversation (#293).
   chat: "Test console",
 };
 
@@ -82,13 +61,9 @@ export interface StatusBarLayout {
 }
 
 export interface StatusBarRow {
-  /** Page label at the start of the row, when present. */
   active?: string;
-  /** Left-side hotkeys (page navigation). */
   leftKeys: KeyEntry[];
-  /** Right-side hotkeys (admin / system). */
   rightKeys: KeyEntry[];
-  /** Render each hotkey with its full label vs. just the letter. */
   withLabels: boolean;
 }
 
@@ -99,7 +74,6 @@ export function buildStatusBarLayout(
   const activeLabel = `${theme.symbols.bullet} ${PAGE_LABELS[page]}`;
 
   if (layout === "wide") {
-    // One row, everything with labels, page indicator + admin on the right.
     return {
       rows: [
         {
@@ -114,7 +88,6 @@ export function buildStatusBarLayout(
   }
 
   if (layout === "medium") {
-    // One row, single-letter hotkeys only, page indicator still on the left.
     return {
       rows: [
         {
@@ -128,7 +101,6 @@ export function buildStatusBarLayout(
     };
   }
 
-  // Narrow: two lines — page on its own line, hotkeys below.
   return {
     rows: [
       {
@@ -154,7 +126,7 @@ export function buildStatusBarLayout(
 export function StatusBar({
   page = "dashboard",
   quitConfirm,
-  version = "0.1.3",
+  version = FOREMAN_VERSION,
 }: StatusBarProps): JSX.Element {
   const layout = useLayout();
   if (quitConfirm) {
@@ -191,7 +163,6 @@ function StatusRow({
   showVersion: boolean;
   version: string;
 }): JSX.Element {
-  // When the row has only an active label and nothing else, just render that.
   if (row.leftKeys.length === 0 && row.rightKeys.length === 0 && row.active) {
     return (
       <Box justifyContent="space-between">
@@ -250,8 +221,6 @@ function Hotkey({
   withLabel: boolean;
   active: boolean;
 }): JSX.Element {
-  // The active page's hotkey letter is highlighted: bold + accent. Others
-  // stay muted-grey so they don't compete for attention.
   const letterColor = active ? theme.accent.primary : theme.fg.muted;
   const labelColor = active ? theme.fg.emphasis : theme.fg.muted;
   return (

@@ -1,6 +1,6 @@
 {
   "name": "foreman-agent",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Your local AI agents talk to each other. You should know what they're saying.",
   "type": "module",
   "bin": {

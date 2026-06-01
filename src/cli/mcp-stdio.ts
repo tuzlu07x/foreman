@@ -33,10 +33,11 @@ import { createDecoder, encodeMessage } from "../mcp/framing.js";
 import type { JSONRPCMessage } from "../mcp/types.js";
 import { getForemanPaths } from "../utils/config.js";
 import { red } from "./colors.js";
+import { FOREMAN_VERSION } from "../version.js";
 
 const PROTOCOL_VERSION = "2024-11-05";
 const SERVER_NAME = "foreman";
-const SERVER_VERSION = "0.1.3";
+const SERVER_VERSION = FOREMAN_VERSION;
 
 export const mcpStdioCommand = new Command("mcp-stdio")
   .description(
@@ -70,24 +71,11 @@ interface Services {
   sessionManager: SessionManager;
   audit: AuditLogger;
   secretStore: SecretStore;
-  /** #431 — Routes `/foreman <cmd>` text the agent relays via the
-   *  `submit_command` MCP tool. */
   commandRouter: ForemanCommandRouter;
-  /** Path to llm.yaml — needed by the LLM-status command handler. */
   llmConfigPath: string;
-  /** Foreman's `<configDir>` — used by the stop handler to locate
-   *  the pidfile written by `foreman start`. */
   configDir: string;
-  /** #432 — Foreman LLM orchestrator chat. Built when llm.yaml is
-   *  present + parseable; null otherwise (read-only verbs still work). */
   orchestratorChat: OrchestratorChat | null;
-  /** #440 — Cross-process control queue. mcp-stdio is the writer
-   *  side; the reader (foreman start) drains pending rows. */
   controlChannel: ControlChannel;
-  /** #528 — `ask_user_with_options` MCP tool backend. The agent's
-   *  blocking tool call inserts a pending_questions row + polls;
-   *  the chat listener in `foreman start` writes the user's pick
-   *  back via submit_user_answer. */
   pendingQuestions: PendingQuestionsService;
 }
 
@@ -95,15 +83,12 @@ function bootServices(): Services {
   const db = getDb();
   const registry = new RegistryService(db, bus);
   const audit = new AuditLogger(db, bus);
-  // Cross-process IPC via SQLite — the TUI in `foreman start` (a separate
-  // process) bridges these via ApprovalBridge.
   const approval = new DbApprovalService(db, { bus, timeoutMs: 60_000 });
   const policy = new PolicyEngine(db, bus);
   const paths = getForemanPaths();
   if (existsSync(paths.policyPath)) policy.loadFromYaml(paths.policyPath);
   const risk = new RiskScorer(db, undefined, {
     bucketOverrides: () => policy.getBucketOverrides(),
-    // Wire the responsibility-violation rule (#300) — same as start.ts.
     getAgentResponsibility: (agentId) =>
       registry.get(agentId)?.responsibilityNote ?? null,
     responsibilityPolicies: () => policy.getResponsibilityPolicies(),
@@ -122,9 +107,6 @@ function bootServices(): Services {
   });
   const commandRouter = new ForemanCommandRouter();
   registerBuiltinCommands(commandRouter);
-  // #432 — Build the orchestrator chat service only when llm.yaml
-  // parses cleanly. A malformed config shouldn't crash MCP-stdio
-  // (read-only verbs must still work).
   let orchestratorChat: OrchestratorChat | null = null;
   try {
     const llmConfig = existsSync(paths.llmConfigPath)
@@ -140,10 +122,6 @@ function bootServices(): Services {
   } catch {
     orchestratorChat = null;
   }
-  // #498 — Pass the bus so enqueue events can be observed in-process
-  // (tests / audit hooks). Cross-process visibility (mcp-stdio →
-  // foreman start TUI) still goes through the SQLite poll in
-  // useDashboardState — bus events don't cross process boundaries.
   const controlChannel = new ControlChannel(db, bus);
   const pendingQuestions = new PendingQuestionsService(db, { bus });
   return {
@@ -253,13 +231,6 @@ export async function handleMessage(
           },
         },
         {
-          // #406 — Agent-routed approval flow. Foreman sends an
-          // approval-request notification to the user's chat with a
-          // `/approve <id>` / `/deny <id>` reply hint. When the user
-          // types that command, the agent (sole polling consumer on the
-          // bot) calls this tool to relay the user's decision back. See
-          // SOUL.md "Approval Routing" section for the agent-side
-          // routing rules.
           name: "submit_approval",
           description:
             'Submit the user\'s decision on a pending Foreman approval. Call this when a user message in your chat is the literal slash command `/approve <id>`, `/approve_remember <id>`, `/deny <id>`, or `/deny_remember <id>` — OR when the user taps an inline-keyboard button on a Foreman approval message (the agent receives a `callback_query` with `data: "fa:<action_id>:<approval_id>"`). The approval id comes from a Foreman notification message in the same chat. Pass `decision: "allow"` or `"deny"`, and `remember: true` only for the `_remember` variants. For custom action buttons (action_id starts with `block_`), pass the `action_id` so Foreman can resolve which predicate to inject + automatically deny the call. Do NOT call this on your own initiative — only when the user typed the command or tapped a Foreman button.',
@@ -292,11 +263,6 @@ export async function handleMessage(
           },
         },
         {
-          // #431 — Agent-routed orchestrator command relay. User types
-          // `/foreman <verb> [args]` in the agent's chat; the agent's
-          // getUpdates consumer parses + calls this tool. Foreman runs
-          // a built-in handler and returns text the agent posts back.
-          // See SOUL.md "Orchestrator Routing" section for the rules.
           name: "submit_command",
           description:
             "Submit a /foreman orchestrator command relayed from the user's chat. Call this when a user message in your chat is `/foreman <verb> [args...]` (e.g. `/foreman status`, `/foreman help`, `/foreman llm status`). Pass the verb as `command`, the rest of the message tokens as `args` (string array). Do NOT call on your own initiative — only when the user types the literal `/foreman ...` command. The returned text is the response to post back to the user verbatim.",
@@ -324,12 +290,6 @@ export async function handleMessage(
           },
         },
         {
-          // #528 — Agent-driven structured question. The agent calls
-          // this tool to ask the user a multiple-choice question;
-          // Foreman dispatches the question to their chat channel
-          // with inline option buttons + blocks until the user picks
-          // (or the timeout fires). The agent then sees the chosen
-          // option (or free-form text) as the tool result.
           name: "ask_user_with_options",
           description:
             'Ask the human user a structured question with pre-defined options. Foreman pushes the question to the user\'s chat channel (Telegram) with tap-to-select buttons and blocks until the user answers, the timeout fires, or the user dismisses. Use for clear product decisions the user has to make ("shadcn/ui or custom?"). Returns `{ chosen, freeText, label, payload, outcome, answeredAt }`. Do NOT use for free-form Q&A — for that, just say what you need in chat.',
@@ -393,11 +353,6 @@ export async function handleMessage(
           },
         },
         {
-          // #528 — Agent-routed answer relay. User tapped an
-          // `ask_<question_id>_<option_id>` inline-keyboard button OR
-          // (when allow_free_text=true) typed a reply. The agent calls
-          // this tool to deliver the answer back to Foreman, which
-          // resolves the original ask_user_with_options call.
           name: "submit_user_answer",
           description:
             "Submit the user's answer to an open ask_user_with_options question. Call this when the user taps an inline-keyboard button on an `🤖 <agent> asks` message (callback_data `fa:ask_<question_id>_<option_id>:<chat_id>`) — pass `question_id` + `option_id`. When the user types a free-text reply AND `allow_free_text` was true on the original question, pass `question_id` + `free_text` instead. Do NOT call on your own initiative — only when the user tapped or replied.",
@@ -429,14 +384,6 @@ export async function handleMessage(
           },
         },
         {
-          // #527 — Agent-routed session resolution. User tapped a
-          // "Skip / Let PM decide / I'll decide / Abandon" button on
-          // a halt prompt; the agent's getUpdates consumer parses the
-          // `fa:resolve_<option_id>:<session_id>` callback_data and
-          // calls this tool. Foreman flips the session out of halt
-          // (or finalizes as abandoned) + enqueues a `write` directive
-          // to the participating agents so they receive the user's
-          // resolution as a normal chat message.
           name: "submit_resolution",
           description:
             "Submit the user's session-resolution choice when they tap a button on a Foreman halt prompt. The callback_data is `fa:resolve_<option_id>:<session_id>`; pass both ids verbatim along with the Telegram numeric `from.id` as `source_user`. Foreman flips the session out of halt + delivers the resolution to the agents as a `foreman write` directive. Do NOT call this on your own initiative — only when the user taps a button on a `🛑 Session needs your call` message.",
@@ -463,16 +410,6 @@ export async function handleMessage(
           },
         },
         {
-          // #552 — Generic approval-mediation tool. Any agent (or, more
-          // commonly, a transport bridge sitting between an agent and
-          // Foreman — e.g. the codex exec-server bridge in PR 3) can
-          // call this to ask: "I'm about to do X — is that OK?"
-          // Foreman runs the call through its adapter → risk → approval
-          // pipeline (auto-allows low-risk, surfaces high-risk in chat)
-          // and returns the agent's wire-shaped decision. The tool
-          // surface is intentionally agent-agnostic: the adapter named
-          // in `adapter_id` knows how to decode the opaque `wire`
-          // payload and encode the resolved decision back.
           name: "request_action_approval",
           description:
             "Ask Foreman to mediate an agent action before it runs. Pass the agent's native approval-request payload as `wire` and the matching adapter id (e.g. 'codex-exec-server-v1', 'claude-code-pretooluse-v1'). Foreman decodes, scores risk, escalates to the operator when needed, and returns a `structuredContent` with both the normalised decision ('allow' | 'deny') and the adapter-encoded wire response your transport bridge can send back to the agent verbatim. Fail-closed: any decode error or unknown adapter id yields deny.",
@@ -525,9 +462,6 @@ export async function handleMessage(
     }
 
     if (toolName === "ask_user_with_options") {
-      // #528 — Agent-driven structured question. Create a pending row,
-      // emit `question:asked` (NotificationBridge picks it up), block
-      // until the user picks / types / dismisses / the deadline fires.
       const args = params?.arguments ?? {};
       const question =
         typeof args.question === "string" ? args.question.trim() : "";
@@ -560,8 +494,6 @@ export async function handleMessage(
           "ask_user_with_options requires 2-6 options",
         );
       }
-      // Validate every option shape early so the agent sees a clear
-      // error instead of a deeper "options malformed" failure later.
       const options: Array<{
         id: string;
         label: string;
@@ -631,10 +563,6 @@ export async function handleMessage(
     }
 
     if (toolName === "submit_user_answer") {
-      // #528 — Agent-routed answer relay. Resolves the pending question
-      // either by option pick or free-text. ask_user_with_options's
-      // polling loop sees the row flip + returns to the original
-      // tool caller.
       const args = params?.arguments ?? {};
       const questionId =
         typeof args.question_id === "string" ? args.question_id : "";
@@ -695,15 +623,6 @@ export async function handleMessage(
     }
 
     if (toolName === "submit_approval") {
-      // #406 — Agent-routed approval relay. Validates approval id +
-      // pending status, emits the resolution event so the in-flight
-      // mediator request unblocks.
-      // #526 — Optional `action_id` parameter for custom approval
-      // buttons (e.g. "Block .env* reads from hermes"). When set,
-      // Foreman both denies the current call AND injects a permanent
-      // predicate-based deny rule derived from the approval's risk
-      // factors. Plain decision: allow|deny still works for the
-      // standard 4-action ladder.
       const args = params?.arguments ?? {};
       const rawApprovalId =
         typeof args.approval_id === "string" ? args.approval_id : "";
@@ -734,11 +653,6 @@ export async function handleMessage(
           "submit_approval not supported by this Foreman build",
         );
       }
-      // #552 PR 5 — Strip the visible `aprv_` prefix (added by the chat
-      // surface so operators can distinguish Foreman approval ids from
-      // agent session/thread ids) and classify the residual shape so a
-      // "not found" reply can point the user at the right id source
-      // instead of just saying "not found".
       const classification = classifyApprovalIdInput(rawApprovalId);
       const approvalId = classification.stripped;
       const result = await services.approval.submitFromAgent({
@@ -763,10 +677,6 @@ export async function handleMessage(
           ],
         });
       }
-      // isError lets the agent's LLM see the message text and surface
-      // it back to the user. PR 5 enriches the "not found" case with a
-      // shape-aware hint so a user who pasted a codex thread id sees
-      // "looks like a session id" instead of a flat "not found".
       const storeError = result.error ?? "submit_approval failed";
       const hint = approvalIdMissHint(classification);
       return reply(id, {
@@ -776,10 +686,6 @@ export async function handleMessage(
     }
 
     if (toolName === "submit_command") {
-      // #431 — Agent-routed orchestrator command. Same routing shape as
-      // submit_approval: agent's chat consumer relays `/foreman <verb>`
-      // text via this tool, we dispatch + return the reply for the
-      // agent to post back.
       const args = params?.arguments ?? {};
       const command =
         typeof args.command === "string" ? args.command.trim() : "";
@@ -807,9 +713,6 @@ export async function handleMessage(
         ownerStore: services.secretStore,
         secretStore: services.secretStore,
       });
-      // #431 — Audit row per /foreman invocation. Persisted to
-      // `audit_events` so the TUI Log page + `foreman log` CLI can
-      // surface every orchestrator-routed command.
       services.audit.logEvent("foreman:command", {
         command,
         args: argList,
@@ -825,10 +728,6 @@ export async function handleMessage(
     }
 
     if (toolName === "submit_resolution") {
-      // #527 — Agent-routed session resolution. The user tapped a
-      // resolution button on a halt prompt; we hand the pick to the
-      // SessionManager which flips state + enqueues a `write` row to
-      // notify the participating agents.
       const args = params?.arguments ?? {};
       const sessionId =
         typeof args.session_id === "string" ? args.session_id : "";
@@ -890,11 +789,6 @@ export async function handleMessage(
     }
 
     if (toolName === "request_action_approval") {
-      // #552 — Generic agent-action mediation entry point. Adapter
-      // decodes the agent's wire payload, mediator runs risk + approval,
-      // adapter encodes the resolved decision back. Fail-closed at every
-      // step so a malformed payload or a mis-registered adapter cannot
-      // silently let actions through.
       const args = params?.arguments ?? {};
       const adapterId =
         typeof args.adapter_id === "string" ? args.adapter_id : "";
@@ -923,11 +817,6 @@ export async function handleMessage(
         );
       }
 
-      // Decode — fail-closed deny on any malformed payload. We still go
-      // through the adapter's encodeDecision so the wire shape is correct
-      // for the agent's transport. `approvalId: "unknown"` because we
-      // don't have the agent's id yet — the adapter is allowed to use it
-      // or ignore it.
       let normalised;
       try {
         normalised = adapter.decodeRequest(wire, sourceAgent);
@@ -958,10 +847,6 @@ export async function handleMessage(
         });
       }
 
-      // Route through the existing mediator. The synthetic JSON-RPC
-      // message gives the mediator's `argsFromMessage` exactly what it
-      // would have parsed from a real tools/call so risk + audit + LLM
-      // verifier paths are unchanged.
       const mediatorResult = await services.mediator.handleRequest({
         sourceAgent: normalised.sourceAgent,
         targetTool: normalised.targetTool,
