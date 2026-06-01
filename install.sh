@@ -5,6 +5,8 @@ set -euo pipefail
 REPO="tuzlu07x/foreman"
 PACKAGE="foreman-agent"
 MIN_NODE_MAJOR=20
+NODE_LTS_MAJOR=20
+SUPPORTED_NODE_MAJORS="20, 22"
 NVM_VERSION="${FOREMAN_NVM_VERSION:-v0.40.1}"
 
 # Colours (TTY only).
@@ -41,6 +43,8 @@ ${c_bold}ENVIRONMENT${c_reset}
   FOREMAN_INSTALL_PREFIX    npm prefix override
   FOREMAN_VERSION           specific version (default: latest published)
   FOREMAN_SKIP_NVM          set to 1 to refuse the nvm bootstrap path
+  FOREMAN_REUSE_ANY_NODE    set to 1 to reuse a Node >=20 outside the tested
+                            LTS lines (${SUPPORTED_NODE_MAJORS}); may require a C/C++ toolchain
 EOF
 }
 
@@ -52,35 +56,53 @@ current_node_major() {
   node --version 2>/dev/null | sed -e 's/^v//' -e 's/\..*$//' || echo 0
 }
 
+is_supported_node_major() {
+  case "${1:-0}" in
+    20|22) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 ensure_node() {
   local major
   major=$(current_node_major)
-  if [ "${major:-0}" -ge "${MIN_NODE_MAJOR}" ]; then
+
+  if is_supported_node_major "${major}"; then
     ok "Node $(node --version) detected — reusing it"
     return 0
   fi
 
+  if [ "${major:-0}" -ge "${MIN_NODE_MAJOR}" ] && [ "${FOREMAN_REUSE_ANY_NODE:-0}" = "1" ]; then
+    warn "Node $(node --version) is outside the tested LTS lines (${SUPPORTED_NODE_MAJORS}) — reusing it because FOREMAN_REUSE_ANY_NODE=1"
+    warn "If 'npm install' fails to build native modules, install Node ${NODE_LTS_MAJOR} LTS and re-run."
+    return 0
+  fi
+
   if [ "${FOREMAN_SKIP_NVM:-0}" = "1" ]; then
-    err "Node ${MIN_NODE_MAJOR}+ required but not found, and FOREMAN_SKIP_NVM=1"
-    err "Install Node ${MIN_NODE_MAJOR} (https://nodejs.org) then re-run the installer."
+    err "Node ${NODE_LTS_MAJOR} LTS required (found: ${major:-none}) but FOREMAN_SKIP_NVM=1"
+    err "Install Node ${NODE_LTS_MAJOR} (https://nodejs.org/en/download) then re-run the installer."
     exit 1
   fi
 
-  warn "Node ${MIN_NODE_MAJOR}+ not detected — bootstrapping via nvm"
+  if [ "${major:-0}" -ge "${MIN_NODE_MAJOR}" ]; then
+    warn "Node $(node --version) has no prebuilt native binaries — installing Node ${NODE_LTS_MAJOR} LTS via nvm so you don't need a compiler"
+  else
+    warn "Node ${NODE_LTS_MAJOR} LTS not detected — installing it via nvm (no Python / build tools required)"
+  fi
   bootstrap_nvm
 
-  # Load nvm into the current shell and install the LTS line.
   export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
   if [ ! -s "${NVM_DIR}/nvm.sh" ]; then
     err "nvm install completed but ${NVM_DIR}/nvm.sh is missing"
     err "Open a new shell and re-run this installer, or install Node manually."
     exit 1
   fi
+  set +u
   # shellcheck disable=SC1091
   . "${NVM_DIR}/nvm.sh"
-
-  nvm install "${MIN_NODE_MAJOR}" >&2
-  nvm use "${MIN_NODE_MAJOR}" >&2
+  nvm install "${NODE_LTS_MAJOR}" >&2
+  nvm use "${NODE_LTS_MAJOR}" >&2
+  set -u
   ok "Node $(node --version) ready via nvm"
 }
 
@@ -95,13 +117,14 @@ bootstrap_nvm() {
   fi
   local installer
   installer=$(mktemp -t foreman-nvm-XXXXXX)
-  trap 'rm -f "${installer}"' RETURN
   if ! curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" -o "${installer}"; then
+    rm -f "${installer}"
     err "failed to download nvm ${NVM_VERSION} installer"
     err "manual: see https://github.com/nvm-sh/nvm#installing-and-updating"
     exit 1
   fi
   bash "${installer}"
+  rm -f "${installer}"
 }
 
 npm_install_foreman() {
