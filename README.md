@@ -12,6 +12,7 @@ machine, **scores each request for risk**, and **asks you** before anything dang
 <br/>
 
 [![npm](https://img.shields.io/npm/v/foreman-agent?color=FF8C42&label=foreman-agent&logo=npm)](https://www.npmjs.com/package/foreman-agent)
+[![website](https://img.shields.io/badge/website-foreman--agent.com-FF8C42?logo=readthedocs&logoColor=white)](https://foreman-agent.com)
 [![license](https://img.shields.io/badge/license-MIT-FF8C42)](./LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-00D084?logo=node.js&logoColor=white)](https://nodejs.org)
 [![platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux%20%C2%B7%20WSL2-4D9DE0)](#install)
@@ -19,7 +20,7 @@ machine, **scores each request for risk**, and **asks you** before anything dang
 
 <br/>
 
-**[Install](#install)** · **[Quick start](#quick-start)** · **[Docs](#documentation)** · **[Integrations](#supported-integrations)** · **[Roadmap](#roadmap)**
+**[Website](https://foreman-agent.com)** · **[Install](#install)** · **[Quick start](#quick-start)** · **[Docs](#documentation)** · **[Integrations](#supported-integrations)** · **[Roadmap](#roadmap)**
 
 </div>
 
@@ -219,6 +220,8 @@ setups people now run at home.
 
 ## Documentation
 
+📖 **Hosted docs: [foreman-agent.com](https://foreman-agent.com)** — the guides below, nicely rendered and searchable.
+
 | Doc                                                              | What's inside                                                 |
 | ---------------------------------------------------------------- | ------------------------------------------------------------- |
 | [`FOREMAN.md`](./FOREMAN.md)                                     | Full design doc — architecture, services, schema              |
@@ -236,6 +239,7 @@ setups people now run at home.
 PRs and issues welcome. Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md) and the
 [Code of Conduct](./CODE_OF_CONDUCT.md).
 
+**Website:** [foreman-agent.com](https://foreman-agent.com) ·
 **Repo:** [github.com/tuzlu07x/foreman](https://github.com/tuzlu07x/foreman) ·
 **Issues:** [`/issues`](https://github.com/tuzlu07x/foreman/issues)
 
