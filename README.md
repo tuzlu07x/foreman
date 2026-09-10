@@ -236,8 +236,8 @@ setups people now run at home.
 
 ## Contributing
 
-PRs and issues welcome. Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md) and the
-[Code of Conduct](./CODE_OF_CONDUCT.md).
+PRs and issues welcome. Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md), the
+[agent contribution guide](./AGENTS.md), and the [Code of Conduct](./CODE_OF_CONDUCT.md).
 
 **Website:** [foreman-agent.com](https://foreman-agent.com) ·
 **Repo:** [github.com/tuzlu07x/foreman](https://github.com/tuzlu07x/foreman) ·

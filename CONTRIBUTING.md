@@ -5,7 +5,7 @@ Thanks for taking a look. Foreman is a small, opinionated project — short PRs 
 ## Before you start
 
 - Read [`FOREMAN.md`](./FOREMAN.md) for the architecture and [`FOREMAN-TUI.md`](./FOREMAN-TUI.md) for the brand / UI spec. Most "why is it like this?" answers are in there.
-- Scan open [issues](https://github.com/tuzlu07x/foreman/issues) — labelled by phase (`phase:1-skeleton` … `phase:4-release`) and area (`area:tui`, `area:mediator`, `area:docs`, …). Pick something with no assignee.
+- Scan open [issues](https://github.com/tuzlu07x/foreman/issues). New contributors and coding agents should prefer `good first issue`, `help wanted`, or `agent-ready`; pick work with no assignee.
 - For anything beyond a small fix, open an issue first so we can agree on scope before code lands.
 
 ## Dev setup
@@ -30,6 +30,7 @@ FOREMAN_HOME=./.foreman-dev node dist/cli/index.js start
 
 - Branch off the latest `main`. Name it `feat/<issue#>-<short-slug>` or `fix/<issue#>-<short-slug>`.
 - One issue per PR. Reference it in the body with `Closes #<N>`.
+- Use the PR template. State what you changed, checks you ran, and the security impact. `none` is a valid security impact when appropriate.
 - Keep commits tidy. Conventional commit subjects (`feat(scope): …`, `fix(scope): …`).
 - Tests, lint, and build must be green before review. The TUI has a manual smoke step — call it out in the PR body if you touched `src/tui/`.
 - Match the existing patterns rather than introducing new ones. The shape of services, pages, and CLI commands is intentional — copy a neighbour.
@@ -43,7 +44,7 @@ Good issues describe:
 3. The smallest steps to reproduce.
 4. Foreman version (`foreman --version`) and Node version.
 
-For feature ideas, lead with the user story ("as a user running X, I want Y because Z"). Issues that fit the v0.1 scope (see roadmap in README) get triaged fastest.
+For feature ideas, lead with the user story ("as a user running X, I want Y because Z") and measurable acceptance criteria. Issues that fit the current roadmap in README get triaged fastest.
 
 ## Code style
 
@@ -66,7 +67,7 @@ npm run build
 node dist/cli/index.js registry validate
 ```
 
-4. Foreman never ships another team's binary — the `install.npm` field points at *their* package. We orchestrate, we don't repackage.
+4. Foreman never ships another team's binary — the `install.npm` field points at _their_ package. We orchestrate, we don't repackage.
 
 ## Community
 

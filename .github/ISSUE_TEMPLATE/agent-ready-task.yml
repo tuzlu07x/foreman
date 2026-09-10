@@ -1,0 +1,52 @@
+name: Agent-ready task
+description: Create a bounded, independently verifiable coding task for an external contributor or coding agent.
+title: "task: "
+labels: ["agent-ready", "help wanted"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this only for work that can be completed in a focused pull request.
+        Maintainers must ensure the referenced labels exist in the repository.
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Explain the problem and link relevant code, docs, or prior discussion.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: In scope / out of scope
+      description: Be explicit about what the contributor should and should not change.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Write testable completion conditions.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: List exact commands and any required manual check.
+      value: |
+        npm run lint
+        npm test
+        npm run build
+    validations:
+      required: true
+  - type: checkboxes
+    id: security
+    attributes:
+      label: Security boundary
+      options:
+        - label: This task does not require weakening policy, approval, identity, audit, or secret handling.
+          required: true

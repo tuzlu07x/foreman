@@ -1,0 +1,9 @@
+# Keep contribution and automation controls under maintainer review.
+
+/.github/ @tuzlu07x
+/SECURITY.md @tuzlu07x
+/install.sh @tuzlu07x
+/scripts/ @tuzlu07x
+/src/core/ @tuzlu07x
+/src/mcp/ @tuzlu07x
+/registry/ @tuzlu07x
