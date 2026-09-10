@@ -115,7 +115,7 @@ jobs:
           echo "::warning::HOMEBREW_TAP_TOKEN secret is not configured — rendered formula is in the job artifacts but no PR was opened."
 
       - name: Upload rendered formula as artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: foreman-formula
           path: _render/Formula/foreman-agent.rb
