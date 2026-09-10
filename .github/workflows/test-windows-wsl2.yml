@@ -36,7 +36,7 @@ jobs:
       FOREMAN_REPO: ${{ github.repository }}
     steps:
       - name: Set up WSL2 + Ubuntu-22.04
-        uses: Vampire/setup-wsl@v3
+        uses: Vampire/setup-wsl@v7
         with:
           distribution: Ubuntu-22.04
           set-as-default: "true"
