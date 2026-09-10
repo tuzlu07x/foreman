@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/tuzlu07x/foreman/security/advisories/new
+    about: Please report vulnerabilities privately. Do not open a public issue.
+  - name: Ask a question or share an idea
+    url: https://github.com/tuzlu07x/foreman/discussions
+    about: Use Discussions for support, open-ended ideas, and community chat.

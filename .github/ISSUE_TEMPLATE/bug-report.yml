@@ -1,0 +1,49 @@
+name: Bug report
+description: Report reproducible behavior that differs from expectation.
+title: "bug: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include secrets, tokens, private keys, or contents of `.env` files.
+        Security vulnerabilities belong in a private security advisory, not here.
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead? Include sanitized output only.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Steps, configuration shape, and commands needed to reproduce.
+      placeholder: |
+        1. Run ...
+        2. Configure ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Foreman version
+      placeholder: "foreman --version"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform and Node version
+      placeholder: "macOS 15 / Node 20.x"
+    validations:
+      required: true
