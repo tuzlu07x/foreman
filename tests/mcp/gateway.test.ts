@@ -120,6 +120,21 @@ describe('MCPGateway with fake stdio child', () => {
     expect(() => gateway.detach('ghost')).not.toThrow()
   })
 
+  it('can detach and reattach without allowing stale queued writes', async () => {
+    gateway.attach('cycle', { command: process.execPath, args: [FAKE_CHILD] })
+    gateway.detach('cycle')
+    expect(gateway.isAttached('cycle')).toBe(false)
+
+    gateway.attach('cycle', { command: process.execPath, args: [FAKE_CHILD] })
+    const pending = waitForMessage(
+      bus,
+      'cycle',
+      (msg) => 'id' in msg && msg.id === 9 && 'result' in msg,
+    )
+    gateway.send('cycle', { jsonrpc: '2.0', id: 9, method: 'tools/list' })
+    await expect(pending).resolves.toMatchObject({ id: 9 })
+  })
+
   it('attached() lists every live agent', () => {
     gateway.attach('a', { command: process.execPath, args: [FAKE_CHILD] })
     gateway.attach('b', { command: process.execPath, args: [FAKE_CHILD] })

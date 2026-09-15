@@ -38,9 +38,24 @@ export class StdioTransport {
     proc.stderr?.on('data', () => {})
     proc.on('exit', (code, signal) => {
       this.exited = true
+      this.waitingDrain = false
+      this.writeQueue.length = 0
       this.opts.onExit?.(code, signal)
     })
     proc.on('error', (err) => {
+      this.exited = true
+      this.waitingDrain = false
+      this.writeQueue.length = 0
+      this.opts.onError?.(err)
+    })
+    proc.stdin?.on('error', (err) => {
+      // A child can close stdin before its exit event (common when a nested
+      // agent tears down its MCP server). Mark the transport terminal so a
+      // queued drain callback cannot write into a closed pipe or re-emit stale
+      // frames during the next attach cycle.
+      this.exited = true
+      this.waitingDrain = false
+      this.writeQueue.length = 0
       this.opts.onError?.(err)
     })
   }
@@ -58,6 +73,9 @@ export class StdioTransport {
 
   stop(): void {
     if (!this.proc || this.exited) return
+    this.exited = true
+    this.waitingDrain = false
+    this.writeQueue.length = 0
     try {
       this.proc.stdin?.end()
     } catch {
@@ -80,6 +98,11 @@ export class StdioTransport {
   }
 
   private flushQueue(): void {
+    if (this.exited || !this.proc) {
+      this.waitingDrain = false
+      this.writeQueue.length = 0
+      return
+    }
     this.waitingDrain = false
     while (this.writeQueue.length > 0) {
       const line = this.writeQueue.shift()!
