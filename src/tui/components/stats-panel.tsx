@@ -1,4 +1,5 @@
 import { Box, Text } from "ink";
+import type { JSX } from "react";
 import { percentBar, percentLabel } from "../format.js";
 import { singleBorder, theme } from "../theme.js";
 import { useDashboardState } from "../use-dashboard-state.js";

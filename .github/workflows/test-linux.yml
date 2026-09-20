@@ -55,11 +55,13 @@ jobs:
       - name: npm run lint
         run: npm run lint
 
-      - name: npm test
-        run: npm test
-
+      # Build before test: ten CLI suites spawn the compiled binary at
+      # dist/cli/index.js, so the bundle has to exist before vitest runs.
       - name: npm run build
         run: npm run build
+
+      - name: npm test
+        run: npm test
 
       - name: Install foreman globally from the checkout
         run: npm install -g .

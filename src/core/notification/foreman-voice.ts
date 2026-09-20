@@ -169,6 +169,7 @@ export class ForemanVoice {
     const level = URGENCY_TO_LEVEL[input.urgency];
     try {
       const result = await this.service.send(level, {
+        level,
         requestId: null,
         title: input.title,
         body: input.body,
