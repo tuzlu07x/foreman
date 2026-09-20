@@ -1,4 +1,5 @@
 import { Box, Text } from "ink";
+import type { JSX } from "react";
 import type { Page } from "../app.js";
 import { useLayout } from "../hooks.js";
 import { type Layout } from "../layout.js";

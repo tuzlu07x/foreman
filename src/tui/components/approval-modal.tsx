@@ -1,4 +1,5 @@
 import { Box, Text } from "ink";
+import type { JSX } from "react";
 import type { ApprovalRequest } from "../../core/approval.js";
 import type {
   RiskBucket,

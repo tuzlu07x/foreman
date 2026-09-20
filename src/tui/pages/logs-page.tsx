@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Box, Text } from "ink";
-import { useEffect, useMemo, useState } from "react";
+import { type JSX, useEffect, useMemo, useState } from "react";
 import type { Request } from "../../db/schema.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import {
