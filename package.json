@@ -71,7 +71,7 @@
     "drizzle-orm": "^0.30.0",
     "ink": "^7.1.1",
     "ink-big-text": "^2.0.0",
-    "ink-gradient": "^3.0.0",
+    "ink-gradient": "^4.0.1",
     "react": "^19.2.8",
     "shell-quote": "^1.8.3",
     "smol-toml": "^1.6.1",
