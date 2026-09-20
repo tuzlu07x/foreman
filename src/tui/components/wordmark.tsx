@@ -1,7 +1,7 @@
 import { Box, Text } from "ink";
 import BigText from "ink-big-text";
 import Gradient from "ink-gradient";
-import { useEffect, useState } from "react";
+import { type JSX, useEffect, useState } from "react";
 import { isAsciiMode, theme } from "../theme.js";
 
 const TYPEWRITER_STEP_MS = 55;
