@@ -16,11 +16,25 @@ export interface StdioTransportOptions {
 export class StdioTransport {
   private proc: ChildProcess | null = null
   private decoder: MessageDecoder = createDecoder()
+  /** Transport is terminal: no further frames may be written. Set by stop()
+   *  and by any error that closes the pipe — not necessarily by the child
+   *  having exited. */
   private exited = false
+  /** The child actually emitted 'exit'. Only this clears stop() of its duty
+   *  to kill the process: a stdin EPIPE marks the transport terminal while
+   *  the child is still very much alive. */
+  private procExited = false
   private writeQueue: string[] = []
   private waitingDrain = false
 
   constructor(private readonly opts: StdioTransportOptions) {}
+
+  /** Drop the queue and stop accepting writes. Idempotent. */
+  private markTerminal(): void {
+    this.exited = true
+    this.waitingDrain = false
+    this.writeQueue.length = 0
+  }
 
   start(): void {
     if (this.proc) throw new Error('StdioTransport already started')
@@ -37,15 +51,14 @@ export class StdioTransport {
     })
     proc.stderr?.on('data', () => {})
     proc.on('exit', (code, signal) => {
-      this.exited = true
-      this.waitingDrain = false
-      this.writeQueue.length = 0
+      this.procExited = true
+      this.markTerminal()
       this.opts.onExit?.(code, signal)
     })
     proc.on('error', (err) => {
-      this.exited = true
-      this.waitingDrain = false
-      this.writeQueue.length = 0
+      // A spawn failure (ENOENT, EACCES) means there is no process at all.
+      this.procExited = true
+      this.markTerminal()
       this.opts.onError?.(err)
     })
     proc.stdin?.on('error', (err) => {
@@ -53,9 +66,9 @@ export class StdioTransport {
       // agent tears down its MCP server). Mark the transport terminal so a
       // queued drain callback cannot write into a closed pipe or re-emit stale
       // frames during the next attach cycle.
-      this.exited = true
-      this.waitingDrain = false
-      this.writeQueue.length = 0
+      // Deliberately does not set procExited: the child that closed its
+      // stdin is usually still running, and stop() still has to kill it.
+      this.markTerminal()
       this.opts.onError?.(err)
     })
   }
@@ -72,16 +85,14 @@ export class StdioTransport {
   }
 
   stop(): void {
-    if (!this.proc || this.exited) return
-    this.exited = true
-    this.waitingDrain = false
-    this.writeQueue.length = 0
+    if (!this.proc) return
+    this.markTerminal()
     try {
       this.proc.stdin?.end()
     } catch {
       /* stdin may already be closed */
     }
-    if (!this.proc.killed) this.proc.kill()
+    if (!this.procExited && !this.proc.killed) this.proc.kill()
   }
 
   isAlive(): boolean {
