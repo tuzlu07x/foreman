@@ -104,7 +104,7 @@ describe('submit_approval — aprv_ prefix stripping', () => {
       },
     } as JSONRPCMessage)
 
-    const callArg = vi.mocked(services.approval.submitFromAgent).mock.calls[0]![0]
+    const callArg = vi.mocked(services.approval.submitFromAgent!).mock.calls[0]![0]
     expect(callArg.approvalId).toBe(VALID_ULID)
   })
 })
