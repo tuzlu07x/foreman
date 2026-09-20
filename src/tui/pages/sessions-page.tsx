@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import { Box, Text } from "ink";
-import { useEffect, useState } from "react";
+import { type JSX, useEffect, useState } from "react";
 import type { Request } from "../../db/schema.js";
 import type { SessionInfo } from "../../core/session.js";
 import { useDashboardServices } from "../dashboard-context.js";
@@ -263,6 +263,8 @@ function TranscriptLine({ row }: { row: Request }): JSX.Element {
 interface RawRow {
   id: string;
   source_agent: string;
+  parent_request_id: string | null;
+  session_id: string | null;
   target_agent: string | null;
   target_tool: string | null;
   args: string;
@@ -308,6 +310,8 @@ export function querySessionTranscript(
   return rows.map((row) => ({
     id: row.id,
     sourceAgent: row.source_agent,
+    parentRequestId: row.parent_request_id ?? null,
+    sessionId: row.session_id ?? null,
     targetAgent: row.target_agent,
     targetTool: row.target_tool,
     args: row.args,
