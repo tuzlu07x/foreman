@@ -11,7 +11,7 @@
  */
 
 import { Box, Text } from "ink";
-import { useEffect, useState } from "react";
+import { type JSX, useEffect, useState } from "react";
 import type { Delegation } from "../../db/schema.js";
 import { DelegationTracker } from "../../core/delegation-tracker.js";
 import { useDashboardServices } from "../dashboard-context.js";

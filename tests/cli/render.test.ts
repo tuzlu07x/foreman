@@ -20,6 +20,8 @@ function stripAnsi(s: string): string {
 const sampleRequest: Request = {
   id: 'req-1',
   sourceAgent: 'hermes',
+  parentRequestId: null,
+  sessionId: null,
   targetAgent: 'claude-code',
   targetTool: 'read_file',
   args: JSON.stringify({ path: 'src/auth.ts' }),

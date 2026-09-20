@@ -1,7 +1,15 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import {
   classifySetupOutput,
   classifyVerifyOutput,
@@ -101,7 +109,7 @@ describe("rewriteForHeadless", () => {
 
 describe("runOauthFlows", () => {
   let tmp: string;
-  let writeSpy: ReturnType<typeof vi.spyOn>;
+  let writeSpy: MockInstance;
 
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), "foreman-oauth-flow-"));
