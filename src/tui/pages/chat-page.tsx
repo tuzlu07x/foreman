@@ -1,6 +1,6 @@
 import { TextInput } from "@inkjs/ui";
 import { Box, Text } from "ink";
-import { useEffect, useState } from "react";
+import { type JSX, useEffect, useState } from "react";
 import type { RegisteredAgent } from "../../core/registry.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { formatTime } from "../format.js";

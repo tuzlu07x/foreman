@@ -421,7 +421,7 @@ export function startForeman(
   }
 
   const waitForExit = (): Promise<void> => {
-    if (instance) return instance.waitUntilExit();
+    if (instance) return instance.waitUntilExit().then(() => undefined);
     return new Promise<void>((resolve) => {
       exitResolve = resolve;
     });
