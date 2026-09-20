@@ -22,7 +22,7 @@ function svc(overrides: Partial<ServiceEntry>): ServiceEntry {
     name: 'Telegram',
     description: 'desc',
     secret_name: 'telegram-bot-token',
-    where_to_get: null,
+    where_to_get: 'https://t.me/BotFather',
     format_hint: 'token',
     setup_steps: [],
     used_by_agents: [],

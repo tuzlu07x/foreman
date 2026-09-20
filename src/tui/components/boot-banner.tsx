@@ -1,5 +1,5 @@
 import { Box, Text, useStdout } from "ink";
-import { useCallback, useEffect, useState } from "react";
+import { type JSX, useCallback, useEffect, useState } from "react";
 import { buildBootLines, type BootInfo } from "../boot-info.js";
 import { theme } from "../theme.js";
 import { BootMascot } from "./boot-mascot.js";
