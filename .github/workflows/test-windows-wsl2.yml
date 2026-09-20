@@ -70,8 +70,9 @@ jobs:
           cd "$HOME/foreman"
           npm ci
           npm run lint
-          npm test
+          # Build before test — the CLI suites spawn dist/cli/index.js.
           npm run build
+          npm test
 
       - name: Install foreman globally from the checkout
         shell: wsl-bash {0}

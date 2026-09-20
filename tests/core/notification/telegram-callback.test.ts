@@ -19,7 +19,7 @@ describe('#302 — Telegram callback → ApprovalService.via propagation', () =>
     const pending = svc.request({
       requestId: 'req-1',
       sourceAgent: 'hermes',
-      targetAgent: null,
+      targetAgent: undefined,
       targetTool: 'read_file',
       args: { path: '.env' },
       riskScore: 80,
@@ -50,7 +50,7 @@ describe('#302 — Telegram callback → ApprovalService.via propagation', () =>
     const pending = svc.request({
       requestId: 'req-2',
       sourceAgent: 'hermes',
-      targetAgent: null,
+      targetAgent: undefined,
       targetTool: 'read_file',
       args: {},
       riskScore: 0,
@@ -81,7 +81,7 @@ describe('#302 — Telegram callback → ApprovalService.via propagation', () =>
       const pending = svc.request({
         requestId: reqId,
         sourceAgent: 'hermes',
-        targetAgent: null,
+        targetAgent: undefined,
         targetTool: 'read_file',
         args: {},
         riskScore: 0,
