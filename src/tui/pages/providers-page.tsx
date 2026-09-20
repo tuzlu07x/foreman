@@ -1,6 +1,6 @@
 import { ConfirmInput, PasswordInput, TextInput } from "@inkjs/ui";
 import { Box, Text, useInput } from "ink";
-import { useEffect, useMemo, useState } from "react";
+import { type JSX, useEffect, useMemo, useState } from "react";
 import {
   buildProviderPromptList,
   storageNameForPrompt,

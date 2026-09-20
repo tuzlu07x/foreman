@@ -1,5 +1,5 @@
 import { Box, Text } from "ink";
-import { useEffect, useState } from "react";
+import { type JSX, useEffect, useState } from "react";
 import type { policies } from "../../db/schema.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { formatTime } from "../format.js";

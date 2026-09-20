@@ -1,6 +1,6 @@
 import { Select, TextInput } from "@inkjs/ui";
 import { Box, Text } from "ink";
-import { useEffect, useMemo, useState } from "react";
+import { type JSX, useEffect, useMemo, useState } from "react";
 import {
   loadActiveProviders,
   type ProviderEntry,

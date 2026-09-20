@@ -10,7 +10,7 @@ import {
   StatusMessage,
   TextInput,
 } from "@inkjs/ui";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type JSX, useEffect, useMemo, useRef, useState } from "react";
 import {
   checkSecrets,
   pickConfigPath,

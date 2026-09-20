@@ -1,5 +1,5 @@
 import { Box, Text } from 'ink'
-import { useEffect, useState } from 'react'
+import { type JSX, useEffect, useState } from 'react'
 import type { ApprovalRequest } from '../../core/approval.js'
 import type { RiskBucket } from '../../core/risk-rules/types.js'
 import { useDashboardState } from '../use-dashboard-state.js'
