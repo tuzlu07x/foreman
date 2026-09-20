@@ -32,11 +32,12 @@ describe('SessionProgressTicker', () => {
     db = handle.db
     sqlite = handle.sqlite
     bus = new EventBus<ForemanEventMap>()
-    sessions = new SessionManager(db, { bus })
-    // Sync the fake clock with real wall time so SessionManager.startSession
-    // (which uses Date.now() directly) matches the ticker's nowFn baseline.
-    // Each test then advances `now` manually — deterministic from here on.
+    // One clock for both. Reading Date.now() here and letting SessionManager
+    // read it again inside startSession() left a 1-2 ms gap that shifted every
+    // elapsed-time assertion in this file — the interval checks then landed
+    // either side of the boundary depending on how the runner was feeling.
     now = Date.now()
+    sessions = new SessionManager(db, { bus, nowFn: () => now })
   })
 
   afterEach(() => {
