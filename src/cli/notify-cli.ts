@@ -535,7 +535,6 @@ async function buildTelegramChannel(
   return new TelegramChannel({
     botToken: token,
     chatId: tg.chat_id,
-    maxPolls: 0, // CLI shouldn't poll; only used for one-shot sends
   })
 }
 
