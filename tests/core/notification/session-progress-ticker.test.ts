@@ -32,10 +32,12 @@ describe('SessionProgressTicker', () => {
     db = handle.db
     sqlite = handle.sqlite
     bus = new EventBus<ForemanEventMap>()
-    // One clock for both. Reading Date.now() here and letting SessionManager
-    // read it again inside startSession() left a 1-2 ms gap that shifted every
-    // elapsed-time assertion in this file — the interval checks then landed
-    // either side of the boundary depending on how the runner was feeling.
+    // One clock for both. SessionManager takes nowFn but startSession() and
+    // complete() still read Date.now() directly, so the session's startedAt
+    // and the ticker's baseline drifted 1-2 ms apart and every elapsed-time
+    // assertion here landed either side of the interval boundary depending on
+    // how the runner was feeling. Those two now go through the injected clock
+    // as the other lifecycle writes already did.
     now = Date.now()
     sessions = new SessionManager(db, { bus, nowFn: () => now })
   })
