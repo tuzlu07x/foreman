@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { useEffect, useState } from "react";
+import { type JSX, useEffect, useState } from "react";
 import { Box, Text } from "ink";
 import {
   featureSplit,

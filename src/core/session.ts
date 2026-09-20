@@ -181,7 +181,7 @@ export class SessionManager {
     } = {},
   ): string {
     const id = ulid();
-    const startedAt = Date.now();
+    const startedAt = this.now();
     this.db
       .insert(sessions)
       .values({
@@ -254,7 +254,7 @@ export class SessionManager {
     // Don't double-complete (e.g. complete() after halt()) — the halt path
     // already emitted its lifecycle event with outcome:'halted'.
     if (current.status !== "active") return;
-    const completedAt = Date.now();
+    const completedAt = this.now();
     this.db
       .update(sessions)
       .set({ status: "completed", endedAt: completedAt })

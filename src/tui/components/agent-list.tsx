@@ -1,5 +1,5 @@
 import { Box, Text } from "ink";
-import { useEffect, useState } from "react";
+import { type JSX, useEffect, useState } from "react";
 import type { RegisteredAgent } from "../../core/registry.js";
 import { singleBorder, theme } from "../theme.js";
 import { useDashboardState } from "../use-dashboard-state.js";

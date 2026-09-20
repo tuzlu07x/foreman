@@ -1,6 +1,6 @@
 import { Box, Text } from "ink";
 import { Spinner } from "@inkjs/ui";
-import { useEffect, useState } from "react";
+import { type JSX, useEffect, useState } from "react";
 import type { ControlCommand, Request } from "../../db/schema.js";
 import {
   formatDuration,
