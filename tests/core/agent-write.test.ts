@@ -1,4 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -216,12 +223,17 @@ describe("deliverWriteDirective (#433)", () => {
 
     it("records a warning + falls back to telegram-only when file write fails", async () => {
       const fetchImpl = makeFetchOk();
-      // Use an unwritable path to force a write failure.
+      // Force a write failure with a path *inside* a regular file: mkdir
+      // there fails with ENOTDIR for every user. A merely unwritable-looking
+      // absolute path is not enough — the WSL2 job runs as root and happily
+      // creates it, which is why this test only ever failed there.
+      const blocker = join(tmp, "not-a-directory");
+      writeFileSync(blocker, "x");
       const outcome = await deliverWriteDirective(
         {
           agentId: "openclaw",
           message: "x",
-          inboundDir: "/this/path/should/not/be/writable/foreman-test",
+          inboundDir: join(blocker, "foreman-test"),
         },
         {
           telegramBotToken: "tk",

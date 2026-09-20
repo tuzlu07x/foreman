@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest'
 
 // =============================================================================
 // Unit tests for the shared TTY guard helpers
@@ -27,16 +34,22 @@ interface MockedStream {
   isTTY?: boolean
 }
 
+// `process.exit` is typed `never`, so a hand-written MockInstance annotation
+// drifts with every @types/node bump. Infer the spy types from the factories
+// instead — one source of truth for both describe blocks below.
+const spyOnExit = () =>
+  vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+const spyOnConsoleError = () =>
+  vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
 describe('requireConfirm', () => {
-  let exitSpy: ReturnType<typeof vi.spyOn>
-  let errorSpy: ReturnType<typeof vi.spyOn>
+  let exitSpy: ReturnType<typeof spyOnExit>
+  let errorSpy: ReturnType<typeof spyOnConsoleError>
   const origStdinIsTTY = process.stdin.isTTY
 
   beforeEach(() => {
-    exitSpy = vi
-      .spyOn(process, 'exit')
-      .mockImplementation((() => undefined) as never)
-    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    exitSpy = spyOnExit()
+    errorSpy = spyOnConsoleError()
   })
 
   afterEach(() => {
@@ -106,16 +119,14 @@ describe('requireConfirm', () => {
 })
 
 describe('requireTty', () => {
-  let exitSpy: ReturnType<typeof vi.spyOn>
-  let errorSpy: ReturnType<typeof vi.spyOn>
+  let exitSpy: ReturnType<typeof spyOnExit>
+  let errorSpy: ReturnType<typeof spyOnConsoleError>
   const origStdinIsTTY = process.stdin.isTTY
   const origStdoutIsTTY = process.stdout.isTTY
 
   beforeEach(() => {
-    exitSpy = vi
-      .spyOn(process, 'exit')
-      .mockImplementation((() => undefined) as never)
-    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    exitSpy = spyOnExit()
+    errorSpy = spyOnConsoleError()
   })
 
   afterEach(() => {

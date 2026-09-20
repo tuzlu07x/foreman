@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import { createContext, useContext, type ReactNode } from "react";
+import { type JSX, createContext, useContext, type ReactNode } from "react";
 import type { ForemanDb } from "../db/client.js";
 import type { EventBus, ForemanEventMap } from "../core/event-bus.js";
 import type { MediatorService } from "../core/mediator.js";
