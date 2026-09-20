@@ -1,5 +1,5 @@
 import { Box, Text, useApp, useInput, useStdin } from "ink";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApprovalRequest } from "../core/approval.js";
 import type { BootInfo } from "./boot-info.js";
 import {
