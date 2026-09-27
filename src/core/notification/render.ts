@@ -1,5 +1,6 @@
 import type { ForemanEventMap } from "../event-bus.js";
 import { predicateHintsForFactors } from "../risk-rules/predicate-hint.js";
+import { redactSecretShapes } from "../risk-rules/secret-patterns.js";
 import type { RiskBucket, RiskFactor } from "../risk-rules/types.js";
 import type {
   Notification,
@@ -244,7 +245,9 @@ function categoryLabel(c: RiskFactor["category"]): string {
 function renderArgs(args: unknown): string {
   if (args === null || args === undefined) return "";
   try {
-    const text = JSON.stringify(args);
+    // Notification bodies leave the machine (Telegram, Slack, webhooks) —
+    // mask API keys / tokens / private keys before they do.
+    const text = redactSecretShapes(JSON.stringify(args)).text;
     if (text.length <= 200) return text;
     return `${text.slice(0, 197)}…`;
   } catch {
