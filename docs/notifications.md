@@ -234,6 +234,8 @@ Two **outbound-only** channels for deployments that want delivery without bidire
 
 Routes every notification as a JSON POST to your configured URL. Suitable for Discord/Slack-incoming webhooks, n8n / Zapier / PagerDuty, or your own relay.
 
+The URL must be `https://`. Plain `http://` is only accepted to this machine (`localhost`, `127.0.0.1`, `::1`), because the payload describes tool calls.
+
 ```bash
 foreman secrets add webhook-url
 # paste the URL, hit Enter
@@ -267,9 +269,13 @@ channels:
     { "id": "deny", "label": "Deny", "style": "danger" }
   ],
   "agentBlocking": true,
-  "sentAt": 1779800000000
+  "sentAt": 1779800000000,
+  "kind": "notification",
+  "messageId": "webhook:1:01JZ...:req-abc"
 }
 ```
+
+When an approval is decided or times out, Foreman sends **one** more POST with the outcome. It has `"kind": "outcome"`, the same `id` and `requestId` as the approval, and `"inReplyTo"` set to the approval's `messageId`, so you can match the two. Countdown refreshes are not sent.
 
 **HMAC verification** — receivers should validate:
 
