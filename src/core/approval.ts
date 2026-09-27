@@ -389,7 +389,7 @@ export class DbApprovalService implements ApprovalService {
           decision: row.decision ?? "denied",
           ...(row.remember ? { remember: row.remember } : {}),
           ...(row.resolvedBy === "agent" ? { via: "agent_mcp" as const } : {}),
-          ...(this.cancelled.delete(req.requestId)
+          ...(this.cancelled.delete(req.requestId) || row.resolvedBy === "cancelled"
             ? { cancelled: true }
             : row.resolvedBy === "timeout"
               ? { timedOut: true }
@@ -443,7 +443,7 @@ export class DbApprovalService implements ApprovalService {
       .set({
         status: "resolved",
         decision: "denied",
-        resolvedBy: "timeout",
+        resolvedBy: "cancelled",
         resolvedAt: Date.now(),
       })
       .where(
@@ -648,7 +648,8 @@ export class ApprovalBridge {
   private readonly bus: EventBus<ForemanEventMap>;
   private readonly pollIntervalMs: number;
   private readonly staleMs: number;
-  private readonly seen = new Set<string>();
+  /** Approvals this process announced that it hasn't seen resolved. */
+  private readonly seen = new Map<string, ForemanEventMap["approval:requested"]>();
   private timer: NodeJS.Timeout | null = null;
   private offResolved: (() => void) | null = null;
 
@@ -664,7 +665,7 @@ export class ApprovalBridge {
   start(): void {
     if (this.timer) return;
     this.offResolved = this.bus.on("approval:resolved", (e) => {
-      this.db
+      const written = this.db
         .update(pendingApprovals)
         .set({
           status: "resolved",
@@ -680,11 +681,20 @@ export class ApprovalBridge {
           ),
         )
         .run();
-      this.seen.delete(e.requestId);
+      // Nothing written means the row was already decided elsewhere and
+      // this decision lost the race. Keeping the id makes the next poll
+      // announce what actually happened.
+      if (written.changes > 0) this.seen.delete(e.requestId);
     });
     this.timer = setInterval(() => this.poll(), this.pollIntervalMs);
     this.timer.unref?.();
     this.poll(); // immediate first pass so the modal pops without a 200ms gap
+  }
+
+  /** Approvals announced and still open, for a listener that attaches
+   *  after they were announced (the TUI mounts after the first poll). */
+  pending(): Array<ForemanEventMap["approval:requested"]> {
+    return [...this.seen.values()];
   }
 
   stop(): void {
@@ -735,8 +745,7 @@ export class ApprovalBridge {
         continue;
       }
       if (this.seen.has(row.requestId)) continue;
-      this.seen.add(row.requestId);
-      this.bus.emit("approval:requested", {
+      const announcement: ForemanEventMap["approval:requested"] = {
         requestId: row.requestId,
         sourceAgent: row.sourceAgent,
         targetAgent: row.targetAgent ?? undefined,
@@ -753,14 +762,37 @@ export class ApprovalBridge {
         // Legacy rows without a deadline_ms column value pass undefined,
         // which the channel render path treats as "no countdown line".
         ...(row.deadlineMs != null ? { deadlineMs: row.deadlineMs } : {}),
-      });
+      };
+      this.seen.set(row.requestId, announcement);
+      this.bus.emit("approval:requested", announcement);
     }
-    // Forget seen ids that have left the table (resolved + cleared later).
-    if (this.seen.size > 100) {
-      const live = new Set(rows.map((r) => r.requestId));
-      for (const id of this.seen) {
-        if (!live.has(id)) this.seen.delete(id);
+    // Approvals this process surfaced that are no longer pending were
+    // decided elsewhere: in another process (a relayed Telegram tap, the
+    // requester's own timeout) or by the stale sweep above. Announce them,
+    // so the TUI drops the prompt instead of offering a decision that no
+    // longer counts.
+    const live = new Set(rows.map((r) => r.requestId));
+    const gone = [...this.seen.keys()].filter((id) => !live.has(id));
+    if (gone.length > 0) {
+      const resolved = this.db
+        .select()
+        .from(pendingApprovals)
+        .where(inArray(pendingApprovals.requestId, gone))
+        .all();
+      for (const row of resolved) {
+        this.seen.delete(row.requestId);
+        if (row.status !== "resolved") continue;
+        this.bus.emit("approval:resolved", {
+          requestId: row.requestId,
+          decision: row.decision ?? "denied",
+          ...(row.remember ? { remember: row.remember } : {}),
+          resolvedBy: row.resolvedBy ?? "timeout",
+          ...(row.resolvedBy === "agent" ? { via: "agent_mcp" as const } : {}),
+        });
       }
+      // Rows that vanished entirely (pruned) are simply forgotten.
+      const found = new Set(resolved.map((r) => r.requestId));
+      for (const id of gone) if (!found.has(id)) this.seen.delete(id);
     }
     void lt;
   }

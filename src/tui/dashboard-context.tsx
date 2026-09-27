@@ -8,6 +8,11 @@ import type { RegistryService } from "../core/registry.js";
 import type { SecretStore } from "../core/secret-store.js";
 import type { SessionManager } from "../core/session.js";
 import type { OauthFlowResult } from "../cli/run-oauth-flow.js";
+import type {
+  ForemanCommandContext,
+  ForemanCommandRouter,
+} from "../core/foreman-command.js";
+import type { InboxService } from "../core/inbox.js";
 import type { WizardOauthRunStep } from "./setup-wizard.js";
 
 export interface DashboardServices {
@@ -23,6 +28,19 @@ export interface DashboardServices {
   sessionManager?: SessionManager;
   secretStore?: SecretStore;
   runInteractiveLogin?: (steps: WizardOauthRunStep[]) => OauthFlowResult[];
+  /** Notification centre store (#613). */
+  inbox?: InboxService;
+  /** Approvals announced before the TUI mounted (see ApprovalBridge.pending). */
+  pendingApprovals?: () => Array<ForemanEventMap["approval:requested"]>;
+  /** Milliseconds letter keys are ignored after the approval on screen
+   *  changes (tests set 0). */
+  keySettleMs?: number;
+  /** Chat verbs for the TUI command bar (#612). The TUI adds the source
+   *  and owner fields itself. */
+  commandRouter?: ForemanCommandRouter;
+  commandContext?: Omit<ForemanCommandContext, "sourceAgent" | "sourceUser" | "trustedOwner">;
+  audit?: { logEvent(eventType: string, payload: unknown): void };
+  orgConfigPath?: string;
 }
 
 const DashboardContext = createContext<DashboardServices | null>(null);

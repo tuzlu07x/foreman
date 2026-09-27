@@ -36,7 +36,10 @@ import {
   deleteForemanPidfile,
   writeForemanPidfile,
 } from "../core/foreman-pidfile.js";
-import { saveLlmConfig } from "../core/llm/config.js";
+import { defaultLlmConfig, saveLlmConfig } from "../core/llm/config.js";
+import { ForemanCommandRouter, registerBuiltinCommands } from "../core/foreman-command.js";
+import { InboxRecorder, InboxService, oneLineSummary, recordDelegationOutcome } from "../core/inbox.js";
+import { OrchestratorChat } from "../core/orchestrator-chat.js";
 import { RegistryService } from "../core/registry.js";
 import { RiskScorer } from "../core/risk-scorer.js";
 import { SessionManager } from "../core/session.js";
@@ -62,6 +65,7 @@ import { SecretStore } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { approvalSigner } from "../core/approval-token.js";
 import { buildEnabledChannels } from "../core/notification/channel-factory.js";
+import { isHumanSource } from "../core/org/guard.js";
 import {
   costBySession,
   recordUsageAndCheckBudget,
@@ -241,8 +245,34 @@ export function startForeman(
   // Surface pending approvals from spawned `foreman mcp-stdio` / `foreman
   // wrap` processes into this process's bus, so the TUI's approval modal
   // fires for cross-process requests too (#117).
+  // Started below, once the inbox and notification listeners are attached,
+  // so approvals already pending at launch reach them too.
   const approvalBridge = new ApprovalBridge(db, { bus });
-  approvalBridge.start();
+
+  // In-app inbox (#613): every approval, block, crash and update, kept
+  // with read state so the TUI shows what happened while you were away —
+  // with or without external channels configured.
+  const inbox = new InboxService(db, bus);
+  const inboxRecorder = new InboxRecorder(db, inbox, { bus });
+  inboxRecorder.start();
+
+  // Chat verbs for the TUI command bar (#612) — the same router the
+  // Telegram / MCP path uses. Created up front so the TUI gets it.
+  const controlChannel = new ControlChannel(db, bus);
+  const commandRouter = new ForemanCommandRouter();
+  registerBuiltinCommands(commandRouter);
+  let orchestratorChat: OrchestratorChat | null = null;
+  try {
+    orchestratorChat = new OrchestratorChat({
+      db,
+      config: existsSync(paths.llmConfigPath) ? loadLlmConfig(paths.llmConfigPath) : defaultLlmConfig(),
+      secretStore,
+      registry,
+      bus,
+    });
+  } catch {
+    orchestratorChat = null;
+  }
 
   // Autonomous loop tracker — records every `foreman write` delegation
   // and lets the watchdog nudge initiators that go idle after the peer
@@ -262,6 +292,7 @@ export function startForeman(
   });
   const notificationBridge = notificationSetup?.bridge ?? null;
   const dailyScheduler = notificationSetup?.scheduler ?? null;
+  approvalBridge.start();
 
   // #303 / #304 / #305 — ForemanVoice + pattern detection. Only started
   // when notify is configured (no proactive messages to send otherwise).
@@ -408,6 +439,21 @@ export function startForeman(
           sessionManager,
           secretStore,
           runInteractiveLogin,
+          inbox,
+          pendingApprovals: () => approvalBridge.pending(),
+          commandRouter,
+          commandContext: {
+            db,
+            registry,
+            llmConfigPath: paths.llmConfigPath,
+            configDir: paths.configDir,
+            controlChannel,
+            ownerStore: secretStore,
+            secretStore,
+            ...(orchestratorChat ? { orchestratorChat } : {}),
+          },
+          audit,
+          orgConfigPath: paths.orgConfigPath,
         },
       }),
       { exitOnCtrlC: false },
@@ -442,6 +488,7 @@ export function startForeman(
       r();
     }
     approvalBridge.stop();
+    inboxRecorder.stop();
     controlPoller.stop();
     if (dailyScheduler) dailyScheduler.stop();
     if (activitySummaryScheduler) activitySummaryScheduler.stop();
@@ -482,7 +529,6 @@ export function startForeman(
   // #498 — Bus injection so drain outcomes surface as control:applied /
   // control:failed events; the TUI Activity feed subscribes for live
   // status transitions.
-  const controlChannel = new ControlChannel(db, bus);
   const controlHandlers = new Map<string, ControlHandler>([
     [
       "stop",
@@ -724,7 +770,7 @@ export function startForeman(
             // `sourceAgent === 'cli'` (terminal user; no chat to
             // nudge).
             const initiator = row.sourceAgent ?? "cli";
-            if (initiator && initiator !== "cli") {
+            if (!isHumanSource(initiator)) {
               try {
                 delegationTracker.closeOpenInitiatorRows(initiator);
               } catch (err) {
@@ -805,6 +851,13 @@ export function startForeman(
                 exec.spawn.kind === "unsupported" ? exec.spawn.reason : null,
               outputRelay: exec.outputRelay,
             });
+            // The TUI promised "output will arrive in your inbox".
+            recordDelegationOutcome(inbox, {
+              controlId: row.id,
+              agentId,
+              task: message,
+              spawn: exec.spawn,
+            });
             if (exec.spawn.kind === "ok") {
               return { status: "applied" };
             }
@@ -835,6 +888,14 @@ export function startForeman(
           if (outcome.status === "failed") {
             return { status: "failed", error: outcome.error };
           }
+          inbox.add({
+            level: "info",
+            kind: "delegation",
+            title: `Task handed to ${agentId}: ${oneLineSummary(message, 60)}`,
+            body: `${agentId} has no non-interactive command, so the task was posted for it to pick up.`,
+            agentId,
+            dedupeKey: `control:${row.id}:outcome`,
+          });
           return { status: "applied" };
         } catch (err) {
           return {
@@ -1305,7 +1366,7 @@ export async function runDelegationWatchdog(
   for (const row of pending) {
     // Initiators that aren't LLM agents (e.g. `cli` for terminal users)
     // have nothing to nudge — they SEE the output in their own context.
-    if (row.initiatorAgent === "cli") continue;
+    if (isHumanSource(row.initiatorAgent)) continue;
 
     const isLastNudge = row.nudgeCount + 1 >= deps.tracker.maxNudges;
     const text = isLastNudge

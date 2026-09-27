@@ -6,6 +6,7 @@ import {
   real,
   sqliteTable,
   text,
+  uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
 export const agents = sqliteTable("agents", {
@@ -220,7 +221,7 @@ export const pendingApprovals = sqliteTable(
       .default("pending"),
     decision: text("decision", { enum: ["allowed", "denied"] }),
     remember: text("remember", { enum: ["allow", "deny"] }),
-    resolvedBy: text("resolved_by", { enum: ["user", "timeout", "agent"] }),
+    resolvedBy: text("resolved_by", { enum: ["user", "timeout", "agent", "cancelled"] }),
     requestedAt: integer("requested_at").notNull(),
     resolvedAt: integer("resolved_at"),
     // #525 — Absolute Unix ms timestamp when the approval auto-resolves to
@@ -529,6 +530,34 @@ export const delegations = sqliteTable(
 
 export type Delegation = typeof delegations.$inferSelect;
 export type NewDelegation = typeof delegations.$inferInsert;
+
+// In-app inbox (#613) — what the TUI notification centre shows. See
+// migrations/0023_inbox.sql.
+export const inboxItems = sqliteTable(
+  "inbox_items",
+  {
+    id: text("id").primaryKey(),
+    createdAt: integer("created_at").notNull(),
+    level: text("level", { enum: ["info", "warning", "critical"] }).notNull(),
+    kind: text("kind", {
+      enum: ["approval", "block", "delegation", "budget", "agent", "update", "system"],
+    }).notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull().default(""),
+    requestId: text("request_id"),
+    agentId: text("agent_id"),
+    dedupeKey: text("dedupe_key"),
+    readAt: integer("read_at"),
+  },
+  (t) => ({
+    dedupeIdx: uniqueIndex("inbox_items_dedupe_idx").on(t.dedupeKey),
+    createdIdx: index("inbox_items_created_idx").on(t.createdAt),
+    unreadIdx: index("inbox_items_unread_idx").on(t.readAt, t.createdAt),
+  }),
+);
+
+export type InboxItem = typeof inboxItems.$inferSelect;
+export type NewInboxItem = typeof inboxItems.$inferInsert;
 
 // FTS5 virtual table and triggers live in a hand-written migration
 // (drizzle-kit cannot emit virtual tables). See:

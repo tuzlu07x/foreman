@@ -264,7 +264,11 @@ export function renderResolvedFooter(
 ): string {
   const verb = e.decision === "allowed" ? "✓ Allowed" : "✗ Denied";
   const source =
-    e.resolvedBy === "timeout" ? "(timeout default)" : "(resolved elsewhere)";
+    e.resolvedBy === "timeout"
+      ? "(timeout default)"
+      : e.resolvedBy === "cancelled"
+        ? "(request withdrawn)"
+        : "(resolved elsewhere)";
   return `${verb} ${source} at ${new Date().toISOString().slice(11, 19)}`;
 }
 

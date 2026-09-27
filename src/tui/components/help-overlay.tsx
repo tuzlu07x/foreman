@@ -23,17 +23,22 @@ interface HelpSection {
 
 const NAV_SECTIONS: HelpSection[] = [
   {
-    title: "Navigation",
+    title: "Everywhere",
     rows: [
+      { key: ":", label: "command console" },
+      { key: "Tab / ⇧Tab", label: "next / previous page" },
+      { key: "n", label: "inbox (notifications)" },
       { key: "h / ?", label: "open / close help" },
-      { key: "Esc", label: "back to dashboard" },
+      { key: "Esc", label: "back to Home" },
       { key: "q / Ctrl-C", label: "quit (with confirm)" },
     ],
   },
   {
     title: "Pages",
     rows: [
+      { key: "n", label: "Inbox" },
       { key: "a", label: "Agents" },
+      { key: "d", label: "Delegations" },
       { key: "v", label: "Providers" },
       { key: "V", label: "Services" },
       { key: "k", label: "Secrets / keys" },
@@ -50,6 +55,7 @@ const NAV_SECTIONS: HelpSection[] = [
     rows: [
       { key: "a / d", label: "allow once / deny" },
       { key: "A / D", label: "always allow / deny" },
+      { key: "← → / [ ]", label: "next approval in queue" },
       { key: "i", label: "inspect details" },
       { key: "t", label: "toggle technical" },
       { key: "k", label: "halt session" },

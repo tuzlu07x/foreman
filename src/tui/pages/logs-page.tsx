@@ -11,7 +11,7 @@ import {
   summariseTool,
   targetLabel,
 } from "../format.js";
-import { singleBorder, theme } from "../theme.js";
+import { roundBorder, theme } from "../theme.js";
 import { EmptyState } from "../components/empty-state.js";
 import { PageHeader } from "../components/typography.js";
 import {
@@ -71,7 +71,7 @@ export function LogsPage(props: LogsPageProps): JSX.Element {
   return (
     <Box
       flexDirection="column"
-      borderStyle={singleBorder()}
+      borderStyle={roundBorder()}
       borderDimColor
       paddingX={1}
       flexGrow={1}
@@ -221,7 +221,7 @@ function ResultRow({
           marginLeft={2}
           marginBottom={1}
           paddingX={1}
-          borderStyle={singleBorder()}
+          borderStyle={roundBorder()}
           borderDimColor
         >
           <Text color={theme.fg.muted}>id: {row.id}</Text>

@@ -13,7 +13,7 @@ import {
 import { isOAuthProviderId } from "../../core/llm/oauth/oauth-providers.js";
 import type { SecretStore } from "../../core/secret-store.js";
 import { useDashboardServices } from "../dashboard-context.js";
-import { singleBorder, theme } from "../theme.js";
+import { roundBorder, theme } from "../theme.js";
 import { PageHeader } from "../components/typography.js";
 
 const REVEAL_AUTO_HIDE_MS = 10_000;
@@ -37,9 +37,12 @@ type Op =
 
 export interface ProvidersPageProps {
   onLeave: () => void;
+  /** Told when the page starts or stops taking typed text, so global keys
+   *  (Tab, `:`) stay out of a value being entered. */
+  onEditingChange?: (editing: boolean) => void;
 }
 
-export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
+export function ProvidersPage({ onLeave, onEditingChange }: ProvidersPageProps): JSX.Element {
   const { registry, secretStore, bus, runInteractiveLogin } =
     useDashboardServices();
   const catalog = useMemo(() => loadActiveProviders().doc.providers, []);
@@ -49,6 +52,10 @@ export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [op, setOp] = useState<Op>({ kind: "list" });
+  const editing = op.kind !== "list";
+  useEffect(() => {
+    onEditingChange?.(editing);
+  }, [editing, onEditingChange]);
   // Whether the selected row is expanded to show extra detail. Matches the
   // pattern used by every other list page (#280) so Enter is consistent.
   const [expanded, setExpanded] = useState(false);
@@ -185,7 +192,7 @@ export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
     return (
       <Box
         flexDirection="column"
-        borderStyle={singleBorder()}
+        borderStyle={roundBorder()}
         borderDimColor
         paddingX={1}
         flexGrow={1}
@@ -198,7 +205,7 @@ export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
   return (
     <Box
       flexDirection="column"
-      borderStyle={singleBorder()}
+      borderStyle={roundBorder()}
       borderDimColor
       paddingX={1}
       flexGrow={1}
@@ -264,7 +271,7 @@ export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
           flexDirection="column"
           marginTop={1}
           paddingX={1}
-          borderStyle={singleBorder()}
+          borderStyle={roundBorder()}
           borderColor={theme.accent.warning}
         >
           <Text color={theme.accent.warning}>
@@ -455,7 +462,7 @@ function AddingOverlay({
       flexDirection="column"
       marginTop={1}
       paddingX={1}
-      borderStyle={singleBorder()}
+      borderStyle={roundBorder()}
       borderColor={theme.accent.warning}
     >
       <Text color={theme.accent.warning}>
@@ -501,7 +508,7 @@ function RotatingOverlay({
       flexDirection="column"
       marginTop={1}
       paddingX={1}
-      borderStyle={singleBorder()}
+      borderStyle={roundBorder()}
       borderColor={theme.accent.warning}
     >
       <Text color={theme.accent.warning}>
@@ -545,7 +552,7 @@ function RemovingOverlay({
       flexDirection="column"
       marginTop={1}
       paddingX={1}
-      borderStyle={singleBorder()}
+      borderStyle={roundBorder()}
       borderColor={theme.accent.danger}
     >
       <Text color={theme.accent.danger}>Remove {provider.name}?</Text>

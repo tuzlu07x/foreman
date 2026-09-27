@@ -11,7 +11,7 @@ import {
   summariseTool,
   targetLabel,
 } from "../format.js";
-import { singleBorder, theme } from "../theme.js";
+import { roundBorder, theme } from "../theme.js";
 import { EmptyState } from "../components/empty-state.js";
 import { PageHeader } from "../components/typography.js";
 
@@ -54,7 +54,7 @@ export function SessionsPage({
     return (
       <Box
         flexDirection="column"
-        borderStyle={singleBorder()}
+        borderStyle={roundBorder()}
         borderDimColor
         paddingX={1}
         flexGrow={1}
@@ -74,7 +74,7 @@ export function SessionsPage({
   return (
     <Box
       flexDirection="column"
-      borderStyle={singleBorder()}
+      borderStyle={roundBorder()}
       borderDimColor
       paddingX={1}
       flexGrow={1}
@@ -213,7 +213,7 @@ function SessionDetail({
       marginLeft={2}
       marginBottom={1}
       paddingX={1}
-      borderStyle={singleBorder()}
+      borderStyle={roundBorder()}
       borderDimColor
     >
       <Text color={theme.fg.muted}>session id: {session.id}</Text>
