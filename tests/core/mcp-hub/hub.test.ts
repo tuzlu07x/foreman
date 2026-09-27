@@ -187,6 +187,41 @@ describe('McpHub against a real stdio MCP server', () => {
     expect(status!.error).not.toContain('hunter2hunter2')
   })
 
+  it('scrubs injected and secret-shaped values from an upstream tool-call error', async () => {
+    const cfg = HubConfigSchema.parse({
+      servers: {
+        demo: {
+          command: process.execPath,
+          args: [DEMO],
+          env: { DEMO_VARIANT: 'failing', DEMO_TOKEN: '${secret:demo-token}' },
+        },
+      },
+    })
+    const h = hub(cfg, { resolveSecret: (n) => (n === 'demo-token' ? 'hunter2hunter2' : null) })
+    const resolution = await h.resolveCall('demo__fail', {})
+    if (resolution?.kind !== 'tool') throw new Error('expected tool')
+    const err = await h.call(resolution.tool, resolution.args).then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect(err).toBeInstanceOf(Error)
+    const message = (err as Error).message
+    expect(message).toContain('auth failed for token=[redacted]')
+    expect(message).toContain('[REDACTED')
+    expect(message).not.toContain('hunter2hunter2')
+    expect(message).not.toContain(`ghp_${'b'.repeat(36)}`)
+  })
+
+  it('ignores non-JSON-RPC lines an upstream prints on stdout', async () => {
+    const h = hub(config({}, 'noisy'))
+    const names = (await h.listForAgent()).map((t) => t.name)
+    expect(names).toContain('demo__echo')
+    const resolution = await h.resolveCall('demo__echo', { text: 'still here' })
+    if (resolution?.kind !== 'tool') throw new Error('expected tool')
+    const { result } = await h.call(resolution.tool, resolution.args)
+    expect(result.content).toEqual([{ type: 'text', text: 'still here' }])
+  })
+
   it('honours an org scope: servers outside the role are invisible and refused', async () => {
     const h = hub(config())
     const scope = { allowedServers: new Set(['github']) }

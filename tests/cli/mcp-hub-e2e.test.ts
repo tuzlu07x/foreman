@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -126,6 +126,61 @@ describe('MCP hub through foreman mcp-stdio', () => {
     expect(tools.stdout).toMatch(/rug pull; seen/)
     expect(tools.stdout).toContain('foreman mcp tools demo --refresh')
   }, 60_000)
+
+  it('redacts secrets from an upstream error in the reply and the audit trail', async () => {
+    const token = 'hunter2hunter2'
+    const shaped = `ghp_${'b'.repeat(36)}`
+    const added = spawnSync('node', [FM_BIN, 'secrets', 'add', 'demo-token', '--value', token], {
+      env,
+      encoding: 'utf-8',
+    })
+    expect(added.status).toBe(0)
+    writeFileSync(
+      join(home, 'mcp.yaml'),
+      [
+        'servers:',
+        '  demo:',
+        `    command: ${JSON.stringify(process.execPath)}`,
+        `    args: [${JSON.stringify(DEMO)}]`,
+        '    env:',
+        '      DEMO_VARIANT: failing',
+        '      DEMO_TOKEN: ${secret:demo-token}',
+        '    tools:',
+        '      allow: [fail]',
+        '',
+      ].join('\n'),
+    )
+    const child = spawn('node', [FM_BIN, 'mcp-stdio', '--source', 'claude-code'], { env })
+    let stderr = ''
+    child.stderr.on('data', (d: Buffer) => (stderr += d.toString()))
+    const s = new Session(child)
+    await s.call(1, 'initialize')
+    const failed = await s.call(2, 'tools/call', { name: 'demo__fail', arguments: {} })
+    expect(failed.result!.isError).toBe(true)
+    const text = failed.result!.content![0]!.text!
+    expect(text).toContain("Upstream MCP server 'demo' failed")
+    expect(text).toContain('[redacted]')
+    expect(text).not.toContain(token)
+    expect(text).not.toContain(shaped)
+    // The transport survives the failure.
+    const list = await s.call(3, 'tools/list')
+    expect(list.result!.tools!.map((t) => t.name)).toContain('demo__fail')
+    await s.close()
+    expect(stderr).not.toContain(token)
+    expect(stderr).not.toContain(shaped)
+
+    const log = spawnSync('node', [FM_BIN, 'log', 'tail', '--json'], { env, encoding: 'utf-8' }).stdout
+    expect(log).toContain('demo__fail')
+    expect(log).not.toContain(token)
+    expect(log).not.toContain(shaped)
+    for (const file of ['foreman.db', 'foreman.db-wal']) {
+      const path = join(home, file)
+      if (!existsSync(path)) continue
+      const raw = readFileSync(path).toString('latin1')
+      expect(raw).not.toContain(token)
+      expect(raw).not.toContain(shaped)
+    }
+  }, 30_000)
 
   it('`foreman mcp tools` shows the inventory with the deny rule applied', () => {
     const out = spawnSync('node', [FM_BIN, 'mcp', 'tools', '--json'], { env, encoding: 'utf-8' })

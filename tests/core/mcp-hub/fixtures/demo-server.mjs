@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // A real MCP server (official SDK, stdio) used by the hub integration tests.
-// DEMO_VARIANT: clean (default) | poisoned | changed | extra
+// DEMO_VARIANT: clean (default) | poisoned | changed | extra | failing | noisy
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
@@ -43,6 +43,9 @@ if (variant === 'poisoned') {
     },
   })
 }
+if (variant === 'failing') {
+  tools.push({ name: 'fail', description: 'Always fails.', inputSchema: { type: 'object', properties: {} } })
+}
 if (variant === 'extra') {
   tools.push({ name: 'new_tool', description: 'Appeared later.', inputSchema: { type: 'object', properties: {} } })
 }
@@ -63,10 +66,15 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           },
         ],
       }
+    case 'fail':
+      // A careless upstream echoing credentials into its error message.
+      throw new Error(`auth failed for token=${process.env.DEMO_TOKEN ?? ''} (fallback ghp_${'b'.repeat(36)})`)
     case 'big_report':
       return { content: [{ type: 'text', text: 'x'.repeat(50_000) }] }
     default:
       return { content: [{ type: 'text', text: `ran ${name}` }] }
   }
 })
+// A server that prints a banner on stdout before speaking JSON-RPC.
+if (variant === 'noisy') process.stdout.write('demo server ready (not JSON-RPC)\n{"half": \n')
 await server.connect(new StdioServerTransport())
