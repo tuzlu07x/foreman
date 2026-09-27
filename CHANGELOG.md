@@ -241,6 +241,19 @@ All notable changes to Foreman are documented here. The format follows
 - The default Claude Code hook matcher also covers `Read`, `NotebookEdit`,
   `WebSearch` and third-party `mcp__…` tools.
 - The MCP SDK floor is raised to 1.30 (lockfile unchanged).
+- **better-sqlite3 13** (#644, [supported platforms](docs/install.md#supported-platforms)).
+  - The SQLite driver moves from 12.11 to 13.0.3: N-API, SQLite 3.53.4,
+    and prebuilt binaries inside the npm package instead of an install-time
+    download from GitHub (`prebuild-install` and `bindings` are gone, and
+    there is no install script). The binaries are covered by the lockfile's
+    integrity hash; the package grows from 2.7 MB to 11.4 MB (27 MB
+    unpacked).
+  - Supported platforms are macOS, Linux (glibc and musl) and Windows on
+    x64 and arm64; Foreman itself runs on Windows through WSL2. Other
+    platforms no longer build the driver from source and can't open the
+    database.
+  - The standalone binaries embed the prebuilt addon for their target
+    and load it from the hash-checked runtime directory as before.
 
 ## [0.1.6] - 2026-06-01
 
