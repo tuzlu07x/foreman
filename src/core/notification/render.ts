@@ -256,6 +256,30 @@ function renderArgs(args: unknown): string {
 }
 
 // =============================================================================
+// Manager recommendation follow-up (#623)
+// =============================================================================
+
+/** A manager agent's advice on an approval that is still open. No buttons
+ *  and no approval id: the decision stays on the approval message. */
+export function renderRecommendation(
+  e: ForemanEventMap["approval:recommended"],
+): Omit<Notification, "id"> {
+  const reason = redactSecretShapes(e.reason).text;
+  const verb = e.recommendation === "allow" ? "✓ allow" : "✗ deny";
+  return {
+    level: levelForBucket(e.riskBucket),
+    requestId: null,
+    title: `${e.managerTitle} (${e.managerAgent}) recommends ${e.recommendation}`,
+    body:
+      `🧭 ${e.managerTitle} (${e.managerAgent}) recommends ${verb} for ` +
+      `${e.targetTool ?? "the call"} by ${e.requesterAgent}: ${reason.length > 300 ? `${reason.slice(0, 299)}…` : reason}\n` +
+      "Advice only: your decision on the approval is still needed.",
+    actions: [],
+    agentBlocking: false,
+  };
+}
+
+// =============================================================================
 // Channel updateMessage — "decision elsewhere" follow-ups
 // =============================================================================
 

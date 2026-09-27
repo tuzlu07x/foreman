@@ -8,6 +8,7 @@ import {
 } from './notify-state.js'
 import {
   renderApprovalNotification,
+  renderRecommendation,
   renderResolvedFooter,
   renderSessionCompleted,
   renderSessionProgress,
@@ -76,6 +77,9 @@ export class NotificationBridge {
   // free-text replies are routed via the agent SOUL → submit_user_answer
   // MCP tool by way of the same channel listener.
   private offQuestionAsked: (() => void) | null = null
+  // #623 — A manager agent's recommendation on an approval still open in
+  // the user's chat: an informational follow-up, never a decision.
+  private offRecommended: (() => void) | null = null
   /** Maps requestId → notificationIds we've sent, so the resolved handler
    *  knows which messages to update. Cleared once a resolution lands. */
   private readonly outstanding = new Map<string, Set<string>>()
@@ -176,6 +180,13 @@ export class NotificationBridge {
       })
     })
 
+    // 8. #623 — manager recommendations on approvals already in the chat.
+    this.offRecommended = this.bus.on('approval:recommended', (e) => {
+      this.handleRecommended(e).catch(() => {
+        // best-effort — the recommendation is also in the TUI and inbox
+      })
+    })
+
     await this.service.startListening()
     // #525 — Start the shared countdown ticker so in-flight approval
     // messages get their "⏱ Auto-deny in Xm Ys" tail refreshed each
@@ -215,6 +226,10 @@ export class NotificationBridge {
     if (this.offQuestionAsked) {
       this.offQuestionAsked()
       this.offQuestionAsked = null
+    }
+    if (this.offRecommended) {
+      this.offRecommended()
+      this.offRecommended = null
     }
     this.outstanding.clear()
     this.approvalBodies.clear()
@@ -395,6 +410,20 @@ export class NotificationBridge {
     if (isSilenced(state)) return
     const payload = renderUserQuestion(e)
     await this.service.send('warning', payload)
+  }
+
+  /** #623 — Follow up on an approval this bridge sent and that is still
+   *  undecided. Same level as the approval, so it reaches the same
+   *  channels; no buttons, so nothing about it can decide anything. */
+  private async handleRecommended(
+    e: ForemanEventMap['approval:recommended'],
+  ): Promise<void> {
+    if (!this.outstanding.has(e.approvalId) || this.claimed.has(e.approvalId)) return
+    const payload = renderRecommendation(e)
+    const state = this.getState()
+    if (isAgentMuted(state, e.requesterAgent)) return
+    if (isSilenced(state) && payload.level !== 'critical') return
+    await this.service.send(payload.level, payload)
   }
 
   private async handleOobDecision(d: UserDecision): Promise<void> {
