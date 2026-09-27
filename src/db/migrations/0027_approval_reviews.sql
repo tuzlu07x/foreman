@@ -6,9 +6,14 @@
 -- recommendation (allow / deny + reason). A recommendation is advice shown
 -- to the owner: it never resolves the approval, which stays in
 -- `pending_approvals` until the owner decides or it times out.
+--
+-- The manager only ever sees `handle`, never the approval id, so it can't
+-- use the review to answer the approval through `submit_approval`.
 
 CREATE TABLE `approval_reviews` (
   `approval_id` TEXT NOT NULL,
+  -- opaque random id (rv_…) the manager uses with org_recommend
+  `handle` TEXT NOT NULL,
   `manager_role` TEXT NOT NULL,
   -- the agent filling manager_role when the review was sent (lowercase)
   `manager_agent` TEXT NOT NULL,
@@ -28,13 +33,20 @@ CREATE TABLE `approval_reviews` (
   `closed_at` INTEGER,
   -- allow | deny, set once by the manager
   `recommendation` TEXT,
-  -- redacted and clipped
+  -- one line, redacted and clipped
   `reason` TEXT,
   `recommended_at` INTEGER,
-  -- set once `foreman start` has shown the recommendation to the owner
+  -- set once `foreman start` has shown (or skipped) the recommendation
   `announced_at` INTEGER,
+  -- later approvals from the same report to the same manager that were not
+  -- sent for review because this one went out moments before
+  `coalesced` INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (`approval_id`, `manager_role`)
 );
+--> statement-breakpoint
+CREATE UNIQUE INDEX `approval_reviews_handle_idx` ON `approval_reviews` (`handle`);
+--> statement-breakpoint
+CREATE INDEX `approval_reviews_pair_idx` ON `approval_reviews` (`requester_agent`, `manager_role`, `requested_at`);
 --> statement-breakpoint
 CREATE INDEX `approval_reviews_unannounced_idx` ON `approval_reviews` (`announced_at`, `recommended_at`);
 --> statement-breakpoint

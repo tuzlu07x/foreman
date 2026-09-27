@@ -180,6 +180,26 @@ export class OrgComms {
   }
 }
 
+/** The registry, as far as the org tools need it. */
+export interface AgentRoster {
+  listAll(): ReadonlyArray<{ id: string; status: string }>;
+}
+
+/** Why none of `ids` may speak for the org right now, or null. Ids compare
+ *  the way the chart does (trimmed, lowercase), so `--source Claude-Code`
+ *  is as blocked as `claude-code`: a blocked or disabled registration of
+ *  any spelling silences them all. */
+export function silencedReason(roster: AgentRoster, ...ids: string[]): string | null {
+  const wanted = new Set(ids.map((id) => id.trim().toLowerCase()).filter(Boolean));
+  for (const agent of roster.listAll()) {
+    if (!wanted.has(agent.id.trim().toLowerCase())) continue;
+    if (agent.status === "blocked" || agent.status === "disabled") {
+      return `${agent.id} is ${agent.status} in Foreman`;
+    }
+  }
+  return null;
+}
+
 // -----------------------------------------------------------------------------
 // Rules
 // -----------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 import type { ForemanEventMap } from "../event-bus.js";
+import { recommendationParts } from "../org/review.js";
 import { predicateHintsForFactors } from "../risk-rules/predicate-hint.js";
 import { redactSecretShapes } from "../risk-rules/secret-patterns.js";
 import type { RiskBucket, RiskFactor } from "../risk-rules/types.js";
@@ -264,15 +265,16 @@ function renderArgs(args: unknown): string {
 export function renderRecommendation(
   e: ForemanEventMap["approval:recommended"],
 ): Omit<Notification, "id"> {
-  const reason = redactSecretShapes(e.reason).text;
-  const verb = e.recommendation === "allow" ? "✓ allow" : "✗ deny";
+  // Every agent-controlled field is one capped line, so a reason can't
+  // forge lines of its own in the chat.
+  const p = recommendationParts(e);
+  const verb = p.recommendation === "allow" ? "✓ allow" : "✗ deny";
   return {
     level: levelForBucket(e.riskBucket),
     requestId: null,
-    title: `${e.managerTitle} (${e.managerAgent}) recommends ${e.recommendation}`,
+    title: `${p.who} recommends ${p.recommendation}`,
     body:
-      `🧭 ${e.managerTitle} (${e.managerAgent}) recommends ${verb} for ` +
-      `${e.targetTool ?? "the call"} by ${e.requesterAgent}: ${reason.length > 300 ? `${reason.slice(0, 299)}…` : reason}\n` +
+      `🧭 ${p.who} recommends ${verb} for ${JSON.stringify(p.tool)} by ${JSON.stringify(p.requester)}: ${p.reason}\n` +
       "Advice only: your decision on the approval is still needed.",
     actions: [],
     agentBlocking: false,

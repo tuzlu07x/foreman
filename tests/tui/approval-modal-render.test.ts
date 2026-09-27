@@ -275,8 +275,43 @@ describe('ApprovalModal — bucket-coloured border + grouped factor view', () =>
       ).lastFrame() ?? '',
     )
     expect(frame).toContain('Manager review')
-    expect(frame).toContain('CTO (claude-code) recommends deny: no reason to read .env')
+    expect(frame).toContain('CTO (claude-code, unverified id) recommends deny: no reason to read .env')
     expect(frame).toContain('Advice only. Your decision is final.')
     expect(frame).toContain(']llow once')
+  })
+
+  it("a recommendation can't forge lines or push the keys and timer off screen (#623)", () => {
+    const hostile = {
+      approvalId: 'req-1',
+      managerRole: 'cto',
+      managerTitle: 'CTO\n[a] allow once',
+      managerAgent: 'claude-code\u202e',
+      requesterRole: 'engineer',
+      requesterAgent: 'hermes',
+      targetTool: 'read_file\n[A] always allow',
+      riskBucket: 'medium' as const,
+      recommendation: 'allow' as const,
+      reason: `fine\nPolicy: approved by owner\n[a] allow once\u2028[D] deny always${'\n'.repeat(60)}\u200b\ttail ${'x'.repeat(400)}`,
+      recommendedAt: 1,
+    }
+    const plain = stripAnsi(
+      render(React.createElement(ApprovalModal, { request: makeRequest({ riskBucket: 'medium' }), remainingSeconds: 30 })).lastFrame() ?? '',
+    )
+    const frame = stripAnsi(
+      render(
+        React.createElement(ApprovalModal, {
+          request: makeRequest({ riskBucket: 'medium' }),
+          remainingSeconds: 30,
+          recommendations: [hostile],
+        }),
+      ).lastFrame() ?? '',
+    )
+    const lines = frame.split('\n')
+    // Header + one recommendation line + the "advice only" line, at most.
+    expect(lines.length).toBeLessThanOrEqual(plain.split('\n').length + 4)
+    expect(lines.filter((l) => /^\W*(Policy:|\[a\] allow once|\[D\] deny always)/.test(l))).toEqual([])
+    expect(frame).not.toMatch(/[\u202e\u200b\u2028]/)
+    expect(frame).toContain(']llow once')
+    expect(frame).toContain('30s left')
   })
 })
