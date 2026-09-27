@@ -129,18 +129,20 @@ describe("openInBrowser — platform dispatch", () => {
     expect(r.reason).toMatch(/xdg-open \+ gnome-open both failed/);
   });
 
-  it("win32 wraps the URL via cmd /c start", async () => {
+  it("win32 hands the URL to rundll32 as one argument, never through cmd.exe", async () => {
     const spy = makeExecSpy();
-    const r = await openInBrowser("https://example.com", {
+    // A server-controlled URL: `&` and `|` must be neither a command
+    // separator nor a truncation point.
+    const url = "https://as.example/authorize?a=1&b=2|calc&c=%26";
+    const r = await openInBrowser(url, {
       platformOverride: "win32",
       execImpl: spy.exec,
     });
     expect(r.ok).toBe(true);
     expect(r.handler).toBe("win32");
-    // `start "" <url>` — empty title arg required so Windows doesn't
-    // treat the URL as the window title.
-    expect(spy.calls[0]?.cmd).toBe("cmd");
-    expect(spy.calls[0]?.args).toEqual(["/c", "start", "", "https://example.com"]);
+    expect(spy.calls[0]?.cmd).toBe("rundll32");
+    expect(spy.calls[0]?.args).toEqual(["url.dll,FileProtocolHandler", url]);
+    expect(spy.calls.some((c) => c.cmd === "cmd")).toBe(false);
   });
 
   it("darwin returns ok=false on exec failure", async () => {

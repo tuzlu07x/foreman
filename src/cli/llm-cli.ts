@@ -45,6 +45,7 @@ import {
 import { SecretStore } from "../core/secret-store.js";
 import { closeDb, getDb } from "../db/client.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
+import { WIN32_URL_HANDLER } from "../utils/browser-open.js";
 import { getForemanPaths } from "../utils/config.js";
 import { dim, green, orange, red } from "./colors.js";
 import { safeLoadConfig } from "./safe-load.js";
@@ -729,9 +730,11 @@ function openInBrowser(url: string, autoOpen = true): void {
   console.log("");
   if (!autoOpen) return;
   const platform = process.platform;
+  // win32: rundll32, not `cmd /c start` — cmd.exe would re-parse `&` in
+  // the query string.
   const cmd =
-    platform === "darwin" ? "open" : platform === "win32" ? "cmd" : "xdg-open";
-  const args = platform === "win32" ? ["/c", "start", "", url] : [url];
+    platform === "darwin" ? "open" : platform === "win32" ? "rundll32" : "xdg-open";
+  const args = platform === "win32" ? [WIN32_URL_HANDLER, url] : [url];
   try {
     const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
     child.on("error", () => {});
