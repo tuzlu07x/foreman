@@ -113,9 +113,15 @@ policy rules and org role.
   | OpenClaw | `~/.openclaw/openclaw.json` | `mcp.servers.foreman` |
 
   A `foreman` entry an older Foreman left under a key the agent doesn't
-  read (e.g. `mcpServers` in Hermes' config) is removed. Config files that
-  carry a token are made owner-only (0600) and replaced in one step (temp file and
-  rename; a symlinked dotfile is written through), keeping every other key.
+  read (e.g. `mcpServers` in Hermes' config) is removed. Files that carry a
+  token (configs, the wrapper script, `--token-out`) are owner-only (0600,
+  tightened again on every rewire even when the entry is current), replaced
+  in one step (temp file and rename) and keep every other key. Foreman
+  refuses to write a token through a symlink, or into a file inside a
+  project's git work tree (where it could be committed); a dotfiles repo at
+  your home directory is allowed with a warning to keep the file ignored.
+  `foreman doctor` flags token files others can read, and tamper protection
+  flags an agent reading another agent's wiring or any `/proc/*/environ`.
 - `foreman mcp-stdio` reads the variable, removes it from its own environment
   (so nothing it starts inherits it), and compares it in constant time with
   the stored token. It re-checks before every message, so a rotation takes
@@ -153,7 +159,7 @@ client's MCP server env yourself:
 
 ```bash
 foreman agent rewire my-bot --token-out ~/my-bot.token    # 0600
-foreman agent rewire claude-code --config-path ./.mcp.json
+foreman agent rewire claude-code --config-path ~/.config/my-claude/.claude.json
 ```
 
 **Rotating.** `foreman agent token rotate <id>` mints a new token and

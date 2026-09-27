@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type Database from 'better-sqlite3'
@@ -13,6 +13,7 @@ import { auditAgentTokens, rewireAgent } from '../../src/core/agent-wiring.js'
 import { isForemanServedTool } from '../../src/core/foreman-mcp-trust.js'
 import { findAgent, loadBundledRegistry, type AgentEntry } from '../../src/core/registry-catalog.js'
 import { SecretStore } from '../../src/core/secret-store.js'
+import { UnsafeTokenPathError } from '../../src/core/token-file-safety.js'
 import { createInMemoryDb } from '../../src/db/client.js'
 import { generateMasterKey } from '../../src/identity/encryption.js'
 
@@ -91,6 +92,8 @@ describe('MCP wiring targets', () => {
       expect(auditAgentTokens([{ id: 'claude-code', metadata: { registryId: 'claude-code' } }], store, () => entry)).toEqual({
         missing: [],
         stale: [],
+        unwired: [],
+        exposed: [],
       })
     })
 
@@ -100,15 +103,15 @@ describe('MCP wiring targets', () => {
       expect(readWiredAgentToken(join(home, '.claude.json'))).toMatch(/^fat_/)
     })
 
-    it('writes through a symlinked dotfile instead of replacing the link', () => {
+    it('refuses to write a token through a symlinked dotfile, and leaves both files alone', () => {
       const entry = bundled('claude-code', home)
       const real = join(home, 'dotfiles-claude.json')
-      writeFileSync(real, '{"theme":"dark"}')
+      writeFileSync(real, '{"theme":"dark"}', { mode: 0o644 })
       symlinkSync(real, join(home, '.claude.json'))
-      rewireAgent(store, 'claude-code', entry)
-      const doc = JSON.parse(readFileSync(real, 'utf-8')) as { theme: string; mcpServers: Record<string, unknown> }
-      expect(doc.theme).toBe('dark')
-      expect(doc.mcpServers.foreman).toBeDefined()
+      expect(() => rewireAgent(store, 'claude-code', entry)).toThrow(UnsafeTokenPathError)
+      expect(readFileSync(real, 'utf-8')).toBe('{"theme":"dark"}')
+      expect(mode(real)).toBe(0o644) // chmod never followed the link
+      expect(lstatSync(join(home, '.claude.json')).isSymbolicLink()).toBe(true)
     })
   })
 
@@ -257,6 +260,8 @@ describe('MCP wiring targets', () => {
       expect(auditAgentTokens([{ id: 'zeroclaw', metadata: { registryId: 'zeroclaw' } }], store, () => entry)).toEqual({
         missing: [],
         stale: [],
+        unwired: [],
+        exposed: [],
       })
 
       // A rotation replaces the entry in place.

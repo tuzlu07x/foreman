@@ -3,7 +3,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -12,6 +11,7 @@ import { dirname, extname } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { AGENT_TOKEN_ENV } from "./agent-token.js";
+import { checkTokenPath, tightenTokenFile, TOKEN_FILE_MODE } from "./token-file-safety.js";
 
 export type ConfigFormat = "yaml" | "json" | "toml";
 
@@ -155,26 +155,30 @@ function serialize(doc: Record<string, unknown>, format: ConfigFormat): string {
   return `${JSON.stringify(doc, null, 2)}\n`;
 }
 
-// The foreman entry carries the agent's identity token (#618), so the file
-// is made owner-only before the token lands in it.
-export function applyInjection(configPath: string, plan: InjectionPlan): void {
-  if (plan.alreadyHasForeman && !plan.replacedStale) return;
+// The foreman entry carries the agent's identity token (#618): the file
+// must be safe to hold one (no symlink, not in a project's git tree), and
+// is owner-only even when its entry was already current. Returns a warning
+// worth showing, or null.
+export function applyInjection(configPath: string, plan: InjectionPlan): string | null {
+  const warning = checkTokenPath(configPath);
+  if (plan.alreadyHasForeman && !plan.replacedStale) {
+    tightenTokenFile(configPath);
+    return warning;
+  }
   writeConfigAtomically(configPath, plan.after);
+  return warning;
 }
-
-const CONFIG_MODE = 0o600;
 
 /** Replace the file in one step (temp file + rename), so the agent never
  *  reads a half-written config — Claude Code rewrites ~/.claude.json
- *  itself. A symlinked dotfile is written through, not replaced. */
+ *  itself. The new file is owner-only from its first byte. */
 export function writeConfigAtomically(configPath: string, text: string): void {
   mkdirSync(dirname(configPath), { recursive: true });
-  const target = existsSync(configPath) ? realpathSync(configPath) : configPath;
-  const tmp = `${target}.foreman-${process.pid}-${Date.now()}.tmp`;
+  const tmp = `${configPath}.foreman-${process.pid}-${Date.now()}.tmp`;
   try {
-    writeFileSync(tmp, text, { encoding: "utf-8", mode: CONFIG_MODE, flag: "wx" });
-    chmodSync(tmp, CONFIG_MODE);
-    renameSync(tmp, target);
+    writeFileSync(tmp, text, { encoding: "utf-8", mode: TOKEN_FILE_MODE, flag: "wx" });
+    chmodSync(tmp, TOKEN_FILE_MODE);
+    renameSync(tmp, configPath);
   } catch (err) {
     rmSync(tmp, { force: true });
     throw err;

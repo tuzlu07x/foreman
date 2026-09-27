@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { pickMcpConfigPath } from "./agent-add-flow.js";
 import {
   applyInjection,
@@ -13,6 +13,7 @@ import {
 } from "./agent-mcp-register-hint.js";
 import { buildMcpSnippet, ZEROCLAW_BUNDLE } from "./agent-mcp-snippet.js";
 import {
+  AGENT_TOKEN_ENV,
   ensureAgentToken,
   hasAgentToken,
   issueAgentToken,
@@ -20,6 +21,13 @@ import {
   type AgentTokenStore,
 } from "./agent-token.js";
 import type { AgentEntry } from "./registry-catalog.js";
+import {
+  checkTokenPath,
+  isExposedTokenFile,
+  tightenTokenFile,
+  TOKEN_FILE_MODE,
+  UnsafeTokenPathError,
+} from "./token-file-safety.js";
 import type { RegisteredAgent } from "./registry.js";
 
 // Writes an agent's MCP wiring with its identity token (#618): the foreman
@@ -69,17 +77,19 @@ export function writeAgentWiring(
         const snippet = buildMcpSnippet(agentId, entry, token).json;
         const zeroclaw = entry.mcp_config?.layout === "zeroclaw" ? planZeroclawInjection(configPath, snippet) : null;
         const plan = zeroclaw ?? planInjection(configPath, snippet);
-        applyInjection(configPath, plan);
+        const warning = applyInjection(configPath, plan);
+        if (warning) note = warning;
         if (zeroclaw && zeroclaw.grantedAgents.length === 0) {
-          note =
+          const grant =
             `${configPath} defines no [agents.<alias>], so no ZeroClaw agent uses Foreman yet: ` +
             `add mcp_bundles = ["${ZEROCLAW_BUNDLE}"] to your agent, then run 'foreman agent rewire ${agentId}'`;
+          note = note ? `${note} ${grant}` : grant;
         }
         config = plan.alreadyHasForeman ? "current" : plan.replacedStale ? "replaced" : "written";
       } catch (err) {
         if (err instanceof UnsupportedConfigFormatError) {
           config = "unsupported";
-        } else if (err instanceof Error && "code" in err) {
+        } else if (err instanceof UnsafeTokenPathError || (err instanceof Error && "code" in err)) {
           throw err; // a filesystem error names the path, never the content
         } else {
           // Parser messages quote the file, which may hold a token.
@@ -152,10 +162,16 @@ export function rewireAgent(
 export interface AgentTokenAudit {
   /** Agents with no token: every MCP call they make runs untrusted. */
   missing: string[];
-  /** Agents whose default config file wires Foreman without their current
-   *  token (never rewired, or rotated since). */
+  /** Agents whose config (or MCP wrapper) wires Foreman without their
+   *  current token (never rewired, or rotated since). */
   stale: string[];
+  /** Agents whose MCP config file (or wrapper) isn't there at all. */
+  unwired: string[];
+  /** Token-bearing files others on this machine can read. */
+  exposed: string[];
 }
+
+const WRAPPER_TOKEN_RE = new RegExp(`^export ${AGENT_TOKEN_ENV}='([A-Za-z0-9_-]+)'$`, "m");
 
 /** Which registered agents still need `foreman agent rewire`. Only reads
  *  files; comparisons are constant-time and nothing is printed. */
@@ -163,8 +179,9 @@ export function auditAgentTokens(
   agents: ReadonlyArray<Pick<RegisteredAgent, "id" | "metadata">>,
   store: AgentTokenStore,
   entryFor: (registryId: string) => AgentEntry | null,
+  options: { homeDir?: string } = {},
 ): AgentTokenAudit {
-  const audit: AgentTokenAudit = { missing: [], stale: [] };
+  const audit: AgentTokenAudit = { missing: [], stale: [], unwired: [], exposed: [] };
   for (const agent of agents) {
     if (!hasAgentToken(store, agent.id)) {
       audit.missing.push(agent.id);
@@ -172,21 +189,46 @@ export function auditAgentTokens(
     }
     const registryId = typeof agent.metadata?.registryId === "string" ? agent.metadata.registryId : null;
     const entry = registryId ? entryFor(registryId) : null;
-    const configPath = entry ? pickMcpConfigPath(entry) : null;
-    if (!entry || !configPath) continue;
-    // A file with no foreman entry may mean the agent was wired elsewhere
-    // (--config-path); only a foreman entry with the wrong token is stale.
-    const wired = readWiredAgentToken(configPath, buildMcpSnippet(agent.id, entry).json);
-    if (wired === undefined) continue;
-    if (wired === null || !verifyAgentToken(store, agent.id, wired)) audit.stale.push(agent.id);
+    if (!entry) continue;
+    const verdicts: Array<"ok" | "stale" | "unwired"> = [];
+    const configPath = pickMcpConfigPath(entry);
+    if (configPath) {
+      // A file with no foreman entry may mean the agent was wired elsewhere
+      // (--config-path); only a foreman entry with the wrong token is stale.
+      const wired = existsSync(configPath)
+        ? readWiredAgentToken(configPath, buildMcpSnippet(agent.id, entry).json)
+        : null;
+      if (!existsSync(configPath)) verdicts.push("unwired");
+      else if (wired !== undefined) {
+        verdicts.push(wired !== null && verifyAgentToken(store, agent.id, wired) ? "ok" : "stale");
+        if (isExposedTokenFile(configPath)) audit.exposed.push(configPath);
+      }
+    }
+    const wrapper = buildMcpRegisterHint(agent.id, entry, options.homeDir ? { homeDir: options.homeDir } : {})?.wrapper;
+    if (wrapper) {
+      if (!existsSync(wrapper.path)) verdicts.push("unwired");
+      else {
+        let wired: string | null = null;
+        try {
+          wired = WRAPPER_TOKEN_RE.exec(readFileSync(wrapper.path, "utf-8"))?.[1] ?? null;
+        } catch {
+          wired = null;
+        }
+        verdicts.push(wired !== null && verifyAgentToken(store, agent.id, wired) ? "ok" : "stale");
+        if (isExposedTokenFile(wrapper.path)) audit.exposed.push(wrapper.path);
+      }
+    }
+    if (verdicts.includes("stale")) audit.stale.push(agent.id);
+    else if (verdicts.includes("unwired")) audit.unwired.push(agent.id);
   }
   return audit;
 }
 
 /** One warning for `doctor` and `foreman start`, or null when every agent
- *  is wired with its current token. */
+ *  is wired with its current token in owner-only files. */
 export function describeTokenAudit(audit: AgentTokenAudit): { message: string; remediation: string } | null {
-  if (audit.missing.length === 0 && audit.stale.length === 0) return null;
+  const needRewire = [...audit.missing, ...audit.stale, ...audit.unwired];
+  if (needRewire.length === 0 && audit.exposed.length === 0) return null;
   const parts: string[] = [];
   if (audit.missing.length > 0) {
     parts.push(
@@ -197,17 +239,27 @@ export function describeTokenAudit(audit: AgentTokenAudit): { message: string; r
   if (audit.stale.length > 0) {
     parts.push(`MCP wiring without the current token for ${audit.stale.join(", ")}`);
   }
-  const one = audit.missing.length + audit.stale.length === 1 ? (audit.missing[0] ?? audit.stale[0]) : null;
-  return {
-    message: parts.join("; "),
-    remediation:
+  if (audit.unwired.length > 0) {
+    parts.push(`no MCP config found for ${audit.unwired.join(", ")}`);
+  }
+  if (audit.exposed.length > 0) {
+    parts.push(`agent tokens in files others can read: ${audit.exposed.join(", ")}`);
+  }
+  const fixes: string[] = [];
+  if (needRewire.length > 0) {
+    const one = needRewire.length === 1 ? needRewire[0] : null;
+    fixes.push(
       `Run \`foreman agent rewire ${one ?? "--all"}\`, then restart the agent${one ? "" : "s"}. ` +
-      "Custom agents: `foreman agent rewire <id> --token-out <file>`.",
-  };
+        "Custom agents: `foreman agent rewire <id> --token-out <file>`.",
+    );
+  }
+  if (audit.exposed.length > 0) fixes.push(`\`chmod 600\` ${audit.exposed.join(" ")} (or rewire, which does it).`);
+  return { message: parts.join("; "), remediation: fixes.join(" ") };
 }
 
 function writeTokenFile(path: string, token: string): void {
-  if (existsSync(path)) chmodSync(path, 0o600);
-  writeFileSync(path, `${token}\n`, { encoding: "utf-8", mode: 0o600 });
-  chmodSync(path, 0o600);
+  checkTokenPath(path);
+  tightenTokenFile(path);
+  writeFileSync(path, `${token}\n`, { encoding: "utf-8", mode: TOKEN_FILE_MODE });
+  tightenTokenFile(path);
 }

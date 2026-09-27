@@ -66,10 +66,14 @@ Known limits, which we track as roadmap items rather than hide:
   `foreman agent token rotate` cuts off running sessions), and never
   printed, logged or audited. Installs from before tokens degrade to
   untrusted until `foreman agent rewire --all`; `foreman doctor` and
-  `foreman start` say so. Remaining limits: an agent that can read
-  another agent's MCP config file (same OS user, see above) can read its
-  token, which tamper protection flags only when the file is written; and
-  `foreman write` from an agent's shell still trusts `FOREMAN_SPAWNED_BY`.
+  `foreman start` say so. Token files are owner-only, never written
+  through a symlink or into a project's git work tree, and `foreman doctor`
+  flags any that others can read. Remaining limits: an agent running as
+  the same OS user (see above) can read another agent's MCP config file,
+  and so its token; tamper protection flags such a read (and any
+  `/proc/*/environ` read) as critical, but a call that skips mediation
+  isn't seen. `foreman write` from an agent's shell still trusts
+  `FOREMAN_SPAWNED_BY`.
   Blocked and paused agents are denied on every transport.
 - **Relayed approvals.** By default, Telegram decisions reach Foreman
   through the chat agent that polls the bot. Each allow button carries an

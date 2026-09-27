@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { AGENT_TOKEN_ENV } from "./agent-token.js";
+import { checkTokenPath } from "./token-file-safety.js";
 import type { AgentEntry } from "./registry-catalog.js";
 
 // =============================================================================
@@ -96,6 +97,7 @@ const WRAPPER_MODE = 0o700;
  * quiet on re-runs).
  */
 export function writeMcpWrapperScript(wrapper: McpRegisterHintWrapper): boolean {
+  checkTokenPath(wrapper.path);
   try {
     const existing = readFileSync(wrapper.path, "utf-8");
     if (existing === wrapper.content) {

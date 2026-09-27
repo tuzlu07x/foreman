@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type Database from 'better-sqlite3'
@@ -167,13 +167,41 @@ describe('agent MCP wiring with identity tokens', () => {
     issueAgentToken(store, 'stale') // rotated without rewriting the file
     issueAgentToken(store, 'elsewhere') // default file has no foreman entry: wired elsewhere
     writeFileSync(elsewhere, '{}')
-    const agents = ['fresh', 'stale', 'elsewhere', 'legacy'].map((id) => ({ id, metadata: { registryId: id } }))
+    const gone = join(dir, 'gone.json')
+    entries.gone = e(gone)
+    issueAgentToken(store, 'gone') // its config file doesn't exist
+    const agents = ['fresh', 'stale', 'elsewhere', 'legacy', 'gone'].map((id) => ({ id, metadata: { registryId: id } }))
     const audit = auditAgentTokens(agents, store, (id) => entries[id] ?? null)
-    expect(audit).toEqual({ missing: ['legacy'], stale: ['stale'] })
+    expect(audit).toEqual({ missing: ['legacy'], stale: ['stale'], unwired: ['gone'], exposed: [] })
     const text = describeTokenAudit(audit)!
     expect(text.message).toContain('legacy')
     expect(text.remediation).toContain('foreman agent rewire --all')
     expect(JSON.stringify(text)).not.toMatch(/fat_/)
-    expect(describeTokenAudit({ missing: [], stale: [] })).toBeNull()
+    expect(describeTokenAudit({ missing: [], stale: [], unwired: [], exposed: [] })).toBeNull()
+  })
+
+  it('audit flags token files others can read, and a wrapper with a stale token', () => {
+    const config = join(dir, 'config.json')
+    const hermesLike = entry({
+      id: 'hermes',
+      config_paths: [config],
+      mcp_register_cli: {
+        command_template: 'x {wrapper_path}',
+        wrapper: { path_template: '~/.foreman/wrappers/{agent_id}-mcp.sh', content_template: '#!/bin/sh\nexec foreman mcp-stdio --source {agent_id}\n' },
+      },
+    })
+    rewireAgent(store, 'hermes', hermesLike, { homeDir: dir })
+    const agents = [{ id: 'hermes', metadata: { registryId: 'hermes' } }]
+    const audit = (): ReturnType<typeof auditAgentTokens> => auditAgentTokens(agents, store, () => hermesLike, { homeDir: dir })
+    expect(audit()).toEqual({ missing: [], stale: [], unwired: [], exposed: [] })
+    chmodSync(config, 0o644)
+    expect(audit().exposed).toEqual([config])
+    expect(describeTokenAudit(audit())!.remediation).toContain(`chmod 600\` ${config}`)
+    // Rotating the token without rewriting the wrapper leaves it stale.
+    const wrapper = join(dir, '.foreman/wrappers/hermes-mcp.sh')
+    const before = readFileSync(wrapper, 'utf-8')
+    rewireAgent(store, 'hermes', hermesLike, { homeDir: dir, rotate: true })
+    writeFileSync(wrapper, before)
+    expect(audit().stale).toEqual(['hermes'])
   })
 })
