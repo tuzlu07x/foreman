@@ -78,6 +78,18 @@ check also flags an agent whose config still wires Foreman without its current
 token (for example after a rotation whose config write failed). See
 [Agent identity tokens](agent-lifecycle.md#agent-identity-tokens).
 
+**Agent wiring doctor can't see** (generic-mcp, or an agent wired through
+`--config-path` or `--token-out`):
+```
+agent_tokens         ok     1 of 2 agents proves its identity with a token
+agent_tokens:generic-mcp warn generic-mcp: token issued, wiring not visible to doctor — make sure its MCP client passes FOREMAN_AGENT_TOKEN (or FOREMAN_AGENT_TOKEN_FILE)
+                            → Get its token with 'foreman agent rewire generic-mcp --token-out <file>' and set it as FOREMAN_AGENT_TOKEN …
+```
+Doctor counts an agent as proving its identity only when it has read the
+agent's MCP wiring and found its current token there. An agent whose wiring
+it can't read gets its own warning row instead; the warning stays as long
+as the wiring is out of doctor's sight.
+
 **Identity key corrupt:**
 ```
 identity_key         fail   identity.key is 24 bytes (expected 32)

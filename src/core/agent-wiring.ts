@@ -17,6 +17,7 @@ import {
 import { buildMcpSnippet, ZEROCLAW_BUNDLE } from "./agent-mcp-snippet.js";
 import {
   AGENT_TOKEN_ENV,
+  AGENT_TOKEN_FILE_ENV,
   ensureAgentToken,
   hasAgentToken,
   issueAgentToken,
@@ -213,6 +214,11 @@ export interface AgentTokenAudit {
   unwired: string[];
   /** Token-bearing files others on this machine can read. */
   exposed: string[];
+  /** Agents with a token whose wiring nothing here can see: no MCP config
+   *  or wrapper in the registry (generic-mcp), no registry entry, or a
+   *  config without a foreman entry (wired elsewhere, e.g. --config-path).
+   *  Their token may well be wired; it just isn't verified. */
+  unverified: string[];
 }
 
 const WRAPPER_TOKEN_RE = new RegExp(`^export ${AGENT_TOKEN_ENV}='([A-Za-z0-9_-]+)'$`, "m");
@@ -225,7 +231,7 @@ export function auditAgentTokens(
   entryFor: (registryId: string) => AgentEntry | null,
   options: { homeDir?: string } = {},
 ): AgentTokenAudit {
-  const audit: AgentTokenAudit = { missing: [], stale: [], unwired: [], exposed: [] };
+  const audit: AgentTokenAudit = { missing: [], stale: [], unwired: [], exposed: [], unverified: [] };
   for (const agent of agents) {
     if (!hasAgentToken(store, agent.id)) {
       audit.missing.push(agent.id);
@@ -233,7 +239,10 @@ export function auditAgentTokens(
     }
     const registryId = typeof agent.metadata?.registryId === "string" ? agent.metadata.registryId : null;
     const entry = registryId ? entryFor(registryId) : null;
-    if (!entry) continue;
+    if (!entry) {
+      audit.unverified.push(agent.id);
+      continue;
+    }
     const verdicts: Array<"ok" | "stale" | "unwired"> = [];
     const configPath = pickMcpConfigPath(entry);
     if (configPath) {
@@ -264,8 +273,29 @@ export function auditAgentTokens(
     }
     if (verdicts.includes("stale")) audit.stale.push(agent.id);
     else if (verdicts.includes("unwired")) audit.unwired.push(agent.id);
+    else if (!verdicts.includes("ok")) audit.unverified.push(agent.id);
   }
   return audit;
+}
+
+/** Agents whose wiring was read and carries their current token. */
+export function verifiedAgentCount(agentCount: number, audit: AgentTokenAudit): number {
+  return (
+    agentCount - audit.missing.length - audit.stale.length - audit.unwired.length - audit.unverified.length
+  );
+}
+
+/** What doctor says about an agent whose wiring it can't see: not a
+ *  failure, not a pass. Never includes the token. */
+export function describeUnverifiedWiring(agentId: string): { message: string; remediation: string } {
+  return {
+    message:
+      `${agentId}: token issued, wiring not visible to doctor — make sure its MCP client passes ` +
+      `${AGENT_TOKEN_ENV} (or ${AGENT_TOKEN_FILE_ENV})`,
+    remediation:
+      `Get its token with 'foreman agent rewire ${agentId} --token-out <file>' and set it as ${AGENT_TOKEN_ENV} ` +
+      `in the agent's MCP server env (or point ${AGENT_TOKEN_FILE_ENV} at the file); without it the agent runs untrusted.`,
+  };
 }
 
 /** One warning for `doctor` and `foreman start`, or null when every agent

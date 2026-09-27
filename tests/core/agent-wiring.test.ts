@@ -245,12 +245,14 @@ describe('agent MCP wiring with identity tokens', () => {
     issueAgentToken(store, 'gone') // its config file doesn't exist
     const agents = ['fresh', 'stale', 'elsewhere', 'legacy', 'gone'].map((id) => ({ id, metadata: { registryId: id } }))
     const audit = auditAgentTokens(agents, store, (id) => entries[id] ?? null)
-    expect(audit).toEqual({ missing: ['legacy'], stale: ['stale'], unwired: ['gone'], exposed: [] })
+    // `elsewhere` has a token but its default file has no foreman entry:
+    // wired somewhere doctor can't see, so not counted as verified.
+    expect(audit).toEqual({ missing: ['legacy'], stale: ['stale'], unwired: ['gone'], exposed: [], unverified: ['elsewhere'] })
     const text = describeTokenAudit(audit)!
     expect(text.message).toContain('legacy')
     expect(text.remediation).toContain('foreman agent rewire --all')
     expect(JSON.stringify(text)).not.toMatch(/fat_/)
-    expect(describeTokenAudit({ missing: [], stale: [], unwired: [], exposed: [] })).toBeNull()
+    expect(describeTokenAudit({ missing: [], stale: [], unwired: [], exposed: [], unverified: ['elsewhere'] })).toBeNull()
   })
 
   it('audit flags token files others can read, and a wrapper with a stale token', () => {
@@ -266,7 +268,7 @@ describe('agent MCP wiring with identity tokens', () => {
     rewireAgent(store, 'hermes', hermesLike, { homeDir: dir })
     const agents = [{ id: 'hermes', metadata: { registryId: 'hermes' } }]
     const audit = (): ReturnType<typeof auditAgentTokens> => auditAgentTokens(agents, store, () => hermesLike, { homeDir: dir })
-    expect(audit()).toEqual({ missing: [], stale: [], unwired: [], exposed: [] })
+    expect(audit()).toEqual({ missing: [], stale: [], unwired: [], exposed: [], unverified: [] })
     chmodSync(config, 0o644)
     expect(audit().exposed).toEqual([config])
     expect(describeTokenAudit(audit())!.remediation).toContain(`chmod 600\` ${config}`)

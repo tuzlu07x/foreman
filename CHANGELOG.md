@@ -34,7 +34,9 @@ All notable changes to Foreman are documented here. The format follows
     (generic-mcp), in its install log and on the Done screen.
   - `foreman doctor` (`agent_tokens`) and `foreman start` (an inbox warning)
     name the agents that still need rewiring and token files others can
-    read. Unverified connections are audited (`agent:identity`) and raised
+    read. Doctor counts only agents whose wiring it read and verified; one
+    whose wiring it can't see (generic-mcp) gets its own
+    `agent_tokens:<id>` warning. Unverified connections are audited (`agent:identity`) and raised
     in the inbox once a day; tokens never are. Tamper protection flags an
     agent reading another agent's wiring or any `/proc/*/environ`.
   - The Claude Code hook skips `mcp__foreman__*` tools only when each

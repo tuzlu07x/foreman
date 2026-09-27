@@ -98,6 +98,7 @@ describe('MCP wiring targets', () => {
         stale: [],
         unwired: [],
         exposed: [],
+        unverified: [],
       })
     })
 
@@ -266,6 +267,7 @@ describe('MCP wiring targets', () => {
         stale: [],
         unwired: [],
         exposed: [],
+        unverified: [],
       })
 
       // A rotation replaces the entry in place.
