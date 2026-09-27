@@ -1,40 +1,52 @@
 name: release-binaries
 
+# Standalone binaries for every release (#620).
+#
+# Each target builds on a runner of its own architecture: the bundle carries
+# a native addon (better-sqlite3) that can't be cross-compiled, so a binary
+# built on another arch would ship the wrong one. Every binary is smoke-tested
+# (it must start, print the release's version and open its database) on the
+# machine that built it. A SHA256SUMS file is published next to them.
+#
+# Security: runs only on a published release (a maintainer action) or a
+# manual dispatch, never on pull requests. Actions are pinned by commit SHA.
+# Build jobs get a read-only token; only the checksums job, which attaches
+# the files to a real release, gets `contents: write`.
+
 on:
   release:
     types: [published]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     name: Build ${{ matrix.label }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
           - label: darwin-arm64
-            runner: macos-14
-            smoke: true
+            runner: macos-15
           - label: darwin-x64
-            runner: macos-13
-            smoke: true
+            runner: macos-15-intel
           - label: linux-x64
-            runner: ubuntu-latest
-            smoke: true
+            runner: ubuntu-24.04
           - label: linux-arm64
-            runner: ubuntu-latest
-            smoke: false # built on x64 host, can't natively execute
-
+            runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-          cache: "npm"
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
@@ -45,39 +57,62 @@ jobs:
       - name: Build standalone binary
         run: node scripts/build-binaries.mjs ${{ matrix.label }}
 
-      - name: Verify binary size + version (skip for non-native arch)
-        if: matrix.smoke == true
+      - name: Smoke test (size, start-up, version, database)
+        env:
+          LABEL: ${{ matrix.label }}
         run: |
-          binary="dist-binaries/foreman-${{ matrix.label }}"
+          set -euo pipefail
+          binary="dist-binaries/foreman-${LABEL}"
           test -x "$binary"
-          size_mb=$(stat -f%z "$binary" 2>/dev/null || stat -c%s "$binary")
-          size_mb=$((size_mb / 1024 / 1024))
-          echo "binary size: ${size_mb} MB"
-          test "$size_mb" -lt 80
-          "$binary" --version | tee version.out
-          grep -E "^[0-9]+\.[0-9]+\.[0-9]+$" version.out
+          size=$(stat -f%z "$binary" 2>/dev/null || stat -c%s "$binary")
+          echo "binary size: $((size / 1024 / 1024)) MB"
+          test "$((size / 1024 / 1024))" -lt 80
+          expected=$(node -p "require('./package.json').version")
+          actual=$("$binary" --version)
+          echo "version: ${actual} (package.json: ${expected})"
+          test "$actual" = "$expected"
+          # The native addon loads: set up a throwaway home with the binary.
+          FOREMAN_HOME="$(mktemp -d)/home" "$binary" init >/dev/null
 
-      - name: Verify binary size (non-native arch — size only)
-        if: matrix.smoke != true
-        run: |
-          binary="dist-binaries/foreman-${{ matrix.label }}"
-          test -x "$binary"
-          size_mb=$(stat -c%s "$binary")
-          size_mb=$((size_mb / 1024 / 1024))
-          echo "binary size: ${size_mb} MB"
-          test "$size_mb" -lt 80
-
-      - name: Upload binary as workflow artifact
-        uses: actions/upload-artifact@v7
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: foreman-${{ matrix.label }}
           path: dist-binaries/foreman-${{ matrix.label }}
+          if-no-files-found: error
 
-      - name: Attach binary to release
+  checksums:
+    name: Checksums and release assets
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: foreman-*
+          path: dist-binaries
+          merge-multiple: true
+
+      - name: Write SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd dist-binaries
+          chmod +x foreman-*
+          sha256sum foreman-* | tee SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 4
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: SHA256SUMS
+          path: dist-binaries/SHA256SUMS
+
+      - name: Attach binaries and checksums to the release
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "${GITHUB_REF_NAME}" \
-            "dist-binaries/foreman-${{ matrix.label }}" \
-            --clobber
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist-binaries/foreman-* dist-binaries/SHA256SUMS --clobber

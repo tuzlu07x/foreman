@@ -19,7 +19,7 @@ jobs:
     name: shellcheck install.sh
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install shellcheck
         run: sudo apt-get install -y shellcheck
       - name: shellcheck --shell=bash install.sh
@@ -29,7 +29,7 @@ jobs:
     name: smoke (help / unknown flag)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: --help exits 0 and prints usage
         run: |
           out=$(bash install.sh --help)
