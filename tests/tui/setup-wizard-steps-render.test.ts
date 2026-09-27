@@ -106,15 +106,28 @@ vi.mock('../../src/tui/setup-wizard/install-runner.js', () => ({
           })) ?? null
         log('  ✗ skipped by user')
       }
+      // #646 — OpenClaw is held back by its Node range.
+      const nodeEngineSkipped = toAdd.includes('openclaw')
+        ? [
+            {
+              agentId: 'openclaw',
+              lines: [
+                'OpenClaw needs Node >=24.16.0 <25 || >=26.1.0',
+                'Or run: curl -fsSL https://openclaw.ai/install.sh | bash',
+              ],
+            },
+          ]
+        : []
       return {
-        registered: toAdd.filter((id) => id !== 'hermes'),
+        registered: toAdd.filter((id) => id !== 'hermes' && id !== 'openclaw'),
         identityPushed: [],
         identitySkipped: [],
         // generic-mcp has no identity file (mirrors runInstallStep).
         identityNotApplicable: toAdd.filter((id) => id === 'generic-mcp'),
-        failed: toAdd.includes('hermes') ? ['hermes'] : [],
+        failed: toAdd.filter((id) => id === 'hermes' || id === 'openclaw'),
         removed: [],
         mcpRegisterFailed: [],
+        nodeEngineSkipped,
       }
     },
   ),
@@ -889,6 +902,33 @@ describe('done step identity summary', () => {
     expect(w.frame()).toContain('No Foreman identity file for generic-mcp')
     expect(w.frame()).not.toContain('Identity push failed')
     expect(w.frame()).not.toContain('pushed to 0 of 1')
+  })
+})
+
+describe('done step Node requirement', () => {
+  it('repeats why an agent was not installed and the command to run', async () => {
+    const w = await mount('install', {
+      initialState: {
+        version: 1,
+        completed: ALL_BEFORE.install,
+        startedAt: 1,
+        lastUpdatedAt: 1,
+        session: {
+          providersSelected: [],
+          providersSignedIn: [],
+          agentsSelected: ['openclaw'],
+          agentConfigs: {},
+          servicesSelected: [],
+          // Registry unchanged since the snapshot → no agents review.
+          registeredAtSnapshot: [],
+        },
+      },
+    })
+    await w.startInstall()
+    await w.until('What next?')
+    expect(w.frame()).toContain('Not installed: these agents need a newer Node.js')
+    expect(w.frame()).toContain('OpenClaw needs Node >=24.16.0 <25 || >=26.1.0')
+    expect(w.frame()).toContain('curl -fsSL https://openclaw.ai/install.sh | bash')
   })
 })
 

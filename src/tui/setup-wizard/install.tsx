@@ -67,6 +67,7 @@ export function failedInstallSummary(toAdd: string[]): InstallStepSummary {
     failed: [...toAdd],
     removed: [],
     mcpRegisterFailed: [],
+    nodeEngineSkipped: [],
   };
 }
 

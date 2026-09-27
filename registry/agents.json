@@ -219,6 +219,9 @@
       },
       "supported_versions": ">=1.4.0",
       "min_foreman_version": "0.1.2",
+      "engines": {
+        "node": ">=24.16.0 <25 || >=26.1.0"
+      },
       "provider_mapping": {
         "openai": {
           "preferred": "native",

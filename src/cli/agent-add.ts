@@ -24,6 +24,11 @@ import {
 } from "../core/agent-install.js";
 import { buildMcpSnippet } from "../core/agent-mcp-snippet.js";
 import {
+  checkNodeEngine,
+  describeNodeEngineMismatch,
+  resolveInstallerNodeVersion,
+} from "../core/node-engines.js";
+import {
   AgentNotInRegistryError,
   findAgent,
   loadActiveRegistry,
@@ -92,7 +97,21 @@ export async function runAgentAddScripted(
       );
       if (detection.brokenReason) log(dim(`  ${detection.brokenReason}`));
     }
-    if (options.autoInstall && manualInstallCmd) {
+    // #646 — The node on PATH is outside the agent's engines range, so the
+    // install would fail halfway. Explain instead; the upstream installer
+    // is printed for the user to run, never run here. With --auto-install
+    // stop before touching config or registration.
+    const engineMismatch = checkNodeEngine(entry, resolveInstallerNodeVersion);
+    if (engineMismatch) {
+      const [first, ...rest] = describeNodeEngineMismatch(engineMismatch);
+      if (options.autoInstall) {
+        logError(first);
+        for (const line of rest) log(`  ${line}`);
+        return 1;
+      }
+      log(orange("note: ") + first);
+      for (const line of rest) log(`  ${line}`);
+    } else if (options.autoInstall && manualInstallCmd) {
       // --auto-install IS the user's consent — runInstall handles all three
       // transports (npm, brew, curl script) since PR #107.
       log(orange(`installing ${entry.name} (${manualInstallCmd})…`));
@@ -362,7 +381,12 @@ export async function runAgentAddInteractive(deps: AddDeps): Promise<number> {
   });
   const installCmd = preferredInstallCommand(entry.install);
   let autoInstall = false;
-  if (!detection.found && installCmd) {
+  // #646 — Don't offer an install that can't work on this Node; the
+  // scripted step below prints the requirement instead.
+  const engineMismatch = detection.found
+    ? null
+    : checkNodeEngine(entry, resolveInstallerNodeVersion);
+  if (!detection.found && installCmd && !engineMismatch) {
     if (detection.brokenAt) {
       log(
         orange(

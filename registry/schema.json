@@ -75,6 +75,17 @@
         "min_foreman_version": {
           "type": "string",
           "description": "Lowest Foreman version that supports this entry."
+        },
+        "engines": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["node"],
+          "properties": {
+            "node": {
+              "type": "string",
+              "description": "Node.js range the agent needs (e.g. '>=24.16.0 <25 || >=26.1.0'). When the node on PATH is outside it, Foreman skips the automated install and prints the requirement instead; `foreman doctor` warns."
+            }
+          }
         }
       }
     }

@@ -30,6 +30,11 @@ import {
   runUninstall,
 } from "../core/agent-install.js";
 import {
+  checkNodeEngine,
+  describeNodeEngineMismatch,
+  resolveInstallerNodeVersion,
+} from "../core/node-engines.js";
+import {
   applyPermissions,
   DEFAULT_PERMISSIONS,
   resolveAgentSettingsPath,
@@ -1066,6 +1071,16 @@ async function runAgentUpdateOne(
       console.log(`${green("✓")} ${agent.id} is up to date (v${status.current})`);
       return 0;
     }
+  }
+
+  // #646 — npm would refuse the new version on a Node outside the
+  // agent's engines range; say so instead of failing mid-install.
+  const engineMismatch = checkNodeEngine(entry, resolveInstallerNodeVersion);
+  if (engineMismatch) {
+    const [first, ...rest] = describeNodeEngineMismatch(engineMismatch);
+    console.error(red("error: ") + first);
+    for (const line of rest) console.error(`  ${line}`);
+    return 1;
   }
 
   console.log(orange(`updating ${agent.id} (${entry.install.npm})…`));

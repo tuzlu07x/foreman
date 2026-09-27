@@ -82,6 +82,10 @@ export interface InstallStepSummary {
    *  surfaces these with the manual fallback command so the user can
    *  re-run after fixing the underlying issue. */
   mcpRegisterFailed: { agentId: string; command: string; reason: string }[];
+  /** #646 — Agents not installed because the node on PATH is outside the
+   *  agent's `engines.node` range. `lines` explains the requirement and
+   *  the upstream installer command for the user to run themselves. */
+  nodeEngineSkipped: { agentId: string; lines: string[] }[];
 }
 
 export type AgentInstallStage = "install" | "config-inject" | "register";

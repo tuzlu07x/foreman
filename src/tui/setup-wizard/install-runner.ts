@@ -28,6 +28,11 @@ import {
 } from "../../core/agent-install.js";
 import { buildMcpSnippet } from "../../core/agent-mcp-snippet.js";
 import {
+  checkNodeEngine,
+  describeNodeEngineMismatch,
+  resolveInstallerNodeVersion,
+} from "../../core/node-engines.js";
+import {
   autoRegisterMcp,
   buildMcpRegisterHint,
   writeMcpWrapperScript,
@@ -73,6 +78,7 @@ export async function runInstallStep(
     failed: [],
     removed: [],
     mcpRegisterFailed: [],
+    nodeEngineSkipped: [],
   };
   const { doc } = loadActiveRegistry();
   // #373 — load provider catalog once so checkSecrets can filter
@@ -146,6 +152,22 @@ export async function runInstallStep(
       if (detection.brokenAt) {
         log(`  ⚠ found broken binary at ${detection.brokenAt} — reinstalling`);
         log(`    ${detection.brokenReason ?? "(no diagnostic)"}`);
+      }
+      // #646 — The agent needs a newer Node than the one on PATH (OpenClaw:
+      // >=24.16.0 <25 || >=26.1.0). Running `npm install -g` would fail
+      // halfway, so explain and skip this agent; the rest of the batch
+      // continues. The upstream installer is shown, never run.
+      const engineMismatch = checkNodeEngine(entry, resolveInstallerNodeVersion);
+      if (engineMismatch) {
+        const lines = describeNodeEngineMismatch(engineMismatch);
+        const [first, ...rest] = lines;
+        log(`  ⚠ ${first}`);
+        for (const line of rest) log(`  ◦ ${line}`);
+        log(`  ✗ ${entry.name} skipped — not registered`);
+        summary.failed.push(id);
+        summary.nodeEngineSkipped.push({ agentId: id, lines });
+        skipThisAgent = true;
+        break;
       }
       // #369 — Delegate command construction to the platform-aware
       // picker so Windows users get the PowerShell form and so the
