@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -69,6 +69,40 @@ describe("foreman hook claude-code — Faz 4 (#517)", () => {
     const r = runHook("", env);
     expect(r.exit).toBe(2);
     expect(r.stderr).toMatch(/empty PreToolUse payload/);
+  });
+
+  it("exits 2 on a usage error (missing agent id, unknown flag)", () => {
+    for (const args of [["hook"], ["hook", "claude-code", "--bogus"]]) {
+      const r = spawnSync("node", [FM_BIN, ...args], { env, encoding: "utf-8", timeout: 10_000 });
+      expect(r.status).toBe(2);
+    }
+  });
+
+  it("exits 2 when an async error escapes, even through the main CLI's handler", async () => {
+    // Throw once the hook is waiting on stdin — after the main CLI's
+    // rethrowing uncaughtException handler is installed.
+    const preload = join(tmp, "throw-later.mjs");
+    writeFileSync(
+      preload,
+      `const t = setInterval(() => {
+        if (process.stdin.listenerCount("data") > 0) {
+          clearInterval(t);
+          setImmediate(() => { throw new Error("boom"); });
+        }
+      }, 10);\n`,
+    );
+    // stdin stays open, so the hook is parked in readStdin when it throws.
+    const child = spawn("node", ["--import", preload, FM_BIN, "hook", "claude-code"], { env });
+    let stderr = "";
+    child.stderr.on("data", (d: Buffer) => {
+      stderr += d.toString();
+    });
+    const killer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+    const status = await new Promise<number | null>((done) => child.on("exit", done));
+    clearTimeout(killer);
+    const r = { stderr, status };
+    expect(r.stderr).toContain("boom");
+    expect(r.status).toBe(2);
   });
 
   it("exits 2 on malformed JSON payload (fail closed)", () => {

@@ -132,6 +132,12 @@ describe("installPreToolUseHook — disk I/O", () => {
     expect(written.hooks.PreToolUse[0]!.matcher).toBe(
       DEFAULT_PRETOOLUSE_MATCHER,
     );
+    // Every tool that can read or change files is gated; Grep prints file
+    // contents, so it is as sensitive as Read.
+    const matcher = new RegExp(`^(${DEFAULT_PRETOOLUSE_MATCHER})$`);
+    for (const tool of ["Bash", "Read", "Grep", "Glob", "Write", "NotebookEdit", "mcp__x__y"]) {
+      expect(matcher.test(tool)).toBe(true);
+    }
   });
 
   it("merges into an existing settings file without dropping user keys", () => {
