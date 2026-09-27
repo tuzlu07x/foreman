@@ -14,7 +14,7 @@ import { checkProviderMapping } from "../../core/doctor.js";
 import { getDb } from "../../db/client.js";
 import { getForemanPaths } from "../../utils/config.js";
 import { useDashboardServices } from "../dashboard-context.js";
-import { singleBorder, theme } from "../theme.js";
+import { roundBorder, theme } from "../theme.js";
 import { PageHeader } from "../components/typography.js";
 
 export interface SettingsPageProps {
@@ -78,7 +78,7 @@ export function SettingsPage({
   return (
     <Box
       flexDirection="column"
-      borderStyle={singleBorder()}
+      borderStyle={roundBorder()}
       borderDimColor
       paddingX={1}
       flexGrow={1}

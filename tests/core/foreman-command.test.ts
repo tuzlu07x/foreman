@@ -654,6 +654,94 @@ describe("ForemanCommandRouter (#431)", () => {
 
   // QA round 14 — `/foreman activity` is a non-LLM view of recent
   // control_commands rows. Previously returned "Unknown command".
+  describe("TUI owner surface, assign and org (#612)", () => {
+    beforeEach(() => {
+      for (const id of ["hermes", "claude-code", "codex", "openclaw"]) {
+        registry.register({ id, displayName: id, transport: "stdio" });
+      }
+    });
+
+    it("a trusted owner (the TUI) can write without a Telegram id", async () => {
+      const channel = new ControlChannel(db);
+      const result = await router.dispatch("write", ["codex", "fix", "tests"], {
+        ...ctx,
+        sourceAgent: "tui",
+        controlChannel: channel,
+        trustedOwner: true,
+      });
+      expect(result.ok).toBe(true);
+      expect(channel.pending()[0]?.sourceUser).toBe("owner");
+    });
+
+    it("without trustedOwner the same command stays owner-gated", async () => {
+      const channel = new ControlChannel(db);
+      const result = await router.dispatch("write", ["codex", "fix"], {
+        ...ctx,
+        sourceAgent: "tui",
+        controlChannel: channel,
+      });
+      expect(result.errorCode).toBe("NOT_AUTHORIZED");
+      expect(channel.pending()).toHaveLength(0);
+    });
+
+    it("assign resolves a department to its head and queues the task", async () => {
+      const { findOrgTemplate } = await import("../../src/core/org/templates.js");
+      writeFileSync(join(tmp, "org.yaml"), findOrgTemplate("startup")!.render("Acme"));
+      const channel = new ControlChannel(db);
+      const result = await router.dispatch("assign", ["engineering", "ship", "it"], {
+        ...ctx,
+        sourceAgent: "tui",
+        controlChannel: channel,
+        trustedOwner: true,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.text).toContain("cto");
+      expect(JSON.parse(channel.pending()[0]!.args)).toEqual(["claude-code", "ship it"]);
+    });
+
+    it("the TUI is the human at the keyboard: no runaway-loop guard", async () => {
+      const { DelegationTracker } = await import("../../src/core/delegation-tracker.js");
+      const tracker = new DelegationTracker({ db });
+      for (let i = 0; i < 6; i++) tracker.recordDelegation({ initiatorAgent: "tui", targetAgent: "codex", prompt: `t${i}` });
+      const channel = new ControlChannel(db);
+      const result = await router.dispatch("write", ["codex", "one", "more"], {
+        ...ctx,
+        sourceAgent: "tui",
+        controlChannel: channel,
+        trustedOwner: true,
+      });
+      expect(result.errorCode).toBeUndefined();
+      expect(result.ok).toBe(true);
+    });
+
+    it("assign never resolves object prototype names", async () => {
+      const { findOrgTemplate } = await import("../../src/core/org/templates.js");
+      writeFileSync(join(tmp, "org.yaml"), findOrgTemplate("startup")!.render("Acme"));
+      const result = await router.dispatch("assign", ["constructor", "x"], { ...ctx, trustedOwner: true });
+      expect(result.ok).toBe(false);
+      expect(result.text).toContain("'constructor'");
+    });
+
+    it("assign explains a missing org chart and an unknown target", async () => {
+      const noOrg = await router.dispatch("assign", ["marketing", "x"], ctx);
+      expect(noOrg.text).toContain("foreman org init");
+      const { findOrgTemplate } = await import("../../src/core/org/templates.js");
+      writeFileSync(join(tmp, "org.yaml"), findOrgTemplate("startup")!.render("Acme"));
+      const unknown = await router.dispatch("assign", ["legal", "x"], ctx);
+      expect(unknown.ok).toBe(false);
+      expect(unknown.text).toContain("'legal'");
+    });
+
+    it("org renders the chart as plain text", async () => {
+      const { findOrgTemplate } = await import("../../src/core/org/templates.js");
+      writeFileSync(join(tmp, "org.yaml"), findOrgTemplate("startup")!.render("Acme"));
+      const result = await router.dispatch("org", [], ctx);
+      expect(result.ok).toBe(true);
+      expect(result.text.split("\n")[0]).toContain("Acme");
+      expect(result.text).toMatch(/cto · .* · ● claude-code/);
+    });
+  });
+
   describe("activity", () => {
     it("returns NOT_AVAILABLE when no control channel is wired", async () => {
       const result = await router.dispatch("activity", [], ctx);

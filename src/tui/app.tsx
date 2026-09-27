@@ -1,7 +1,18 @@
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApprovalRequest } from "../core/approval.js";
+import { loadOrg } from "../core/org/org.js";
 import type { BootInfo } from "./boot-info.js";
+import { AppHeader, NavTabs, nextTab, Toast } from "./components/app-header.js";
+import { CommandBar, type ConsoleEntry } from "./components/command-bar.js";
+import { InboxPage } from "./pages/inbox-page.js";
+import { secondsLeft } from "./approval-queue.js";
+import { ApprovalQueueStrip } from "./components/approval-queue-strip.js";
+import type { CommandEnv, TuiPage } from "./tui-commands.js";
+import { useApprovalQueue } from "./use-approval-queue.js";
+import { useInbox } from "./use-inbox.js";
+import { useDashboardState } from "./use-dashboard-state.js";
+import { useTerminalSize } from "./hooks.js";
 import {
   ApprovalModal,
   type ApprovalResolution,
@@ -43,20 +54,12 @@ import { buildSettingsItems, SettingsPage } from "./pages/settings-page.js";
 import { launchEditor } from "./launch-editor.js";
 import { resolveAgentLoginSteps } from "../core/agent-login.js";
 
-const APPROVAL_TIMEOUT_MS = 60_000;
+/** The boot banner shows this long (or until the first key). */
+const BOOT_BANNER_MS = 3_500;
+/** How long letter keys are ignored after the approval on screen changes. */
+const KEY_SETTLE_MS = 600;
 
-export type Page =
-  | "dashboard"
-  | "logs"
-  | "policy"
-  | "sessions"
-  | "delegations"
-  | "agents"
-  | "providers"
-  | "services"
-  | "secrets"
-  | "settings"
-  | "chat";
+export type Page = TuiPage;
 
 export interface AppProps {
   bootInfo: BootInfo;
@@ -85,7 +88,15 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     secretStore,
     registry,
     runInteractiveLogin,
+    inbox: inboxService,
+    pendingApprovals,
+    keySettleMs = KEY_SETTLE_MS,
+    commandRouter,
+    commandContext,
+    audit,
+    orgConfigPath,
   } = useDashboardServices();
+  const { exit } = useApp();
 
   const [page, setPage] = useState<Page>("dashboard");
   const [quitConfirm, setQuitConfirm] = useState(false);
@@ -218,13 +229,21 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   );
   const [agentsLlmDraft, setAgentsLlmDraft] = useState<string | null>(null);
 
-  const [pendingApproval, setPendingApproval] =
-    useState<ApprovalRequest | null>(null);
-  const [approvalDeadline, setApprovalDeadline] = useState<number | null>(null);
+  // Every pending approval, oldest deadline first (#614).
+  const queue = useApprovalQueue(bus, pendingApprovals);
+  const pendingApproval: ApprovalRequest | null = queue.current?.request ?? null;
   const [inspectOpen, setInspectOpen] = useState(false);
   const [inspectOffset, setInspectOffset] = useState(0);
   const [technicalExpanded, setTechnicalExpanded] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
+  const inbox = useInbox(inboxService, bus);
+  const [commandOpen, setCommandOpen] = useState(false);
+  /** Providers / Services pages are taking typed text (they own their keys). */
+  const [pageEditing, setPageEditing] = useState(false);
+  useEffect(() => setPageEditing(false), [page]);
+  const [commandHistory, setCommandHistory] = useState<string[]>([]);
+  const [consoleEntries, setConsoleEntries] = useState<ConsoleEntry[]>([]);
+  const [booting, setBooting] = useState(true);
+  const terminal = useTerminalSize();
 
   const [logSearch, setLogSearch] = useState("");
   const [logSearchMode, setLogSearchMode] = useState(false);
@@ -237,60 +256,60 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const pendingRef = useRef(pendingApproval);
   pendingRef.current = pendingApproval;
 
+  // The boot banner gives way to the compact header after a moment.
   useEffect(() => {
-    return bus.on("approval:requested", (req) => {
-      setPendingApproval(req);
-      setApprovalDeadline(Date.now() + APPROVAL_TIMEOUT_MS);
-      setInspectOpen(false);
-      setInspectOffset(0);
-      setTechnicalExpanded(false);
-    });
-  }, [bus]);
+    const t = setTimeout(() => setBooting(false), BOOT_BANNER_MS);
+    return () => clearTimeout(t);
+  }, []);
 
+  // A different approval on screen starts with its details collapsed.
+  const currentApprovalId = pendingApproval?.requestId ?? null;
+
+  // A letter key that lands right after the approval on screen changed was
+  // meant for what was there before: a double tap, key repeat, or an
+  // approval decided elsewhere a moment ago. Without this, `A A` would
+  // always-allow two different requests, and a `d` meant for a vanished
+  // approval would reach the page underneath (delete a key, disable a rule).
+  const shownApprovalRef = useRef<string | null>(null);
+  const approvalChangedAtRef = useRef(0);
+  if (shownApprovalRef.current !== currentApprovalId) {
+    shownApprovalRef.current = currentApprovalId;
+    approvalChangedAtRef.current = Date.now();
+  }
+  const swallowUnsettledKey = useCallback((): boolean => {
+    const now = Date.now();
+    if (now - approvalChangedAtRef.current >= keySettleMs) return false;
+    // Keep swallowing while keys keep coming (a held key).
+    approvalChangedAtRef.current = now;
+    return true;
+  }, [keySettleMs]);
   useEffect(() => {
-    if (!pendingApproval) return;
-    const tick = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(tick);
-  }, [pendingApproval]);
+    setInspectOpen(false);
+    setInspectOffset(0);
+    setTechnicalExpanded(false);
+  }, [currentApprovalId]);
 
+  // Decisions always name the request that was on screen when the key was
+  // pressed. The TUI never times approvals out itself: the service that
+  // asked owns the deadline and announces the outcome.
   const resolveApproval = useCallback(
-    (resolution: ApprovalResolution, resolvedBy: ResolvedBy): void => {
+    (resolution: ApprovalResolution, _by?: ResolvedBy): void => {
       const current = pendingRef.current;
       if (!current) return;
-      bus.emit("approval:resolved", {
-        requestId: current.requestId,
-        decision: resolution.decision,
-        remember: resolution.remember,
-        resolvedBy,
-      });
-      setPendingApproval(null);
-      setApprovalDeadline(null);
-      setInspectOpen(false);
-      setInspectOffset(0);
-      setTechnicalExpanded(false);
+      queue.resolve(current.requestId, resolution);
     },
-    [bus],
+    [queue.resolve],
   );
-
-  useEffect(() => {
-    if (!pendingApproval || approvalDeadline === null) return;
-    if (now >= approvalDeadline) {
-      resolveApproval({ decision: "denied" }, "timeout");
-    }
-  }, [now, pendingApproval, approvalDeadline, resolveApproval]);
 
   const onHaltSessionFromApproval = useCallback((): void => {
     const current = pendingRef.current;
     if (!current?.sessionId || !sessionManager) return;
     if (!current.riskFactors?.some((f) => f.category === "loop")) return;
     sessionManager.halt(current.sessionId, "loop_detection");
-    resolveApproval({ decision: "denied" }, "user");
+    resolveApproval({ decision: "denied" });
   }, [sessionManager, resolveApproval]);
 
-  const remainingSeconds =
-    approvalDeadline === null
-      ? 0
-      : Math.max(0, Math.ceil((approvalDeadline - now) / 1000));
+  const remainingSeconds = queue.current ? secondsLeft(queue.current, queue.now) : 0;
 
   const selectedRequestId = useMemo(() => {
     if (page !== "logs") return null;
@@ -824,6 +843,75 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     setAgentsLlmDraft(null);
   }, []);
 
+  const queueCount = queue.state.items.length;
+  const queueCountRef = useRef(queueCount);
+  queueCountRef.current = queueCount;
+  const queueItemsRef = useRef(queue.state.items);
+  queueItemsRef.current = queue.state.items;
+  const commandEnv = useMemo<CommandEnv>(
+    () => ({
+      dispatch: async (verb, args) => {
+        if (!commandRouter || !commandContext) {
+          return { ok: false, text: "Chat commands are not available in this session.", errorCode: "NOT_AVAILABLE" };
+        }
+        // The TUI is the owner at the host: no Telegram id to check.
+        const result = await commandRouter.dispatch(verb, args, {
+          ...commandContext,
+          sourceAgent: "tui",
+          sourceUser: "owner",
+          trustedOwner: true,
+        });
+        audit?.logEvent("foreman:command", {
+          command: verb,
+          args,
+          sourceAgent: "tui",
+          sourceUser: "owner",
+          ok: result.ok,
+          errorCode: result.errorCode ?? null,
+        });
+        return result;
+      },
+      verbs: () => commandRouter?.listVerbs() ?? [],
+      navigate: (next) => {
+        setCommandOpen(false);
+        setPage(next);
+      },
+      approvals: {
+        current: () => pendingRef.current?.requestId ?? null,
+        describe: (id) => {
+          const req = queueItemsRef.current.find((q) => q.request.requestId === id)?.request;
+          return req ? `${req.targetTool ?? req.targetAgent ?? "a tool"} for ${req.sourceAgent}` : null;
+        },
+        count: () => queueCountRef.current,
+        resolve: (id, decision) => queue.resolve(id, decision),
+      },
+      inbox: { markAllRead: () => inbox.markAllRead() },
+      agentIds: () => registry.list().map((a) => a.id),
+      orgTargets: () => {
+        try {
+          const org = orgConfigPath ? loadOrg(orgConfigPath) : null;
+          return org ? [...Object.keys(org.departments), ...Object.keys(org.roles)] : [];
+        } catch {
+          return [];
+        }
+      },
+      quit: () => exit(),
+    }),
+    [commandRouter, commandContext, audit, queue.resolve, inbox.markAllRead, registry, orgConfigPath, exit],
+  );
+
+  const dashboard = useDashboardState();
+  const headerStats = {
+    agentsOnline: dashboard.agents.filter((a) => a.status === "active").length,
+    agentsTotal: dashboard.agents.length,
+    pendingApprovals: queueCount,
+    unread: inbox.unread,
+    allowedToday: dashboard.todayStats.allowed,
+    deniedToday: dashboard.todayStats.denied,
+  };
+  // Rows left for the page between the chrome (header, tabs, toast, bar).
+  const pageHeight = Math.max(8, terminal.rows - 6 - (inbox.toast ? 1 : 0));
+
   return (
     <Box flexDirection="column">
       {isRawModeSupported && (
@@ -907,24 +995,40 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           onAgentEnable={onAgentEnable}
           onAgentLogin={onAgentLogin}
           agentsEditMode={agentsEditMode}
+          pageEditing={pageEditing}
           onAgentStartNoteEdit={onAgentStartNoteEdit}
           onAgentStartLlmEdit={onAgentStartLlmEdit}
           onAgentSaveLlm={onAgentSaveLlm}
           onAgentCancelEdit={onAgentCancelEdit}
+          commandOpen={commandOpen}
+          openCommand={() => {
+            setBooting(false);
+            setCommandOpen(true);
+          }}
+          onMoveApproval={queue.move}
+          onAnyKey={() => setBooting(false)}
+          swallowUnsettledKey={swallowUnsettledKey}
         />
       )}
-      <BootBanner
-        info={bootInfo}
-        animationsEnabled={isRawModeSupported}
-        updateNotice={updateNotice}
-        agentUpdates={agentUpdates}
-        agentOvershoots={agentOvershoots}
-        daemonCrashes={daemonCrashes.map((c) => ({
-          agentId: c.agentId,
-          exitCode: c.exitCode,
-          stderrHint: c.stderrHint,
-        }))}
-      />
+      {booting && !pendingApproval ? (
+        // Splash: the banner alone, until a key or a moment passes.
+        <BootBanner
+          info={bootInfo}
+          animationsEnabled={isRawModeSupported}
+          updateNotice={updateNotice}
+          agentUpdates={agentUpdates}
+          agentOvershoots={agentOvershoots}
+          daemonCrashes={daemonCrashes.map((c) => ({
+            agentId: c.agentId,
+            exitCode: c.exitCode,
+            stderrHint: c.stderrHint,
+          }))}
+        />
+      ) : (
+        <>
+      <AppHeader stats={headerStats} width={terminal.cols} />
+      <NavTabs page={page} unread={inbox.unread} width={terminal.cols} />
+      {inbox.toast && page !== "inbox" && !pendingApproval ? <Toast item={inbox.toast} /> : null}
       {budgetAlertNotice ? (
         <Box paddingX={1}>
           <Text
@@ -947,21 +1051,58 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
       ) : null}
       {helpOpen ? (
         <HelpOverlay />
+      ) : commandOpen ? (
+        <Box flexDirection="column">
+          {pendingApproval ? (
+            <Box paddingX={1}>
+              <Text color={theme.accent.warning} bold>
+                {`${theme.symbols.warn} ${queueCount} approval${queueCount === 1 ? "" : "s"} waiting`}
+              </Text>
+              <Text color={theme.fg.muted}>
+                {` — ${pendingApproval.sourceAgent} → ${pendingApproval.targetTool ?? pendingApproval.targetAgent ?? "?"} · type approve / deny, or Esc to see it`}
+              </Text>
+            </Box>
+          ) : null}
+          <CommandBar
+            env={commandEnv}
+            onClose={() => setCommandOpen(false)}
+            width={terminal.cols}
+            height={pageHeight + 1 - (pendingApproval ? 1 : 0)}
+            history={commandHistory}
+            onHistory={setCommandHistory}
+            scrollback={consoleEntries}
+            onScrollback={setConsoleEntries}
+          />
+        </Box>
       ) : pendingApproval ? (
-        inspectOpen ? (
-          <InspectView
-            request={pendingApproval}
-            offset={inspectOffset}
-            setOffset={setInspectOffset}
-            remainingSeconds={remainingSeconds}
-          />
-        ) : (
-          <ApprovalModal
-            request={pendingApproval}
-            remainingSeconds={remainingSeconds}
-            technicalExpanded={technicalExpanded}
-          />
-        )
+        <Box flexDirection="column">
+          <ApprovalQueueStrip state={queue.state} now={queue.now} />
+          {inspectOpen ? (
+            <InspectView
+              request={pendingApproval}
+              offset={inspectOffset}
+              setOffset={setInspectOffset}
+              remainingSeconds={remainingSeconds}
+            />
+          ) : (
+            <ApprovalModal
+              request={pendingApproval}
+              remainingSeconds={remainingSeconds}
+              technicalExpanded={technicalExpanded}
+            />
+          )}
+        </Box>
+      ) : page === "inbox" ? (
+        <InboxPage
+          items={inbox.items}
+          unread={inbox.unread}
+          onMarkRead={inbox.markRead}
+          onMarkAllRead={() => {
+            inbox.markAllRead();
+          }}
+          active={!commandOpen && !helpOpen && !quitConfirm}
+          height={pageHeight}
+        />
       ) : page === "logs" ? (
         <LogsPage
           search={logSearch}
@@ -1030,13 +1171,17 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           daemonCrashes={daemonCrashes}
         />
       ) : page === "providers" ? (
-        <ProvidersPage onLeave={() => setPage("dashboard")} />
+        <ProvidersPage onLeave={() => setPage("dashboard")} onEditingChange={setPageEditing} />
       ) : page === "services" ? (
-        <ServicesPage onLeave={() => setPage("dashboard")} />
+        <ServicesPage onLeave={() => setPage("dashboard")} onEditingChange={setPageEditing} />
       ) : (
-        <Box flexGrow={1}>{renderPanels(layout)}</Box>
+        <Box height={pageHeight}>{renderPanels(layout)}</Box>
       )}
-      <StatusBar quitConfirm={quitConfirm} page={page} />
+      {commandOpen ? null : (
+        <StatusBar quitConfirm={quitConfirm} page={page} approval={pendingApproval !== null && !helpOpen} />
+      )}
+        </>
+      )}
     </Box>
   );
 }
@@ -1121,10 +1266,18 @@ interface KeyboardHandlerProps {
   onAgentEnable: () => void;
   onAgentLogin: () => void;
   agentsEditMode: "none" | "note" | "llm";
+  pageEditing: boolean;
   onAgentStartNoteEdit: () => void;
   onAgentStartLlmEdit: () => void;
   onAgentSaveLlm: () => void;
   onAgentCancelEdit: () => void;
+  commandOpen: boolean;
+  openCommand: () => void;
+  onMoveApproval: (delta: number) => void;
+  onAnyKey: () => void;
+  /** True when a letter key should be ignored because the approval on
+   *  screen just changed. */
+  swallowUnsettledKey: () => boolean;
 }
 
 function KeyboardHandler(props: KeyboardHandlerProps): null {
@@ -1207,18 +1360,36 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     onAgentEnable,
     onAgentLogin,
     agentsEditMode,
+    pageEditing,
     onAgentStartNoteEdit,
     onAgentStartLlmEdit,
     onAgentSaveLlm,
     onAgentCancelEdit,
+    commandOpen,
+    openCommand,
+    onMoveApproval,
+    onAnyKey,
+    swallowUnsettledKey,
   } = props;
 
   useInput((input, key) => {
+    onAnyKey();
+    // The command bar owns the keyboard while it is open.
+    if (commandOpen) return;
     // Help overlay takes priority — when open, Esc / `?` / `h` close it.
     if (helpOpen) {
       if (key.escape || input === "?" || input === "h") setHelpOpen(false);
       return;
     }
+    // Keys that work on every page, unless the page is taking typed text.
+    const textEntry =
+      (page === "logs" && logSearchMode) ||
+      (page === "chat" && chatInputMode) ||
+      (page === "secrets" && (addSecretMode !== null || rotateMode !== null)) ||
+      (page === "agents" && agentsEditMode !== "none") ||
+      ((page === "providers" || page === "services") && pageEditing);
+    const letter = /^[a-zA-Z]$/.test(input) && !key.ctrl && !key.meta;
+    if (letter && (pendingApproval || !textEntry) && swallowUnsettledKey()) return;
     if (pendingApproval && inspectOpen) {
       if (key.escape) {
         setInspectOpen(false);
@@ -1245,6 +1416,18 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       return;
     }
     if (pendingApproval) {
+      if (key.leftArrow || input === "[") {
+        onMoveApproval(-1);
+        return;
+      }
+      if (key.rightArrow || input === "]") {
+        onMoveApproval(1);
+        return;
+      }
+      if (input === ":") {
+        openCommand();
+        return;
+      }
       if (input === "a") onResolveApproval({ decision: "allowed" }, "user");
       else if (input === "A")
         onResolveApproval({ decision: "allowed", remember: "allow" }, "user");
@@ -1254,6 +1437,27 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "i") setInspectOpen(true);
       else if (input === "t") setTechnicalExpanded(!technicalExpanded);
       else if (input === "k") onHaltSessionFromApproval();
+      return;
+    }
+    if (!textEntry && !quitConfirm) {
+      if (input === ":") {
+        openCommand();
+        return;
+      }
+      if (key.tab) {
+        setPage(nextTab(page, key.shift ? -1 : 1));
+        return;
+      }
+      // Secrets, Providers and Services use `n` for "new".
+      if (input === "n" && page !== "secrets" && page !== "providers" && page !== "services") {
+        setPage("inbox");
+        return;
+      }
+    }
+    if (page === "inbox") {
+      // The page handles its own keys; only leaving is handled here.
+      if (key.escape) setPage("dashboard");
+      else if (input === "q") exit();
       return;
     }
     if (page === "logs") {
@@ -1492,7 +1696,8 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         setQuitConfirm(false);
       return;
     }
-    if (input === "?" || input === "h") setHelpOpen(true);
+    if (input === "/") openCommand();
+    else if (input === "?" || input === "h") setHelpOpen(true);
     else if (input === "q") exit();
     else if (key.ctrl && input === "c") setQuitConfirm(true);
     else if (input === "c") setPage("chat");

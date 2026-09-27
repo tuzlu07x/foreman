@@ -1,7 +1,14 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: { "cli/index": "src/cli/index.ts", "cli/hook": "src/cli/hook-main.ts" },
+  entry: {
+    "cli/index": "src/cli/index.ts",
+    "cli/hook": "src/cli/hook-main.ts",
+    "cli/env-preflight": "src/cli/env-preflight.ts",
+  },
+  // Kept as a separate file so its import stays first in index.js and runs
+  // before chalk / Ink read the environment (see env-preflight.ts).
+  external: ["./env-preflight.js"],
   outDir: "dist",
   format: ["esm"],
   target: "node22",

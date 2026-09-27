@@ -237,5 +237,7 @@ describe('relayed approvals (submit_approval) across processes', () => {
     const rows = db.select().from(pendingApprovals).all()
     expect(rows.map((r) => r.requestId)).toEqual(['req-i'])
     expect(rows[0]!.status).toBe('resolved')
+    // Recorded as withdrawn, not as a timeout nobody answered.
+    expect(rows[0]!.resolvedBy).toBe('cancelled')
   })
 })

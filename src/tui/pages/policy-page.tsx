@@ -3,7 +3,7 @@ import { type JSX, useEffect, useState } from "react";
 import type { policies } from "../../db/schema.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { formatTime } from "../format.js";
-import { singleBorder, theme } from "../theme.js";
+import { roundBorder, theme } from "../theme.js";
 import { EmptyState } from "../components/empty-state.js";
 import { PageHeader } from "../components/typography.js";
 
@@ -37,7 +37,7 @@ export function PolicyPage({
     return (
       <Box
         flexDirection="column"
-        borderStyle={singleBorder()}
+        borderStyle={roundBorder()}
         borderDimColor
         paddingX={1}
         flexGrow={1}
@@ -60,7 +60,7 @@ export function PolicyPage({
   return (
     <Box
       flexDirection="column"
-      borderStyle={singleBorder()}
+      borderStyle={roundBorder()}
       borderDimColor
       paddingX={1}
       flexGrow={1}
@@ -155,7 +155,7 @@ function RuleRow({
           marginLeft={2}
           marginBottom={1}
           paddingX={1}
-          borderStyle={singleBorder()}
+          borderStyle={roundBorder()}
           borderDimColor
         >
           <Text color={theme.fg.muted}>rule id: {row.id}</Text>

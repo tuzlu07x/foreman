@@ -98,6 +98,37 @@ describe("AgentDaemonManager", () => {
   });
 
   describe("startOne", () => {
+    it("reports a missing daemon binary instead of crashing foreman start", async () => {
+      const mgr = new AgentDaemonManager({
+        paths,
+        registry,
+        onLifecycle: (e) => events.push(e),
+      });
+      // A real spawn of a command that does not exist.
+      mgr.startOne("hermes", fakeEntry({ command: "foreman-test-no-such-binary", args: [] }));
+      await new Promise((r) => setTimeout(r, 100));
+      const crashed = events.find((e) => e.kind === "crashed");
+      expect(crashed).toMatchObject({ kind: "crashed", agentId: "hermes", exitCode: 127 });
+      expect((crashed as { stderr: string }).stderr).toContain("command not found");
+      expect(existsSync(resolve(stateDir, "daemons", "hermes.pid"))).toBe(false);
+    });
+
+    it("does not call a running daemon crashed when a later child error fires", () => {
+      const child = makeFakeChild(99002);
+      const spawnImpl = vi.fn(() => child) as never;
+      const mgr = new AgentDaemonManager({
+        paths,
+        registry,
+        onLifecycle: (e) => events.push(e),
+        spawnImpl,
+      });
+      mgr.startOne("hermes", fakeEntry());
+      // e.g. a kill() that failed while stopping: the process still runs.
+      child.emit("error", Object.assign(new Error("kill EPERM"), { code: "EPERM", syscall: "kill" }));
+      expect(events.some((e) => e.kind === "crashed")).toBe(false);
+      expect(existsSync(resolve(stateDir, "daemons", "hermes.pid"))).toBe(true);
+    });
+
     it("spawns the daemon command, writes a pidfile, and emits started", () => {
       const child = makeFakeChild(99001);
       const spawnImpl = vi.fn(() => child) as never;

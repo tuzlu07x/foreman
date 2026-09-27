@@ -9,7 +9,7 @@ import {
   summariseTool,
   targetLabel,
 } from "../format.js";
-import { singleBorder, theme } from "../theme.js";
+import { roundBorder, theme } from "../theme.js";
 import { useDashboardState } from "../use-dashboard-state.js";
 
 const FADE_DURATION_MS = 200;
@@ -51,7 +51,13 @@ export function ActivityFeed({
         <PendingRow key={p.requestId} pending={p} />
       ))}
       {visible.length === 0 && pendingRequests.length === 0 ? (
-        <Text color={theme.fg.muted}>(no activity yet)</Text>
+        <Box flexDirection="column">
+          <Text color={theme.fg.muted}>Quiet so far.</Text>
+          <Text color={theme.fg.muted}>
+            Every tool call your agents make shows up here as it happens —
+          </Text>
+          <Text color={theme.fg.muted}>allowed, asked or blocked, with the reason.</Text>
+        </Box>
       ) : (
         visible.map((item) =>
           item.kind === "request" ? (
@@ -77,7 +83,7 @@ export function ActivityFeed({
     <Box
       width={width}
       flexDirection="column"
-      borderStyle={singleBorder()}
+      borderStyle={roundBorder()}
       borderDimColor
       paddingX={1}
       flexGrow={1}

@@ -317,8 +317,8 @@ export function allowedMcpServers(doc: OrgDoc, agentId: string): Set<string> | n
 
 /** Resolve an assignment target (role id, department id or agent id) to a role. */
 export function resolveAssignee(doc: OrgDoc, target: string): string | null {
-  if (doc.roles[target]) return target;
-  const dept = doc.departments[target];
+  if (Object.hasOwn(doc.roles, target)) return target;
+  const dept = Object.hasOwn(doc.departments, target) ? doc.departments[target] : undefined;
   if (dept) return dept.head;
   const byAgent = rolesForAgent(doc, target);
   return byAgent[0] ?? null;
@@ -338,4 +338,21 @@ export function buildTree(doc: OrgDoc): OrgTreeNode[] {
           .filter(([, r]) => r.reports_to === parent)
           .map(([roleId, role]) => ({ roleId, role, children: build(roleId, depth + 1) }));
   return build(HUMAN, 0);
+}
+
+/** Plain-text org chart, one line per role (chat replies, the TUI). */
+export function renderOrgLines(doc: OrgDoc, registered: ReadonlySet<string> = new Set()): string[] {
+  const lines = [`${doc.company}${doc.mission ? ` — ${doc.mission}` : ""}`, `you${doc.human.title ? ` (${doc.human.title})` : ""}`];
+  const walk = (nodes: OrgTreeNode[], prefix: string): void => {
+    nodes.forEach((node, i) => {
+      const last = i === nodes.length - 1;
+      const { role } = node;
+      const dot = registered.size === 0 || registered.has(role.agent.toLowerCase()) ? "●" : "○";
+      const dept = role.department ? ` [${doc.departments[role.department]?.name ?? role.department}]` : "";
+      lines.push(`${prefix}${last ? "└─" : "├─"} ${node.roleId} · ${role.title} · ${dot} ${role.agent}${dept}`);
+      walk(node.children, `${prefix}${last ? "   " : "│  "}`);
+    });
+  };
+  walk(buildTree(doc), "");
+  return lines;
 }

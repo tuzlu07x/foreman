@@ -10,7 +10,7 @@ import {
 import type { StoredSecretMeta } from "../../core/secret-store.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { formatTime } from "../format.js";
-import { singleBorder, theme } from "../theme.js";
+import { roundBorder, theme } from "../theme.js";
 import { EmptyState } from "../components/empty-state.js";
 import { PageHeader } from "../components/typography.js";
 
@@ -92,7 +92,7 @@ export function SecretsPage({
     return (
       <Box
         flexDirection="column"
-        borderStyle={singleBorder()}
+        borderStyle={roundBorder()}
         borderDimColor
         paddingX={1}
         flexGrow={1}
@@ -107,7 +107,7 @@ export function SecretsPage({
   return (
     <Box
       flexDirection="column"
-      borderStyle={singleBorder()}
+      borderStyle={roundBorder()}
       borderDimColor
       paddingX={1}
       flexGrow={1}
@@ -153,7 +153,7 @@ export function SecretsPage({
           flexDirection="column"
           marginTop={1}
           paddingX={1}
-          borderStyle={singleBorder()}
+          borderStyle={roundBorder()}
           borderColor={theme.accent.warning}
         >
           {addSecretMode.phase === "name" ? (
@@ -189,7 +189,7 @@ export function SecretsPage({
           flexDirection="column"
           marginTop={1}
           paddingX={1}
-          borderStyle={singleBorder()}
+          borderStyle={roundBorder()}
           borderColor={theme.accent.warning}
         >
           <Text>
@@ -271,7 +271,7 @@ function SecretRow({
           marginLeft={2}
           marginBottom={1}
           paddingX={1}
-          borderStyle={singleBorder()}
+          borderStyle={roundBorder()}
           borderDimColor
         >
           <Text color={theme.fg.muted}>name: {row.name}</Text>
