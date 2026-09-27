@@ -4,9 +4,11 @@ set -euo pipefail
 
 REPO="tuzlu07x/foreman"
 PACKAGE="foreman-agent"
-MIN_NODE_MAJOR=20
-NODE_LTS_MAJOR=20
-SUPPORTED_NODE_MAJORS="20, 22"
+# Node 20 reached end-of-life on 2026-04-30 and Foreman's dependencies
+# (ink 7, commander 15) require >= 22.12.
+MIN_NODE_MAJOR=22
+NODE_LTS_MAJOR=22
+SUPPORTED_NODE_MAJORS="22, 24"
 NVM_VERSION="${FOREMAN_NVM_VERSION:-v0.40.1}"
 
 # Colours (TTY only).
@@ -43,7 +45,7 @@ ${c_bold}ENVIRONMENT${c_reset}
   FOREMAN_INSTALL_PREFIX    npm prefix override
   FOREMAN_VERSION           specific version (default: latest published)
   FOREMAN_SKIP_NVM          set to 1 to refuse the nvm bootstrap path
-  FOREMAN_REUSE_ANY_NODE    set to 1 to reuse a Node >=20 outside the tested
+  FOREMAN_REUSE_ANY_NODE    set to 1 to reuse a Node >=22 outside the tested
                             LTS lines (${SUPPORTED_NODE_MAJORS}); may require a C/C++ toolchain
 EOF
 }
@@ -58,7 +60,7 @@ current_node_major() {
 
 is_supported_node_major() {
   case "${1:-0}" in
-    20|22) return 0 ;;
+    22|24) return 0 ;;
     *) return 1 ;;
   esac
 }

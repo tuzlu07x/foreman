@@ -83,7 +83,7 @@ describe("computeExitCode", () => {
 });
 
 describe("checkNodeVersion", () => {
-  it("passes on the current process (suite requires Node 20+)", () => {
+  it("passes on the current process (suite requires Node 22+)", () => {
     const result = checkNodeVersion();
     expect(result.status).toBe("ok");
     expect(result.message).toContain(process.versions.node);

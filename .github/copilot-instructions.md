@@ -7,7 +7,7 @@ security boundaries.
 Foreman is security-sensitive software: it mediates tool calls made by local
 developer agents. Prefer minimal, focused changes; preserve fail-closed policy
 and approval behavior; never add credentials, secrets, or machine-specific
-data. Use Node 20+, then run `npm run lint`, `npm test`, and `npm run build`.
+data. Use Node 22.12+, then run `npm run lint`, `npm test`, and `npm run build`.
 
 Before changing a directory, read the closest relevant design material:
 
