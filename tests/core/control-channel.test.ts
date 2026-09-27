@@ -235,6 +235,29 @@ describe("ControlDrainPoller (#440)", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it("stop() waits for a command that is already running before it resolves", async () => {
+    let release: () => void = () => {};
+    const handler = vi.fn(
+      () => new Promise<ControlHandlerOutcome>((r) => {
+        release = () => r({ status: "applied" });
+      }),
+    );
+    const poller = new ControlDrainPoller(channel, new Map([["stop", handler]]), { intervalMs: 100 });
+    poller.start();
+    channel.enqueue({ command: "stop", args: [], sourceAgent: "h" });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(handler).toHaveBeenCalledOnce();
+    let stopped = false;
+    const stopping = poller.stop().then(() => {
+      stopped = true;
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(stopped).toBe(false); // the command is still running
+    release();
+    await stopping;
+    expect(stopped).toBe(true);
+  });
+
   it("start() is idempotent — calling twice doesn't double-fire", async () => {
     const handler = vi.fn(() => ({ status: "applied" as const }));
     const poller = new ControlDrainPoller(
