@@ -214,9 +214,21 @@ export class RegistryService {
     const result = this.db
       .update(agents)
       .set({ lastSeenAt: now, status: "active" })
-      .where(and(eq(agents.id, agentId), ne(agents.status, "blocked")))
+      .where(
+        and(eq(agents.id, agentId), ne(agents.status, "blocked"), ne(agents.status, "disabled")),
+      )
       .run();
-    if (result.changes === 0) throw new AgentNotFoundError(agentId);
+    if (result.changes === 0) {
+      // A disabled agent is still seen, but its own traffic must never
+      // switch it back on: only enable() does that.
+      const seen = this.db
+        .update(agents)
+        .set({ lastSeenAt: now })
+        .where(and(eq(agents.id, agentId), eq(agents.status, "disabled")))
+        .run();
+      if (seen.changes > 0) return;
+      throw new AgentNotFoundError(agentId);
+    }
     this.bus.emit("agent:heartbeat", {
       agentId,
       status: "active",
