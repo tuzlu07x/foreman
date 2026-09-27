@@ -112,6 +112,39 @@ describe('spend and budgets — review fixes', () => {
     expect(titles.filter((t) => t.includes('over its daily budget'))).toHaveLength(2)
   })
 
+  it('checks budgets as soon as usage arrives, without waiting for the next pass', async () => {
+    const inbox = new InboxService(db, new EventBus<ForemanEventMap>())
+    const watcher = new BudgetWatcher(db, { orgConfigPath: orgPath, inbox })
+    let recorded = 0
+    const receiver = new OtlpReceiver({
+      ledger,
+      key: 'i'.repeat(48),
+      port: 0,
+      onRecorded: () => {
+        recorded += 1
+        watcher.checkSoon(10)
+      },
+    })
+    const port = await receiver.start()
+    try {
+      const post = (body: string) =>
+        fetch(`http://127.0.0.1:${port}/v1/logs`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', [USAGE_KEY_HEADER]: 'i'.repeat(48) },
+          body,
+        })
+      await post(JSON.stringify({ resourceLogs: [] }))
+      expect(recorded).toBe(0) // nothing recorded, nothing to check
+      await Promise.all([post(payload('writer-bot', 0.6)), post(payload('writer-bot', 0.6))])
+      expect(recorded).toBe(2)
+      await new Promise((r) => setTimeout(r, 50))
+      expect(inbox.list().filter((i) => i.title.includes('over its daily budget'))).toHaveLength(1)
+    } finally {
+      watcher.stop()
+      await receiver.stop()
+    }
+  })
+
   it('reports a department from what was booked to it, like its budget', () => {
     ledger.record({ agentId: 'claude-code', source: 'telemetry', costUsd: 2, input: 1 })
     // Later claude-code moves to marketing and codex becomes CTO:

@@ -93,6 +93,27 @@ npm install -g foreman-agent                              # Node >= 22.12
 
 ## Quick start
 
+**See it first, in a sandbox:**
+
+```bash
+foreman demo
+```
+
+A made-up company of agents (a CEO, a CTO, an engineer, a CMO and a CFO) works through a day
+while you watch the real TUI. You'll see:
+
+- department messages, and a task handed down the org chart;
+- an agent reaching for `.env` (press `a` or `d`);
+- a poisoned instruction blocked;
+- marketing going over its daily budget;
+- the CEO's report landing in your inbox.
+
+The agents are stand-ins with canned answers, and they're the only agent CLIs on the demo's
+`PATH`. Everything lives in a throwaway folder with its own `FOREMAN_HOME`, and no keys are
+needed. Your real agents, files and `~/.foreman` are never touched.
+
+**Then set up your own:**
+
 ```bash
 foreman init            # identity, policy, encrypted secret store, audit DB
 foreman start           # guided setup on first run, then the live TUI
