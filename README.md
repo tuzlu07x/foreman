@@ -57,7 +57,7 @@ Foreman sits in the path of every call and handles all four locally, before anyt
 | 🧪 **Tool-poisoning & rug-pull defence** | Tool descriptions are scanned for hidden instructions. Definitions are pinned on first use, and a tool that changes later is withheld until you trust it again. Results are redacted for secrets and flagged for injected instructions. |
 | 🏢 **[Foreman Org](docs/org.md)** | `foreman org init --template startup` sets up a CEO, CTO, CMO, CFO and teams, each role filled by the agent you choose. Delegation follows reporting lines, and each department sees only the tools it needs. |
 | 🖥️ **[A terminal you can run your crew from](docs/tui.md)** | A live dashboard, a queue for every agent waiting on you, an inbox of everything you missed, and a `:` console: `write codex …`, `assign marketing …`, `approve`. No chat app required. |
-| 📱 **Approve from anywhere** | You can decide in the TUI or with one tap in Telegram. Buttons carry HMAC-tagged tokens, so no other agent can approve a call and the chat agent can't approve before you tap. Alerts and digests also go to Slack, Discord, email and ntfy phone push. |
+| 📱 **Approve from anywhere** | Decide in the TUI, or with one tap in Telegram, Slack or Discord. Buttons carry HMAC-tagged tokens and reach Foreman over connections only it holds (Telegram approval bot, Slack Socket Mode, the Discord Gateway), so no agent can approve for you. `/foreman status`, `/foreman write codex …` work from Slack and Discord too. Alerts and digests also go to email and ntfy phone push. |
 | 💸 **Fewer tokens** | Lazy tool discovery cut the listing for the official filesystem server from ~2,000 tokens to ~190. Descriptions are clipped, oversized results truncated, and routine roles can run on cheaper models. |
 | 🔒 **Tamper protection** | An agent that tries to edit Foreman's database, policy, keys or its own hook/MCP wiring is caught as a critical risk. |
 | 📝 **Local audit** | Every decision is stored in SQLite with full-text search. Secrets are masked; files are owner-only. No cloud, no telemetry. |
@@ -144,7 +144,7 @@ Then watch it work: `foreman log tail --follow`, `foreman doctor`, `foreman poli
 ## How it works
 
 ```
- you ── TUI · Telegram (approve) · Slack · Discord · email · ntfy (alerts)
+ you ── TUI · Telegram · Slack · Discord (approve + command) · email · ntfy (alerts)
   │
   ▼
 ┌───────────────────────────── FOREMAN (local) ─────────────────────────────┐
@@ -168,7 +168,7 @@ effects afterwards. See [`docs/architecture.md`](docs/architecture.md).
 | --- | --- |
 | **Agents** ([guide](docs/agent-lifecycle.md)) | Claude Code · Codex · Hermes · OpenClaw · ZeroClaw · any MCP agent |
 | **MCP servers** ([hub](docs/mcp-hub.md)) | GitHub · Filesystem · Memory · Playwright · Chrome DevTools · Notion · Sentry · Stripe · Brave · Exa · Firecrawl · Context7 · Figma · Resend · Discord · X · YouTube · App Store Connect · App Store + Google Play · your own (stdio or HTTPS) |
-| **Channels** ([guide](docs/notifications.md)) | Telegram (tap-to-approve) · Slack · Discord · Email (SMTP) · ntfy · Webhook (signed) · OS notifications |
+| **Channels** ([guide](docs/notifications.md)) | Telegram, Slack and Discord (tap-to-approve, `/foreman` commands) · Email (SMTP) · ntfy · Webhook (signed) · OS notifications |
 | **LLM providers** ([guide](docs/llm-providers.md)), for Foreman's optional smart features | Anthropic · OpenAI · Google Gemini · Ollama (local) · any OpenAI-compatible endpoint |
 
 ## How is this different from…
@@ -200,10 +200,11 @@ effects afterwards. See [`docs/architecture.md`](docs/architecture.md).
 
 - ✅ **Shipped:** the mediator across MCP, hooks, ACP and codex · risk engine with tamper
   protection · MCP Hub with a curated catalog · tool-poisoning and rug-pull defence · Foreman
-  Org · Telegram approvals · Slack / Discord / email / ntfy alerts · lazy tool discovery.
-- 🔜 **Next:** a shared hub daemon (one upstream per server, ~50 ms hooks) · Slack Socket
-  Mode and Discord buttons for approvals · OAuth for hosted MCP servers · per-department
-  budgets · approval escalation along the org chart.
+  Org · TUI control surface (approval queue, command console, inbox) · approvals and
+  `/foreman` from Telegram, Slack and Discord · email / ntfy alerts · lazy tool discovery.
+- 🔜 **Next:** per-department cost reports and budgets · department channels on Slack /
+  Discord with Foreman in the loop · a shared hub daemon (one upstream per server, ~50 ms
+  hooks) · OAuth for hosted MCP servers · approval escalation along the org chart.
 - 🧭 **Later:** a desktop / menu-bar app · per-agent identity tokens · cross-machine mesh ·
   a local classifier model (Prompt Guard) for borderline calls.
 

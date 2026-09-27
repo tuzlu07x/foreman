@@ -1,8 +1,8 @@
-import { DiscordChannel } from "./channels/discord.js";
+import { DiscordChannel, type DiscordChannelOptions } from "./channels/discord.js";
 import { EmailChannel } from "./channels/email.js";
 import type { HttpFetch } from "./channels/http-post.js";
 import { NtfyChannel } from "./channels/ntfy.js";
-import { SlackChannel } from "./channels/slack.js";
+import { SlackChannel, type SlackChannelOptions } from "./channels/slack.js";
 import { SystemNotifyChannel } from "./channels/system.js";
 import { TelegramChannel } from "./channels/telegram.js";
 import { WebhookChannel } from "./channels/webhook.js";
@@ -27,9 +27,20 @@ export interface ChannelSecrets {
 
 export interface ChannelFactoryDeps {
   secrets: ChannelSecrets;
-  /** Approval-token signer for Telegram buttons (see approval-token.ts). */
+  /** Approval-token signer for relayed Telegram buttons (see approval-token.ts). */
   signApproval?: (approvalId: string, actionId: string) => string;
+  /** Signer for buttons Foreman receives itself: the Telegram approval
+   *  bot, Slack and Discord. A separate key, so these never work as relay
+   *  tokens. */
+  signButton?: (approvalId: string, actionId: string) => string;
   fetchImpl?: HttpFetch;
+  /** Channels that keep a connection open (the Telegram approval bot,
+   *  Slack Socket Mode, the Discord Gateway) report trouble here: a
+   *  conflicting poller, a revoked token. */
+  onChannelWarning?: (message: string) => void;
+  /** Runs `/foreman <command>` typed in Slack or Discord by an allowed
+   *  user. Omitted: those channels still take approval buttons. */
+  onChatCommand?: (channel: "slack" | "discord", text: string, userId: string) => Promise<string>;
 }
 
 export type ChannelBuild = { channel: NotificationChannel } | { problem: string };
@@ -73,6 +84,11 @@ export function buildChannel(id: ChannelId, toggle: ChannelToggle, deps: Channel
             botToken: secret(toggle.bot_token_ref),
             chatId: toggle.chat_id,
             ...(deps.signApproval ? { signApproval: deps.signApproval } : {}),
+            ...(toggle.approval_bot_token_ref
+              ? { approvalBotToken: secret(toggle.approval_bot_token_ref) }
+              : {}),
+            ...(deps.signButton ? { signButton: deps.signButton } : {}),
+            ...(deps.onChannelWarning ? { onWarning: deps.onChannelWarning } : {}),
           }),
         };
       }
@@ -90,14 +106,31 @@ export function buildChannel(id: ChannelId, toggle: ChannelToggle, deps: Channel
       case "system":
         return { channel: new SystemNotifyChannel() };
       case "slack": {
+        let interactive: SlackChannelOptions["interactive"];
+        if (toggle.app_token_ref) {
+          const users = toggle.allowed_user_ids ?? [];
+          if (users.length === 0) {
+            return { problem: "two-way slack needs allowed_user_ids — run `foreman notify slack-interactive`" };
+          }
+          if (!deps.signButton) return { problem: "two-way slack needs Foreman's button signer" };
+          const onChatCommand = deps.onChatCommand;
+          interactive = {
+            appToken: secret(toggle.app_token_ref),
+            allowedUserIds: users,
+            sign: deps.signButton,
+            ...(onChatCommand ? { onCommand: (text: string, user: string) => onChatCommand("slack", text, user) } : {}),
+            ...(deps.onChannelWarning ? { onWarning: deps.onChannelWarning } : {}),
+          };
+        }
+        const extra = { ...fetchImpl, ...(interactive ? { interactive } : {}) };
         if (toggle.webhook_url_ref) {
-          return { channel: new SlackChannel({ target: { kind: "webhook", url: secret(toggle.webhook_url_ref) }, ...fetchImpl }) };
+          return { channel: new SlackChannel({ target: { kind: "webhook", url: secret(toggle.webhook_url_ref) }, ...extra }) };
         }
         if (toggle.bot_token_ref && toggle.channel) {
           return {
             channel: new SlackChannel({
               target: { kind: "bot", token: secret(toggle.bot_token_ref), channel: toggle.channel },
-              ...fetchImpl,
+              ...extra,
             }),
           };
         }
@@ -107,14 +140,35 @@ export function buildChannel(id: ChannelId, toggle: ChannelToggle, deps: Channel
         };
       }
       case "discord": {
-        if (toggle.webhook_url_ref) {
+        if (toggle.interactive && !(toggle.bot_token_ref && toggle.channel)) {
+          return { problem: "two-way discord needs a bot (bot_token_ref + channel), not a webhook" };
+        }
+        if (toggle.webhook_url_ref && !toggle.interactive) {
           return { channel: new DiscordChannel({ target: { kind: "webhook", url: secret(toggle.webhook_url_ref) }, ...fetchImpl }) };
         }
         if (toggle.bot_token_ref && toggle.channel) {
+          let interactive: DiscordChannelOptions["interactive"];
+          if (toggle.interactive) {
+            const users = toggle.allowed_user_ids ?? [];
+            if (users.length === 0) {
+              return { problem: "two-way discord needs allowed_user_ids — run `foreman notify discord-interactive`" };
+            }
+            if (!deps.signButton) return { problem: "two-way discord needs Foreman's button signer" };
+            const onChatCommand = deps.onChatCommand;
+            interactive = {
+              allowedUserIds: users,
+              sign: deps.signButton,
+              ...(onChatCommand
+                ? { onCommand: (text: string, user: string) => onChatCommand("discord", text, user) }
+                : {}),
+              ...(deps.onChannelWarning ? { onWarning: deps.onChannelWarning } : {}),
+            };
+          }
           return {
             channel: new DiscordChannel({
               target: { kind: "bot", token: secret(toggle.bot_token_ref), channelId: toggle.channel },
               ...fetchImpl,
+              ...(interactive ? { interactive } : {}),
             }),
           };
         }

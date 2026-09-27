@@ -22,6 +22,21 @@ All notable changes to Foreman are documented here. The format follows
   - Inbox (#613). Approvals, blocked calls, crashed or missing agents, task
     results, budget alerts and updates are kept with read state. The TUI
     shows an unread badge and toasts; `foreman inbox` works from any shell.
+- **Telegram approval bot** (#610, `foreman notify approval-bot`).
+  - Approvals go through a second bot that only Foreman holds and polls, so
+    no agent ever sees an approval button.
+  - Taps are accepted only from your chat and only with the button's HMAC
+    tag, and the buttons are removed after the first tap.
+  - `foreman doctor` suggests it when Telegram approvals are relayed.
+- **Two-way Slack and Discord** (#615, `foreman notify slack-interactive`,
+  `foreman notify discord-interactive`).
+  - Approval messages get Allow / Deny buttons, and `/foreman` runs the same
+    commands as the TUI console.
+  - Foreman holds the connection itself (Slack Socket Mode, the Discord
+    Gateway, on Node's built-in WebSocket), so no public URL and no new
+    dependency are needed.
+  - Only the listed user ids can act. Buttons carry HMAC tags, stale buttons
+    say so instead of deciding anything, and reconnects back off.
 - `assign` and `org` chat verbs: route a task through `org.yaml` from
   Telegram or the TUI.
 - `NO_COLOR` is honoured by the TUI.

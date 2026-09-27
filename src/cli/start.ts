@@ -63,7 +63,7 @@ import { runOauthFlows } from "./run-oauth-flow.js";
 import { runLoginWithSuspendedTui } from "../tui/run-login-in-tui.js";
 import { SecretStore } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
-import { approvalSigner } from "../core/approval-token.js";
+import { approvalButtonSigner, approvalSigner } from "../core/approval-token.js";
 import { buildEnabledChannels } from "../core/notification/channel-factory.js";
 import { isHumanSource } from "../core/org/guard.js";
 import {
@@ -79,7 +79,7 @@ import {
 } from "../core/llm/factory.js";
 import { LlmVerifier } from "../core/llm/verifier.js";
 import { BudgetAlertBridge } from "../core/llm/budget-alert-bridge.js";
-import { NotificationBridge } from "../core/notification/notification-bridge.js";
+import { NotificationBridge, type NotificationBridgeOptions } from "../core/notification/notification-bridge.js";
 import { NotificationService } from "../core/notification/notification-service.js";
 import { ForemanVoice } from "../core/notification/foreman-voice.js";
 import {
@@ -283,12 +283,56 @@ export function startForeman(
   // OOB notification bridge (#235 / C11a-2). Best-effort: any failure here
   // (notify.yaml malformed, secret missing, etc.) is logged but does NOT
   // block start — the TUI modal still works on its own.
+  // Shared by the TUI console and by `/foreman` in Slack / Discord.
+  const commandContext = {
+    db,
+    registry,
+    llmConfigPath: paths.llmConfigPath,
+    configDir: paths.configDir,
+    controlChannel,
+    ownerStore: secretStore,
+    secretStore,
+    ...(orchestratorChat ? { orchestratorChat } : {}),
+  };
+  // `/foreman …` typed in Slack or Discord. The channel already checked the
+  // sender against its allowed_user_ids over a connection only Foreman
+  // holds, so it runs as the owner, like the TUI. Audited either way.
+  const runChatCommand = async (
+    channel: "slack" | "discord",
+    text: string,
+    userId: string,
+  ): Promise<string> => {
+    const [verb = "help", ...args] = text.trim().replace(/^\/?foreman\b\s*/i, "").split(/\s+/).filter(Boolean);
+    const sourceUser = `${channel}:${userId}`;
+    const result = await commandRouter.dispatch(verb, args, {
+      ...commandContext,
+      sourceAgent: channel,
+      sourceUser,
+      trustedOwner: true,
+    });
+    audit.logEvent("foreman:command", {
+      command: verb,
+      args,
+      sourceAgent: channel,
+      sourceUser,
+      ok: result.ok,
+      errorCode: result.errorCode ?? null,
+    });
+    return result.text;
+  };
+
   const notificationSetup = setupNotificationBridge({
     db,
     secretStore,
+    onChatCommand: runChatCommand,
+    onChannelDecision: (info) => audit.logEvent("approval:channel-decision", info),
     notifyConfigPath: paths.notifyConfigPath,
     notifyStatePath: paths.notifyStatePath,
     llmConfigPath: paths.llmConfigPath,
+    // Channel trouble (e.g. someone else polling the approval bot) lands
+    // in the inbox, once per distinct message.
+    onChannelWarning: (message) =>
+      inbox.add({ level: "warning", kind: "system", title: message, dedupeKey: `channel:${message}` }),
   });
   const notificationBridge = notificationSetup?.bridge ?? null;
   const dailyScheduler = notificationSetup?.scheduler ?? null;
@@ -442,16 +486,7 @@ export function startForeman(
           inbox,
           pendingApprovals: () => approvalBridge.pending(),
           commandRouter,
-          commandContext: {
-            db,
-            registry,
-            llmConfigPath: paths.llmConfigPath,
-            configDir: paths.configDir,
-            controlChannel,
-            ownerStore: secretStore,
-            secretStore,
-            ...(orchestratorChat ? { orchestratorChat } : {}),
-          },
+          commandContext,
           audit,
           orgConfigPath: paths.orgConfigPath,
         },
@@ -495,9 +530,14 @@ export function startForeman(
     if (patternDetector) patternDetector.stop();
     if (voice) voice.dispose();
     if (notificationBridge) {
-      await notificationBridge.stop().catch(() => {
-        /* best-effort cleanup */
-      });
+      // Bounded: a chat connection that won't close must not keep agent
+      // daemons running and the pidfile behind.
+      await Promise.race([
+        notificationBridge.stop().catch(() => {
+          /* best-effort cleanup */
+        }),
+        new Promise((resolve) => setTimeout(resolve, 5_000).unref()),
+      ]);
     }
     // SIGTERM every tracked agent daemon, wait up to 5s, then SIGKILL.
     // Awaited so foreman doesn't exit with stranded children.
@@ -1041,6 +1081,9 @@ function setupNotificationBridge(args: {
   notifyConfigPath: string;
   notifyStatePath: string;
   llmConfigPath: string;
+  onChannelWarning?: (message: string) => void;
+  onChatCommand?: (channel: "slack" | "discord", text: string, userId: string) => Promise<string>;
+  onChannelDecision?: NotificationBridgeOptions["onChannelDecision"];
 }): {
   bridge: NotificationBridge;
   scheduler: DailyScheduler | null;
@@ -1061,6 +1104,10 @@ function setupNotificationBridge(args: {
     // Buttons carry HMAC-tagged approval ids so the relaying chat agent
     // cannot approve a call the user never tapped.
     signApproval: approvalSigner(loadOrCreateSecretsMasterKey()),
+    // Buttons Foreman receives itself get their own key (never a relay token).
+    signButton: approvalButtonSigner(loadOrCreateSecretsMasterKey()),
+    ...(args.onChannelWarning ? { onChannelWarning: args.onChannelWarning } : {}),
+    ...(args.onChatCommand ? { onChatCommand: args.onChatCommand } : {}),
   });
 
   if (channels.size === 0) return null;
@@ -1071,6 +1118,9 @@ function setupNotificationBridge(args: {
   const bridge = new NotificationBridge(service, {
     bus,
     getState: () => loadNotifyState(args.notifyStatePath),
+    // Which person on which channel decided: the approval row itself only
+    // records "the user".
+    ...(args.onChannelDecision ? { onChannelDecision: args.onChannelDecision } : {}),
   });
   void bridge.start().catch(() => {
     /* best-effort */

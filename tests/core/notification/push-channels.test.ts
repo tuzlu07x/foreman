@@ -56,9 +56,14 @@ describe('SlackChannel', () => {
   it('edits the original message on resolution (bot mode)', async () => {
     const r = recorder([{ body: JSON.stringify({ ok: true }) }])
     const ch = new SlackChannel({ target: { kind: 'bot', token: 'xoxb-t', channel: 'alerts' }, fetchImpl: r.fetchImpl })
-    await ch.updateMessage({ channelMessageId: 'C1:1.2' }, '✓ allowed in the TUI')
+    // Countdown refreshes aren't visible in Block Kit messages: no call.
+    await ch.updateMessage({ channelMessageId: 'C1:1.2' }, '⏱ 4m left')
+    expect(r.calls).toHaveLength(0)
+    await ch.updateMessage({ channelMessageId: 'C1:1.2' }, '✓ allowed in the TUI', { final: true })
     expect(r.calls[0]!.url).toBe('https://slack.com/api/chat.update')
     expect(r.calls[0]!.body).toMatchObject({ channel: 'C1', ts: '1.2' })
+    // The outcome replaces the blocks, buttons included.
+    expect((r.calls[0]!.body as { blocks: unknown[] }).blocks).toHaveLength(1)
   })
 })
 
@@ -132,6 +137,26 @@ describe('channel factory', () => {
     expect(noChannel).toMatchObject({ problem: expect.stringMatching(/webhook_url_ref .*bot_token_ref \+ channel/) })
     const noSecret = buildChannel('ntfy', { enabled: true, topic_ref: 'ntfy-topic' }, { secrets: secrets({}) })
     expect(noSecret).toMatchObject({ problem: expect.stringMatching(/foreman secrets add ntfy-topic/) })
+  })
+
+  it('builds two-way Slack and Discord only with allowed users, a signer and (for Discord) a bot', () => {
+    const vals = secrets({ 'slack-webhook': 'https://hooks.slack.com/x', 'slack-app': 'xapp-1', 'discord-bot': 't', 'discord-hook': 'https://discord.com/api/webhooks/1/x' })
+    const sign = () => 'tag'
+    const slack = { enabled: true, webhook_url_ref: 'slack-webhook', app_token_ref: 'slack-app' }
+    expect(buildChannel('slack', slack, { secrets: vals, signButton: sign })).toMatchObject({
+      problem: expect.stringMatching(/allowed_user_ids/),
+    })
+    // The relay signer alone is not enough: listener buttons need their own key.
+    expect(buildChannel('slack', { ...slack, allowed_user_ids: ['U1'] }, { secrets: vals, signApproval: sign })).toMatchObject({
+      problem: expect.stringMatching(/button signer/),
+    })
+    expect(buildChannel('slack', { ...slack, allowed_user_ids: ['U1'] }, { secrets: vals, signButton: sign })).toHaveProperty('channel')
+    const discordHook = { enabled: true, webhook_url_ref: 'discord-hook', interactive: true, allowed_user_ids: ['1'] }
+    expect(buildChannel('discord', discordHook, { secrets: vals, signButton: sign })).toMatchObject({
+      problem: expect.stringMatching(/needs a bot/),
+    })
+    const discordBot = { enabled: true, bot_token_ref: 'discord-bot', channel: '123', interactive: true, allowed_user_ids: ['1'] }
+    expect(buildChannel('discord', discordBot, { secrets: vals, signButton: sign })).toHaveProperty('channel')
   })
 
   it('keeps a webhook off, rather than unsigned, when its signing secret is missing', () => {
