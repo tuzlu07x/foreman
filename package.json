@@ -67,7 +67,7 @@
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "better-sqlite3": "^11.0.0",
+    "better-sqlite3": "^12.11.1",
     "commander": "^15.0.0",
     "drizzle-orm": "^0.45.2",
     "ink": "^7.1.1",
