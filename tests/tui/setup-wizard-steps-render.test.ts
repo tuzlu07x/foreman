@@ -476,6 +476,47 @@ describe('required-setup step [s] skip', () => {
   }, 20_000)
 })
 
+describe('required-setup cursor', () => {
+  it('keeps a row focused after the list shrinks', async () => {
+    const w = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
+    await w.until('Agents ▸ pick which to install')
+    // Hermes + OpenClaw → two rows; focus the second.
+    await w.press(DOWN)
+    await w.press(SPACE)
+    await w.press(ENTER, 'Hermes (1/8)')
+    await w.press(ENTER, 'how to reach OpenAI')
+    await w.press(ENTER, 'pick a OpenAI model')
+    await w.press(ENTER, 'Hermes — responsibility note')
+    await w.press(ENTER, 'OpenClaw (5/8)')
+    await w.press(ENTER, 'pick a OpenAI model')
+    await w.press(ENTER, 'OpenClaw — responsibility note')
+    await w.press(ENTER, 'Agents ▸ confirm')
+    await w.press('y', 'Services ▸ pick which to configure')
+    await w.press(ENTER, 'Services ▸ summary')
+    await w.press('y', 'Required setup ▸ missing keys')
+    await w.press(DOWN)
+    expect(w.frame()).toContain('❯ ⚠ openrouter-key')
+    // Back to the agents picker; keep only OpenClaw → one row left.
+    await w.press(ESC, 'Services ▸ summary')
+    await w.press(ESC, 'Services ▸ pick which to configure')
+    await w.press(ESC, 'Agents ▸ confirm')
+    await w.press('n', 'Agents ▸ pick which to install')
+    await w.press(SPACE)
+    await w.press(DOWN)
+    await w.press(SPACE)
+    await w.press(ENTER, 'OpenClaw (1/4)')
+    await w.press(ENTER, 'pick a OpenAI model')
+    await w.press(ENTER, 'OpenClaw — responsibility note')
+    await w.press(ENTER, 'Agents ▸ confirm')
+    await w.press('y', 'Services ▸ pick which to configure')
+    await w.press(ENTER, 'Services ▸ summary')
+    await w.press('y', 'Required setup ▸ all set')
+    // The stale cursor (1) used to point past the single row: nothing
+    // focused, so Enter / [s] / [o] did nothing.
+    expect(w.frame()).toContain('❯ ✓ openai-key')
+  }, 40_000)
+})
+
 describe('install step start', () => {
   it('starts the installer exactly once while the screen re-renders', async () => {
     const before = vi.mocked(runInstallStep).mock.calls.length

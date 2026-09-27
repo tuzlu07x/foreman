@@ -64,6 +64,15 @@ export function useRequiredSetupResolution(
   ]);
 }
 
+/** The focused row, kept inside the list. Down on an empty list used to
+ *  set the cursor to -1, and a list that shrank after back-navigation left
+ *  it past the end — either way no row was focused and Enter / [s] / [o]
+ *  silently acted on nothing. */
+export function clampCursor(cursor: number, length: number): number {
+  if (length <= 0) return 0;
+  return Math.min(Math.max(0, cursor), length - 1);
+}
+
 /** `[s]` only skips a secret nobody has provided. A stored key (`present`)
  *  or one pasted this run (`saved-in-session`) used to flip to "✗ skipped"
  *  even though the value was right there in the store. */
@@ -103,6 +112,8 @@ export function handleRequiredSetupInput(
     setChatPrimaryCursor,
   } = ctx.set;
   if (currentStep === "required-setup") {
+    const secretCount = requiredSetupResolution.secrets.length;
+    const cursor = clampCursor(requiredSetupCursor, secretCount);
     if (requiredSetupPhase === "paste") {
       if (key.escape) {
         setRequiredSetupPhase("picker");
@@ -113,7 +124,7 @@ export function handleRequiredSetupInput(
         // Save the pasted value into the secret store + flag this slot
         // as saved-in-session so the aggregator stops flagging it.
         const slot =
-          requiredSetupResolution.secrets[requiredSetupCursor]?.slotName;
+          requiredSetupResolution.secrets[cursor]?.slotName;
         if (slot && requiredSetupPasteValue.length > 0) {
           try {
             if (services.secretStore.exists(slot)) {
@@ -161,21 +172,17 @@ export function handleRequiredSetupInput(
       return true;
     }
     if (key.upArrow) {
-      setRequiredSetupCursor((c) =>
-        Math.max(0, c - 1),
-      );
+      setRequiredSetupCursor(clampCursor(cursor - 1, secretCount));
       return true;
     }
     if (key.downArrow) {
-      setRequiredSetupCursor((c) =>
-        Math.min(requiredSetupResolution.secrets.length - 1, c + 1),
-      );
+      setRequiredSetupCursor(clampCursor(cursor + 1, secretCount));
       return true;
     }
     if (key.return) {
       // If picker has a focused secret in `missing` state → open paste.
       // If everything is resolved → advance to install.
-      const cur = requiredSetupResolution.secrets[requiredSetupCursor];
+      const cur = requiredSetupResolution.secrets[cursor];
       if (
         cur &&
         (cur.status === "missing" || cur.status === "skipped")
@@ -193,7 +200,7 @@ export function handleRequiredSetupInput(
       // Skip the currently focused secret. Install will still write
       // everything else; the agent that needed this secret will fail
       // at start time with a clear error (TUI crash banner).
-      const cur = requiredSetupResolution.secrets[requiredSetupCursor];
+      const cur = requiredSetupResolution.secrets[cursor];
       if (cur && canSkipRequiredSecret(cur.status)) {
         setRequiredSetupOverrides((prev) => ({
           ...prev,
@@ -208,7 +215,7 @@ export function handleRequiredSetupInput(
       // silently no-op (user can still copy-paste from the picker
       // text). React state mirror not needed — the URL is static.
       const acq =
-        requiredSetupResolution.secrets[requiredSetupCursor]?.acquisition;
+        requiredSetupResolution.secrets[cursor]?.acquisition;
       if (acq?.url) {
         void openInBrowser(acq.url).catch(() => {
           /* swallowed — fall back to manual copy */
@@ -238,6 +245,7 @@ export function renderRequiredSetupStep(ctx: WizardContext): JSX.Element {
     requiredSetupPasteValue,
   } = ctx.state;
   const res = requiredSetupResolution;
+  const cursor = clampCursor(requiredSetupCursor, res.secrets.length);
   const totalSecrets = res.secrets.length;
   const totalOauth = res.oauthSteps.length;
   const totalErrors = res.errors.length;
@@ -245,7 +253,7 @@ export function renderRequiredSetupStep(ctx: WizardContext): JSX.Element {
 
   // Paste sub-phase: focused secret gets a single-line input.
   if (requiredSetupPhase === "paste") {
-    const cur = res.secrets[requiredSetupCursor];
+    const cur = res.secrets[cursor];
     const masked =
       requiredSetupPasteValue.length > 0
         ? `${"•".repeat(Math.min(requiredSetupPasteValue.length, 32))}`
@@ -331,7 +339,7 @@ export function renderRequiredSetupStep(ctx: WizardContext): JSX.Element {
             Required secrets ({totalSecrets})
           </Text>
           {res.secrets.map((s, idx) => {
-            const focused = idx === requiredSetupCursor;
+            const focused = idx === cursor;
             const tag =
               s.status === "present"
                 ? "✓"
