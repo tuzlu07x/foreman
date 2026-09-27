@@ -6,6 +6,7 @@ import {
   actionIdForDecision,
   approvalSigner,
   approvalTag,
+  compactBlockActionId,
   deriveApprovalKey,
   parseApprovalToken,
   verifyApprovalTag,
@@ -144,10 +145,97 @@ describe('relayed approvals (submit_approval) across processes', () => {
     expect(again.error).toMatch(/already resolved|no longer pending/)
   })
 
+  it('a remembered deny changes policy, so it needs the token too', async () => {
+    const waiting = pendingRequest('req-g')
+    await waitForRow('req-g')
+    const forged = await relay().submitFromAgent({
+      approvalId: 'req-g',
+      decision: 'deny',
+      remember: true,
+      sourceAgent: 'hermes',
+    })
+    expect(forged.ok).toBe(false)
+    const tapped = await relay().submitFromAgent({
+      approvalId: `req-g.${sign('req-g', 'deny_always')}`,
+      decision: 'deny',
+      remember: true,
+      sourceAgent: 'hermes',
+    })
+    expect(tapped.ok).toBe(true)
+    await expect(waiting).resolves.toMatchObject({ decision: 'denied' })
+  })
+
+  it('resolves a compact block_* id back to its risk factor', async () => {
+    db.insert(pendingApprovals)
+      .values({
+        requestId: 'req-h',
+        sourceAgent: 'hermes',
+        targetAgent: null,
+        targetTool: 'read_file',
+        args: JSON.stringify({ path: '.env' }),
+        riskScore: 80,
+        riskReasons: JSON.stringify(['secret_path']),
+        riskFactors: JSON.stringify([
+          { rule: 'secret_path', category: 'secret', points: 60, reason: '.env-style file' },
+        ]),
+        riskBucket: 'high',
+        status: 'pending',
+        requestedAt: Date.now(),
+      })
+      .run()
+    const injected: unknown[] = []
+    const service = new DbApprovalService(db, {
+      bus: new EventBus<ForemanEventMap>(),
+      approvalKey: key,
+      injectPredicateRule: (input) => {
+        injected.push(input)
+        return 9
+      },
+    })
+    const compact = compactBlockActionId('block_secret_path')
+    const out = await service.submitFromAgent({
+      approvalId: `req-h.${sign('req-h', compact)}`,
+      decision: 'deny',
+      sourceAgent: 'hermes',
+      actionId: compact,
+    })
+    expect(out.ok).toBe(true)
+    expect(injected).toHaveLength(1)
+  })
+
   it('cancelPending denies approvals whose caller disconnected', async () => {
     const waiting = pendingRequest('req-f')
     await waitForRow('req-f')
     relay().cancelPending(['req-f'])
     await expect(waiting).resolves.toMatchObject({ decision: 'denied' })
+  })
+
+  it('close() cancels waiting requests and refuses new ones without a row', async () => {
+    const service = new DbApprovalService(db, {
+      bus: new EventBus<ForemanEventMap>(),
+      timeoutMs: 5_000,
+      pollIntervalMs: 10,
+    })
+    const req = (requestId: string) =>
+      service.request({
+        requestId,
+        sourceAgent: 'hermes',
+        targetTool: 'read_file',
+        args: { path: '.env' },
+        riskScore: 80,
+        riskReasons: [],
+        riskFactors: [],
+        riskBucket: 'high',
+        llmVerification: null,
+        securityReport: null,
+      })
+    const waiting = req('req-i')
+    await waitForRow('req-i')
+    service.close()
+    await expect(waiting).resolves.toEqual({ decision: 'denied', cancelled: true })
+    await expect(req('req-j')).resolves.toEqual({ decision: 'denied', cancelled: true })
+    const rows = db.select().from(pendingApprovals).all()
+    expect(rows.map((r) => r.requestId)).toEqual(['req-i'])
+    expect(rows[0]!.status).toBe('resolved')
   })
 })

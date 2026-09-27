@@ -169,8 +169,43 @@ describe('TelegramChannel — send (outbound only, #406)', () => {
     }
     const data = body.reply_markup.inline_keyboard.flat().map((b) => b.callback_data)
     expect(data).toEqual(['fa:allow:req-99.ALLOW6', 'fa:deny:req-99.DENY6'])
-    expect(body.text).toContain('/approve aprv_req-99.ALLOW6')
-    expect(body.text).toContain('/deny aprv_req-99.DENY6')
+    // The text can be read back without a tap, so it carries no grant token:
+    // only the harmless typed deny, plus a pointer to the buttons.
+    expect(body.text).not.toContain('ALLOW6')
+    expect(body.text).not.toContain('/approve')
+    expect(body.text).toContain('/deny aprv_req-99')
+    expect(body.text).toContain('To allow, tap a button')
+  })
+
+  it('sends long block_* actions in compact form instead of dropping them', async () => {
+    const { compactBlockActionId } = await import('../../../src/core/approval-token.js')
+    const f = makeFetch([{ body: { ok: true, result: { message_id: 42, chat: { id: 12345 } } } }])
+    const channel = new TelegramChannel({
+      botToken: 'TEST_TOKEN',
+      chatId: '12345',
+      fetchImpl: f.fetchImpl,
+      signApproval: () => 'T'.repeat(10),
+    })
+    const requestId = '01J9ZZZZZZZZZZZZZZZZZZZZZZ'
+    const long = 'block_shell_rm_rf_general'
+    await channel.send(
+      makeNotification({
+        requestId,
+        actions: [
+          { id: 'deny', label: 'Deny' },
+          { id: long, label: 'Block pattern', intent: 'custom', payload: { action: 'add-deny-rule' } },
+        ],
+      }),
+    )
+    const body = f.calls[0]!.body as {
+      reply_markup: { inline_keyboard: Array<Array<{ callback_data: string }>> }
+    }
+    const data = body.reply_markup.inline_keyboard.flat().map((b) => b.callback_data)
+    expect(data).toEqual([
+      `fa:deny:${requestId}.${'T'.repeat(10)}`,
+      `fa:${compactBlockActionId(long)}:${requestId}.${'T'.repeat(10)}`,
+    ])
+    for (const d of data) expect(Buffer.byteLength(d)).toBeLessThanOrEqual(64)
   })
 
   it('drops a button whose callback_data would exceed Telegram\'s 64-byte cap', async () => {
@@ -181,10 +216,10 @@ describe('TelegramChannel — send (outbound only, #406)', () => {
         actions: [
           { id: 'deny', label: 'Deny' },
           {
-            id: 'block_injection_system_override_very_long',
-            label: 'Block pattern',
+            id: 'resolve_continue_session',
+            label: 'Continue',
             intent: 'custom',
-            payload: { action: 'add-deny-rule' },
+            payload: { sessionId: 's'.repeat(48) },
           },
         ],
       }),

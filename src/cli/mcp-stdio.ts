@@ -39,6 +39,7 @@ import { SecretStore } from "../core/secret-store.js";
 import type { SessionManager } from "../core/session.js";
 import { closeDb, getDb } from "../db/client.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
+import { redactSecretShapes } from "../core/risk-rules/secret-patterns.js";
 import { createDecoder, encodeMessage } from "../mcp/framing.js";
 import type { JSONRPCMessage } from "../mcp/types.js";
 import { getForemanPaths } from "../utils/config.js";
@@ -103,12 +104,19 @@ function bootServices(): Services {
   const masterKey = loadOrCreateSecretsMasterKey();
   // FOREMAN_APPROVAL_TIMEOUT wins over the 60 s interactive default (the
   // approval service reads it when no explicit timeout is passed).
+  const paths = getForemanPaths();
+  // Built below; the approval service needs it only when a relayed
+  // `block_*` tap arrives, long after boot.
+  let policyEngine: PolicyEngine | null = null;
   const approval = new DbApprovalService(db, {
     bus,
     ...(process.env.FOREMAN_APPROVAL_TIMEOUT ? {} : { timeoutMs: 60_000 }),
     approvalKey: deriveApprovalKey(masterKey),
+    injectPredicateRule: (input) => {
+      if (!policyEngine) throw new Error("policy engine not ready");
+      return policyEngine.addPredicateRule({ ...input, policyYamlPath: paths.policyPath });
+    },
   });
-  const paths = getForemanPaths();
   const secretStore = new SecretStore(db, masterKey);
   const { registry, policy, risk, sessionManager, mediator } =
     createMediatorStack({
@@ -118,6 +126,7 @@ function bootServices(): Services {
       policyPath: paths.policyPath,
       secretStore,
     });
+  policyEngine = policy;
   const commandRouter = new ForemanCommandRouter();
   registerBuiltinCommands(commandRouter);
   let orchestratorChat: OrchestratorChat | null = null;
@@ -200,6 +209,9 @@ function runMcpLoop(services: Services, sourceAgent: string): void {
     void drainAndExit(services, inFlight);
   };
   process.stdin.on("end", shutdown);
+  // A client that closes its end first makes our next write fail (EPIPE);
+  // unhandled, that crashes the process before the audit queue flushes.
+  process.stdout.on("error", shutdown);
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
 }
@@ -223,7 +235,12 @@ async function respond(
       `Foreman internal error: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  if (response) process.stdout.write(encodeMessage(response));
+  if (!response) return;
+  try {
+    process.stdout.write(encodeMessage(response));
+  } catch {
+    // The client is gone; the stdout "error" handler drives the shutdown.
+  }
 }
 
 /** The client went away. Calls still waiting on a human can never be
@@ -234,6 +251,9 @@ async function drainAndExit(
   inFlight: Set<Promise<void>>,
 ): Promise<void> {
   try {
+    // Calls still in policy / LLM evaluation would otherwise open fresh
+    // approvals for a requester that is already gone.
+    services.approval.close?.();
     if (services.pendingRequestIds && services.pendingRequestIds.size > 0) {
       services.approval.cancelPending?.([...services.pendingRequestIds]);
     }
@@ -1065,7 +1085,9 @@ async function handleHubCall(
     });
     return reply(id, result);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    // The hub already masks the secrets it injected; this catches anything
+    // else secret-shaped an upstream error might echo.
+    const message = redactSecretShapes(err instanceof Error ? err.message : String(err)).text;
     services.audit.logEvent("mcp:call", {
       requestId: decision.requestId,
       sourceAgent,
