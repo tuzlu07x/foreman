@@ -1,12 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import { Command } from "commander";
-import { parseDocument } from "yaml";
+import { isMap, parseDocument } from "yaml";
 import { EventBus, type ForemanEventMap } from "../core/event-bus.js";
 import { loadActiveRegistry } from "../core/registry-catalog.js";
 import { RegistryService } from "../core/registry.js";
 import {
   buildTree,
   checkDelegation,
+  escalatesViaManager,
   loadOrg,
   OrgValidationError,
   parseOrgText,
@@ -268,6 +269,40 @@ orgCommand
         ? `${green("✓")} ${id} has no budget now`
         : `${green("✓")} ${id}: $${Number(usd.replace(/^\$/, ""))} per ${opts.daily ? "day" : "month"}` +
             dim(opts.pause ? " · agents pause when it's spent" : " · alerts at 80% and 100%"),
+    );
+  });
+
+orgCommand
+  .command("escalate [state]")
+  .description("Send low/medium-risk approvals to the requester's manager agent for a recommendation (`on` / `off`)")
+  .action((state: string | undefined) => {
+    const org = requireOrg();
+    if (state === undefined) {
+      console.log(
+        escalatesViaManager(org)
+          ? "on: low- and medium-risk approvals also go to the requester's manager agent, who may recommend. You decide."
+          : "off: approvals come only to you. Turn on: foreman org escalate on",
+      );
+      return;
+    }
+    const value = state.toLowerCase();
+    if (value !== "on" && value !== "off") fail(`'${state}' is not on or off`);
+    const paths = getForemanPaths();
+    const doc = parseDocument(readFileSync(paths.orgConfigPath, "utf-8"));
+    if (value === "on") doc.setIn(["approvals", "escalate_via_manager"], true);
+    else doc.deleteIn(["approvals", "escalate_via_manager"]);
+    const approvals = doc.getIn(["approvals"]);
+    if (isMap(approvals) && approvals.items.length === 0) doc.deleteIn(["approvals"]);
+    try {
+      saveOrgText(paths.orgConfigPath, doc.toString());
+    } catch (err) {
+      reportInvalid(err);
+    }
+    console.log(
+      value === "on"
+        ? `${green("✓")} low- and medium-risk approvals now also go to the requester's manager agent` +
+            dim(" · managers recommend with org_recommend; you still decide every approval")
+        : `${green("✓")} approvals come only to you`,
     );
   });
 

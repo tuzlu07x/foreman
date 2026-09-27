@@ -1080,5 +1080,134 @@ describe("mcp-stdio handleMessage", () => {
         expect.objectContaining({ sourceAgent: "codex", tool: "org_post", ok: false }),
       );
     });
+
+    describe("org_recommend — manager review of approvals (#623)", () => {
+      const APPROVAL = "01J9ZZZZZZZZZZZZZZZZZZZZZ7";
+
+      async function withReviews() {
+        const { mkdtempSync, writeFileSync } = await import("node:fs");
+        const { tmpdir } = await import("node:os");
+        const { join } = await import("node:path");
+        const { createInMemoryDb } = await import("../../src/db/client.js");
+        const { OrgComms } = await import("../../src/core/org/comms.js");
+        const { ApprovalReviews } = await import("../../src/core/org/review.js");
+        const { DbApprovalService } = await import("../../src/core/approval.js");
+        const { pendingApprovals } = await import("../../src/db/schema.js");
+        const { eq } = await import("drizzle-orm");
+        const dir = mkdtempSync(join(tmpdir(), "foreman-mcp-review-"));
+        writeFileSync(join(dir, "org.yaml"), `${ORG}approvals:\n  escalate_via_manager: true\n`);
+        const { db } = createInMemoryDb();
+        const comms = new OrgComms(db, { orgConfigPath: join(dir, "org.yaml") });
+        const reviews = new ApprovalReviews(db, comms);
+        const services = makeServices("allowed");
+        Object.assign(services as unknown as Record<string, unknown>, {
+          comms,
+          reviews,
+          approval: new DbApprovalService(db, { approvalKey: Buffer.alloc(32, 9) }),
+        });
+        db.insert(pendingApprovals)
+          .values({
+            requestId: APPROVAL,
+            sourceAgent: "codex",
+            targetTool: "shell_exec",
+            args: "{}",
+            riskScore: 40,
+            riskReasons: "[]",
+            riskBucket: "medium",
+            status: "pending",
+            requestedAt: Date.now(),
+            deadlineMs: Date.now() + 600_000,
+          })
+          .run();
+        reviews.escalate({
+          requestId: APPROVAL,
+          sourceAgent: "codex",
+          targetTool: "shell_exec",
+          args: { command: "npm test" },
+          riskScore: 40,
+          riskReasons: ["shell_exec"],
+          riskBucket: "medium",
+          deadlineMs: Date.now() + 600_000,
+        });
+        const row = () => db.select().from(pendingApprovals).where(eq(pendingApprovals.requestId, APPROVAL)).get()!;
+        return { services, row };
+      }
+
+      it("is advertised", async () => {
+        const out = (await handleMessage(makeServices("allowed"), "codex", {
+          jsonrpc: "2.0",
+          id: 88,
+          method: "tools/list",
+        } as JSONRPCMessage)) as unknown as { result: { tools: { name: string }[] } };
+        expect(out.result.tools.map((t) => t.name)).toContain("org_recommend");
+      });
+
+      it("the manager recommends; the approval stays with the human; it is audited", async () => {
+        const { services, row } = await withReviews();
+        const review = await call(services, "claude-code", "org_read", {});
+        expect(review.result.content[0]!.text).toContain(`approval_id: ${APPROVAL}`);
+        const out = await call(services, "claude-code", "org_recommend", {
+          approval_id: APPROVAL,
+          recommendation: "allow",
+          reason: "tests only",
+        });
+        expect(out.result.isError).toBe(false);
+        expect(out.result.content[0]!.text).toContain("The human sees it next to the approval and decides");
+        expect(row()).toMatchObject({ status: "pending", decision: null });
+        expect(services.audit.logEvent).toHaveBeenCalledWith(
+          "org:recommendation",
+          expect.objectContaining({ sourceAgent: "claude-code", ok: true, recommendation: "allow", reason: "tests only" }),
+        );
+      });
+
+      it("the manager can never approve on the human's behalf through submit_approval", async () => {
+        const { services, row } = await withReviews();
+        await call(services, "claude-code", "org_recommend", { approval_id: APPROVAL, recommendation: "allow", reason: "ok" });
+        for (const args of [
+          { approval_id: APPROVAL, decision: "allow" },
+          { approval_id: `aprv_${APPROVAL}`, decision: "allow", remember: true },
+          { approval_id: `${APPROVAL}.forgedtag0`, decision: "allow" },
+          { approval_id: APPROVAL, decision: "deny" },
+        ]) {
+          const out = await call(services, "claude-code", "submit_approval", args);
+          expect(out.result.isError).toBe(true);
+        }
+        expect(row()).toMatchObject({ status: "pending", decision: null });
+      });
+
+      it("rejects a non-manager, the requester itself, and a spoofed source", async () => {
+        const { services } = await withReviews();
+        const tries: Array<[string, Record<string, unknown>]> = [
+          ["writer-bot", {}],
+          ["codex", {}],
+          // Arguments can't name someone else as the author.
+          ["writer-bot", { from: "claude-code", source: "claude-code", as: "cto" }],
+          ["cli", {}],
+          ["CTO", {}],
+        ];
+        for (const [agent, extra] of tries) {
+          const out = await call(services, agent, "org_recommend", {
+            approval_id: APPROVAL,
+            recommendation: "allow",
+            reason: "looks fine",
+            ...extra,
+          });
+          expect(out.result.isError).toBe(true);
+          expect(out.result.content[0]!.text).toMatch(/^Not recorded: /);
+        }
+        expect(services.audit.logEvent).toHaveBeenCalledWith(
+          "org:recommendation",
+          expect.objectContaining({ sourceAgent: "codex", ok: false }),
+        );
+      });
+
+      it("a blocked manager gets no voice", async () => {
+        const { services } = await withReviews();
+        (services.registry as unknown as { get: (id: string) => unknown }).get = (id: string) => ({ id, status: "blocked" });
+        const out = await call(services, "claude-code", "org_recommend", { approval_id: APPROVAL, recommendation: "deny", reason: "x" });
+        expect(out.result.isError).toBe(true);
+        expect(out.result.content[0]!.text).toContain("claude-code is blocked");
+      });
+    });
   });
 });

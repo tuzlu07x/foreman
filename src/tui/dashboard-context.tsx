@@ -32,6 +32,8 @@ export interface DashboardServices {
   inbox?: InboxService;
   /** Approvals announced before the TUI mounted (see ApprovalBridge.pending). */
   pendingApprovals?: () => Array<ForemanEventMap["approval:requested"]>;
+  /** Manager recommendations already recorded for an approval (#623). */
+  approvalRecommendations?: (approvalId: string) => Array<ForemanEventMap["approval:recommended"]>;
   /** Milliseconds letter keys are ignored after the approval on screen
    *  changes (tests set 0). */
   keySettleMs?: number;

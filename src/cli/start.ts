@@ -67,6 +67,8 @@ import { approvalButtonSigner, approvalSigner } from "../core/approval-token.js"
 import { buildEnabledChannels } from "../core/notification/channel-factory.js";
 import { isHumanSource, orgBudgetBlock } from "../core/org/guard.js";
 import { CommsMirrorWorker, mirrorsFromNotifyConfig } from "../core/org/comms-mirror.js";
+import { OrgComms } from "../core/org/comms.js";
+import { ApprovalReviews, ApprovalReviewWorker } from "../core/org/review.js";
 import { BudgetWatcher } from "../core/usage/budget-watcher.js";
 import { UsageLedger } from "../core/usage/ledger.js";
 import { OtlpReceiver } from "../core/usage/otlp-receiver.js";
@@ -373,6 +375,13 @@ export function startForeman(
   });
   const notificationBridge = notificationSetup?.bridge ?? null;
   const dailyScheduler = notificationSetup?.scheduler ?? null;
+
+  // Approval escalation along reporting lines (#623): low- and medium-risk
+  // approvals also go to the requester's manager agent, whose
+  // recommendation is shown next to the approval. Advice only.
+  const approvalReviews = new ApprovalReviews(db, new OrgComms(db, { orgConfigPath: paths.orgConfigPath, bus }));
+  const reviewWorker = new ApprovalReviewWorker(approvalReviews, { bus, inbox });
+  reviewWorker.start();
   approvalBridge.start();
 
   // Department channels (#630): mirror what agents say to each other to
@@ -556,6 +565,7 @@ export function startForeman(
           runInteractiveLogin,
           inbox,
           pendingApprovals: () => approvalBridge.pending(),
+          approvalRecommendations: (approvalId: string) => approvalReviews.recommendationsFor(approvalId),
           commandRouter,
           commandContext,
           audit,
@@ -594,6 +604,7 @@ export function startForeman(
       r();
     }
     approvalBridge.stop();
+    reviewWorker.stop();
     inboxRecorder.stop();
     budgetWatcher.stop();
     commsMirror.stop();
