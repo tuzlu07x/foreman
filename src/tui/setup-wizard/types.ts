@@ -1,0 +1,93 @@
+import type { ChatPrimaryService } from "../../core/chat-primary.js";
+import type { RegistryService } from "../../core/registry.js";
+import type { SecretStore } from "../../core/secret-store.js";
+import type { ForemanDb } from "../../db/client.js";
+import type { SetupState } from "../setup-state.js";
+
+export interface WizardServices {
+  db: ForemanDb;
+  secretStore: SecretStore;
+  registry: RegistryService;
+  /** #426 — Primary chat agent per messaging channel. Wizard's
+   *  chat-primary step writes here; the projector reads it via the
+   *  ProjectionContext. Wizard caller is responsible for instantiating
+   *  + passing this; defaults to a no-op service when omitted (legacy). */
+  chatPrimary?: ChatPrimaryService;
+  policyPath: string;
+  /** Path to llm.yaml — wizard writes here after providers step (#289). */
+  llmConfigPath: string;
+  /** Path to notify.yaml — wizard writes here after services step (#290). */
+  notifyConfigPath: string;
+  /** Path to voice.yaml — wizard seeds here after services step (#305).
+   *  ForemanVoice + PatternDetectionService read from this on startup. */
+  voiceConfigPath: string;
+  launchEditor: (path: string) => Promise<unknown>;
+  /** #468 — When the Done screen's [y] hotkey is pressed, the wizard
+   *  exits and hands off these OAuth/interactive_setup commands to the
+   *  outer CLI for inline browser-flow execution. The CLI spawns them
+   *  with inherited stdio so the user's browser actually opens. */
+  requestOauthRun?: (steps: WizardOauthRunStep[]) => void;
+}
+
+export interface WizardOauthRunStep {
+  agentId: string;
+  command: string;
+  verify: string | null;
+  mandatory: boolean;
+  reason: string | null;
+}
+
+export interface SetupWizardProps {
+  initialState: SetupState;
+  services: WizardServices;
+}
+
+export interface AgentConfig {
+  llmProvider?: string;
+  /** #450 — Variant id within the chosen llmProvider's mapping
+   *  (e.g. "via-openrouter" or "via-codex-oauth" for Hermes/openai).
+   *  Optional; falls back to the registry's `preferred` when unset. */
+  providerVariant?: string;
+  /** #434 — Specific model id chosen for this agent (e.g.
+   *  claude-opus-4-7). Optional; falls back to the variant default. */
+  modelVersion?: string;
+  responsibilityNote?: string;
+}
+
+export type AgentConfigsMap = Record<string, AgentConfig | undefined>;
+
+export interface InstallStepSummary {
+  registered: string[];
+  identityPushed: string[];
+  identitySkipped: { agentId: string; reason: string }[];
+  failed: string[];
+  removed: string[];
+  /** #audit-finding-15 — Agents whose Foreman MCP registration failed
+   *  during install (auto-run command refused, wrapper write blocked,
+   *  Hermes' `hermes mcp add` errored). The agent runs but its MCP
+   *  client can't reach Foreman — silent degradation. Done screen
+   *  surfaces these with the manual fallback command so the user can
+   *  re-run after fixing the underlying issue. */
+  mcpRegisterFailed: { agentId: string; command: string; reason: string }[];
+}
+
+export type AgentInstallStage = "install" | "config-inject" | "register";
+
+export interface AgentInstallFailure {
+  agentId: string;
+  agentName: string;
+  stage: AgentInstallStage;
+  error: string;
+  manualHint: string;
+}
+
+export type FailureResolution = "retry" | "skip" | "continue";
+
+export type OnAgentInstallFailure = (
+  failure: AgentInstallFailure,
+) => Promise<FailureResolution>;
+
+export interface InstallStepProjectionContext {
+  providersSelected: string[];
+  servicesSelected: string[];
+}

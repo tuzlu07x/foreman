@@ -1,0 +1,274 @@
+import type { Key } from "ink";
+import { applyAgentConfigSubmit } from "./agents-logic.js";
+import type { WizardContext } from "./context.js";
+
+// #450 — Variant picker handler. Lists variants of the picked
+// provider's mapping (e.g. Hermes/openai: via-openrouter vs
+// via-codex-oauth). Auto-skip happens in the useEffect when
+// single-variant; this handler only runs when multi-variant.
+export function handleAgentVariantPickInput(
+  ctx: WizardContext,
+  input: string,
+  key: Key,
+): boolean {
+  const { currentStep, agentCatalog } = ctx;
+  const {
+    agentsPhase,
+    agentConfigPrompts,
+    agentConfigIdx,
+    agentConfigs,
+    agentVariantDraft,
+  } = ctx.state;
+  const {
+    setAgentsPhase,
+    setAgentConfigIdx,
+    setAgentConfigs,
+    setAgentVariantDraft,
+  } = ctx.set;
+  if (
+    currentStep === "agents" &&
+    agentsPhase === "per-agent-config"
+  ) {
+    const prompt = agentConfigPrompts[agentConfigIdx];
+    if (prompt && prompt.kind === "variant-pick") {
+      const cfg = agentConfigs[prompt.agentId];
+      const provider = cfg?.llmProvider;
+      const agentEntry = agentCatalog.find((a) => a.id === prompt.agentId);
+      const compat = agentEntry?.llm_compat ?? [];
+      const effectiveProvider =
+        provider ?? (compat.length === 1 ? compat[0] : undefined);
+      if (!effectiveProvider || !agentEntry?.provider_mapping) return true;
+      const providerMapping = agentEntry.provider_mapping[effectiveProvider];
+      if (!providerMapping) return true;
+      const variantIds = Object.keys(providerMapping.variants);
+      if (variantIds.length <= 1) return true;
+      const cursor = agentVariantDraft ?? providerMapping.preferred;
+      const idx = Math.max(0, variantIds.indexOf(cursor));
+      if (key.upArrow) {
+        setAgentVariantDraft(
+          variantIds[(idx - 1 + variantIds.length) % variantIds.length] ??
+            null,
+        );
+        return true;
+      }
+      if (key.downArrow) {
+        setAgentVariantDraft(
+          variantIds[(idx + 1) % variantIds.length] ?? null,
+        );
+        return true;
+      }
+      if (key.escape) {
+        // Step back to llm-choice for this agent.
+        setAgentConfigIdx(Math.max(0, agentConfigIdx - 1));
+        setAgentVariantDraft(null);
+        return true;
+      }
+      if (key.return || input === " ") {
+        const chosen = cursor;
+        setAgentConfigs((prev) => ({
+          ...prev,
+          [prompt.agentId]: {
+            ...(prev[prompt.agentId] ?? {}),
+            providerVariant: chosen,
+          },
+        }));
+        setAgentVariantDraft(null);
+        const result = applyAgentConfigSubmit({
+          currentIdx: agentConfigIdx,
+          totalPrompts: agentConfigPrompts.length,
+        });
+        setAgentConfigIdx(result.nextIdx);
+        setAgentsPhase(result.nextPhase);
+        return true;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+// #434 — Per-agent model picker key handling. Shows up between
+// llm-choice and responsibility-note. ↑↓ moves cursor through the
+// discovered models, Enter commits, [s] skips (uses variant default).
+export function handleAgentModelPickInput(
+  ctx: WizardContext,
+  input: string,
+  key: Key,
+): boolean {
+  const { currentStep } = ctx;
+  const {
+    agentsPhase,
+    agentConfigPrompts,
+    agentConfigIdx,
+    agentModelOptions,
+    agentModelDraft,
+  } = ctx.state;
+  const {
+    setAgentsPhase,
+    setAgentConfigIdx,
+    setAgentConfigs,
+    setAgentModelDraft,
+  } = ctx.set;
+  if (
+    currentStep === "agents" &&
+    agentsPhase === "per-agent-config"
+  ) {
+    const prompt = agentConfigPrompts[agentConfigIdx];
+    if (prompt && prompt.kind === "model-pick") {
+      // Loading: only Esc/s actionable.
+      if (agentModelOptions === null) {
+        if (key.escape || input === "s" || input === "S") {
+          // Skip → advance without storing modelVersion (= variant default).
+          const result = applyAgentConfigSubmit({
+            currentIdx: agentConfigIdx,
+            totalPrompts: agentConfigPrompts.length,
+          });
+          setAgentConfigIdx(result.nextIdx);
+          setAgentsPhase(result.nextPhase);
+          return true;
+        }
+        return true;
+      }
+      // Error / empty list: only [s]kip or [Enter] (accepted as skip)
+      // advances. Esc goes back to the llm-choice for the same agent.
+      if (agentModelOptions.length === 0) {
+        if (key.escape) {
+          // Step back to llm-choice for THIS agent (it's the prompt
+          // immediately before model-pick in the list).
+          setAgentConfigIdx(Math.max(0, agentConfigIdx - 1));
+          return true;
+        }
+        if (key.return || input === "s" || input === "S") {
+          const result = applyAgentConfigSubmit({
+            currentIdx: agentConfigIdx,
+            totalPrompts: agentConfigPrompts.length,
+          });
+          setAgentConfigIdx(result.nextIdx);
+          setAgentsPhase(result.nextPhase);
+          return true;
+        }
+        return true;
+      }
+      // Picker active.
+      const cursor = agentModelDraft ?? agentModelOptions[0]?.id ?? null;
+      const idx = agentModelOptions.findIndex((m) => m.id === cursor);
+      const safeIdx = idx < 0 ? 0 : idx;
+      if (key.upArrow) {
+        const len = agentModelOptions.length;
+        setAgentModelDraft(
+          agentModelOptions[(safeIdx - 1 + len) % len]?.id ?? null,
+        );
+        return true;
+      }
+      if (key.downArrow) {
+        const len = agentModelOptions.length;
+        setAgentModelDraft(agentModelOptions[(safeIdx + 1) % len]?.id ?? null);
+        return true;
+      }
+      if (key.escape) {
+        setAgentConfigIdx(Math.max(0, agentConfigIdx - 1));
+        return true;
+      }
+      if (input === "s" || input === "S") {
+        // Skip → no modelVersion stored; variant default applies.
+        const result = applyAgentConfigSubmit({
+          currentIdx: agentConfigIdx,
+          totalPrompts: agentConfigPrompts.length,
+        });
+        setAgentConfigIdx(result.nextIdx);
+        setAgentsPhase(result.nextPhase);
+        return true;
+      }
+      if (key.return || input === " ") {
+        if (cursor) {
+          setAgentConfigs((prev) => {
+            const existing = prev[prompt.agentId] ?? {};
+            return {
+              ...prev,
+              [prompt.agentId]: { ...existing, modelVersion: cursor },
+            };
+          });
+        }
+        const result = applyAgentConfigSubmit({
+          currentIdx: agentConfigIdx,
+          totalPrompts: agentConfigPrompts.length,
+        });
+        setAgentConfigIdx(result.nextIdx);
+        setAgentsPhase(result.nextPhase);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// #358 — Per-agent LLM picker key handling. ↑↓ live-updates the
+// selection (cursor + ✓ travel together — round-3 muscle memory
+// expectation), Space or Enter commits and advances. The render side
+// pulls from llmDraft so updating it re-renders the radio in place.
+export function handleAgentLlmChoiceInput(
+  ctx: WizardContext,
+  input: string,
+  key: Key,
+): boolean {
+  const { currentStep, llmPickerOptions } = ctx;
+  const {
+    agentsPhase,
+    agentConfigPrompts,
+    agentConfigIdx,
+    llmDraft,
+  } = ctx.state;
+  const {
+    setAgentsPhase,
+    setAgentConfigIdx,
+    setAgentConfigs,
+    setLlmDraft,
+  } = ctx.set;
+  if (
+    currentStep === "agents" &&
+    agentsPhase === "per-agent-config" &&
+    llmPickerOptions.length > 0
+  ) {
+    const prompt = agentConfigPrompts[agentConfigIdx];
+    if (prompt && prompt.kind === "llm-choice") {
+      const currentChoice = llmDraft ?? llmPickerOptions[0];
+      const currentIdx = Math.max(
+        0,
+        llmPickerOptions.indexOf(currentChoice ?? ""),
+      );
+      if (key.upArrow) {
+        const nextIdx =
+          (currentIdx - 1 + llmPickerOptions.length) %
+          llmPickerOptions.length;
+        setLlmDraft(llmPickerOptions[nextIdx] ?? null);
+        return true;
+      }
+      if (key.downArrow) {
+        const nextIdx = (currentIdx + 1) % llmPickerOptions.length;
+        setLlmDraft(llmPickerOptions[nextIdx] ?? null);
+        return true;
+      }
+      if (key.return || input === " ") {
+        const chosen = llmDraft ?? llmPickerOptions[0];
+        if (chosen) {
+          setAgentConfigs((prev) => {
+            const existing = prev[prompt.agentId] ?? {};
+            return {
+              ...prev,
+              [prompt.agentId]: { ...existing, llmProvider: chosen },
+            };
+          });
+        }
+        const result = applyAgentConfigSubmit({
+          currentIdx: agentConfigIdx,
+          totalPrompts: agentConfigPrompts.length,
+        });
+        setAgentConfigIdx(result.nextIdx);
+        setAgentsPhase(result.nextPhase);
+        setLlmDraft(null);
+        return true;
+      }
+    }
+  }
+  return false;
+}
