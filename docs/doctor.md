@@ -29,6 +29,7 @@ Foreman doctor
   ✓ fts5                 FTS5 available; requests_fts ready
   ✓ policy_yaml          parses
   ✓ agents_registered    1 registered (1 active)
+  ✓ agent_tokens         1 agent proves its identity with a token
   ✓ mcp_gateway          gateway instantiates cleanly (stdio transport ready)
   ✓ legacy_home          no legacy ~/.foreman/ files detected
   ✓ update               up to date (latest 0.1.0)
@@ -64,6 +65,18 @@ chafa                warn   chafa not found
 (exit 1 — warnings only)
 ```
 Expected. Run `foreman setup` (the wizard) or `foreman agent add` to register the first agent.
+
+**Agents without an identity token** (an install from before #618, or a
+custom agent never given one):
+```
+agent_tokens         warn   no identity token for claude-code, codex — their MCP calls run untrusted (no agent allow rules, org role or hub servers)
+                            → Run `foreman agent rewire --all`, then restart the agents. …
+(exit 1 — warnings only)
+```
+Until they are rewired, these agents' MCP calls run as `untrusted:<id>`. The
+check also flags an agent whose config still wires Foreman without its current
+token (for example after a rotation whose config write failed). See
+[Agent identity tokens](agent-lifecycle.md#agent-identity-tokens).
 
 **Identity key corrupt:**
 ```

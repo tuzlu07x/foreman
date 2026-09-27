@@ -51,9 +51,26 @@ Known limits, which we track as roadmap items rather than hide:
   access can in principle read Foreman's files. The tamper-protection rule
   flags any such access as critical, and files are owner-only. True
   isolation needs a separate OS user or keychain, which is planned.
-- **Self-declared agent ids.** `--source` identifies an agent on the MCP
-  path. Per-agent identity tokens are planned. Blocked and paused agents
-  are denied on every transport today.
+- **Agent identity on the MCP path.** `--source` only names an agent; its
+  identity token proves it. `foreman agent add` mints a 256-bit token,
+  keeps it in the encrypted secret store under a name nothing agent-facing
+  can read (`foreman secrets show` and the MCP `secrets/get` tool refuse
+  it), and writes it into the agent's MCP config as the
+  `FOREMAN_AGENT_TOKEN` env var, never as an argument. Files that carry it
+  are owner-only. A connection with no token, a wrong one, or another
+  agent's runs as `untrusted:<id>`: none of that agent's allow rules, no
+  org role, no delegation, no MCP hub servers, and no remembered "always
+  allow". The claimed agent's deny and ask rules, block and pause still
+  apply, so dropping the token never loosens anything. Tokens are
+  compared in constant time, re-checked on every message (so
+  `foreman agent token rotate` cuts off running sessions), and never
+  printed, logged or audited. Installs from before tokens degrade to
+  untrusted until `foreman agent rewire --all`; `foreman doctor` and
+  `foreman start` say so. Remaining limits: an agent that can read
+  another agent's MCP config file (same OS user, see above) can read its
+  token, which tamper protection flags only when the file is written; and
+  `foreman write` from an agent's shell still trusts `FOREMAN_SPAWNED_BY`.
+  Blocked and paused agents are denied on every transport.
 - **Relayed approvals.** By default, Telegram decisions reach Foreman
   through the chat agent that polls the bot. Each allow button carries an
   HMAC tag bound to that action. Other agents can't approve anything, and

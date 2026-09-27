@@ -34,6 +34,8 @@ Foreman manages each agent from install through removal. The same operations are
 | `foreman agent show <name>` | full record — id, public key, state, config path, registered secrets |
 | `foreman agent update [name]` | re-fetch registry entry + re-inject MCP block |
 | `foreman agent remove <name> [--keep-binary]` | unregister + strip MCP block from config + (optionally) uninstall binary |
+| `foreman agent rewire [<name>\|--all]` | give the agent its identity token and rewrite its MCP wiring (see [Agent identity tokens](#agent-identity-tokens)) |
+| `foreman agent token rotate <name>` | mint a new identity token and rewrite the wiring; the old token stops working at once |
 | `foreman agent regenerate-key <name>` | issue a new Ed25519 keypair (revokes the old one) |
 | `foreman agent block <agentId>` | force every call to deny + audit |
 | `foreman agent unblock <agentId>` | return to whatever state the agent was in before block |
@@ -71,7 +73,7 @@ When you remove an agent, Foreman:
 
 1. Strips the `mcpServers.foreman` (or `mcp_servers.foreman` for Codex's TOML, or `mcp.servers.foreman` for niche configs) entry from every `config_paths` entry. No orphaned MCP blocks.
 2. Deletes the agent's row from the DB (and any per-agent config like `llmProvider` / `responsibilityNote`).
-3. Revokes the Ed25519 keypair — even if the binary is left on disk, a new install can't impersonate the removed agent.
+3. Revokes the Ed25519 keypair and the agent's identity token — even if the binary is left on disk, a new install can't impersonate the removed agent.
 4. **Does not** delete the agent's own config files outside the MCP block, the agent's binary (unless install was via `npm`/`brew` and you didn't pass `--keep-binary`), or anything in the agent's own state dir (`~/.hermes/`, `~/.openclaw/`, etc.).
 
 For script-installed agents like Hermes, removal prints the manual uninstall hint:
@@ -79,6 +81,71 @@ For script-installed agents like Hermes, removal prints the manual uninstall hin
 ```
 Remove the hermes binary manually (try the installer's --uninstall flag).
 ```
+
+## Agent identity tokens
+
+On the MCP path, `foreman mcp-stdio --source <id>` names the agent, and the
+agent's **identity token** proves it (#618). Without the token, anything that
+can edit an agent's MCP config could claim another agent's id and inherit its
+policy rules and org role.
+
+- `foreman agent add` mints a token, keeps it in the encrypted secret store
+  under a reserved name (`foreman-agent-token:<id>`), and writes it into the
+  agent's MCP wiring as the `FOREMAN_AGENT_TOKEN` environment variable, never
+  as an argument:
+
+  ```json
+  "foreman": {
+    "command": "foreman",
+    "args": ["mcp-stdio", "--source", "claude-code"],
+    "env": { "FOREMAN_AGENT_TOKEN": "fat_…" }
+  }
+  ```
+
+  Codex gets the same under `[mcp_servers.foreman.env]` in `config.toml`.
+  Hermes also gets it in its MCP wrapper script
+  (`~/.foreman/wrappers/hermes-mcp.sh`, mode 0700). Config files that carry a
+  token are made owner-only (0600).
+- `foreman mcp-stdio` reads the variable, removes it from its own environment
+  (so nothing it starts inherits it), and compares it in constant time with
+  the stored token. It re-checks before every message, so a rotation takes
+  effect in running sessions too.
+- **No token, a wrong token, or another agent's token** runs the connection
+  as `untrusted:<claimed id>`, the lowest privilege there is: none of the
+  claimed agent's allow rules (wildcard `*` rules apply, as to any unknown
+  agent), no org role, no delegation, no MCP hub servers, and no "always
+  allow" remembered for it. The claimed agent's deny and ask rules and its
+  `block` / `disable` still apply, so dropping the token never loosens
+  anything. Human ids (`cli`, `tui`, `telegram`, …) stay refused outright.
+  Foreman warns on stderr, in the inbox and in the audit log
+  (`agent:identity` events); the token itself is never printed or logged.
+- `foreman agent show` says whether the agent has a token (and when it was
+  issued) and shows the snippet with a placeholder. `foreman secrets show`
+  refuses agent tokens, and so does the MCP `secrets/get` tool.
+- `foreman agent remove` revokes the token.
+
+**Upgrading an install from before tokens.** Existing agents keep working,
+but as `untrusted:<id>` until they are rewired. `foreman doctor` (the
+`agent_tokens` check) and `foreman start` (an inbox warning) say which ones.
+Fix them all at once, then restart the agents:
+
+```bash
+foreman agent rewire --all
+```
+
+`rewire` keeps an agent's current token if it has one, so it is safe to run
+again. For an agent Foreman can't wire itself (a custom MCP client, or a
+config at a non-default path), write the token to a file and set it in the
+client's MCP server env yourself:
+
+```bash
+foreman agent rewire my-bot --token-out ~/my-bot.token    # 0600
+foreman agent rewire claude-code --config-path ./.mcp.json
+```
+
+**Rotating.** `foreman agent token rotate <id>` mints a new token and
+rewrites the wiring. Sessions still running with the old token drop to
+untrusted immediately; restart the agent to pick up the new one.
 
 ## Identity push
 

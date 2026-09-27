@@ -27,11 +27,12 @@ That command runs the installer, injects the MCP snippet into `~/.hermes/config.
 
 ## 2. (Manual) point Hermes at Foreman
 
-If you'd rather wire things by hand, install Hermes from the official installer and merge the foreman block into its config:
+If you'd rather wire things by hand, install Hermes from the official installer, register it with Foreman to get its identity token, and merge the foreman block into its config:
 
 ```bash
 curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 hermes setup     # one-time bootstrap; writes ~/.hermes/config.yaml
+foreman agent add hermes --type hermes --skip-config --token-out ~/.hermes-foreman.token
 ```
 
 ```yaml
@@ -41,9 +42,12 @@ mcp_servers:
   foreman:
     command: foreman
     args: ["mcp-stdio", "--source", "hermes"]
+    env:
+      # Proves the agent id; without it Hermes runs as untrusted:hermes.
+      FOREMAN_AGENT_TOKEN: "<contents of ~/.hermes-foreman.token>"
 ```
 
-Hermes' real config keys evolve faster than this doc — pull the current skeleton from upstream (`hermes setup` regenerates it) and just merge in the `foreman:` server entry. `hermes mcp list` should then show `foreman`. API keys belong in `~/.hermes/.env`, not in `config.yaml`.
+Hermes' real config keys evolve faster than this doc — pull the current skeleton from upstream (`hermes setup` regenerates it) and just merge in the `foreman:` server entry. `hermes mcp list` should then show `foreman`. API keys belong in `~/.hermes/.env`, not in `config.yaml`. Easier still: `foreman agent rewire hermes` writes the entry with the token for you. See [agent identity tokens](../../docs/agent-lifecycle.md#agent-identity-tokens).
 
 ## 3. Apply the phishing-safe policy
 

@@ -7,6 +7,24 @@ All notable changes to Foreman are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Per-agent identity tokens on the MCP path** (#618,
+  [docs](docs/agent-lifecycle.md#agent-identity-tokens)).
+  - `foreman agent add` mints a token, keeps it in the encrypted secret
+    store and writes it into the agent's MCP config as
+    `FOREMAN_AGENT_TOKEN` in the server's `env` (Claude Code / OpenClaw JSON,
+    Codex TOML, Hermes YAML and its MCP wrapper), never as an argument.
+    Files that carry it are made owner-only.
+  - `foreman mcp-stdio` resolves the agent from the token. `--source`
+    without a valid token runs as `untrusted:<id>`: none of that agent's
+    allow rules, org role, delegation rights or MCP hub servers, while the
+    agent's deny / ask rules, block and pause still apply.
+  - `foreman agent rewire [<id>|--all]` gives existing agents a token and
+    rewrites their wiring; `foreman agent token rotate <id>` replaces a
+    token and cuts off sessions using the old one. `--token-out <file>`
+    (0600) covers agents wired by hand.
+  - `foreman doctor` (`agent_tokens`) and `foreman start` (an inbox warning)
+    name the agents that still need rewiring. Unverified connections are
+    audited (`agent:identity`) and raised in the inbox; tokens never are.
 - **OAuth for hosted MCP servers** (#617,
   [docs/mcp-hub.md](docs/mcp-hub.md#oauth-servers)).
   - Mark a remote server `auth: oauth` in `mcp.yaml` (or use
@@ -263,6 +281,12 @@ All notable changes to Foreman are documented here. The format follows
     database.
   - The standalone binaries embed the prebuilt addon for their target
     and load it from the hash-checked runtime directory as before.
+- **Upgrade note (#618):** agents wired before identity tokens keep
+  working, but as `untrusted:<id>` (lowest privilege) until you run
+  `foreman agent rewire --all` and restart them. `mcp-stdio` no longer
+  registers unknown `--source` ids on first connection; register agents with
+  `foreman agent add`. `foreman secrets show` / `add` / `rotate` refuse the
+  reserved `foreman-agent-token:*` names.
 
 ## [0.1.6] - 2026-06-01
 

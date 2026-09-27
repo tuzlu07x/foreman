@@ -355,8 +355,11 @@ resets. You can still assign work to it yourself.
 
 ## Limits
 
-- The chart organises work and limits blast radius; it is not an identity
-  boundary. Agent ids are self-declared today (see [SECURITY.md](../SECURITY.md)).
+- On the MCP path an agent holds its role only when it proves its id with its
+  identity token ([agent identity tokens](./agent-lifecycle.md#agent-identity-tokens)).
+  A connection without it runs as `untrusted:<id>`: no role, no department
+  channels, no hub servers, and it can't delegate. `foreman write` run from
+  an agent's shell still trusts `FOREMAN_SPAWNED_BY` (see [SECURITY.md](../SECURITY.md)).
 - A broken `org.yaml` fails closed: agent-to-agent delegation is blocked and
   agents get no hub servers until `foreman org validate` passes.
 - A manager's recommendation is only as trustworthy as the manager agent.

@@ -206,6 +206,7 @@ the provider's settings.
 | **Secret leakage** in results | API keys, tokens, private keys and database passwords are redacted before the agent sees them. |
 | **Credential sprawl** in agent configs | Tokens live in Foreman's encrypted store. Agents never see them; upstream processes get a minimal environment (plus proxy/CA variables) instead of yours. |
 | **Oversharing** | `tools.deny` hides tools completely; [Foreman Org](./org.md) limits servers per department. |
+| **Borrowed identity** — a process claims another agent's `--source` | Hub servers go only to agents that prove their id with their [identity token](./agent-lifecycle.md#agent-identity-tokens). An unverified `untrusted:<id>` connection sees no hub tools. |
 
 Stdio servers run as your user, like any `npx` tool. Prefer official
 servers, pin versions in `args` when you can, and consider a container

@@ -38,11 +38,11 @@ Every subcommand lives in its own file under `src/cli/`. The root `src/cli/index
 | `foreman init` | Seeds the Foreman home: `identity.key` (Ed25519), `policy.yaml` (smart-default rules), `SOUL.md` (Foreman identity persona), `foreman.db` (SQLite). Idempotent. |
 | `foreman setup` | Interactive Ink wizard — API keys → agents → install → policy review. Re-runnable with `--resume` / `--reset`. |
 | `foreman start` | Detects fresh installs and runs the wizard inline, then mounts the gateway + TUI dashboard. `--no-onboarding` skips the wizard. |
-| `foreman mcp-stdio --source <agent>` | Acts as an MCP server over stdio for the partner runtime. JSON-RPC `tools/list` + `tools/call` go through the mediator. |
+| `foreman mcp-stdio --source <agent>` | Acts as an MCP server over stdio for the partner runtime. JSON-RPC `tools/list` + `tools/call` go through the mediator. The agent proves its id with `FOREMAN_AGENT_TOKEN`; without it the connection is `untrusted:<agent>`. |
 | `foreman wrap --name <id> -- <cmd>` | Spawns a child process under Foreman; intercepts its MCP-framed stdout, signs responses, audits every call. |
 | `foreman log tail / search / show` | Reads the audit log. FTS5-indexed; `search` queries the index, `tail` paginates, `show <id>` expands one row. |
 | `foreman policy show / edit / reset` | Inspects + edits `policy.yaml`. `edit` opens `$EDITOR`, then reloads + reports the rule count. |
-| `foreman agent add / list / remove / show / regenerate-key / block / unblock / update` | Manages registered agents. Aliased as `agents`. |
+| `foreman agent add / list / remove / show / rewire / token rotate / regenerate-key / block / unblock / update` | Manages registered agents and their MCP identity tokens. Aliased as `agents`. |
 | `foreman secrets add / list / show / rotate / remove` | Manages the encrypted secret store (AES-256-GCM at rest). `show` refuses without `--reveal`. |
 | `foreman registry list / info / update / validate` | Curated catalogue lookup. `update` refreshes from the upstream URL (24 h TTL). |
 | `foreman identity show / edit / reset / push` | Foreman's canonical SOUL.md propagated into each partner runtime's identity hook (`~/.hermes/SOUL.md`, etc.). |
@@ -125,8 +125,10 @@ Migrations are hand-written SQL files under `src/db/migrations/`, plus a `_journ
 
 Foreman exposes itself as an **MCP server** over stdio so the partner runtime can call it. The server advertises **one explicit tool** (`secrets/get`) plus the implicit "send anything else and Foreman will mediate it" surface.
 
+At startup mcp-stdio resolves who is connected (`src/core/agent-token.ts`): the agent whose stored token matches `FOREMAN_AGENT_TOKEN` (and `--source`, when given), or `untrusted:<--source>` when there is no valid token. That id is the `sourceAgent` below; it is re-checked before every message, so a rotated token takes effect in running sessions.
+
 When the partner runtime calls `tools/call` with `name = read_file`, `arguments = { path: ".env" }`:
-1. mcp-stdio calls `mediator.handleRequest({ sourceAgent: "<--source flag>", targetTool: "read_file", message: <jsonrpc> })`.
+1. mcp-stdio calls `mediator.handleRequest({ sourceAgent: "<resolved agent id>", targetTool: "read_file", message: <jsonrpc> })`.
 2. Mediator evaluates policy — `.env` paths hit the ASK rule.
 3. Mediator pushes a pending row → `ApprovalBridge` in `foreman start` sees it → modal pops.
 4. User decides — mediator returns to mcp-stdio.

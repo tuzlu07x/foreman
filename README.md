@@ -138,8 +138,7 @@ foreman start           # guided setup on first run, then the live TUI
 Write, WebFetch, …) with the PreToolUse hook:
 
 ```bash
-foreman agent add claude-code            # register Claude Code with Foreman
-claude mcp add --scope user foreman -- foreman mcp-stdio --source claude-code   # MCP servers live in ~/.claude.json
+foreman agent add claude-code            # wires MCP with claude-code's identity token
 foreman agent hook install claude-code
 ```
 
