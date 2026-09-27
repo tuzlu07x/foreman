@@ -142,8 +142,10 @@ export class CommsMirrorWorker {
       for (const m of pending) {
         // Reports to you always reach the inbox, however late.
         if (m.channel === BOSS) this.toInbox(m);
-        // Chat channels only get what is still news.
-        const fresh = m.ts > now - MAX_AGE_MS;
+        // Chat channels only get what is still news. Review requests
+        // (#623) stay local: they carry a report's tool arguments, which
+        // must not leave the machine.
+        const fresh = m.ts > now - MAX_AGE_MS && m.kind !== "review";
         for (const [platform, target] of fresh ? targetsFor(org, m.channel) : []) {
           const mirror = this.opts.mirrors.get(platform);
           if (!mirror) {

@@ -1,7 +1,10 @@
 import { Box, Text } from "ink";
 import type { JSX } from "react";
 import type { ApprovalRequest } from "../../core/approval.js";
-import type { ApprovalRecommendation } from "../../core/org/review.js";
+import {
+  recommendationParts,
+  type ApprovalRecommendation,
+} from "../../core/org/review.js";
 import type {
   RiskBucket,
   RiskCategory,
@@ -137,24 +140,29 @@ export function RecommendationBlock({
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text color={theme.fg.muted}>Manager review:</Text>
-      {recommendations.map((r) => (
-        <Text key={r.managerRole}>
-          {"    "}
-          <Text color={theme.accent.primary}>{theme.symbols.reason}</Text>{" "}
-          {r.managerTitle} ({r.managerAgent}) recommends{" "}
-          <Text
-            bold
-            color={
-              r.recommendation === "allow"
-                ? theme.accent.success
-                : theme.accent.danger
-            }
-          >
-            {r.recommendation}
+      {recommendations.slice(0, 3).map((r) => {
+        // Every field is one capped line: a reason can't fake key hints
+        // or push the real ones off screen.
+        const p = recommendationParts(r);
+        return (
+          <Text key={r.managerRole} wrap="truncate-end">
+            {"    "}
+            <Text color={theme.accent.primary}>{theme.symbols.reason}</Text>{" "}
+            {p.who} recommends{" "}
+            <Text
+              bold
+              color={
+                p.recommendation === "allow"
+                  ? theme.accent.success
+                  : theme.accent.danger
+              }
+            >
+              {p.recommendation}
+            </Text>
+            : {p.reason}
           </Text>
-          : {r.reason}
-        </Text>
-      ))}
+        );
+      })}
       <Text color={theme.fg.muted}>
         {"    "}Advice only. Your decision is final.
       </Text>

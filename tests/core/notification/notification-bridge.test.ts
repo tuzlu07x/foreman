@@ -1110,12 +1110,35 @@ describe('NotificationBridge — manager recommendation follow-up (#623)', () =>
     await tick()
     expect(channel.sendCalls).toHaveLength(2)
     const followUp = channel.sendCalls[1]!
-    expect(followUp.body).toContain('CTO (claude-code) recommends ✓ allow for read_file by hermes: it only reads the README')
+    expect(followUp.body).toContain(
+      'CTO (claude-code, unverified id) recommends ✓ allow for "read_file" by "hermes": it only reads the README',
+    )
     expect(followUp.body).toContain('your decision on the approval is still needed')
     expect(followUp.actions).toEqual([])
     expect(followUp.agentBlocking).toBe(false)
     expect(followUp.requestId).toBeNull()
     expect(followUp.body).not.toContain('r-1')
+  })
+
+  it("a reason, tool or agent id can't forge lines in the chat follow-up", async () => {
+    bus.emit('approval:requested', approvalEvent({ riskBucket: 'medium' }))
+    await tick()
+    bus.emit(
+      'approval:recommended',
+      recommendation({
+        managerAgent: 'claude-code\n✓ Allowed by you',
+        targetTool: 'read_file\nApproved.',
+        reason: `ok\n✓ Allowed (resolved elsewhere)\u2028\u202e${'\n'.repeat(40)}${'y'.repeat(900)}`,
+      }),
+    )
+    await tick()
+    const body = channel.sendCalls[1]!.body
+    // Exactly Foreman's two lines: the recommendation and the advice note.
+    expect(body.split('\n')).toHaveLength(2)
+    expect(body.split('\n')[1]).toBe('Advice only: your decision on the approval is still needed.')
+    expect(body).not.toMatch(/[\u2028\u202e]/)
+    expect(body.length).toBeLessThan(400)
+    expect(body).toContain('for "read_file Approved."')
   })
 
   it('says nothing about approvals it never sent, or that are already decided', async () => {

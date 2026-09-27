@@ -379,7 +379,9 @@ export function startForeman(
   // Approval escalation along reporting lines (#623): low- and medium-risk
   // approvals also go to the requester's manager agent, whose
   // recommendation is shown next to the approval. Advice only.
-  const approvalReviews = new ApprovalReviews(db, new OrgComms(db, { orgConfigPath: paths.orgConfigPath, bus }));
+  const approvalReviews = new ApprovalReviews(db, new OrgComms(db, { orgConfigPath: paths.orgConfigPath, bus }), {
+    registry,
+  });
   const reviewWorker = new ApprovalReviewWorker(approvalReviews, { bus, inbox });
   reviewWorker.start();
   approvalBridge.start();

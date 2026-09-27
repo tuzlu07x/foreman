@@ -629,6 +629,8 @@ export const approvalReviews = sqliteTable(
   "approval_reviews",
   {
     approvalId: text("approval_id").notNull(),
+    /** Opaque handle the manager sees instead of the approval id. */
+    handle: text("handle").notNull(),
     managerRole: text("manager_role").notNull(),
     managerAgent: text("manager_agent").notNull(),
     requesterRole: text("requester_role").notNull(),
@@ -646,9 +648,14 @@ export const approvalReviews = sqliteTable(
     reason: text("reason"),
     recommendedAt: integer("recommended_at"),
     announcedAt: integer("announced_at"),
+    /** Later approvals from the same report to the same manager that were
+     *  not sent for review because this one was sent moments before. */
+    coalesced: integer("coalesced").notNull().default(0),
   },
   (t) => ({
     pk: primaryKey({ columns: [t.approvalId, t.managerRole] }),
+    handleIdx: uniqueIndex("approval_reviews_handle_idx").on(t.handle),
+    pairIdx: index("approval_reviews_pair_idx").on(t.requesterAgent, t.managerRole, t.requestedAt),
     unannouncedIdx: index("approval_reviews_unannounced_idx").on(t.announcedAt, t.recommendedAt),
     statusIdx: index("approval_reviews_status_idx").on(t.status),
   }),
