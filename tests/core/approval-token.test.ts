@@ -50,7 +50,9 @@ describe('relayed approvals (submit_approval) across processes', () => {
     db = handle.db
     sqlite = handle.sqlite
   })
-  afterEach(() => sqlite.close())
+  afterEach(() => {
+    sqlite.close()
+  })
 
   function pendingRequest(requestId: string) {
     // Process A — the requester (an agent's mcp-stdio, the hook, wrap).
