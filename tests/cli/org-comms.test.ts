@@ -50,7 +50,8 @@ describe('foreman org channel / tell / messages (#630)', () => {
     expect(run('org', 'escalate', 'off').status).toBe(0)
     yaml = readFileSync(path, 'utf-8')
     expect(yaml).toContain('# my company, my comments')
-    expect(yaml).not.toMatch(/^approvals:|escalate_via_manager/m)
+    expect(yaml).not.toMatch(/^approvals:/m)
+    expect(yaml).not.toContain('escalate_via_manager')
   })
 
   it('posts as you and reads it back', () => {
