@@ -57,6 +57,7 @@ The provider catalog doesn't reference the other two — providers are leaf node
    - `optional_services` — service ids the agent can integrate with
    - `mcp_compatible: true`
    - `supported_versions`, `min_foreman_version`
+   - optional `engines.node` — the Node range the agent's own package declares, e.g. OpenClaw's `">=24.16.0 <25 || >=26.1.0"`. When the `node` on PATH is outside it, Foreman skips the automated install, prints the requirement and the entry's `install.script` command as text, and `foreman doctor` warns. Only `>=`, `>`, `<=`, `<` and `=` comparators joined by spaces and `||` are accepted; `foreman registry validate` rejects anything else.
 2. **Test the install path on a clean VM** before publishing. The `verify_command` (when we add it) doubles as a fast smoke; for now manually run `foreman setup` on a fresh box and pick this agent.
 3. If the agent declares `optional_services`, **also update the matching services' `used_by_agents` arrays** so the wizard's "Used by:" line on the Services step shows accurate consumers.
 4. Run `npm test`; the bundled-catalog cross-validation will fail loudly if you forgot the reverse mapping.

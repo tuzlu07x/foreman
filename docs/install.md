@@ -16,6 +16,12 @@ Step-by-step recipes for macOS, Linux, and Windows. Pick the section that matche
 | 4. First run | `foreman start` → wizard auto-launches | same | same |
 | 5. Verify | `foreman doctor` → 12+ ok, 1–2 warn | same | same |
 
+> **OpenClaw needs a newer Node than Foreman.** Since v2026.9.3 OpenClaw requires Node `>=24.16.0 <25 || >=26.1.0`. If the `node` on your PATH is older (say 22.x), Foreman won't run `npm install -g openclaw`: the wizard and `foreman agent add` print the requirement and OpenClaw's upstream installer instead, and set up your other agents as usual. Either switch to Node 24.16+ or 26.1+ (e.g. `nvm install 24`) and add OpenClaw again, or run the upstream installer yourself, which provisions a supported Node when it's missing:
+> ```bash
+> curl -fsSL https://openclaw.ai/install.sh | bash
+> ```
+> Foreman never runs that script for you. `foreman doctor` warns while OpenClaw is registered or installed on an older Node.
+
 After release-day (`npm publish` + GH release + repo public) the entire install becomes one line:
 ```
 curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash
@@ -243,6 +249,7 @@ The wizard already installed + registered whatever you picked. Add a new one lat
 foreman agent add openclaw --type openclaw      # respects the registry catalogue
 foreman agent list
 ```
+OpenClaw needs Node `>=24.16.0 <25 || >=26.1.0` on your PATH (see the note under the [cheat sheet](#tldr-cheat-sheet)). On an older Node, `--auto-install` stops with the requirement and the upstream installer command instead of installing.
 
 ### Drop the dummy keys, paste real ones
 ```bash
@@ -310,6 +317,7 @@ foreman agent hook uninstall claude-code   # run before step 1
 | `foreman: command not found` after install | Re-source your shell (`hash -r` / new terminal) or check `npm prefix -g` is on PATH. |
 | `foreman start` skips the wizard | The foreman home already exists with registered agents. Either wipe it (see Uninstall) or re-run the wizard explicitly with `foreman setup --resume` or `foreman setup --reset`. |
 | Wizard's Step 1 doesn't ask for key values | You probably hit Enter on an empty MultiSelect. As of PR #148 the three common keys are pre-checked — make sure you're on a build that includes the merge. |
+| Wizard or `foreman agent add` says "OpenClaw needs Node >=24.16.0 <25 \|\| >=26.1.0" | The `node` on your PATH is too old for OpenClaw. Switch to Node 24.16+ or 26.1+ (`nvm install 24`) and add it again, or run `curl -fsSL https://openclaw.ai/install.sh \| bash` yourself. |
 | OpenClaw / Codex toggle didn't take in the wizard | The `@inkjs/ui` MultiSelect selected state can be subtle. Check the install-step summary line `Selected agents: …` — if your pick isn't there, Esc back, Space again, Enter. |
 | Telegram polling fails on Linux | Check outbound TCP to `api.telegram.org` (149.154.166.110:443) isn't blocked. The gateway prints `httpx.ConnectError: All connection attempts failed` in journalctl. |
 | Bot still says "Hermes Agent" not "Foreman" after registration | Run `hermes sessions prune --older-than 0 --yes` then restart the gateway — cached session prompt from before the SOUL write. |
