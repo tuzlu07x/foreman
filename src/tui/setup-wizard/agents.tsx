@@ -25,10 +25,11 @@ export function renderAgentsStep(ctx: WizardContext): JSX.Element | null {
     agentCatalog,
     initialRegistered,
   } = ctx;
-  const { agentsSelected, agentsPhase } = ctx.state;
+  const { agentsSelected, agentsPhase, agentsPickerChecked } = ctx.state;
   const {
     setAgentsSelected,
     setAgentsPhase,
+    setAgentsPickerChecked,
     setAgentConfigPrompts,
     setAgentConfigIdx,
     setLlmDraft,
@@ -78,6 +79,9 @@ export function renderAgentsStep(ctx: WizardContext): JSX.Element | null {
       return status?.state !== "needs-llm";
     });
     const defaults = compatibleDefaults;
+    // Mirrors the MultiSelect's live toggles, not just the pre-checked
+    // defaults ("Pre-checked: hermes" stayed up after Hermes was unticked).
+    const checked = agentsPickerChecked ?? defaults;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <WizardProgress {...stepProgress("agents")} label="Agents" phase="pick which to install" />
@@ -93,12 +97,15 @@ export function renderAgentsStep(ctx: WizardContext): JSX.Element | null {
             Silent hiding is the cleanest UX — the picker only shows
             agents the user CAN actually install. */}
         <Text color={theme.accent.primary}>
-          Pre-checked: {defaults.length > 0 ? defaults.join(", ") : "(none)"}
+          Checked:{" "}
+          {checked.length > 0 ? checked.join(", ") : "(none)"}
         </Text>
         <MultiSelect
           options={options}
           defaultValue={defaults}
+          onChange={(values) => setAgentsPickerChecked(values)}
           onSubmit={(values) => {
+            setAgentsPickerChecked(null);
             const result = applyAgentsPickerSubmit(values);
             setAgentsSelected(result.selected);
             const prompts = buildAgentConfigPromptList(
@@ -208,6 +215,7 @@ export function handleAgentsEscape(ctx: WizardContext): boolean {
   const {
     setProvidersPhase,
     setAgentsPhase,
+    setAgentsPickerChecked,
     setAgentConfigIdx,
     setLlmDraft,
   } = ctx.set;
@@ -223,6 +231,7 @@ export function handleAgentsEscape(ctx: WizardContext): boolean {
       return true;
     }
     if (agentsPhase === "picker") {
+      setAgentsPickerChecked(null);
       uncomplete("providers");
       setProvidersPhase("summary");
       return true;

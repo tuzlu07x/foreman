@@ -58,6 +58,11 @@ export interface WizardState {
 
   agentsSelected: string[];
   agentsPhase: AgentsPhase;
+  // What the agents picker currently has checked (MultiSelect onChange);
+  // null until the user toggles something, then the pre-checked defaults
+  // apply. Reset whenever the picker is left, since it remounts with its
+  // defaults next time.
+  agentsPickerChecked: string[] | null;
   agentConfigPrompts: AgentConfigPrompt[];
   agentConfigIdx: number;
   agentConfigs: AgentConfigsMap;
@@ -166,6 +171,7 @@ export function createInitialWizardState(
       session?.agentsSelected ??
       (initialRegistered.length > 0 ? initialRegistered : DEFAULT_AGENTS),
     agentsPhase: "picker",
+    agentsPickerChecked: null,
     agentConfigPrompts: [],
     agentConfigIdx: 0,
     agentConfigs: session?.agentConfigs ?? {},

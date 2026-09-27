@@ -415,7 +415,7 @@ describe('agents step', () => {
   it('walks picker → per-agent config → confirm', async () => {
     const w = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
     await w.until('Agents ▸ pick which to install')
-    expect(w.frame()).toContain('Pre-checked: hermes')
+    expect(w.frame()).toContain('Checked: hermes')
     await w.press(ENTER, 'Hermes (1/4)')
     expect(w.frame()).toContain('Currently selected')
     await w.press(ENTER, 'how to reach OpenAI')
@@ -425,6 +425,24 @@ describe('agents step', () => {
     await w.press(ENTER, 'Agents ▸ confirm')
     expect(w.frame()).toContain('▸ Will install: hermes')
     expect(w.frame()).toContain('Continue to services? (y/n)')
+  })
+})
+
+describe('agents picker header', () => {
+  it('follows what is currently checked, and resets when the picker is left', async () => {
+    const w = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
+    await w.until('Checked: hermes')
+    // Untick Hermes: the header used to keep saying "Pre-checked: hermes".
+    await w.press(SPACE, 'Checked: (none)')
+    await w.press(DOWN)
+    await w.press(SPACE, 'Checked: openclaw')
+    // The toggles themselves survive the re-render (check glyph varies: ✔ / √).
+    expect(w.frame()).toMatch(/OpenClaw — Multi-channel assistant with a lobster-themed TUI [✔√]/)
+    expect(w.frame()).not.toMatch(/Hermes — Personal AI assistant on Telegram and Discord [✔√]/)
+    // Leave the picker; it remounts with its defaults, and so does the header.
+    await w.press(ENTER, 'OpenClaw (1/4)')
+    await w.press(ESC, 'Agents ▸ pick which to install')
+    expect(w.frame()).toContain('Checked: hermes')
   })
 })
 
