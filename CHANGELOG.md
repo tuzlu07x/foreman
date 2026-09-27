@@ -183,6 +183,10 @@ All notable changes to Foreman are documented here. The format follows
   - Pushing a SOUL backs up user-authored identity files.
 
 ### Changed
+- **Release pipeline** (#620, [docs/releasing.md](docs/releasing.md)).
+  - Publishing a GitHub release now publishes to npm with provenance.
+  - Each binary is built and smoke-tested on its own architecture (macOS arm64 and x64, Linux x64 and arm64) and ships with `SHA256SUMS`.
+  - Every workflow pins its actions by commit SHA.
 - Node **22.12+** is required. Node 20 reached end-of-life on 2026-04-30, and
   `ink` 7 / `commander` 15 need Node 22. The installer now sets up Node 22.
 - The default Claude Code hook matcher also covers `Read`, `NotebookEdit`,

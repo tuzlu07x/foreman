@@ -1,0 +1,87 @@
+name: release-npm
+
+# Publish foreman-agent to npm with provenance when a release is published
+# (#620). The provenance statement links the package on npmjs.com to this
+# workflow run and the exact commit it was built from.
+#
+# Security:
+# - Runs only on a published release (a maintainer action) or a manual
+#   dispatch, never on pull requests. A manual run is a dry run unless
+#   `dry_run` is unticked.
+# - The release tag must match package.json's version, and lint, tests and
+#   the build must pass before anything is published (`prepublishOnly` runs
+#   them again).
+# - `id-token: write` is granted to this one job, for npm provenance. The
+#   npm token lives in the `npm` environment, where maintainers can require
+#   an approval before the job starts.
+# - Actions are pinned by commit SHA.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Pack and check everything, but don't publish"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-npm
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Check the tag matches package.json
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "v${version}" ]; then
+            echo "::error::release tag ${TAG} does not match package.json version ${version} (expected v${version})"
+            exit 1
+          fi
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Lint, test, build
+        run: |
+          npm run lint
+          npm run build
+          npm test
+
+      - name: Publish with provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = "true" ]; then
+            npm publish --provenance --access public --dry-run
+          else
+            npm publish --provenance --access public
+          fi
