@@ -5,7 +5,7 @@ A release is one GitHub release. Publishing it starts three workflows:
 | Workflow | What it does |
 | --- | --- |
 | `release-npm.yml` | Checks the tag matches `package.json`, runs lint, build and tests, then publishes `foreman-agent` to npm **with provenance**. |
-| `release-binaries.yml` | Builds the four standalone binaries, each on a runner of its own architecture, smoke-tests them, and attaches them with `SHA256SUMS`. |
+| `release-binaries.yml` | Builds the four standalone binaries (Node.js single executable applications, see below), each on a runner of its own architecture, smoke-tests them, and attaches them with `SHA256SUMS`. |
 | `homebrew-bump.yml` | Waits for the npm release, then opens a PR on `tuzlu07x/homebrew-foreman` with the new formula. |
 
 All three run only on a published release or a manual dispatch, never on pull requests, and every action is pinned to a commit SHA.
@@ -36,6 +36,26 @@ All three run only on a published release or a manual dispatch, never on pull re
 
 - **npm:** Actions → `release-npm` → Run workflow. `dry_run` defaults to on: it runs every check and `npm publish --dry-run --provenance`, and publishes nothing.
 - **Binaries:** Actions → `release-binaries` → Run workflow. It builds and smoke-tests all four binaries and writes `SHA256SUMS` as workflow artifacts; nothing is attached to a release.
+
+## Standalone binaries
+
+`scripts/build-binaries.mjs` builds one binary for the machine it runs on (after `npm ci && npm run build`):
+
+1. tsup bundles `dist/cli/index.js` and every dependency into one file. better-sqlite3's native addon, the migrations, the registry and the mascot art are embedded next to it and written to a verified directory in Foreman's cache dir on first start (`scripts/sea-runtime.cjs`).
+2. `@yao-pkg/pkg --sea` downloads the official Node.js binary of the same version as the Node running the build from nodejs.org, checks it against `SHASUMS256.txt`, injects the script and, on macOS, ad-hoc signs it.
+3. The budget is 160 MB; a binary is about 130 MB, almost all of it Node.js.
+
+It refuses to build for another platform or architecture, because the addon comes from the local `node_modules`. To try one locally:
+
+```bash
+npm ci && npm run build
+node scripts/build-binaries.mjs                  # → dist-binaries/foreman-<os>-<arch>
+python3 scripts/smoke-binary.py dist-binaries/foreman-linux-x64
+```
+
+`scripts/smoke-binary.py` is the same check the workflow runs: `--version`, `init`, `doctor --json`, an `mcp-stdio` round trip, `mcp tools` against the MCP fixture server, the TUI in a pseudo-terminal, and `foreman demo`, all from an empty directory with throwaway homes.
+
+The binaries use a real Node.js rather than pkg's own base binaries on purpose: those are built with small ICU, where `Intl.Segmenter` doesn't work, and Ink needs it to lay out any non-ASCII text, so the TUI would crash.
 
 ## If something goes wrong
 

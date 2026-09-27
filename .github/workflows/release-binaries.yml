@@ -2,11 +2,19 @@ name: release-binaries
 
 # Standalone binaries for every release (#620).
 #
+# Each binary is a Node.js single executable application: the official
+# Node.js binary for the target (downloaded from nodejs.org and checked
+# against its SHASUMS256.txt, same version as the runner's Node) with the
+# whole CLI bundled in. See scripts/build-binaries.mjs.
+#
 # Each target builds on a runner of its own architecture: the bundle carries
 # a native addon (better-sqlite3) that can't be cross-compiled, so a binary
-# built on another arch would ship the wrong one. Every binary is smoke-tested
-# (it must start, print the release's version and open its database) on the
-# machine that built it. A SHA256SUMS file is published next to them.
+# built on another arch would ship the wrong one (the build script refuses).
+# Every binary is smoke-tested on the machine that built it, from an empty
+# directory with throwaway homes (scripts/smoke-binary.py): version, init
+# (native addon + migrations), doctor, mcp-stdio, the MCP hub's SDK client,
+# the TUI in a pseudo-terminal, and the demo. A SHA256SUMS file is published
+# next to them.
 #
 # Security: runs only on a published release (a maintainer action) or a
 # manual dispatch, never on pull requests. Actions are pinned by commit SHA.
@@ -57,22 +65,14 @@ jobs:
       - name: Build standalone binary
         run: node scripts/build-binaries.mjs ${{ matrix.label }}
 
-      - name: Smoke test (size, start-up, version, database)
+      - name: Smoke test
         env:
           LABEL: ${{ matrix.label }}
         run: |
           set -euo pipefail
           binary="dist-binaries/foreman-${LABEL}"
-          test -x "$binary"
-          size=$(stat -f%z "$binary" 2>/dev/null || stat -c%s "$binary")
-          echo "binary size: $((size / 1024 / 1024)) MB"
-          test "$((size / 1024 / 1024))" -lt 80
-          expected=$(node -p "require('./package.json').version")
-          actual=$("$binary" --version)
-          echo "version: ${actual} (package.json: ${expected})"
-          test "$actual" = "$expected"
-          # The native addon loads: set up a throwaway home with the binary.
-          FOREMAN_HOME="$(mktemp -d)/home" "$binary" init >/dev/null
+          file "$binary" || true
+          python3 scripts/smoke-binary.py "$binary"
 
       - name: Upload binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
