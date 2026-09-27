@@ -18,6 +18,8 @@ import { loadOAuthTokens } from "./llm/oauth/token-store.js";
 import { loadActiveProviders, loadActiveRegistry } from "./registry-catalog.js";
 import { detectProviderByPrefix } from "./key-prefix-detect.js";
 import { loadVoiceConfig } from "./notification/voice-config.js";
+import { enabledServers, loadHubConfig } from "./mcp-hub/config.js";
+import { missingSecrets } from "./mcp-hub/manage.js";
 import { findDuplicateSlots } from "./secret-slot-migration.js";
 import { SecretStore } from "./secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
@@ -1074,6 +1076,55 @@ export function checkAcpAgents(
   return out;
 }
 
+// MCP hub — mcp.yaml parses, and every enabled server has its secrets.
+// Connectivity is checked on demand by `foreman mcp tools` (it spawns
+// servers, which doctor must not do).
+export function checkMcpHub(): CheckResult {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.mcpConfigPath)) {
+    return {
+      name: "mcp_hub",
+      status: "ok",
+      message: "no mcp.yaml — MCP hub not configured (try `foreman mcp catalog`)",
+    };
+  }
+  let config;
+  try {
+    config = loadHubConfig(paths.mcpConfigPath);
+  } catch (err) {
+    return {
+      name: "mcp_hub",
+      status: "fail",
+      message: `mcp.yaml is invalid: ${err instanceof Error ? err.message : String(err)}`,
+      remediation: `Fix ${paths.mcpConfigPath} — agents get no hub tools until it parses.`,
+    };
+  }
+  const enabled = enabledServers(config);
+  let exists: (name: string) => boolean = () => true;
+  try {
+    const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey());
+    exists = (name) => store.exists(name);
+  } catch {
+    // secret store unavailable — the database check reports it
+  }
+  const missing = enabled.flatMap(([name]) =>
+    missingSecrets(config, name, exists).map((s) => `${name}: ${s}`),
+  );
+  if (missing.length > 0) {
+    return {
+      name: "mcp_hub",
+      status: "warn",
+      message: `${enabled.length} server(s) enabled; missing secrets — ${missing.join(", ")}`,
+      remediation: `Store them with \`foreman secrets add <name>\`.`,
+    };
+  }
+  return {
+    name: "mcp_hub",
+    status: "ok",
+    message: `${enabled.length} MCP server(s) enabled, mode ${config.mode}`,
+  };
+}
+
 const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkNodeVersion,
   checkPaths,
@@ -1094,6 +1145,7 @@ const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkAcpAgents,
   checkProviderMapping,
   checkMcpGateway,
+  checkMcpHub,
   checkLegacyHome,
   checkUpdate,
   () => checkChafa(),

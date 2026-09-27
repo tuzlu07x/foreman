@@ -22,6 +22,13 @@ import {
 } from "../core/approval-id.js";
 import { deriveApprovalKey } from "../core/approval-token.js";
 import { createMediatorStack } from "../core/mediator-stack.js";
+import { loadHub, scopeForAgent } from "../core/mcp-hub/boot.js";
+import type {
+  AgentScope,
+  AgentTool,
+  HubCallResolution,
+  McpHub,
+} from "../core/mcp-hub/hub.js";
 import type { MediatorService } from "../core/mediator.js";
 import { OrchestratorChat } from "../core/orchestrator-chat.js";
 import { PendingQuestionsService } from "../core/pending-questions.js";
@@ -61,6 +68,7 @@ export const mcpStdioCommand = new Command("mcp-stdio")
       process.exit(1);
     }
     const services = bootServices();
+    services.hubScope = scopeForAgent(paths.orgConfigPath, options.source, warn);
     autoRegisterSource(services.registry, options.source);
     runMcpLoop(services, options.source);
   });
@@ -83,6 +91,10 @@ interface Services {
   /** Request ids of mediated calls still in flight in this process — their
    *  pending approvals are cancelled if the client disconnects. */
   pendingRequestIds?: Set<string>;
+  /** MCP hub — upstream servers from mcp.yaml, mediated per call. */
+  hub?: McpHub | null;
+  /** The connected agent's org.yaml server allow-list. */
+  hubScope?: AgentScope;
 }
 
 function bootServices(): Services {
@@ -141,7 +153,13 @@ function bootServices(): Services {
     orchestratorChat,
     controlChannel,
     pendingRequestIds: new Set<string>(),
+    hub: loadHub(paths, secretStore, warn),
   };
+}
+
+/** Diagnostics go to stderr: stdout is the agent's JSON-RPC channel. */
+function warn(message: string): void {
+  process.stderr.write(`foreman mcp-stdio: ${message}\n`);
 }
 
 function autoRegisterSource(
@@ -224,6 +242,7 @@ async function drainAndExit(
       new Promise((resolve) => setTimeout(resolve, SHUTDOWN_GRACE_MS).unref()),
     ]);
   } finally {
+    await services.hub?.close().catch(() => undefined);
     cleanup(services);
     process.exit(0);
   }
@@ -482,6 +501,7 @@ export async function handleMessage(
             },
           },
         },
+        ...(await hubToolsFor(services)),
       ],
     });
   }
@@ -951,6 +971,12 @@ export async function handleMessage(
       });
     }
 
+    const hubCall =
+      toolName && services.hub
+        ? await services.hub.resolveCall(toolName, params?.arguments, services.hubScope)
+        : null;
+    if (hubCall) return handleHubCall(services, sourceAgent, id, hubCall);
+
     const result = await trackRequest(services, (requestId) =>
       services.mediator.handleRequest({
         requestId,
@@ -975,6 +1001,84 @@ export async function handleMessage(
     return replyError(id, -32601, `Method not found: ${method ?? "(unknown)"}`);
   }
   return null;
+}
+
+/** Hub tools for `tools/list`. A failing upstream must never break the
+ *  listing of Foreman's own tools. */
+async function hubToolsFor(services: Services): Promise<AgentTool[]> {
+  if (!services.hub) return [];
+  try {
+    return await services.hub.listForAgent(services.hubScope);
+  } catch (err) {
+    warn(`MCP hub listing failed: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
+  }
+}
+
+/** A call to an upstream MCP server: mediate (policy / risk / approval /
+ *  audit) exactly like any other tool call, then execute through the hub. */
+async function handleHubCall(
+  services: Services,
+  sourceAgent: string,
+  id: string | number | undefined,
+  hubCall: HubCallResolution,
+): Promise<JSONRPCMessage | null> {
+  const hub = services.hub!;
+  if (hubCall.kind === "search") {
+    const matches = await hub.search(hubCall.query, hubCall.limit, services.hubScope);
+    return reply(id, {
+      content: [{ type: "text", text: JSON.stringify({ tools: matches }) }],
+    });
+  }
+  if (hubCall.kind === "unavailable") {
+    return reply(id, { content: [{ type: "text", text: hubCall.message }], isError: true });
+  }
+  const { tool, args } = hubCall;
+  const decision = await trackRequest(services, (requestId) =>
+    services.mediator.handleRequest({
+      requestId,
+      sourceAgent,
+      targetTool: tool.exposedName,
+      message: {
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { name: tool.exposedName, arguments: args },
+      } as JSONRPCMessage,
+      ...(tool.rule && tool.rule !== "deny"
+        ? { policyFallback: { effect: tool.rule, source: `mcp.yaml:${tool.server}` } }
+        : {}),
+    }),
+  );
+  if (decision.decision !== "allowed") {
+    return replyError(id, -32603, `Denied by ${decision.decidedBy}`);
+  }
+  try {
+    const { result, stats, durationMs } = await hub.call(tool, args);
+    services.audit.logEvent("mcp:call", {
+      requestId: decision.requestId,
+      sourceAgent,
+      server: tool.server,
+      tool: tool.name,
+      isError: result.isError === true,
+      durationMs,
+      ...stats,
+    });
+    return reply(id, result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    services.audit.logEvent("mcp:call", {
+      requestId: decision.requestId,
+      sourceAgent,
+      server: tool.server,
+      tool: tool.name,
+      isError: true,
+      error: message,
+    });
+    return reply(id, {
+      content: [{ type: "text", text: `Upstream MCP server '${tool.server}' failed: ${message}` }],
+      isError: true,
+    });
+  }
 }
 
 /** Run a mediated call under an explicit request id and remember it while

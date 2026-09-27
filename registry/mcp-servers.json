@@ -1,0 +1,402 @@
+{
+  "version": 1,
+  "servers": [
+    {
+      "id": "filesystem",
+      "name": "Filesystem",
+      "description": "Read, search and edit files inside the directories you allow.",
+      "category": "developer",
+      "publisher": "Model Context Protocol",
+      "official": true,
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+      "user_args": {
+        "description": "Directories the server may access (absolute paths).",
+        "example": ["/path/to/project"]
+      },
+      "tools": {
+        "allow": [
+          "read_file",
+          "read_text_file",
+          "read_media_file",
+          "read_multiple_files",
+          "list_directory",
+          "list_directory_with_sizes",
+          "search_files",
+          "directory_tree",
+          "get_file_info",
+          "list_allowed_directories"
+        ]
+      }
+    },
+    {
+      "id": "memory",
+      "name": "Memory (knowledge graph)",
+      "description": "Persistent local knowledge graph agents can share across sessions.",
+      "category": "utility",
+      "publisher": "Model Context Protocol",
+      "official": true,
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "tools": { "allow": ["read_graph", "search_nodes", "open_nodes"] }
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "description": "Issues, pull requests, code search and repository management (GitHub's hosted server).",
+      "category": "developer",
+      "publisher": "GitHub",
+      "official": true,
+      "homepage": "https://github.com/github/github-mcp-server",
+      "transport": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": { "Authorization": "Bearer ${secret:github-pat}" },
+      "secrets": [
+        {
+          "name": "github-pat",
+          "description": "GitHub personal access token (fine-grained, only the repos you need).",
+          "where_to_get": "https://github.com/settings/personal-access-tokens/new"
+        }
+      ],
+      "tools": { "allow": ["get_*", "list_*", "search_*"] },
+      "notes": "Write tools (create/update/merge/push/delete) ask by default."
+    },
+    {
+      "id": "playwright",
+      "name": "Playwright browser",
+      "description": "Drive a real browser: navigate, click, fill forms, take snapshots.",
+      "category": "browser",
+      "publisher": "Microsoft",
+      "official": true,
+      "homepage": "https://github.com/microsoft/playwright-mcp",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "tools": { "allow": ["browser_snapshot", "browser_take_screenshot", "browser_console_messages", "browser_network_requests", "browser_tabs"] },
+      "notes": "Navigation and form actions ask by default — a browser is an exfiltration channel."
+    },
+    {
+      "id": "chrome-devtools",
+      "name": "Chrome DevTools",
+      "description": "Inspect and debug a live Chrome: performance traces, network, console, DOM.",
+      "category": "browser",
+      "publisher": "Google Chrome",
+      "official": true,
+      "homepage": "https://github.com/ChromeDevTools/chrome-devtools-mcp",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@latest"],
+      "tools": { "allow": ["list_*", "get_*", "take_snapshot", "take_screenshot"] }
+    },
+    {
+      "id": "notion",
+      "name": "Notion",
+      "description": "Search, read and edit Notion pages and databases.",
+      "category": "productivity",
+      "publisher": "Notion",
+      "official": true,
+      "homepage": "https://github.com/makenotion/notion-mcp-server",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@notionhq/notion-mcp-server"],
+      "env": { "NOTION_TOKEN": "${secret:notion-integration-token}" },
+      "secrets": [
+        {
+          "name": "notion-integration-token",
+          "description": "Internal integration secret (share the pages you want with the integration).",
+          "where_to_get": "https://www.notion.so/profile/integrations"
+        }
+      ],
+      "tools": { "allow": ["*search*", "*retrieve*", "*get*", "*query*", "*list*"] }
+    },
+    {
+      "id": "sentry",
+      "name": "Sentry",
+      "description": "Errors, issues, releases and performance data from Sentry.",
+      "category": "developer",
+      "publisher": "Sentry",
+      "official": true,
+      "homepage": "https://github.com/getsentry/sentry-mcp",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@sentry/mcp-server@latest"],
+      "env": { "SENTRY_ACCESS_TOKEN": "${secret:sentry-access-token}" },
+      "secrets": [
+        {
+          "name": "sentry-access-token",
+          "description": "Sentry user auth token.",
+          "where_to_get": "https://sentry.io/settings/account/api/auth-tokens/"
+        }
+      ],
+      "tools": { "allow": ["find_*", "get_*", "search_*", "whoami"] }
+    },
+    {
+      "id": "stripe",
+      "name": "Stripe",
+      "description": "Customers, invoices, payments and subscriptions via the Stripe API.",
+      "category": "payments",
+      "publisher": "Stripe",
+      "official": true,
+      "homepage": "https://github.com/stripe/agent-toolkit",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@stripe/mcp", "--tools=all"],
+      "env": { "STRIPE_SECRET_KEY": "${secret:stripe-restricted-key}" },
+      "secrets": [
+        {
+          "name": "stripe-restricted-key",
+          "description": "A RESTRICTED key (rk_…) with only the permissions your agents need — never your full secret key.",
+          "where_to_get": "https://dashboard.stripe.com/apikeys"
+        }
+      ],
+      "tools": { "allow": ["list_*", "retrieve_*", "search_*"], "ask": ["*"] },
+      "notes": "Every call that creates, updates, refunds or cancels asks you first."
+    },
+    {
+      "id": "brave-search",
+      "name": "Brave Search",
+      "description": "Private web, news, image and local search.",
+      "category": "search",
+      "publisher": "Brave",
+      "official": true,
+      "homepage": "https://github.com/brave/brave-search-mcp-server",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@brave/brave-search-mcp-server"],
+      "env": { "BRAVE_API_KEY": "${secret:brave-api-key}" },
+      "secrets": [
+        {
+          "name": "brave-api-key",
+          "description": "Brave Search API key.",
+          "where_to_get": "https://api-dashboard.search.brave.com/app/keys"
+        }
+      ],
+      "tools": { "allow": ["*"] }
+    },
+    {
+      "id": "exa",
+      "name": "Exa search",
+      "description": "Neural web search and page contents (hosted server, works anonymously with rate limits).",
+      "category": "search",
+      "publisher": "Exa",
+      "official": true,
+      "homepage": "https://github.com/exa-labs/exa-mcp-server",
+      "transport": "http",
+      "url": "https://mcp.exa.ai/mcp",
+      "tools": { "allow": ["*search*", "*fetch*", "*crawl*"] },
+      "notes": "Add `Authorization: Bearer ${secret:exa-api-key}` under headers in mcp.yaml for higher limits."
+    },
+    {
+      "id": "firecrawl",
+      "name": "Firecrawl",
+      "description": "Scrape, crawl and extract structured data from websites.",
+      "category": "search",
+      "publisher": "Firecrawl",
+      "official": true,
+      "homepage": "https://github.com/firecrawl/firecrawl-mcp-server",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "firecrawl-mcp"],
+      "env": { "FIRECRAWL_API_KEY": "${secret:firecrawl-api-key}" },
+      "secrets": [
+        {
+          "name": "firecrawl-api-key",
+          "description": "Firecrawl API key.",
+          "where_to_get": "https://www.firecrawl.dev/app/api-keys"
+        }
+      ],
+      "tools": { "allow": ["firecrawl_scrape", "firecrawl_search", "firecrawl_map", "firecrawl_check_*"] }
+    },
+    {
+      "id": "context7",
+      "name": "Context7 docs",
+      "description": "Up-to-date library documentation and code examples for coding agents.",
+      "category": "developer",
+      "publisher": "Upstash",
+      "official": true,
+      "homepage": "https://github.com/upstash/context7",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "tools": { "allow": ["*"] }
+    },
+    {
+      "id": "figma",
+      "name": "Figma (Framelink)",
+      "description": "Give coding agents Figma layout and styling data.",
+      "category": "developer",
+      "publisher": "Framelink (community)",
+      "official": false,
+      "homepage": "https://github.com/GLips/Figma-Context-MCP",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "figma-developer-mcp", "--stdio"],
+      "env": { "FIGMA_API_KEY": "${secret:figma-api-key}" },
+      "secrets": [
+        {
+          "name": "figma-api-key",
+          "description": "Figma personal access token (read-only file scopes are enough).",
+          "where_to_get": "https://help.figma.com/hc/en-us/articles/8085703771159-Manage-personal-access-tokens"
+        }
+      ],
+      "tools": { "allow": ["get_*"] }
+    },
+    {
+      "id": "resend",
+      "name": "Resend email",
+      "description": "Send transactional email through Resend.",
+      "category": "communication",
+      "publisher": "Resend",
+      "official": true,
+      "homepage": "https://github.com/resend/resend-mcp",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "resend-mcp"],
+      "env": { "RESEND_API_KEY": "${secret:resend-api-key}" },
+      "secrets": [
+        {
+          "name": "resend-api-key",
+          "description": "Resend API key (sending access, one verified domain).",
+          "where_to_get": "https://resend.com/api-keys"
+        }
+      ],
+      "tools": { "allow": ["list_*", "get_*"] },
+      "notes": "Sending email always asks — outbound email is the classic exfiltration path."
+    },
+    {
+      "id": "discord",
+      "name": "Discord",
+      "description": "Read and post in Discord servers through a bot you own (moderation, community updates).",
+      "category": "communication",
+      "publisher": "barryyip0625 (community)",
+      "official": false,
+      "homepage": "https://github.com/barryyip0625/mcp-discord",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "mcp-discord"],
+      "env": { "DISCORD_TOKEN": "${secret:discord-bot-token}" },
+      "secrets": [
+        {
+          "name": "discord-bot-token",
+          "description": "Bot token of a Discord application you created.",
+          "where_to_get": "https://discord.com/developers/applications"
+        }
+      ],
+      "tools": { "allow": ["*read*", "*get*", "*list*"], "deny": ["*delete_channel*"] },
+      "notes": "Posting, deleting and moderation actions ask by default."
+    },
+    {
+      "id": "x-twitter",
+      "name": "X (Twitter)",
+      "description": "Post tweets and search X with your own developer app keys.",
+      "category": "media",
+      "publisher": "EnesCinr (community)",
+      "official": false,
+      "homepage": "https://github.com/EnesCinr/twitter-mcp",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@enescinar/twitter-mcp"],
+      "env": {
+        "API_KEY": "${secret:x-api-key}",
+        "API_SECRET_KEY": "${secret:x-api-secret}",
+        "ACCESS_TOKEN": "${secret:x-access-token}",
+        "ACCESS_TOKEN_SECRET": "${secret:x-access-token-secret}"
+      },
+      "secrets": [
+        { "name": "x-api-key", "description": "X app API key.", "where_to_get": "https://developer.x.com/en/portal/dashboard" },
+        { "name": "x-api-secret", "description": "X app API key secret." },
+        { "name": "x-access-token", "description": "X user access token." },
+        { "name": "x-access-token-secret", "description": "X user access token secret." }
+      ],
+      "tools": { "allow": ["search_tweets"] },
+      "notes": "Posting asks by default — public posts cannot be taken back."
+    },
+    {
+      "id": "youtube",
+      "name": "YouTube transcripts",
+      "description": "Fetch YouTube video transcripts for summarising and research.",
+      "category": "media",
+      "publisher": "anaisbetts (community)",
+      "official": false,
+      "homepage": "https://github.com/anaisbetts/mcp-youtube",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anaisbetts/mcp-youtube"],
+      "tools": { "allow": ["*"] },
+      "notes": "Needs yt-dlp on PATH."
+    },
+    {
+      "id": "app-store-connect",
+      "name": "App Store Connect",
+      "description": "Apps, builds, TestFlight, reviews and sales reports on Apple's App Store Connect.",
+      "category": "commerce",
+      "publisher": "akoskomuves (community)",
+      "official": false,
+      "homepage": "https://www.npmjs.com/package/@akoskomuves/appstoreconnect-mcp",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@akoskomuves/appstoreconnect-mcp"],
+      "env": {
+        "ASC_ISSUER_ID": "${secret:asc-issuer-id}",
+        "ASC_KEY_ID": "${secret:asc-key-id}",
+        "ASC_PRIVATE_KEY_PATH": "${secret:asc-private-key-path}",
+        "ASC_MCP_TELEMETRY": "false",
+        "DO_NOT_TRACK": "1"
+      },
+      "secrets": [
+        { "name": "asc-issuer-id", "description": "App Store Connect API issuer id.", "where_to_get": "https://appstoreconnect.apple.com/access/integrations/api" },
+        { "name": "asc-key-id", "description": "App Store Connect API key id." },
+        { "name": "asc-private-key-path", "description": "Absolute path to the downloaded .p8 key file." }
+      ],
+      "tools": { "allow": ["list_*", "get_*"] },
+      "notes": "Submitting builds or editing metadata asks by default."
+    },
+    {
+      "id": "app-stores",
+      "name": "App Store + Google Play",
+      "description": "Release status, reviews and metadata across Apple App Store and Google Play in one server.",
+      "category": "commerce",
+      "publisher": "appstore-play-mcp (community)",
+      "official": false,
+      "homepage": "https://www.npmjs.com/package/appstore-play-mcp",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "appstore-play-mcp"],
+      "env": {
+        "ASC_KEY_ID": "${secret:asc-key-id}",
+        "ASC_ISSUER_ID": "${secret:asc-issuer-id}",
+        "ASC_KEY_PATH": "${secret:asc-private-key-path}",
+        "PLAY_SERVICE_ACCOUNT_PATH": "${secret:play-service-account-path}"
+      },
+      "secrets": [
+        { "name": "asc-key-id", "description": "App Store Connect API key id.", "where_to_get": "https://appstoreconnect.apple.com/access/integrations/api" },
+        { "name": "asc-issuer-id", "description": "App Store Connect API issuer id." },
+        { "name": "asc-private-key-path", "description": "Absolute path to the .p8 key file." },
+        { "name": "play-service-account-path", "description": "Absolute path to a Google Play service-account JSON.", "where_to_get": "https://play.google.com/console/developers" }
+      ],
+      "tools": { "allow": ["list_*", "get_*"] },
+      "notes": "Community package — review it before trusting it with release rights."
+    }
+  ]
+}
