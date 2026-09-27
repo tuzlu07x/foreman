@@ -4,6 +4,9 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+/** Windows' URL protocol handler, invoked without cmd.exe. */
+export const WIN32_URL_HANDLER = "url.dll,FileProtocolHandler";
+
 // =============================================================================
 // Cross-platform browser opener (#408 / #413 — Phase 5)
 // =============================================================================
@@ -16,7 +19,7 @@ const execFileAsync = promisify(execFile);
 // Platform dispatch:
 //   - darwin → `open <url>`
 //   - linux  → `xdg-open <url>` with `gnome-open` fallback
-//   - win32  → `start "" <url>` (cmd.exe)
+//   - win32  → `rundll32 url.dll,FileProtocolHandler <url>` (no shell)
 //   - else   → return ok=false (we don't pretend to know the platform)
 
 export interface BrowserOpenResult {
@@ -104,11 +107,10 @@ export async function openInBrowser(
   }
   if (plat === "win32") {
     try {
-      // `start` is a cmd.exe builtin — we wrap it via `cmd /c`.
-      // The empty "" is the title arg (start treats first quoted arg as
-      // the window title); without it `start "https://..."` treats the
-      // URL as the title and never opens anything.
-      await exec("cmd", ["/c", "start", "", url]);
+      // Never `cmd /c start`: cmd.exe re-parses the line, so a URL with
+      // `&` or `|` (query strings do) would be cut short or run a command.
+      // rundll32 takes the URL as one argv entry, with no shell involved.
+      await exec("rundll32", [WIN32_URL_HANDLER, url]);
       return { ok: true, handler: "win32" };
     } catch (err) {
       return { ok: false, reason: errMessage(err), handler: "win32" };
