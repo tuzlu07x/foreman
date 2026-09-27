@@ -65,6 +65,49 @@ describe('foreman mcp-stdio lifecycle', () => {
     await new Promise((r) => child.on('exit', r))
   }, 20_000)
 
+  it('drops malformed JSON-RPC input without replying, echoing it, or dying', async () => {
+    const shaped = `ghp_${'c'.repeat(36)}`
+    const child = spawn('node', [FM_BIN, 'mcp-stdio', '--source', 'tester'], { env })
+    let stdout = ''
+    let stderr = ''
+    child.stderr.on('data', (d: Buffer) => (stderr += d.toString()))
+    const gotList = new Promise<void>((resolveList, reject) => {
+      const timer = setTimeout(() => reject(new Error(`no tools/list reply; stdout=${stdout}`)), 8_000)
+      child.stdout.on('data', (d: Buffer) => {
+        stdout += d.toString()
+        if (stdout.includes('"id":10')) {
+          clearTimeout(timer)
+          resolveList()
+        }
+      })
+    })
+    child.stdin.write(frame(INIT))
+    child.stdin.write(
+      [
+        `this is not json token=${shaped}`,
+        '{"jsonrpc":"2.0","id":7,"method":',
+        '{"hello":"world"}',
+        '[{"jsonrpc":"2.0","id":8,"method":"tools/list"}]',
+        '{"jsonrpc":"1.0","id":9,"method":"tools/list"}',
+        '',
+      ].join('\n'),
+    )
+    child.stdin.write(frame({ jsonrpc: '2.0', id: 10, method: 'tools/list' }))
+    await gotList
+    child.stdin.end()
+    const code = await new Promise<number | null>((r) => child.on('exit', r))
+    expect(code).toBe(0)
+
+    const replies = stdout
+      .split('\n')
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as { jsonrpc: string; id: number })
+    expect(replies.every((r) => r.jsonrpc === '2.0')).toBe(true)
+    expect(replies.map((r) => r.id).sort((a, b) => a - b)).toEqual([1, 10])
+    expect(stdout).not.toContain(shaped)
+    expect(stderr).not.toContain(shaped)
+  }, 20_000)
+
   it('audits a pending call when the client disconnects, then exits cleanly', async () => {
     const child = spawn('node', [FM_BIN, 'mcp-stdio', '--source', 'tester'], { env })
     child.stdin.write(frame(INIT) + frame(SECRET_READ))
