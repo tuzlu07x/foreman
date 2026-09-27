@@ -7,6 +7,23 @@ All notable changes to Foreman are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **OAuth for hosted MCP servers** (#617,
+  [docs/mcp-hub.md](docs/mcp-hub.md#oauth-servers)).
+  - Mark a remote server `auth: oauth` in `mcp.yaml` (or use
+    `foreman mcp add <name> --url <url> --oauth`), then run
+    `foreman mcp login <name>`. Foreman discovers the authorization server,
+    registers itself as a client, and signs you in in the browser (PKCE
+    S256, a one-shot `127.0.0.1` redirect listener with a `state` check).
+    `foreman mcp logout <name>` deletes the tokens.
+  - The hub attaches the bearer token upstream. It refreshes the token
+    before it expires and once on a 401, and it saves rotated refresh
+    tokens in one write, even when several agents share the session.
+  - `foreman mcp list` and `foreman doctor` show whether each server is
+    logged in, when its token expires, or that it needs login.
+  - Tokens live only in the encrypted secret store. They never appear in
+    `mcp.yaml`, CLI output, errors or the audit log. Agents can't read
+    them: `secrets/get` refuses `mcp-oauth-*` names whatever the policy
+    says.
 - **End-to-end QA suite** (#624, [docs/qa.md](docs/qa.md)).
   - `npm run qa` walks eight user journeys, the Claude Code
     PreToolUse hook among them, with real processes in
