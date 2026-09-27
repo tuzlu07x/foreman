@@ -46,6 +46,10 @@ export interface WizardSessionSnapshot {
   agentsSelected: string[];
   agentConfigs: Record<string, SessionAgentConfig>;
   servicesSelected: string[];
+  /** Live registry ids when the snapshot was saved. A resume compares it
+   *  with the registry now; any difference re-opens the agents confirm
+   *  step (planResume). Absent in snapshots written before it existed. */
+  registeredAtSnapshot?: string[];
 }
 
 export interface SetupState {
@@ -220,13 +224,18 @@ export function sanitizeSession(
     if (entry) dropUnknownRoute(cfg, entry);
     agentConfigs[id] = cfg;
   }
-  return {
+  const out: WizardSessionSnapshot = {
     providersSelected: r.providersSelected.filter(knownProvider),
     providersSignedIn: signedIn,
     agentsSelected: r.agentsSelected.filter(knownAgent),
     agentConfigs,
     servicesSelected: r.servicesSelected.filter(knownService),
   };
+  // Kept verbatim: it describes the registry, not the catalog.
+  if (isStringArray(r.registeredAtSnapshot)) {
+    out.registeredAtSnapshot = [...r.registeredAtSnapshot];
+  }
+  return out;
 }
 
 /** Only the four per-agent fields the wizard owns — anything else found in

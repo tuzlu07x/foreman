@@ -670,6 +670,51 @@ describe('resume keeps session-only choices', () => {
   }, 30_000)
 })
 
+describe('resume never uninstalls on its own', () => {
+  it('re-opens agents confirm for an agent registered after the snapshot, and removes nothing', async () => {
+    const first = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
+    await first.until('Agents ▸ pick which to install')
+    await first.press(ENTER, 'Hermes (1/4)')
+    await first.press(ENTER, 'how to reach OpenAI')
+    await first.press(ENTER, 'pick a OpenAI model')
+    await first.press(ENTER, 'Hermes — responsibility note')
+    await first.press(ENTER, 'Agents ▸ confirm')
+    await first.press('y', 'Services ▸ pick which to configure')
+    await first.press(ENTER, 'Services ▸ summary')
+    await first.press('y', 'Required setup')
+    unmount?.()
+    unmount = null
+    sqlite?.close()
+    sqlite = null
+    const saved = loadSetupState()
+
+    // Codex gets registered after the snapshot (another terminal, a
+    // half-finished install). The old resume put it in toRemove.
+    const before = vi.mocked(runInstallStep).mock.calls.length
+    const resumed = await mount('required-setup', {
+      secrets: { 'openai-key': 'sk-fake-openai-000' },
+      registered: ['codex'],
+      initialState: saved,
+    })
+    await resumed.until('Agents ▸ confirm')
+    expect(resumed.frame()).toContain('▸ Will install: hermes')
+    expect(resumed.frame()).not.toContain('Will remove')
+    await resumed.press('y', 'Services ▸ pick which to configure')
+    await resumed.press(ENTER, 'Services ▸ summary')
+    await resumed.press('y', 'Required setup')
+    await resumed.press(DOWN)
+    await resumed.press(DOWN)
+    await resumed.press('s')
+    await resumed.press('c', 'Install + configure')
+    await resumed.until('✗ Hermes — install failed')
+    const call = vi.mocked(runInstallStep).mock.calls.at(-1)
+    expect(vi.mocked(runInstallStep).mock.calls.length - before).toBe(1)
+    expect(call?.[0]).toEqual(['hermes'])
+    expect(call?.[1]).toEqual([])
+    await resumed.press('s', 'Setup complete')
+  }, 40_000)
+})
+
 describe('install step', () => {
   it('shows the failure prompt, the manual-fix overlay, and resolves skip', async () => {
     const w = await mount('install')
@@ -750,6 +795,8 @@ describe('done step identity summary', () => {
           agentsSelected: ['generic-mcp'],
           agentConfigs: {},
           servicesSelected: [],
+          // Registry unchanged since the snapshot → no agents review.
+          registeredAtSnapshot: [],
         },
       },
     })

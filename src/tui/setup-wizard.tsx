@@ -1,5 +1,5 @@
 import { useApp, useInput } from "ink";
-import { type JSX, useMemo, useRef } from "react";
+import { type JSX, useMemo, useRef, useState } from "react";
 import {
   detectMachineCapability,
   type MachineCapability,
@@ -63,6 +63,7 @@ import {
   renderServicesStep,
 } from "./setup-wizard/services.js";
 import { handleCtrlC, isModifiedLetter } from "./setup-wizard/quit.js";
+import { planResume } from "./setup-wizard/resume.js";
 import { snapshotSession, useWizardState } from "./setup-wizard/state.js";
 import type {
   FailureResolution,
@@ -108,7 +109,29 @@ export function SetupWizard({
     () => services.registry.list().map((a) => a.id),
     [services.registry],
   );
-  const { state, set } = useWizardState(initialState, initialRegistered);
+  // Memoize the catalog so MultiSelect doesn't re-mount and reset toggles.
+  const providerCatalog = useMemo(
+    () => loadActiveProviders().doc.providers,
+    [],
+  );
+  // Memoize the catalog so MultiSelect doesn't re-mount on every render —
+  // re-mount would reset the user's toggles back to defaultValue (#152).
+  const agentCatalog = useMemo(() => loadActiveRegistry().doc.agents, []);
+  const serviceCatalog = useMemo(() => loadActiveServices().doc.services, []);
+  // A resumed session is reconciled with the live registry and catalog
+  // once, before anything can act on it (setup-wizard/resume.ts).
+  const [resumePlan] = useState(() =>
+    planResume(initialState, initialRegistered, {
+      agents: agentCatalog,
+      providerIds: providerCatalog.map((p) => p.id),
+      serviceIds: serviceCatalog.map((s) => s.id),
+    }),
+  );
+  const { state, set } = useWizardState(
+    resumePlan.setup,
+    initialRegistered,
+    resumePlan.agentsPhase ?? undefined,
+  );
   const welcomeLayout = useLayout();
   const currentStep: Step = useMemo(() => {
     for (const s of STEPS) {
@@ -120,7 +143,10 @@ export function SetupWizard({
   const advance = (step: Step): void => {
     // Save the session-only choices with every completed step so a resumed
     // run doesn't lose them (setup-state.ts WizardSessionSnapshot).
-    const session = snapshotSession(state);
+    const session = snapshotSession(
+      state,
+      services.registry.list().map((a) => a.id),
+    );
     set.setSetup((prev) => {
       const next = { ...markCompleted(prev, step), session };
       saveSetupState(next);
@@ -135,16 +161,6 @@ export function SetupWizard({
       return next;
     });
   };
-
-  // Memoize the catalog so MultiSelect doesn't re-mount and reset toggles.
-  const providerCatalog = useMemo(
-    () => loadActiveProviders().doc.providers,
-    [],
-  );
-  // Memoize the catalog so MultiSelect doesn't re-mount on every render —
-  // re-mount would reset the user's toggles back to defaultValue (#152).
-  const agentCatalog = useMemo(() => loadActiveRegistry().doc.agents, []);
-  const serviceCatalog = useMemo(() => loadActiveServices().doc.services, []);
 
   const machineCap = useMemo<MachineCapability>(
     () => detectMachineCapability(),

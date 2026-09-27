@@ -157,7 +157,7 @@ describe('snapshotSession whitelist', () => {
         hermes: { llmProvider: 'openai', apiKey: 'fake-should-not-persist' } as unknown as WizardSessionSnapshot['agentConfigs'][string],
       },
     }
-    expect(snapshotSession(withExtra).agentConfigs).toEqual({ hermes: { llmProvider: 'openai' } })
+    expect(snapshotSession(withExtra, []).agentConfigs).toEqual({ hermes: { llmProvider: 'openai' } })
   })
 })
 
@@ -173,6 +173,7 @@ describe('wizard state ↔ snapshot', () => {
 
   it('snapshots exactly what it seeds', () => {
     const s = createInitialWizardState({ ...freshState(), session }, [])
-    expect(snapshotSession(s)).toEqual(session)
+    // Plus the live registry the choices were made against (planResume).
+    expect(snapshotSession(s, ['codex'])).toEqual({ ...session, registeredAtSnapshot: ['codex'] })
   })
 })

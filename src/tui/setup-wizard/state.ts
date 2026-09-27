@@ -154,9 +154,11 @@ export function createInitialWizardState(
   // diff logic: still-checked = no-op or re-verify; newly-checked = install;
   // previously-checked-now-unchecked = uninstall + remove.
   initialRegistered: string[],
+  // Set by planResume when a resume re-opened the agents step.
+  initialAgentsPhase: AgentsPhase = "picker",
 ): WizardState {
   // Choices saved by a previous run of this setup (resume); see
-  // snapshotSession.
+  // snapshotSession. The root reconciles them first (planResume).
   const session = initialState.session;
   return {
     setup: initialState,
@@ -174,7 +176,7 @@ export function createInitialWizardState(
     agentsSelected:
       session?.agentsSelected ??
       (initialRegistered.length > 0 ? initialRegistered : DEFAULT_AGENTS),
-    agentsPhase: "picker",
+    agentsPhase: initialAgentsPhase,
     agentsPickerChecked: null,
     agentConfigPrompts: [],
     agentConfigIdx: 0,
@@ -228,8 +230,12 @@ export function createInitialWizardState(
   };
 }
 
-/** The session-only choices worth keeping across a resume. */
-export function snapshotSession(state: WizardState): WizardSessionSnapshot {
+/** The session-only choices worth keeping across a resume, plus the live
+ *  registry ids they were made against (planResume compares them). */
+export function snapshotSession(
+  state: WizardState,
+  registered: readonly string[],
+): WizardSessionSnapshot {
   const agentConfigs: WizardSessionSnapshot["agentConfigs"] = {};
   for (const [id, cfg] of Object.entries(state.agentConfigs)) {
     // Same four-field whitelist the loader applies (sanitizeSession).
@@ -241,6 +247,7 @@ export function snapshotSession(state: WizardState): WizardSessionSnapshot {
     agentsSelected: [...state.agentsSelected],
     agentConfigs,
     servicesSelected: [...state.servicesSelected],
+    registeredAtSnapshot: [...registered],
   };
 }
 
@@ -318,11 +325,17 @@ export interface WizardStateHandle {
 export function useWizardState(
   initialState: SetupState,
   initialRegistered: string[],
+  initialAgentsPhase?: AgentsPhase,
 ): WizardStateHandle {
   const [state, dispatch] = useReducer(
     wizardReducer,
-    { initialState, initialRegistered },
-    (args) => createInitialWizardState(args.initialState, args.initialRegistered),
+    { initialState, initialRegistered, initialAgentsPhase },
+    (args) =>
+      createInitialWizardState(
+        args.initialState,
+        args.initialRegistered,
+        args.initialAgentsPhase,
+      ),
   );
   // dispatch is stable for the component's lifetime, so the setters are
   // built once and stay stable too — the same guarantee the individual
