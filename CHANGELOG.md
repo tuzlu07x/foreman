@@ -7,6 +7,27 @@ All notable changes to Foreman are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **OAuth for hosted MCP servers** (#617,
+  [docs/mcp-hub.md](docs/mcp-hub.md#oauth-servers)).
+  - Mark a remote server `auth: oauth` in `mcp.yaml` (or use
+    `foreman mcp add <name> --url <url> --oauth`), then run
+    `foreman mcp login <name>`. Foreman discovers the authorization server,
+    registers itself as a client, and signs you in in the browser (PKCE
+    S256, a one-shot `127.0.0.1` redirect listener with a `state` check).
+    `foreman mcp logout <name>` deletes the tokens and revokes them at the
+    provider when the server supports it.
+  - The hub attaches the bearer token upstream. It refreshes the token
+    before it expires and once on a 401, and it saves rotated refresh
+    tokens in one write, even when several agents share the session.
+    Refreshes, login, logout and `mcp remove` share one lock, so a logout
+    is never undone by a refresh already in progress.
+  - `foreman mcp list` and `foreman doctor` show whether each server is
+    logged in, when its token expires, or that it needs login.
+  - Tokens live only in the encrypted secret store. They never appear in
+    `mcp.yaml`, CLI output, errors, tool results or the audit log.
+    Agents can't read them: `secrets/get` refuses `mcp-oauth-*` names
+    whatever the policy says.
+
 - **End-to-end QA suite** (#624, [docs/qa.md](docs/qa.md)).
   - `npm run qa` walks eight user journeys, the Claude Code
     PreToolUse hook among them, with real processes in
@@ -103,6 +124,11 @@ All notable changes to Foreman are documented here. The format follows
   - Node 22/24 test matrix.
 
 ### Fixed
+- **Opening a browser on Windows** no longer goes through `cmd /c start`.
+  A URL with `&` or `|` in it could be cut short there or run a command.
+  Foreman now uses `rundll32 url.dll,FileProtocolHandler` with no shell.
+  This covers the setup wizard, `foreman llm login` and
+  `foreman mcp login`.
 - **Claude Code hook:** `mcp__foreman__*` tools skip the hook only when they are tools Foreman actually serves, and no project `.mcp.json` or local-scope config swaps in another `foreman` server. Anything else is gated (#619).
 - **MCP hub:** a call withheld as a possible rug pull is logged as denied (`mcp:withheld:<server>`), not as the policy's allow (#635). `foreman mcp tools <server>` shows the rug pull even without `--refresh` (#634).
 - **Webhook:**

@@ -4,7 +4,10 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { checkMcpHub, checkNotifyChannels, checkOrg } from '../../../src/core/doctor.js'
 import { findOrgTemplate } from '../../../src/core/org/templates.js'
-import { closeDb } from '../../../src/db/client.js'
+import { saveMcpOAuthRecord } from '../../../src/core/mcp-hub/oauth-store.js'
+import { SecretStore } from '../../../src/core/secret-store.js'
+import { closeDb, getDb } from '../../../src/db/client.js'
+import { loadOrCreateSecretsMasterKey } from '../../../src/identity/master-key.js'
 
 describe('doctor: mcp_hub check', () => {
   let home: string
@@ -38,6 +41,33 @@ describe('doctor: mcp_hub check', () => {
     const result = checkMcpHub()
     expect(result.status).toBe('warn')
     expect(result.message).toContain('gh: github-pat')
+  })
+
+  it('reports OAuth servers that need login, and stored sessions without their tokens', () => {
+    const url = 'https://mcp.example.com/mcp'
+    writeFileSync(join(home, 'mcp.yaml'), `servers:\n  hosted:\n    url: ${url}\n    auth: oauth\n`)
+    const before = checkMcpHub()
+    expect(before.status).toBe('warn')
+    expect(before.message).toContain('hosted: needs login')
+    expect(before.remediation).toBe('foreman mcp login hosted')
+
+    const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
+    saveMcpOAuthRecord(store, {
+      version: 1,
+      server: 'hosted',
+      server_url: url,
+      authorization_server_url: 'https://auth.example.com/',
+      metadata: {},
+      client: { client_id: 'c1' },
+      redirect_uri: 'http://127.0.0.1:1234/callback',
+      tokens: { access_token: 'at-doctor-secret', token_type: 'Bearer', refresh_token: 'rt-doctor-secret' },
+      expires_at: Date.now() + 3_600_000,
+      obtained_at: Date.now(),
+    })
+    const after = checkMcpHub()
+    expect(after.status).toBe('ok')
+    expect(after.message).toContain('hosted: logged in · expires in')
+    expect(JSON.stringify(after)).not.toMatch(/doctor-secret/)
   })
 })
 

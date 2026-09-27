@@ -17,6 +17,20 @@ export const SERVER_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
 export const TOOL_SEPARATOR = "__";
 
+/** Secret-store names holding hub-managed OAuth sessions. Reserved: mcp.yaml
+ *  may not reference them and agents may never read them. */
+export const MCP_OAUTH_SECRET_PREFIX = "mcp-oauth-";
+
+export function mcpOAuthSecretName(server: string): string {
+  return `${MCP_OAUTH_SECRET_PREFIX}${server}`;
+}
+
+export function isMcpOAuthSecretName(name: string): boolean {
+  return name.startsWith(MCP_OAUTH_SECRET_PREFIX);
+}
+
+const SECRET_REF_RE = /\$\{secret:([A-Za-z0-9][A-Za-z0-9._-]{0,127})\}/g;
+
 const GlobListSchema = z.array(z.string().min(1).max(200)).max(200);
 
 const ToolRulesSchema = z
@@ -45,6 +59,9 @@ const ServerConfigSchema = z
     tools: ToolRulesSchema.default({}),
     /** Per-call timeout for this upstream. */
     timeout_seconds: z.number().int().positive().max(3600).default(120),
+    /** `oauth`: the hub runs the MCP authorization flow (`foreman mcp
+     *  login <name>`) and attaches the bearer token itself. */
+    auth: z.enum(["oauth"]).optional(),
   })
   .strict()
   .refine((s) => Boolean(s.command) !== Boolean(s.url), {
@@ -52,6 +69,16 @@ const ServerConfigSchema = z
   })
   .refine((s) => !s.url || /^https:\/\//.test(s.url) || isLoopbackUrl(s.url), {
     message: "remote servers must use https:// (plain http is only allowed for localhost)",
+  })
+  .refine((s) => s.auth !== "oauth" || (Boolean(s.url) && !s.url?.includes("${secret:")), {
+    message: "`auth: oauth` needs a plain `url` (streamable HTTP, no ${secret:…} in it)",
+  })
+  .refine(
+    (s) => s.auth !== "oauth" || !Object.keys(s.headers).some((h) => h.toLowerCase() === "authorization"),
+    { message: "`auth: oauth` sets the Authorization header itself — remove it from `headers`" },
+  )
+  .refine((s) => !rawSecretRefs(s).some(isMcpOAuthSecretName), {
+    message: `\${secret:${MCP_OAUTH_SECRET_PREFIX}…} is reserved for hub OAuth sessions and cannot be referenced`,
   });
 
 const LimitsSchema = z
@@ -147,8 +174,6 @@ export function enabledServers(config: HubConfig): Array<[string, ServerConfig]>
 // Secret references
 // -----------------------------------------------------------------------------
 
-const SECRET_REF_RE = /\$\{secret:([A-Za-z0-9][A-Za-z0-9._-]{0,127})\}/g;
-
 export class MissingSecretError extends Error {
   constructor(
     public readonly server: string,
@@ -163,6 +188,15 @@ export class MissingSecretError extends Error {
 
 /** Every `${secret:<name>}` referenced by a server's env / headers / args. */
 export function referencedSecrets(server: ServerConfig): string[] {
+  return rawSecretRefs(server);
+}
+
+function rawSecretRefs(server: {
+  env: Record<string, string>;
+  headers: Record<string, string>;
+  args: string[];
+  url?: string | undefined;
+}): string[] {
   const names = new Set<string>();
   const scan = (value: string): void => {
     for (const m of value.matchAll(SECRET_REF_RE)) names.add(m[1]!);

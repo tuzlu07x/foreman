@@ -1,8 +1,10 @@
 import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { allowedMcpServers, loadOrg } from "../org/org.js";
-import type { SecretStore } from "../secret-store.js";
-import { enabledServers, loadHubConfig } from "./config.js";
-import { McpHub, type AgentScope } from "./hub.js";
+import { enabledServers, loadHubConfig, mcpOAuthSecretName } from "./config.js";
+import { McpHub, type AgentScope, type HubOAuthSession } from "./hub.js";
+import { McpOAuthSession } from "./oauth-session.js";
+import type { McpOAuthSecretStore } from "./oauth-store.js";
 import { ToolPinStore } from "./pins.js";
 
 // Wiring helpers shared by `foreman mcp-stdio` and the `foreman mcp` CLI.
@@ -17,7 +19,7 @@ export interface HubPaths {
  *  taking Foreman's own tools down with it. */
 export function loadHub(
   paths: HubPaths,
-  secretStore: Pick<SecretStore, "exists" | "get">,
+  secretStore: McpOAuthSecretStore,
   onError: (message: string) => void = () => undefined,
 ): McpHub | null {
   if (!existsSync(paths.mcpConfigPath)) return null;
@@ -33,7 +35,23 @@ export function loadHub(
     config,
     resolveSecret: (name) => (secretStore.exists(name) ? secretStore.get(name) : null),
     pins: new ToolPinStore(config.security.pin_tool_definitions ? paths.mcpPinsPath : null),
+    oauth: hubOAuthSessions(paths, secretStore),
   });
+}
+
+/** The lock every writer of a server's OAuth session takes (hub refresh,
+ *  `foreman mcp login / logout / remove`): a file next to the pins. */
+export function mcpOAuthLockPath(paths: Pick<HubPaths, "mcpPinsPath">, server: string): string {
+  return join(dirname(paths.mcpPinsPath), `${mcpOAuthSecretName(server)}.lock`);
+}
+
+/** OAuth sessions for `auth: oauth` servers, backed by the encrypted store. */
+export function hubOAuthSessions(
+  paths: Pick<HubPaths, "mcpPinsPath">,
+  store: McpOAuthSecretStore,
+): (server: string, url: string) => HubOAuthSession {
+  return (server, url) =>
+    new McpOAuthSession({ server, serverUrl: url, store, lockPath: mcpOAuthLockPath(paths, server) });
 }
 
 /** Which hub servers `agentId` may use according to org.yaml. An org.yaml

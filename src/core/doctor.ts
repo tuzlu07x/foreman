@@ -22,6 +22,7 @@ import { buildEnabledChannels } from "./notification/channel-factory.js";
 import { channelConfig, loadNotifyConfig } from "./notification/notify-config.js";
 import { enabledServers, loadHubConfig } from "./mcp-hub/config.js";
 import { missingSecrets } from "./mcp-hub/manage.js";
+import { describeMcpOAuthStatus, mcpOAuthStatus } from "./mcp-hub/oauth-store.js";
 import { loadOrg, OrgValidationError } from "./org/org.js";
 import { findDuplicateSlots } from "./secret-slot-migration.js";
 import { SecretStore } from "./secret-store.js";
@@ -1151,9 +1152,10 @@ export function checkNotifyChannels(): CheckResult {
   return { name: "notify_channels", status: "ok", message: parts.join(" · ") };
 }
 
-// MCP hub — mcp.yaml parses, and every enabled server has its secrets.
-// Connectivity is checked on demand by `foreman mcp tools` (it spawns
-// servers, which doctor must not do).
+// MCP hub — mcp.yaml parses, every enabled server has its secrets, and
+// every `auth: oauth` server has a stored session (read from the store only;
+// no token refresh). Connectivity is checked on demand by `foreman mcp
+// tools` (it spawns servers, which doctor must not do).
 export function checkMcpHub(): CheckResult {
   const paths = getForemanPaths();
   if (!existsSync(paths.mcpConfigPath)) {
@@ -1176,27 +1178,46 @@ export function checkMcpHub(): CheckResult {
   }
   const enabled = enabledServers(config);
   let exists: (name: string) => boolean = () => true;
+  let store: SecretStore | null = null;
   try {
-    const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey());
-    exists = (name) => store.exists(name);
+    const opened = new SecretStore(getDb(), loadOrCreateSecretsMasterKey());
+    store = opened;
+    exists = (name) => opened.exists(name);
   } catch {
     // secret store unavailable — the database check reports it
   }
   const missing = enabled.flatMap(([name]) =>
     missingSecrets(config, name, exists).map((s) => `${name}: ${s}`),
   );
+  const oauthNotes: string[] = [];
+  const needsLogin: string[] = [];
+  for (const [name, server] of enabled) {
+    if (server.auth !== "oauth" || !store) continue;
+    const status = mcpOAuthStatus(store, name, server.url);
+    if (status.state === "needs-login") needsLogin.push(name);
+    oauthNotes.push(`${name}: ${describeMcpOAuthStatus(name, status)}`);
+  }
+  const oauthSuffix = oauthNotes.length > 0 ? `; OAuth — ${oauthNotes.join(", ")}` : "";
   if (missing.length > 0) {
     return {
       name: "mcp_hub",
       status: "warn",
-      message: `${enabled.length} server(s) enabled; missing secrets — ${missing.join(", ")}`,
+      message: `${enabled.length} server(s) enabled; missing secrets — ${missing.join(", ")}${oauthSuffix}`,
       remediation: `Store them with \`foreman secrets add <name>\`.`,
+    };
+  }
+  if (needsLogin.length > 0) {
+    return {
+      name: "mcp_hub",
+      status: "warn",
+      message: `${enabled.length} server(s) enabled${oauthSuffix}`,
+      remediation: needsLogin.map((n) => `foreman mcp login ${n}`).join(" · "),
     };
   }
   return {
     name: "mcp_hub",
     status: "ok",
-    message: `${enabled.length} MCP server(s) enabled, mode ${config.mode}`,
+    message: `${enabled.length} MCP server(s) enabled, mode ${config.mode}${oauthSuffix}`,
   };
 }
 
