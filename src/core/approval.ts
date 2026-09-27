@@ -1,4 +1,9 @@
-import { and, eq, lt } from "drizzle-orm";
+import {
+  actionIdForDecision,
+  parseApprovalToken,
+  verifyApprovalTag,
+} from "./approval-token.js";
+import { and, eq, inArray, lt } from "drizzle-orm";
 import type { ForemanDb } from "../db/client.js";
 import { pendingApprovals } from "../db/schema.js";
 import {
@@ -107,6 +112,10 @@ export interface ApprovalService {
    *  deadline the service will enforce. Optional — services without
    *  a meaningful timeout (DenyAllApprovalService) leave it out. */
   computeDeadline?(now?: number): number;
+  /** Deny still-pending approvals whose requester can no longer receive
+   *  an answer (e.g. the MCP client disconnected). Only rows that are
+   *  still `pending` are touched. */
+  cancelPending?(requestIds: readonly string[]): void;
 }
 
 export class DenyAllApprovalService implements ApprovalService {
@@ -269,6 +278,11 @@ export interface DbApprovalOptions {
    *  engine writes to the same SQLite handle the approval service uses,
    *  so there's no I/O wait. */
   injectPredicateRule?: (input: ApprovalRuleInjection) => number;
+  /** Key for approval tokens (see approval-token.ts). When set, relayed
+   *  decisions that allow a call or change policy must carry the tag
+   *  Foreman put on the user's button / command; a plain relayed deny
+   *  never needs one (refusing can't be abused to gain access). */
+  approvalKey?: Buffer;
 }
 
 /** #526 — Payload the approval service hands to the policy-engine
@@ -289,6 +303,7 @@ export interface ApprovalRuleInjection {
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 200;
+const STALE_GRACE_MS = 30_000;
 
 export class DbApprovalService implements ApprovalService {
   private readonly bus: EventBus<ForemanEventMap>;
@@ -298,11 +313,14 @@ export class DbApprovalService implements ApprovalService {
     input: ApprovalRuleInjection,
   ) => number;
 
+  private readonly approvalKey?: Buffer;
+
   constructor(
     private readonly db: ForemanDb,
     opts: DbApprovalOptions = {},
   ) {
     this.bus = opts.bus ?? defaultBus;
+    this.approvalKey = opts.approvalKey;
     // QA round 9: DB-backed approval is the flow Telegram (and other
     // out-of-band channels) use. Default to DB_DEFAULT_TIMEOUT_MS (10 min)
     // instead of the CLI's 60s — phone unlocked / context-switched users
@@ -357,6 +375,7 @@ export class DbApprovalService implements ApprovalService {
         const decision: ApprovalDecision = {
           decision: row.decision ?? "denied",
           ...(row.remember ? { remember: row.remember } : {}),
+          ...(row.resolvedBy === "agent" ? { via: "agent_mcp" as const } : {}),
         };
         this.bus.emit("approval:resolved", {
           requestId: req.requestId,
@@ -394,6 +413,25 @@ export class DbApprovalService implements ApprovalService {
     return { decision: "denied" };
   }
 
+  cancelPending(requestIds: readonly string[]): void {
+    if (requestIds.length === 0) return;
+    this.db
+      .update(pendingApprovals)
+      .set({
+        status: "resolved",
+        decision: "denied",
+        resolvedBy: "timeout",
+        resolvedAt: Date.now(),
+      })
+      .where(
+        and(
+          inArray(pendingApprovals.requestId, [...requestIds]),
+          eq(pendingApprovals.status, "pending"),
+        ),
+      )
+      .run();
+  }
+
   // #406 — Agent-routed approval submission. Called from the
   // `submit_approval` MCP tool when an agent (Hermes / OpenClaw / …)
   // sees a `/approve <id>` or `/deny <id>` slash command in user chat
@@ -402,8 +440,27 @@ export class DbApprovalService implements ApprovalService {
   // in-flight `request()` polling picks up to unblock the original
   // mediator call.
   async submitFromAgent(
-    opts: SubmitApprovalFromAgentOpts,
+    rawOpts: SubmitApprovalFromAgentOpts,
   ): Promise<SubmitApprovalResult> {
+    // `approvalId` arrives as `<id>.<tag>` from a tagged button / command.
+    const token = parseApprovalToken(rawOpts.approvalId);
+    const opts = { ...rawOpts, approvalId: token.approvalId };
+    const grants = opts.decision === "allow" || Boolean(opts.actionId);
+    if (this.approvalKey && grants) {
+      const actionId = actionIdForDecision(
+        opts.decision,
+        opts.remember === true,
+        opts.actionId,
+      );
+      if (!verifyApprovalTag(this.approvalKey, opts.approvalId, actionId, token.tag)) {
+        return {
+          ok: false,
+          error:
+            `approval ${opts.approvalId}: missing or invalid approval token — only the user's own ` +
+            "tap or typed command (which carries the token Foreman issued) can allow a call or change policy",
+        };
+      }
+    }
     // Pull the full row when an actionId is set so the custom-action
     // path can re-derive the predicate from the persisted riskFactors.
     // For the plain allow/deny case, the smaller status-only query
@@ -470,6 +527,29 @@ export class DbApprovalService implements ApprovalService {
     const rememberValue: "allow" | "deny" | undefined = opts.remember
       ? effectiveDecision
       : undefined;
+    // Persist the decision so the waiting `request()` — which usually lives
+    // in a different process (another agent's mcp-stdio, the hook, wrap) —
+    // sees it. Emitting on this process's bus alone never reached it, so
+    // relayed Telegram decisions silently timed out to deny.
+    const updated = this.db
+      .update(pendingApprovals)
+      .set({
+        status: "resolved",
+        decision: decisionStr,
+        remember: rememberValue ?? null,
+        resolvedBy: "agent",
+        resolvedAt: Date.now(),
+      })
+      .where(
+        and(
+          eq(pendingApprovals.requestId, opts.approvalId),
+          eq(pendingApprovals.status, "pending"),
+        ),
+      )
+      .run();
+    if (updated.changes === 0) {
+      return { ok: false, error: `approval ${opts.approvalId} is no longer pending` };
+    }
     this.bus.emit("approval:resolved", {
       requestId: opts.approvalId,
       decision: decisionStr,
@@ -598,20 +678,33 @@ export class ApprovalBridge {
       .from(pendingApprovals)
       .where(eq(pendingApprovals.status, "pending"))
       .all();
-    const stale = Date.now() - this.staleMs;
+    const now = Date.now();
     for (const row of rows) {
-      if (row.requestedAt < stale) {
-        // Defensive: anything that's been pending for over staleMs gets
-        // auto-denied so the table doesn't grow forever.
+      // Defensive clean-up of rows whose requester is gone. A row that
+      // carries its own deadline is honoured (plus a grace period) so a
+      // 10-minute Telegram approval isn't cut short by the 5-minute
+      // fallback used for legacy rows.
+      const expiresAt =
+        row.deadlineMs != null
+          ? row.deadlineMs + STALE_GRACE_MS
+          : row.requestedAt + this.staleMs;
+      if (now > expiresAt) {
         this.db
           .update(pendingApprovals)
           .set({
             status: "resolved",
             decision: "denied",
             resolvedBy: "timeout",
-            resolvedAt: Date.now(),
+            resolvedAt: now,
           })
-          .where(eq(pendingApprovals.requestId, row.requestId))
+          // Only if still pending: never overwrite a decision that landed
+          // between the SELECT above and this UPDATE.
+          .where(
+            and(
+              eq(pendingApprovals.requestId, row.requestId),
+              eq(pendingApprovals.status, "pending"),
+            ),
+          )
           .run();
         continue;
       }

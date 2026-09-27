@@ -60,6 +60,7 @@ import { runOauthFlows } from "./run-oauth-flow.js";
 import { runLoginWithSuspendedTui } from "../tui/run-login-in-tui.js";
 import { SecretStore, SecretNotFoundError } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
+import { approvalSigner } from "../core/approval-token.js";
 import {
   costBySession,
   recordUsageAndCheckBudget,
@@ -1001,7 +1002,13 @@ function setupNotificationBridge(args: {
         const token = args.secretStore.get(tg.bot_token_ref);
         channels.set(
           "telegram",
-          new TelegramChannel({ botToken: token, chatId: tg.chat_id }),
+          new TelegramChannel({
+            botToken: token,
+            chatId: tg.chat_id,
+            // Buttons carry HMAC-tagged approval ids so the relaying chat
+            // agent cannot approve a call the user never tapped.
+            signApproval: approvalSigner(loadOrCreateSecretsMasterKey()),
+          }),
         );
       } catch (err) {
         if (!(err instanceof SecretNotFoundError)) throw err;
