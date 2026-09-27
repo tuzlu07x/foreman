@@ -20,13 +20,23 @@ export interface MessageDecoder {
   remainder(): string
 }
 
-export function createDecoder(): MessageDecoder {
+/** A single frame larger than this is dropped (the SDK uses the same
+ *  10 MB default): without a cap, a peer that never sends a newline could
+ *  grow the buffer until the process runs out of memory. */
+export const MAX_FRAME_CHARS = 10 * 1024 * 1024
+
+export function createDecoder(maxFrameChars: number = MAX_FRAME_CHARS): MessageDecoder {
   let buffer = ''
   return {
     push(chunk) {
       buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
       const messages: JSONRPCMessage[] = []
       const rejected: string[] = []
+      if (buffer.length > maxFrameChars && buffer.indexOf('\n') === -1) {
+        rejected.push(`<frame larger than ${maxFrameChars} chars dropped>`)
+        buffer = ''
+        return { messages, rejected }
+      }
       let newlineAt: number
       while ((newlineAt = buffer.indexOf('\n')) !== -1) {
         const line = buffer.slice(0, newlineAt).trim()

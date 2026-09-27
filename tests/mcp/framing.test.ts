@@ -122,3 +122,16 @@ describe('isForemanMethod', () => {
     expect(isForemanMethod(method)).toBe(expected)
   })
 })
+
+describe('createDecoder — frame size cap', () => {
+  it('drops a frame that grows past the cap without a newline', () => {
+    const decoder = createDecoder(1_000)
+    const out = decoder.push('x'.repeat(1_500))
+    expect(out.messages).toEqual([])
+    expect(out.rejected[0]).toMatch(/larger than 1000/)
+    expect(decoder.remainder()).toBe('')
+    // The stream recovers for the next well-formed frame.
+    const next = decoder.push(encodeMessage({ jsonrpc: '2.0', id: 1, method: 'ping' } as never))
+    expect(next.messages).toHaveLength(1)
+  })
+})

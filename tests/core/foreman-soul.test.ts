@@ -1,12 +1,13 @@
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_FOREMAN_SOUL } from "../../src/cli/identity-template.js";
 import {
@@ -97,6 +98,24 @@ describe("applyForemanSoul", () => {
     expect(result!.changed).toBe(true);
     expect(result!.path).toBe(resolve(agentHome, "agent", "SOUL.md"));
     expect(readFileSync(result!.path, "utf-8")).toBe("you are Foreman");
+  });
+
+  it("keeps a one-time backup of a user-authored file before replacing it", () => {
+    const soulPath = join(tmpHome, "SOUL.md");
+    writeFileSync(soulPath, "# Foreman-mediated agent identity\nbe careful");
+    const target = resolve(agentHome, ".codex", "AGENTS.md");
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, "my own global codex instructions");
+    applyForemanSoul(entryWith({ identity_path: "~/.codex/AGENTS.md" }), soulPath, agentHome);
+    expect(readFileSync(`${target}.pre-foreman.bak`, "utf-8")).toBe(
+      "my own global codex instructions",
+    );
+    // A later re-push (Foreman-authored content) must not clobber the backup.
+    writeFileSync(soulPath, "# Foreman-mediated agent identity\nv2");
+    applyForemanSoul(entryWith({ identity_path: "~/.codex/AGENTS.md" }), soulPath, agentHome);
+    expect(readFileSync(`${target}.pre-foreman.bak`, "utf-8")).toBe(
+      "my own global codex instructions",
+    );
   });
 
   // QA round 12: every `{agent_id}` token in the template is rewritten
