@@ -7,6 +7,10 @@ All notable changes to Foreman are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **End-to-end QA suite** (#624, [docs/qa.md](docs/qa.md)).
+  - `npm run qa` walks seven user journeys with real processes in
+    isolated homes, and checks the audit trail each time.
+  - CI runs it on Linux and keeps the Markdown report as an artifact.
 - **`foreman demo`** (#632). A company of agents works through a day in a
   sandbox while you watch the real TUI: approvals, a blocked poisoned
   instruction, department messages, a budget alert and a report to you.
