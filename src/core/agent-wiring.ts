@@ -59,6 +59,21 @@ export interface WireOptions {
   homeDir?: string;
 }
 
+export class WiringParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WiringParseError";
+  }
+}
+
+/** A wiring error's message when it is known not to quote file content
+ *  (which may hold a token): ours, or a filesystem error naming a path. */
+export function describeWiringError(err: unknown): string {
+  if (err instanceof WiringParseError || err instanceof UnsafeTokenPathError) return err.message;
+  if (err instanceof Error && "code" in err && typeof err.code === "string") return `${err.code}: ${err.message}`;
+  return "the agent's MCP config could not be updated";
+}
+
 /** Write `token` into the agent's wiring. Never logs the token. */
 export function writeAgentWiring(
   agentId: string,
@@ -93,7 +108,7 @@ export function writeAgentWiring(
           throw err; // a filesystem error names the path, never the content
         } else {
           // Parser messages quote the file, which may hold a token.
-          throw new Error(`${configPath} doesn't parse; fix it, then run 'foreman agent rewire ${agentId}'`);
+          throw new WiringParseError(`${configPath} doesn't parse; fix it, then run 'foreman agent rewire ${agentId}'`);
         }
       }
     }

@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import { pickConfigPath } from "../../core/agent-add-flow.js";
 import { UnsupportedConfigFormatError } from "../../core/agent-config-injector.js";
 import { ensureAgentToken } from "../../core/agent-token.js";
-import { writeAgentWiring } from "../../core/agent-wiring.js";
+import { describeWiringError, writeAgentWiring } from "../../core/agent-wiring.js";
 import {
   resolveBundledTemplatePath,
   type AgentEntry,
@@ -85,9 +85,8 @@ export function wireAgentConfig(
     if (err instanceof UnsupportedConfigFormatError) {
       log(`  ⚠ ${configPath} unsupported format — paste manually`);
     } else {
-      log(
-        `  ⚠ config inject skipped: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      // Never a raw parser message: it may quote a token-bearing file.
+      log(`  ⚠ config inject skipped: ${describeWiringError(err)}`);
     }
   }
 }

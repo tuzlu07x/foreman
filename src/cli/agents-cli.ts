@@ -25,7 +25,7 @@ import {
   InvalidTokenAgentIdError,
   revokeAgentToken,
 } from "../core/agent-token.js";
-import { rewireAgent, wiringDelivered } from "../core/agent-wiring.js";
+import { describeWiringError, rewireAgent, wiringDelivered } from "../core/agent-wiring.js";
 import { SecretStore } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import {
@@ -491,7 +491,7 @@ function rewireOne(
       ...(options.tokenOut ? { tokenOut: options.tokenOut } : {}),
     });
   } catch (err) {
-    console.log(`  ${red("✗")} ${err instanceof Error ? err.message : String(err)}`);
+    console.log(`  ${red("✗")} ${describeWiringError(err)}`);
     if (options.rotate && hasAgentToken(getTokenStore(), agent.id)) {
       console.log(`  ${orange("!")} ${oldTokenInvalid(agent.id)}`);
     }

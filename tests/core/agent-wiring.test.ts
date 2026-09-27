@@ -8,7 +8,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { readWiredAgentToken } from '../../src/core/agent-config-injector.js'
 import { AGENT_TOKEN_PLACEHOLDER, buildMcpSnippet } from '../../src/core/agent-mcp-snippet.js'
 import { hasAgentToken, issueAgentToken, verifyAgentToken } from '../../src/core/agent-token.js'
-import { auditAgentTokens, describeTokenAudit, rewireAgent, writeAgentWiring } from '../../src/core/agent-wiring.js'
+import {
+  auditAgentTokens,
+  describeTokenAudit,
+  describeWiringError,
+  rewireAgent,
+  WiringParseError,
+  writeAgentWiring,
+} from '../../src/core/agent-wiring.js'
 import type { AgentEntry } from '../../src/core/registry-catalog.js'
 import { SecretStore } from '../../src/core/secret-store.js'
 import { createInMemoryDb } from '../../src/db/client.js'
@@ -145,6 +152,25 @@ describe('agent MCP wiring with identity tokens', () => {
     // The new one can be fetched afterwards without another rotation.
     rewireAgent(store, 'bot', null, { tokenOut: out })
     expect(verifyAgentToken(store, 'bot', readFileSync(out, 'utf-8').trim())).toBe(true)
+  })
+
+  it("a config that doesn't parse never has its content quoted in the error", () => {
+    const path = join(dir, 'settings.json')
+    const secret = `fat_${'S'.repeat(43)}`
+    writeFileSync(path, `{ "mcpServers": { "foreman": { "env": { "FOREMAN_AGENT_TOKEN": "${secret}" } } `)
+    let caught: unknown
+    try {
+      writeAgentWiring('claude-code', entry({}), 'fat_new', { configPath: path })
+    } catch (err) {
+      caught = err
+    }
+    expect(caught).toBeInstanceOf(WiringParseError)
+    expect(describeWiringError(caught)).toContain("doesn't parse")
+    expect(describeWiringError(caught)).not.toContain(secret)
+    // Anything else unknown is summarised, never echoed.
+    expect(describeWiringError(new SyntaxError(`Unexpected token in "${secret}"`))).not.toContain(secret)
+    const fsErr = Object.assign(new Error(`EACCES: permission denied, open '${path}'`), { code: 'EACCES' })
+    expect(describeWiringError(fsErr)).toContain('EACCES')
   })
 
   it('rotating revokes the old token even when writing the wiring fails', () => {
