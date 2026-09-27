@@ -122,8 +122,8 @@ describe('department channels (#630)', () => {
     comms.post({ from: 'writer-bot', to: 'writer', text: 'thread, not mirrored' })
     await worker.tick()
     await worker.tick()
-    const slack = calls.filter((c) => c.url.includes('slack.com'))
-    const discord = calls.filter((c) => c.url.includes('discord.com'))
+    const slack = calls.filter((c) => new URL(c.url).hostname === 'slack.com')
+    const discord = calls.filter((c) => new URL(c.url).hostname === 'discord.com')
     expect(slack.map((c) => c.body.channel)).toEqual(['#eng'])
     expect(String(slack[0]!.body.text)).toContain('&lt;!channel&gt;')
     expect(discord.map((c) => c.url)).toEqual([
