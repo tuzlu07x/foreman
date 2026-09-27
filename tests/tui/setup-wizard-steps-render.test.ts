@@ -580,6 +580,16 @@ describe('foreman-llm step with a subscription sign-in (#575 follow-up)', () => 
   })
 })
 
+describe('done step summary', () => {
+  it('counts an OpenAI-compatible preset alongside catalog providers', async () => {
+    const w = await mount('done', {
+      secrets: { 'openai-key': 'sk-fake-openai-000', 'deepseek-api-key': 'fake-deepseek-000' },
+    })
+    await w.until('What next?')
+    expect(w.frame()).toContain('2 LLM providers   openai, deepseek')
+  })
+})
+
 describe('done step [Enter] label', () => {
   it('does not promise a TUI under `foreman setup`', async () => {
     const w = await mount('done')

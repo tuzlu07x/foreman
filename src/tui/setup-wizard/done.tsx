@@ -5,6 +5,7 @@ import type { Key } from "ink";
 import type { JSX } from "react";
 import { parse as parseYaml } from "yaml";
 import { runDoctor } from "../../core/doctor.js";
+import type { LlmPreset } from "../../core/llm-provider-presets.js";
 import {
   loadActiveRegistry,
   type AgentEntry,
@@ -134,6 +135,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
     afterExit,
     providerCatalog,
     serviceCatalog,
+    llmPresetDoc,
     requiredSetupResolution,
   } = ctx;
   const {
@@ -151,7 +153,12 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
   const storedNames = new Set(
     services.secretStore.list().map((s) => s.name),
   );
-  const providerIds = configuredProviderIds(providerCatalog, storedNames);
+  // Presets (Foreman's brain → OpenAI-compatible) keep their key in their
+  // own slot, which the provider catalog doesn't know about.
+  const providerIds = [
+    ...configuredProviderIds(providerCatalog, storedNames),
+    ...configuredPresetIds(llmPresetDoc.presets, storedNames),
+  ];
   const serviceIds = configuredServiceIds(serviceCatalog, storedNames);
   const agentRows = services.registry.list();
   const policyRuleCount = countPolicyRules(services.policyPath);
@@ -424,6 +431,16 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
 // Read the policy.yaml rule count without instantiating a PolicyEngine.
 // Returns 0 on missing / malformed file rather than throwing — the Done
 // screen is best-effort reporting, not the canonical policy validator.
+/** Ids of the OpenAI-compatible presets whose API key is stored. */
+export function configuredPresetIds(
+  presets: readonly LlmPreset[],
+  storedNames: Set<string>,
+): string[] {
+  return presets
+    .filter((p) => storedNames.has(p.key_secret_name))
+    .map((p) => p.id);
+}
+
 export function countPolicyRules(policyPath: string): number {
   if (!existsSync(policyPath)) return 0;
   try {
