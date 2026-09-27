@@ -692,11 +692,27 @@ describe('resume keeps session-only choices', () => {
     await first.type('Code review')
     await first.press(ENTER, 'Agents ▸ confirm')
     await first.press('y', 'Services ▸ pick which to configure')
+    // Secrets typed through the wizard's own inputs (all fakes): a service
+    // token, then a key pasted on the required-setup screen.
+    const typedSecrets = {
+      'telegram-bot-token': 'fake-resume-telegram-token-000',
+      'openrouter-key': 'sk-or-fake-resume-000',
+    }
     await first.press(SPACE)
     await first.press(ENTER, 'prompt 1 of 2')
+    await first.type(typedSecrets['telegram-bot-token'])
     await first.press(ENTER, 'prompt 2 of 2')
     await first.press(ENTER, 'Services ▸ summary')
     await first.press('y', 'Required setup ▸ missing keys')
+    while (!first.frame().includes('❯ ⚠ openrouter-key')) await first.press(DOWN)
+    await first.press(ENTER, 'paste openrouter-key')
+    await first.type(typedSecrets['openrouter-key'])
+    await first.press(ENTER, 'Required setup ▸ all set')
+    // [c] completes required-setup, so a snapshot is written after the paste.
+    await first.press('c', '✗ Hermes — install failed')
+    for (const [name, value] of Object.entries(typedSecrets)) {
+      expect(first.secretStore.get(name)).toBe(value)
+    }
     unmount?.()
     unmount = null
     sqlite?.close()
@@ -704,14 +720,19 @@ describe('resume keeps session-only choices', () => {
 
     // Like `foreman setup --resume`: a fresh wizard from the file on disk.
     const saved = loadSetupState()
+    expect(saved.completed).toContain('required-setup')
     expect(saved.session?.agentConfigs.hermes).toMatchObject({
       llmProvider: 'openai',
       providerVariant: 'via-openrouter',
       responsibilityNote: 'Code review',
     })
     expect(saved.session?.servicesSelected).toEqual(['telegram'])
-    // Ids and notes only — no secret value reaches setup-state.json.
-    expect(readFileSync(getSetupStatePath(), 'utf-8')).not.toContain('sk-fake-openai-000')
+    // Ids and notes only: none of the typed (or pre-seeded) secret values
+    // may reach setup-state.json — they live in the encrypted store.
+    const stateText = readFileSync(getSetupStatePath(), 'utf-8')
+    for (const value of [...Object.values(typedSecrets), 'sk-fake-openai-000']) {
+      expect(stateText).not.toContain(value)
+    }
 
     const resumed = await mount('required-setup', {
       secrets: { 'openai-key': 'sk-fake-openai-000' },
