@@ -598,7 +598,9 @@ export function startForeman(
     budgetWatcher.stop();
     commsMirror.stop();
     void otlp.stop();
-    controlPoller.stop();
+    // Waits for a command already running (#633 QA: quitting the demo
+    // mid-command closed the database underneath it, exit 7).
+    await controlPoller.stop();
     if (dailyScheduler) dailyScheduler.stop();
     if (activitySummaryScheduler) activitySummaryScheduler.stop();
     if (patternDetector) patternDetector.stop();

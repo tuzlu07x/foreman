@@ -148,6 +148,21 @@ describe('RegistryService', () => {
       expect(() => registry.heartbeat('ghost')).toThrow(AgentNotFoundError)
     })
 
+    it('never switches a disabled agent back on (its own traffic is only "seen")', () => {
+      registry.register({ id: 'a', displayName: 'A', transport: 'stdio' })
+      registry.disable('a')
+      const handler = vi.fn()
+      bus.on('agent:heartbeat', handler)
+      registry.heartbeat('a')
+      const agent = registry.get('a')
+      expect(agent?.status).toBe('disabled')
+      expect(agent?.lastSeenAt).toBeGreaterThan(0)
+      expect(handler).not.toHaveBeenCalled()
+      registry.enable('a')
+      registry.heartbeat('a')
+      expect(registry.get('a')?.status).toBe('active')
+    })
+
     it('throws AgentNotFoundError for a blocked agent', () => {
       registry.register({ id: 'a', displayName: 'A', transport: 'stdio' })
       registry.block('a')
