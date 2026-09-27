@@ -7,3 +7,10 @@
 /src/core/ @tuzlu07x
 /src/mcp/ @tuzlu07x
 /registry/ @tuzlu07x
+/src/cli/mcp-stdio.ts @tuzlu07x
+/src/cli/hook-cli.ts @tuzlu07x
+/src/cli/start.ts @tuzlu07x
+/src/identity/ @tuzlu07x
+/src/db/ @tuzlu07x
+/package.json @tuzlu07x
+/package-lock.json @tuzlu07x

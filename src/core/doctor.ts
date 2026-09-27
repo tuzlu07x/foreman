@@ -57,7 +57,7 @@ export interface DoctorOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-const MIN_NODE_MAJOR = 20;
+const MIN_NODE_MAJOR = 22;
 
 export function checkPaths(): CheckResult {
   const paths = getForemanPaths();

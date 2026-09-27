@@ -4,7 +4,7 @@ export default defineConfig({
   entry: { "cli/index": "src/cli/index.ts", "cli/hook": "src/cli/hook-main.ts" },
   outDir: "dist",
   format: ["esm"],
-  target: "node20",
+  target: "node22",
   platform: "node",
   banner: { js: "#!/usr/bin/env node" },
   clean: true,
