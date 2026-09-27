@@ -388,7 +388,7 @@ export class DbApprovalService implements ApprovalService {
         const decision: ApprovalDecision = {
           decision: row.decision ?? "denied",
           ...(row.remember ? { remember: row.remember } : {}),
-          ...(row.resolvedBy === "agent" ? { via: "agent_mcp" as const } : {}),
+          ...(viaOf(row) ? { via: viaOf(row)! } : {}),
           ...(this.cancelled.delete(req.requestId) || row.resolvedBy === "cancelled"
             ? { cancelled: true }
             : row.resolvedBy === "timeout"
@@ -564,6 +564,7 @@ export class DbApprovalService implements ApprovalService {
         decision: decisionStr,
         remember: rememberValue ?? null,
         resolvedBy: "agent",
+        resolvedVia: "agent_mcp",
         resolvedAt: Date.now(),
       })
       .where(
@@ -672,6 +673,7 @@ export class ApprovalBridge {
           decision: e.decision,
           remember: e.remember ?? null,
           resolvedBy: e.resolvedBy,
+          resolvedVia: e.via ?? null,
           resolvedAt: Date.now(),
         })
         .where(
@@ -787,7 +789,7 @@ export class ApprovalBridge {
           decision: row.decision ?? "denied",
           ...(row.remember ? { remember: row.remember } : {}),
           resolvedBy: row.resolvedBy ?? "timeout",
-          ...(row.resolvedBy === "agent" ? { via: "agent_mcp" as const } : {}),
+          ...(viaOf(row) ? { via: viaOf(row)! } : {}),
         });
       }
       // Rows that vanished entirely (pruned) are simply forgotten.
@@ -950,4 +952,11 @@ function pad(text: string, width: number): string {
   const visible = text.replace(/\x1b\[[0-9;]*m/g, "");
   const padding = Math.max(0, width - visible.length - 16);
   return " ".repeat(padding) + text;
+}
+
+/** The surface that decided a stored approval (#637). Rows from before the
+ *  `resolved_via` column only know that an agent relayed it. */
+function viaOf(row: { resolvedBy: string | null; resolvedVia: ApprovalDecision["via"] | null }): ApprovalDecision["via"] {
+  if (row.resolvedBy !== "user" && row.resolvedBy !== "agent") return undefined;
+  return row.resolvedVia ?? (row.resolvedBy === "agent" ? "agent_mcp" : undefined);
 }

@@ -69,6 +69,31 @@ describe("DbApprovalService", () => {
     expect(decision.decision).toBe("allowed");
   });
 
+  it("tells the requester which surface decided, across processes (#637)", async () => {
+    // The requester (an agent's mcp-stdio) and the TUI's bridge share only
+    // the database: two buses stand in for two processes.
+    const requesterBus = new EventBus<ForemanEventMap>();
+    const service = new DbApprovalService(db, { bus: requesterBus, timeoutMs: 5000, pollIntervalMs: 20 });
+    const bridge = new ApprovalBridge(db, { bus, pollIntervalMs: 20 });
+    bridge.start();
+    try {
+      const decided = service.request(req({ requestId: "via-tui" }));
+      await new Promise((r) => setTimeout(r, 60));
+      bus.emit("approval:resolved", { requestId: "via-tui", decision: "denied", resolvedBy: "user", via: "tui" });
+      const decision = await decided;
+      expect(decision).toMatchObject({ decision: "denied", via: "tui" });
+      const row = db.select().from(pendingApprovals).where(eq(pendingApprovals.requestId, "via-tui")).get();
+      expect(row?.resolvedVia).toBe("tui");
+
+      const slack = service.request(req({ requestId: "via-slack" }));
+      await new Promise((r) => setTimeout(r, 60));
+      bus.emit("approval:resolved", { requestId: "via-slack", decision: "allowed", resolvedBy: "user", via: "slack" });
+      expect(await slack).toMatchObject({ decision: "allowed", via: "slack" });
+    } finally {
+      bridge.stop();
+    }
+  });
+
   it("times out and resolves denied when no decision arrives", async () => {
     const service = new DbApprovalService(db, {
       bus,

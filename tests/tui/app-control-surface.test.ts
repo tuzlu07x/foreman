@@ -129,6 +129,30 @@ describe('TUI control surface', () => {
     expect(strip(app.lastFrame())).toContain('nothing waiting')
   })
 
+  it('q on the approval screen asks to quit and never decides the approval (#637)', async () => {
+    bus.emit('approval:requested', approval('qq', 'codex', 'shell_exec', Date.now() + 60_000))
+    await tick()
+    expect(strip(app.lastFrame())).toContain('q quit')
+    app.stdin.write('q')
+    await tick()
+    const frame = strip(app.lastFrame())
+    expect(frame).toContain('Quit Foreman?')
+    expect(frame).toContain('Waiting calls will be denied')
+    // While the question is up, a/d don't reach the approval.
+    app.stdin.write('a')
+    await tick()
+    expect(resolved).toEqual([])
+    app.stdin.write('n')
+    await tick()
+    expect(strip(app.lastFrame())).not.toContain('Quit Foreman?')
+    // Still on the approval, which still decides with its own keys.
+    expect(strip(app.lastFrame())).toContain('shell_exec')
+    expect(resolved).toEqual([])
+    app.stdin.write('d')
+    await tick()
+    expect(resolved).toEqual([{ requestId: 'qq', decision: 'denied', resolvedBy: 'user', via: 'tui' }])
+  })
+
   it('never auto-denies on its own clock', async () => {
     bus.emit('approval:requested', approval('r3', 'codex', 'write_file', Date.now() + 1_000))
     await tick(1_300)
