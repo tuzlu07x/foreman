@@ -23,7 +23,9 @@ import {
   isReservedAgentId,
 } from "../core/agent-token.js";
 import {
+  NO_CONFIG_PATH_NOTE,
   rewireAgent,
+  tokenHandoffHint,
   wiringDelivered,
   writeAgentWiring,
   type WiringResult,
@@ -195,10 +197,7 @@ export async function runAgentAddScripted(
       rewireAgent(store, agentId, null, { tokenOut: options.tokenOut });
       log(dim(`agent token written to ${options.tokenOut} (0600)`));
     } else if (!wiringDelivered(wiring)) {
-      log(
-        `  get its token with 'foreman agent rewire ${agentId} --token-out <file>' and set it as ${AGENT_TOKEN_ENV}; ` +
-          "without it the agent runs untrusted.",
-      );
+      log(`  ${tokenHandoffHint(agentId)}`);
     }
   }
 
@@ -478,10 +477,7 @@ export function logWiring(
       log(buildMcpSnippet(agentId, entry).yaml);
       break;
     case "none":
-      log(
-        orange("note: ") +
-          "no config path declared in the registry — paste this into the agent's config manually:",
-      );
+      log(orange("note: ") + NO_CONFIG_PATH_NOTE);
       log(buildMcpSnippet(agentId, entry).yaml);
       break;
   }

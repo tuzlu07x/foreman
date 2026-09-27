@@ -130,5 +130,7 @@ describe("wizard config writes and symlinks (#618)", () => {
     expect(lstatSync(configPath).isFile()).toBe(true);
     expect(statSync(configPath).mode & 0o777).toBe(0o600);
     expect(readFileSync(configPath, "utf-8")).toMatch(/"FOREMAN_AGENT_TOKEN": "fat_/);
+    // Wired for it: no by-hand token hint.
+    expect(logs).not.toContain("--token-out");
   });
 });

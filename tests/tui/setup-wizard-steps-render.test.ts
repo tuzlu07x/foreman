@@ -128,6 +128,8 @@ vi.mock('../../src/tui/setup-wizard/install-runner.js', () => ({
         removed: [],
         mcpRegisterFailed: [],
         nodeEngineSkipped,
+        // generic-mcp has no MCP config to write its token to.
+        tokenToWire: toAdd.filter((id) => id === 'generic-mcp'),
       }
     },
   ),
@@ -902,6 +904,33 @@ describe('done step identity summary', () => {
     expect(w.frame()).toContain('No Foreman identity file for generic-mcp')
     expect(w.frame()).not.toContain('Identity push failed')
     expect(w.frame()).not.toContain('pushed to 0 of 1')
+  })
+})
+
+describe('done step token hand-off (#618)', () => {
+  it('names the command that fetches a token Foreman had nowhere to write', async () => {
+    const w = await mount('install', {
+      initialState: {
+        version: 1,
+        completed: ALL_BEFORE.install,
+        startedAt: 1,
+        lastUpdatedAt: 1,
+        session: {
+          providersSelected: [],
+          providersSignedIn: [],
+          agentsSelected: ['generic-mcp'],
+          agentConfigs: {},
+          servicesSelected: [],
+          registeredAtSnapshot: [],
+        },
+      },
+    })
+    await w.startInstall()
+    await w.until('What next?')
+    const frame = stripAnsi(w.frame())
+    expect(frame).toContain("Wire these agents' identity tokens by hand")
+    expect(frame).toContain('foreman agent rewire generic-mcp --token-out <file>')
+    expect(frame).not.toMatch(/fat_[A-Za-z0-9_-]{20,}/)
   })
 })
 

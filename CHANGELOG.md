@@ -29,7 +29,9 @@ All notable changes to Foreman are documented here. The format follows
   - `foreman agent rewire [<id>|--all]` gives existing agents a token and
     rewrites their wiring; `foreman agent token rotate <id>` replaces a
     token, always revoking the old one first, and cuts off sessions using
-    it. `--token-out <file>` (0600) covers agents wired by hand.
+    it. `--token-out <file>` (0600) covers agents wired by hand; the setup
+    wizard names that command for agents it has no config to wire
+    (generic-mcp), in its install log and on the Done screen.
   - `foreman doctor` (`agent_tokens`) and `foreman start` (an inbox warning)
     name the agents that still need rewiring and token files others can
     read. Unverified connections are audited (`agent:identity`) and raised

@@ -1,4 +1,8 @@
-import { checkSecrets, registerAgent } from "../../core/agent-add-flow.js";
+import {
+  checkSecrets,
+  pickMcpConfigPath,
+  registerAgent,
+} from "../../core/agent-add-flow.js";
 import { projectSecretsForAgent } from "../../core/agent-secrets-projector.js";
 import {
   detectProviderConflict,
@@ -20,6 +24,8 @@ import {
   resolveInstallerNodeVersion,
 } from "../../core/node-engines.js";
 import { ensureAgentToken, revokeAgentToken } from "../../core/agent-token.js";
+import { buildMcpSnippet } from "../../core/agent-mcp-snippet.js";
+import { NO_CONFIG_PATH_NOTE, tokenHandoffHint } from "../../core/agent-wiring.js";
 import {
   autoRegisterMcp,
   buildMcpRegisterHint,
@@ -67,6 +73,7 @@ export async function runInstallStep(
     removed: [],
     mcpRegisterFailed: [],
     nodeEngineSkipped: [],
+    tokenToWire: [],
   };
   const { doc } = loadActiveRegistry();
   // #373 — load provider catalog once so checkSecrets can filter
@@ -386,6 +393,14 @@ export async function runInstallStep(
       const registerHint = buildMcpRegisterHint(id, entry, {
         token: ensureAgentToken(services.secretStore, id),
       });
+      // #618 — Nowhere to write the token (generic-mcp): say how to fetch
+      // it, as `foreman agent add` does. The snippet has a placeholder.
+      if (!pickMcpConfigPath(entry) && !registerHint?.wrapper) {
+        log(`  ◦ ${NO_CONFIG_PATH_NOTE}`);
+        for (const line of buildMcpSnippet(id, entry).yaml.trimEnd().split("\n")) log(`      ${line}`);
+        log(`  ◦ ${tokenHandoffHint(id)}`);
+        summary.tokenToWire.push(id);
+      }
       if (registerHint) {
         // #346 — write the wrapper script for agents (Hermes) that can't
         // accept multi-token --args.

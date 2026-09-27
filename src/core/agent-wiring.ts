@@ -132,6 +132,21 @@ export function writeAgentWiring(
   return { configPath, config, wrapperPath: hint?.wrapper?.path ?? null, wrapperWritten, ...(note ? { note } : {}) };
 }
 
+/** When the registry declares no config for the agent (generic-mcp): the
+ *  wiring has to be pasted by hand. Shared by `foreman agent add` and the
+ *  setup wizard so both say the same thing. */
+export const NO_CONFIG_PATH_NOTE =
+  "no config path declared in the registry — paste this into the agent's config manually:";
+
+/** How to hand an agent its token when Foreman had nowhere to write it.
+ *  Names the command, never the token. */
+export function tokenHandoffHint(agentId: string): string {
+  return (
+    `get its token with 'foreman agent rewire ${agentId} --token-out <file>' and set it as ${AGENT_TOKEN_ENV}; ` +
+    "without it the agent runs untrusted."
+  );
+}
+
 /** Did the token reach a place the agent reads it from? */
 export function wiringDelivered(result: WiringResult): boolean {
   return (
