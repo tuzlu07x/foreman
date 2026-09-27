@@ -87,6 +87,20 @@ npm install -g foreman-agent                              # Node >= 22.12
 | `FOREMAN_SKIP_NVM=1`     | Refuse the nvm bootstrap path                              |
 | `--uninstall`            | Remove the global package (Foreman's data is left in place) |
 
+**No Node?** Every [release](https://github.com/tuzlu07x/foreman/releases) has a standalone
+binary for macOS (`darwin-arm64`, `darwin-x64`) and Linux (`linux-x64`, `linux-arm64`), with `SHA256SUMS`.
+It is one ~130 MB file with Node.js built in:
+
+```bash
+target=linux-x64   # or linux-arm64, darwin-arm64, darwin-x64
+base=https://github.com/tuzlu07x/foreman/releases/latest/download
+curl -fsSLO "$base/foreman-$target" && curl -fsSLO "$base/SHA256SUMS"
+grep " foreman-$target\$" SHA256SUMS | shasum -a 256 -c -   # or: sha256sum -c -
+chmod +x "foreman-$target" && sudo mv "foreman-$target" /usr/local/bin/foreman
+```
+
+See [`docs/install.md`](docs/install.md#standalone-binary-no-nodejs) for how it differs from the npm install.
+
 **Windows:** run Foreman inside WSL2. See [`docs/windows-wsl2.md`](docs/windows-wsl2.md).
 
 </details>
