@@ -1,14 +1,8 @@
 # Foreman wires Hermes through the MCP gateway so every outbound tool call is
-# policy-checked and audited. Append this block to ~/.hermes/config.yaml.
-mcp:
-  enabled: true
-  servers:
-    foreman:
-      command: foreman
-      args: ["mcp-stdio", "--source", "hermes"]
-      env:
-        FOREMAN_AGENT_ID: hermes
-secrets:
-  source: foreman
-  required:
-    - anthropic-key
+# policy-checked and audited. Hermes reads MCP servers from the top-level
+# `mcp_servers` map in ~/.hermes/config.yaml (upstream: website/docs/reference/
+# mcp-config-reference.md). `hermes mcp add` writes the same map.
+mcp_servers:
+  foreman:
+    command: foreman
+    args: ["mcp-stdio", "--source", "hermes"]

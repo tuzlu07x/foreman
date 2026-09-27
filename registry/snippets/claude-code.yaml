@@ -1,5 +1,6 @@
-# Claude Code reads MCP server config from ~/.claude/settings.json.
-# `foreman agent add` translates this YAML into that JSON shape.
+# Claude Code stores user-scope MCP servers under `mcpServers` in ~/.claude.json
+# (not in ~/.claude/settings.json). Register this block with:
+#   claude mcp add --scope user foreman -- foreman mcp-stdio --source claude-code
 mcpServers:
   foreman:
     command: foreman
