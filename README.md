@@ -4,244 +4,196 @@
 
 <img src="https://raw.githubusercontent.com/tuzlu07x/foreman/main/assets/foreman-banner.svg" alt="FOREMAN" width="520" />
 
-### Your local AI agents talk to each other. You should know what they're saying.
+### Run a whole crew of AI agents. Safely. On your own machine.
 
-A terminal-first guardian that **mediates every call** between the AI agents on your
-machine, **scores each request for risk**, and **asks you** before anything dangerous happens.
+Foreman is the **security gateway and foreman** for Claude Code, Codex, Hermes, OpenClaw and
+any MCP agent. Every tool call is **mediated, scored, approved by you when it matters, and
+audited**, and your agents are organised like a company, with departments, reporting lines
+and least-privilege access.
 
 <br/>
 
+[![verify](https://github.com/tuzlu07x/foreman/actions/workflows/verify.yml/badge.svg)](https://github.com/tuzlu07x/foreman/actions/workflows/verify.yml)
+[![codeql](https://github.com/tuzlu07x/foreman/actions/workflows/codeql.yml/badge.svg)](https://github.com/tuzlu07x/foreman/actions/workflows/codeql.yml)
 [![npm](https://img.shields.io/npm/v/foreman-agent?color=FF8C42&label=foreman-agent&logo=npm)](https://www.npmjs.com/package/foreman-agent)
-[![website](https://img.shields.io/badge/website-foreman--agent.com-FF8C42?logo=readthedocs&logoColor=white)](https://foreman-agent.com)
 [![license](https://img.shields.io/badge/license-MIT-FF8C42)](./LICENSE)
-[![node](https://img.shields.io/badge/node-%E2%89%A520-00D084?logo=node.js&logoColor=white)](https://nodejs.org)
+[![node](https://img.shields.io/badge/node-%E2%89%A522.12-00D084?logo=node.js&logoColor=white)](https://nodejs.org)
 [![platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux%20%C2%B7%20WSL2-4D9DE0)](#install)
-[![PRs welcome](https://img.shields.io/badge/PRs-welcome-FFC542)](./CONTRIBUTING.md)
 
-<br/>
-
-**[Website](https://foreman-agent.com)** · **[Install](#install)** · **[Quick start](#quick-start)** · **[Docs](#documentation)** · **[Integrations](#supported-integrations)** · **[Roadmap](#roadmap)**
+**[Website](https://foreman-agent.com)** · **[Install](#install)** · **[Quick start](#quick-start)** · **[MCP Hub](docs/mcp-hub.md)** · **[Foreman Org](docs/org.md)** · **[Security](SECURITY.md)** · **[Roadmap](#roadmap)**
 
 </div>
 
 <!-- asciinema cast placeholder — drop in once recorded via `examples/phishing-scenario/` -->
-<!-- [![asciicast](https://asciinema.org/a/PLACEHOLDER.svg)](https://asciinema.org/a/PLACEHOLDER) -->
 
 ---
 
-## 🦫 What is this?
+## Why
 
-When your machine runs Claude Code, Hermes, OpenClaw and friends side by side, they call
-each other and reach for your files, your network, and your shell — and nobody is watching.
-Foreman sits in the middle of all of it.
+People now run several agents side by side: a coding agent in the editor, an assistant on
+Telegram, a few MCP servers wired into both. Each one can read your files, run commands,
+spend money and talk to the others. The failure modes are no longer theoretical:
 
-|                |                                                                                                    |
-| -------------- | -------------------------------------------------------------------------------------------------- |
-| 🛡️ **Mediate** | Every MCP call between your agents and their tools flows through Foreman.                          |
-| 📊 **Score**   | Heuristic rules flag secret-file access, outbound network, shell exec, and cross-agent calls.      |
-| 🙋 **Ask**     | When a request crosses the threshold, you decide in the terminal: `[a]llow / [d]eny / [r]emember`. |
-| 📝 **Log**     | Every request hits a local SQLite store with full-text search (FTS5) for audit.                    |
+- **Prompt injection and tool poisoning.** A web page, an email or an MCP tool description
+  tells the agent to send your `.env` or SSH key somewhere.
+- **Destructive commands.** An `rm -rf` expanded from an empty variable runs before anyone
+  looks.
+- **Supply chain.** An MCP server or skill silently changes after you trusted it.
+- **Runaway cost.** Dozens of tool definitions sit in every context window, and agents
+  delegate to agents in loops.
 
-> If a phishing email tells your assistant agent to share your `.env`, Foreman sees it,
-> scores it **80/100**, and asks before anything leaves your machine.
+Foreman sits in the path of every call and handles all four locally, before anything runs.
 
----
+## What you get
+
+| | |
+| --- | --- |
+| 🛡️ **Mediate every call** | MCP tools, Claude Code's built-in tools (PreToolUse hook), Codex and ACP agents (Hermes, OpenClaw, ZeroClaw) all go through one pipeline: `policy.yaml`, then risk rules, then your approval, then an audit log. It fails closed: if Foreman can't decide, the call doesn't run. |
+| 🧰 **[MCP Hub](docs/mcp-hub.md)** | `foreman mcp add github` once, and every agent gets it, mediated. There is a curated catalog of 19 servers (GitHub, filesystem, Playwright, Notion, Stripe, Sentry, Brave, Exa, Discord, X, YouTube, App Store / Google Play, …). Secrets stay in Foreman's encrypted store, never in agent configs. |
+| 🧪 **Tool-poisoning & rug-pull defence** | Tool descriptions are scanned for hidden instructions. Definitions are pinned on first use, and a tool that changes later is withheld until you trust it again. Results are redacted for secrets and flagged for injected instructions. |
+| 🏢 **[Foreman Org](docs/org.md)** | `foreman org init --template startup` sets up a CEO, CTO, CMO, CFO and teams, each role filled by the agent you choose. Delegation follows reporting lines, and each department sees only the tools it needs. |
+| 📱 **Approve from anywhere** | You can decide in the TUI or with one tap in Telegram; the buttons are HMAC-tagged, so an agent can't approve itself. Alerts and digests also go to Slack, Discord, email and ntfy phone push. |
+| 💸 **Fewer tokens** | Lazy tool discovery cut the listing for the official filesystem server from ~2,000 tokens to ~190. Descriptions are clipped, oversized results truncated, and routine roles can run on cheaper models. |
+| 🔒 **Tamper protection** | An agent that tries to edit Foreman's database, policy, keys or its own hook/MCP wiring is caught as a critical risk. |
+| 📝 **Local audit** | Every decision is stored in SQLite with full-text search. Secrets are masked; files are owner-only. No cloud, no telemetry. |
 
 ## Install
 
-The fastest path — also installs Node 20 LTS via `nvm` if you don't already have it:
+Needs Node **22.12+**. The installer sets up Node 22 LTS through `nvm` if you don't have it:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash
 ```
 
 <details>
-<summary><b>Other ways to install</b> — Homebrew · npm</summary>
+<summary><b>Other ways</b> · Homebrew · npm · installer options</summary>
 
 <br/>
 
-**Homebrew** (macOS / Linuxbrew):
-
 ```bash
-brew tap tuzlu07x/foreman
-brew install foreman-agent
+brew tap tuzlu07x/foreman && brew install foreman-agent   # macOS / Linuxbrew
+npm install -g foreman-agent                              # Node >= 22.12
 ```
-
-**npm** (if you already manage Node yourself, `>= 20` required):
-
-```bash
-npm install -g foreman-agent
-```
-
-</details>
-
-<details>
-<summary><b>Install script options</b> — pin a version, custom prefix, uninstall</summary>
-
-<br/>
 
 | Variable / flag          | Effect                                                     |
 | ------------------------ | ---------------------------------------------------------- |
-| `FOREMAN_VERSION=0.1.0`  | Pin a specific release                                     |
+| `FOREMAN_VERSION=0.1.6`  | Pin a specific release                                     |
 | `FOREMAN_INSTALL_PREFIX` | Use a non-default npm prefix                               |
 | `FOREMAN_SKIP_NVM=1`     | Refuse the nvm bootstrap path                              |
-| `--uninstall`            | Remove the global package (`~/.foreman/` is left in place) |
+| `--uninstall`            | Remove the global package (Foreman's data is left in place) |
+
+**Windows:** run Foreman inside WSL2. See [`docs/windows-wsl2.md`](docs/windows-wsl2.md).
 
 </details>
-
-> **🪟 Windows:** Foreman runs through **WSL2** (Ubuntu 22.04) today — it assumes a POSIX
-> shell, so native PowerShell / `npm install` on Windows isn't supported yet. Full
-> walkthrough and the WSL2-specific quirks are in [`docs/windows-wsl2.md`](docs/windows-wsl2.md).
-> Native Windows lands in **v0.2+**.
-
----
 
 ## Quick start
 
 ```bash
-foreman init                 # create ~/.foreman/ (db, keypair, policy.yaml)
-foreman start                # launch the TUI gateway
-
-# Point an agent at Foreman's stdio MCP transport
-foreman mcp-stdio
+foreman init            # identity, policy, encrypted secret store, audit DB
+foreman start           # guided setup on first run, then the live TUI
 ```
 
-Wire an agent (**Claude Code** example):
-
-```jsonc
-// ~/.config/claude-code/mcp.json
-{
-  "mcpServers": {
-    "foreman": { "command": "foreman", "args": ["mcp-stdio"] },
-  },
-}
-```
-
-Then watch it work:
+**Connect Claude Code.** Wire its MCP connection, then gate its built-in tools (Bash, Read,
+Write, WebFetch, …) with the PreToolUse hook:
 
 ```bash
-foreman log tail --follow    # live request stream
-foreman agent list           # registered agents
-foreman policy show          # active rules
+foreman agent add claude-code            # or: claude mcp add --scope user foreman -- foreman mcp-stdio --source claude-code
+foreman agent hook install claude-code
 ```
 
-**Per-agent recipes:**
-
-- [`examples/claude-code/`](examples/claude-code/) — Anthropic's terminal coding agent
-- [`examples/hermes-integration/`](examples/hermes-integration/) — Nous Research's personal assistant (Telegram + Discord) with a phishing-safe policy
-- [`examples/openclaw-integration/`](examples/openclaw-integration/) — OpenClaw with a skill-compromise policy (CVE-2026-25253, Koi Security advisory)
-- [`examples/mock-agent/`](examples/mock-agent/) — minimal MCP client that exercises the gateway end-to-end
-
----
-
-## ▶️ 5-minute demo
-
-A scripted phishing scenario walks through the boot banner → idle dashboard → ⚠ approval
-modal → inspect → remember → audit log:
+**Give every agent GitHub, safely:**
 
 ```bash
-cd examples/phishing-scenario
-./run-demo.sh
+foreman mcp add github && foreman secrets add github-pat
+foreman mcp tools github          # scan, pin, show token cost
 ```
 
-See [`examples/phishing-scenario/STORYBOARD.md`](examples/phishing-scenario/STORYBOARD.md)
-for the scene-by-scene script, and
-[`docs/scenario-pazartesi-sabahi.md`](docs/scenario-pazartesi-sabahi.md) for the longer
-product narrative that pins Foreman as a **pre-execution gate** (it stops a `.env` leak
-_before_ the call runs — it doesn't undo afterwards).
+**Organise your agents:**
 
----
+```bash
+foreman org init --template startup --company "Acme"
+foreman org show
+foreman org assign marketing "draft the launch post for Friday"
+```
+
+**Get alerts on your phone:**
+
+```bash
+foreman notify ntfy-setup         # or configure Telegram for tap-to-approve
+```
+
+Then watch it work: `foreman log tail --follow`, `foreman doctor`, `foreman policy show`.
+
+## How it works
+
+```
+ you ── TUI · Telegram (approve) · Slack · Discord · email · ntfy (alerts)
+  │
+  ▼
+┌───────────────────────────── FOREMAN (local) ─────────────────────────────┐
+│  policy.yaml ─► risk rules ─► approval ─► audit (SQLite + FTS5)           │
+│      ▲            secret paths · shell · network · injection ·            │
+│      │            loops · responsibility · tamper protection              │
+│  org.yaml: departments · reporting lines · per-department MCP access      │
+│  MCP Hub: catalog · poisoning scan · pins · result guard · token budget   │
+└───────▲──────────────────▲──────────────────▲─────────────────▲───────────┘
+        │ MCP (stdio)      │ PreToolUse hook  │ ACP / codex     │ upstream MCP
+   any MCP agent      Claude Code      Hermes · OpenClaw ·   GitHub · Notion ·
+                                        ZeroClaw · Codex      Stripe · …
+```
+
+Foreman is a **pre-execution gate**. It decides before a call runs; it does not undo side
+effects afterwards. See [`docs/architecture.md`](docs/architecture.md).
 
 ## Supported integrations
 
-Foreman ships three bundled catalogs that drive the wizard, the TUI management pages, and
-the CLI. Tier-1 entries below; see the linked guides for setup walkthroughs.
+| Category | Integrations |
+| --- | --- |
+| **Agents** ([guide](docs/agent-lifecycle.md)) | Claude Code · Codex · Hermes · OpenClaw · ZeroClaw · any MCP agent |
+| **MCP servers** ([hub](docs/mcp-hub.md)) | GitHub · Filesystem · Memory · Playwright · Chrome DevTools · Notion · Sentry · Stripe · Brave · Exa · Firecrawl · Context7 · Figma · Resend · Discord · X · YouTube · App Store Connect · App Store + Google Play · your own (stdio or HTTPS) |
+| **Channels** ([guide](docs/notifications.md)) | Telegram (tap-to-approve) · Slack · Discord · Email (SMTP) · ntfy · Webhook (signed) · OS notifications |
+| **LLM providers** ([guide](docs/llm-providers.md)), for Foreman's optional smart features | Anthropic · OpenAI · Google Gemini · Ollama (local) · any OpenAI-compatible endpoint |
 
-| Category                                              | Integrations                                                                                                                   |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| **🤖 Agents** ([guide](docs/agent-lifecycle.md))      | Claude Code · Codex · Hermes · OpenClaw · ZeroClaw · Generic MCP                                                               |
-| **🧠 LLM providers** ([guide](docs/llm-providers.md)) | Anthropic · OpenAI · Google Gemini · Ollama (local) · Custom OpenAI-compatible (Groq / Together / OpenRouter / vLLM / LiteLLM) |
-| **🔌 Services** ([guide](docs/services.md))           | Telegram · Discord · Slack · GitHub · Atlassian (Jira / Confluence) · Notion                                                   |
+## How is this different from…
 
-Anthropic + OpenAI can also be authenticated by signing in with your Claude or ChatGPT
-subscription — `foreman llm login <provider>` ([details](docs/llm.md#subscription-oauth-claude--codex)).
-
-<details>
-<summary><b>Action-mediation transport</b> — how each integration is wired (#552 / #445)</summary>
-
-<br/>
-
-Every integration falls into one of three categories Foreman handles uniformly.
-
-| Transport                             | Agents                                                                                    | How it works                                                                                                                                                                                                                                                       |
-| ------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Bridge (JSON-RPC stdio)**           | Codex (`codex exec-server`), Hermes / OpenClaw / ZeroClaw (`<binary> acp` — ACP standard) | Foreman spawns the agent as a child process and mediates every approval it emits over JSON-RPC. Bidirectional: Foreman injects user directives via `session/prompt` (ACP) or `turn/start` (codex). Risk rules fire before each shell / file / network action runs. |
-| **Wrap (synthetic Telegram updates)** | Reserved for hypothetical chat-only daemon agents                                         | Replaces the agent's Telegram poller with a Foreman-controlled wrap process that injects synthetic owner-originated updates. Documented + tested; no current agent needs it.                                                                                       |
-| **Legacy hybrid**                     | Claude Code (via PreToolUse hook), Generic MCP                                            | PreToolUse hook for claude-code; chat-post relay for everything else. Pre-bridge baseline that still works for agents without a programmable transport.                                                                                                            |
-
-Audit which transport each agent uses via `foreman agents show <id>`. The wizard surfaces
-it at install time; `foreman doctor` flags missing ACP binaries.
-
-</details>
-
-Adding entries to the bundled catalogs is documented in
-[`docs/registry-maintenance.md`](docs/registry-maintenance.md). A user-editable upstream
-registry URL is on the v0.2 roadmap.
-
----
-
-## How is this different from…?
-
-Tracing tools tell you _what happened_. Foreman decides _what's allowed to happen_ —
-locally, before the call lands.
-
-|                              | Foreman          | LangSmith / Helicone | Vanilla MCP               |
-| ---------------------------- | ---------------- | -------------------- | ------------------------- |
-| Runs on your machine         | ✅ local-first   | ☁️ cloud SaaS        | ✅ local                  |
-| Mediates agent-to-agent      | ✅               | tracing only         | direct calls, no mediator |
-| Asks before risky calls      | ✅ in terminal   | post-hoc dashboard   | no approval layer         |
-| Audit log under your control | ✅ SQLite + FTS5 | their cloud          | no audit                  |
-| Identity per agent           | ✅ Ed25519       | n/a                  | n/a                       |
-| Open source                  | ✅ MIT           | proprietary          | spec                      |
-
-The closest mental model: a personal-scale gateway with an audit log, for the multi-agent
-setups people now run at home.
-
----
-
-## Roadmap
-
-- ✅ **v0.1 — Today.** Single-machine gateway, heuristic risk scoring, Ink TUI, SQLite audit, MCP stdio.
-- 🔜 **v0.2 — Cross-machine mesh.** `foreman link`, optional Tailscale, master/child keys, primary-device approval.
-- 🧠 **v0.3 — Smart risk.** Optional Llama Prompt Guard 2, intent classification, token budget enforcement.
-- 🧩 **v0.4 — Ecosystem.** Plugin API, Cedar policy support, official Hermes / OpenClaw adapters.
-
----
+|  | Foreman | Agent built-in permissions | MCP gateways / registries | Tracing / observability |
+| --- | --- | --- | --- | --- |
+| Covers several agents at once | ✅ | ❌ one agent each | ✅ MCP only | ✅ |
+| Human approval before risky calls | ✅ TUI + phone | ✅ in that agent's UI | rarely | ❌ after the fact |
+| Tool poisoning + rug-pull checks | ✅ | ❌ | some | ❌ |
+| Agent-to-agent delegation rules (org chart) | ✅ | ❌ | ❌ | ❌ |
+| Runs locally, no account | ✅ | ✅ | varies | usually cloud |
 
 ## Documentation
 
-📖 **Hosted docs: [foreman-agent.com](https://foreman-agent.com)** — the guides below, nicely rendered and searchable.
+| Doc | What's inside |
+| --- | --- |
+| [`docs/mcp-hub.md`](docs/mcp-hub.md) | MCP Hub: catalog, `mcp.yaml`, security, token budget |
+| [`docs/org.md`](docs/org.md) | Foreman Org: departments, roles, delegation, upgrades |
+| [`docs/notifications.md`](docs/notifications.md) | Telegram, Slack, Discord, email, ntfy, webhook |
+| [`docs/architecture.md`](docs/architecture.md) | Mediator pipeline, approval flow, data model |
+| [`docs/detection.md`](docs/detection.md) | Risk rules and scoring |
+| [`docs/agent-lifecycle.md`](docs/agent-lifecycle.md) | Install / disable / block / remove agents |
+| [`docs/install.md`](docs/install.md) | Install, upgrade, uninstall |
+| [`SECURITY.md`](SECURITY.md) | Threat model, limits, reporting |
+| [`CHANGELOG.md`](CHANGELOG.md) | What changed |
 
-| Doc                                                              | What's inside                                                 |
-| ---------------------------------------------------------------- | ------------------------------------------------------------- |
-| [`FOREMAN.md`](./FOREMAN.md)                                     | Full design doc — architecture, services, schema              |
-| [`FOREMAN-TUI.md`](./FOREMAN-TUI.md)                             | TUI / brand spec — palette, mascot, layout, screens           |
-| [`docs/architecture.md`](./docs/architecture.md)                 | Runtime behavior — mediator pipeline, approval flow, sessions |
-| [`docs/agent-lifecycle.md`](./docs/agent-lifecycle.md)           | Install / disable / enable / block / remove agents            |
-| [`docs/llm-providers.md`](./docs/llm-providers.md)               | LLM provider catalog reference                                |
-| [`docs/services.md`](./docs/services.md)                         | Service catalog + setup walkthroughs                          |
-| [`docs/registry-maintenance.md`](./docs/registry-maintenance.md) | Adding entries to the bundled catalogs                        |
+## Roadmap
 
----
+- ✅ **Shipped:** the mediator across MCP, hooks, ACP and codex · risk engine with tamper
+  protection · MCP Hub with a curated catalog · tool-poisoning and rug-pull defence · Foreman
+  Org · Telegram approvals · Slack / Discord / email / ntfy alerts · lazy tool discovery.
+- 🔜 **Next:** a shared hub daemon (one upstream per server, ~50 ms hooks) · Slack Socket
+  Mode and Discord buttons for approvals · OAuth for hosted MCP servers · per-department
+  budgets · approval escalation along the org chart.
+- 🧭 **Later:** a desktop / menu-bar app · per-agent identity tokens · cross-machine mesh ·
+  a local classifier model (Prompt Guard) for borderline calls.
 
 ## Contributing
 
-PRs and issues welcome. Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md), the
-[agent contribution guide](./AGENTS.md), and the [Code of Conduct](./CODE_OF_CONDUCT.md).
-
-**Website:** [foreman-agent.com](https://foreman-agent.com) ·
-**Repo:** [github.com/tuzlu07x/foreman](https://github.com/tuzlu07x/foreman) ·
-**Issues:** [`/issues`](https://github.com/tuzlu07x/foreman/issues)
+PRs and issues are welcome. Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md), the
+[agent contribution guide](./AGENTS.md) and the [Code of Conduct](./CODE_OF_CONDUCT.md).
+Every PR runs the **verify** check.
 
 ---
 
@@ -249,6 +201,6 @@ PRs and issues welcome. Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md), the
 
 **[MIT](./LICENSE)** © 2026 Fatih Tuzlu
 
-<sub>Built for developers running more than one agent. 🦫 Foreman the Beaver is watching.</sub>
+<sub>Built for people running more than one agent. 🦫 Foreman the Beaver is watching.</sub>
 
 </div>

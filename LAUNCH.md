@@ -5,7 +5,7 @@ This is the operational playbook for shipping `foreman-agent@0.1.0` to npm and t
 ## Pre-release sanity
 
 - [x] `tsup.config.ts` finalized (ESM, shebang preserved, treeshake on)
-- [x] `package.json` — `version: 0.1.0`, `bin`, `files`, `engines.node: >=20`, keywords aligned with GitHub topics
+- [x] `package.json` — `version: 0.1.0`, `bin`, `files`, `engines.node: >=22.12`, keywords aligned with GitHub topics
 - [x] In-code version strings (CLI, TUI status bar, MCP server) bumped to `0.1.0`
 - [x] `npm run lint` clean (`tsc --noEmit`)
 - [x] `npm test` clean (full vitest suite)
@@ -100,7 +100,7 @@ built for: an email tells the assistant agent to share .env, Foreman
 flags it at risk 80/100, you press `i` to inspect, `d` to deny.
 
 Tech: TypeScript, MCP SDK, better-sqlite3, drizzle, Ink for the TUI,
-Ed25519 identities for each agent. MIT, requires Node 20+.
+Ed25519 identities for each agent. MIT, requires Node 22.12+.
 
   npm install -g foreman-agent
   foreman init && foreman start
