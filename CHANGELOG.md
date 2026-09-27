@@ -94,16 +94,18 @@ All notable changes to Foreman are documented here. The format follows
   - `approvals.escalate_via_manager: true` in `org.yaml` (or
     `foreman org escalate on`) sends low- and medium-risk approvals to the
     requester's manager agent as a review request on their thread.
-  - The manager answers with the `org_recommend` MCP tool. You see the
-    recommendation on the TUI approval screen, in the inbox and in the chat
-    where the approval waits.
+  - The review request carries an opaque review id, never the approval id.
+    The manager answers with the `org_recommend` MCP tool. You see the
+    recommendation, labelled "unverified id", on the TUI approval screen,
+    in the inbox and in the chat where the approval waits.
   - It is advice only. It never approves, denies, extends or shortens an
     approval, and it doesn't change the timeout default. Only the
     requester's actual manager can recommend: not a colleague, not the
-    requester, not a human source. A reviewing agent can't decide the
-    approval through `submit_approval` without your tap's token, even to
-    deny.
-  - High and critical approvals always go straight to you. Recommendations
+    requester, not a human source, not a blocked or disabled agent.
+  - Arguments sent for review have sensitive keys and inline credentials
+    masked. Review requests are never mirrored to Slack or Discord.
+  - High and critical approvals always go straight to you. At most one
+    review request per report and manager every 30 seconds. Recommendations
     are audited as `org:recommendation`.
 - **Grow the org from the CLI:** `foreman org add-department` and
   `foreman org add-role`. Both validate the chart and keep your comments.
