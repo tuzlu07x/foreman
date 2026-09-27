@@ -20,7 +20,7 @@
           "plist_path": "~/Library/LaunchAgents/ai.hermes.gateway.plist"
         }
       },
-      "config_paths": ["~/.hermes/config.yaml", "~/.config/hermes/config.yaml"],
+      "config_paths": ["~/.hermes/config.yaml"],
       "config_snippet": "registry/snippets/hermes.yaml",
       "identity_path": "~/.hermes/SOUL.md",
       "required_secrets": ["anthropic-key"],
@@ -203,10 +203,7 @@
           "openclaw gateway install"
         ]
       },
-      "config_paths": [
-        "~/.openclaw/openclaw.json",
-        "~/.config/openclaw/openclaw.json"
-      ],
+      "config_paths": ["~/.openclaw/openclaw.json"],
       "config_snippet": "registry/snippets/openclaw.yaml",
       "required_secrets": ["anthropic-key"],
       "optional_secrets": ["openai-key", "slack-bot-token"],
@@ -471,13 +468,10 @@
         "brew": null,
         "binary": "claude"
       },
-      "config_paths": [
-        "~/.claude/settings.json",
-        "~/.config/claude-code/settings.json"
-      ],
+      "config_paths": ["~/.claude/settings.json"],
       "config_snippet": "registry/snippets/claude-code.yaml",
-      "required_secrets": ["anthropic-key"],
-      "optional_secrets": [],
+      "required_secrets": [],
+      "optional_secrets": ["anthropic-key"],
       "llm_compat": ["anthropic"],
       "optional_services": ["github"],
       "mcp_compatible": true,

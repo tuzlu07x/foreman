@@ -2,7 +2,7 @@
 
 OpenClaw is the loudest agent in the personal-AI stack right now — multi-channel TUI, sprawling ClawHub skill ecosystem, and a security history (CVE-2026-25253, the Koi Security advisory) that makes a guardian the obvious answer. Foreman's pitch is exactly that: **keep using OpenClaw. Put Foreman in front of it.**
 
-This recipe is intentionally short. OpenClaw ≥ 1.4 speaks MCP, so we hand its tool calls to `foreman mcp-stdio` and watch them flow through the gateway. Skill-compromise scenarios are caught by the example policy at the bottom.
+This recipe is intentionally short. OpenClaw speaks MCP, so we hand its tool calls to `foreman mcp-stdio` and watch them flow through the gateway. Skill-compromise scenarios are caught by the example policy at the bottom.
 
 ## 1. Install Foreman + OpenClaw
 
@@ -13,27 +13,26 @@ foreman init                       # ~/.foreman/ (identity, policy, db)
 foreman secrets add anthropic-key  # stored once, every agent reads it back
 
 # OpenClaw — official installer (curl on macOS / Linux; PowerShell on Windows).
-# OpenClaw recommends Node 24; Node 22.16+ also works.
+# OpenClaw needs Node 24.16+ or 26.1+ (Node 26 recommended); the installer provisions it when missing.
 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-Or have Foreman install OpenClaw for you when you select it (registry uses `npm install -g openclaw` as the primary path; the curl script is a fallback for systems without Node):
+Or have Foreman install OpenClaw for you when you select it (registry uses `npm install -g openclaw` as the primary path, which needs a supported Node; the curl script is a fallback for systems without one):
 
 ```bash
 foreman agent add openclaw --type openclaw --auto-install
 ```
 
-That command runs the install, injects the MCP snippet into `~/.openclaw/config.json`, and registers OpenClaw with Foreman. The interactive `foreman setup` wizard does the same thing when you check the OpenClaw box. Unchecking later runs `npm uninstall -g openclaw` plus removes the registration.
+That command runs the install, injects the MCP snippet into `~/.openclaw/openclaw.json`, and registers OpenClaw with Foreman. The interactive `foreman setup` wizard does the same thing when you check the OpenClaw box. Unchecking later runs `npm uninstall -g openclaw` plus removes the registration.
 
 ## 2. (Manual) point OpenClaw at Foreman
 
-If you'd rather wire things by hand, merge the foreman block into OpenClaw's JSON config (default path `~/.openclaw/config.json`):
+If you'd rather wire things by hand, merge the foreman block into OpenClaw's JSON5 config (default path `~/.openclaw/openclaw.json`):
 
 ```jsonc
-// ~/.openclaw/config.json — merge with your existing config, leave the rest alone
+// ~/.openclaw/openclaw.json — merge with your existing config, leave the rest alone
 {
   "mcp": {
-    "enabled": true,
     "servers": {
       "foreman": {
         "command": "foreman",
@@ -41,12 +40,10 @@ If you'd rather wire things by hand, merge the foreman block into OpenClaw's JSO
       },
     },
   },
-  "secrets": {
-    "source": "foreman",
-    "required": ["anthropic-key"],
-  },
 }
 ```
+
+OpenClaw validates its config strictly and refuses to start on unknown keys, so add only the `mcp.servers.foreman` entry (no `mcp.enabled`). `openclaw mcp list` should then show `foreman`.
 
 `--source openclaw` is the agent id Foreman records on every request. Match it to the rules in your policy below.
 
@@ -105,7 +102,7 @@ foreman log show <request-id>            # full payload of a single call
 | OpenClaw logs `MCP server foreman: connection refused` | `which foreman` — update `command` to the absolute path. Try `foreman mcp-stdio --source openclaw` manually to confirm it stays alive.                                                   |
 | Activity panel stays empty                             | OpenClaw only fires tool calls when a skill or conversation needs one. Trigger a skill that reads a file or runs a command.                                                              |
 | `foreman` not on PATH after the curl installer         | `export PATH="$(npm prefix -g)/bin:$PATH"` or source nvm first if the installer bootstrapped it.                                                                                         |
-| OpenClaw < 1.4 (no MCP support)                        | Use `foreman wrap --name openclaw -- openclaw` — Foreman launches OpenClaw as a child and signs every MCP-framed response. See [`../wrap-example/README.md`](../wrap-example/README.md). |
+| OpenClaw build without MCP support                     | Use `foreman wrap --name openclaw -- openclaw` — Foreman launches OpenClaw as a child and signs every MCP-framed response. See [`../wrap-example/README.md`](../wrap-example/README.md). |
 
 ## Related
 

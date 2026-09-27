@@ -147,11 +147,11 @@
       "category": "payments",
       "publisher": "Stripe",
       "official": true,
-      "homepage": "https://github.com/stripe/agent-toolkit",
+      "homepage": "https://github.com/stripe/ai",
       "requires": ["node"],
       "transport": "stdio",
       "command": "npx",
-      "args": ["-y", "@stripe/mcp", "--tools=all"],
+      "args": ["-y", "@stripe/mcp"],
       "env": { "STRIPE_SECRET_KEY": "${secret:stripe-restricted-key}" },
       "secrets": [
         {
