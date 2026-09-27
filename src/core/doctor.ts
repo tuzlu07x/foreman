@@ -19,7 +19,7 @@ import { loadActiveProviders, loadActiveRegistry } from "./registry-catalog.js";
 import { detectProviderByPrefix } from "./key-prefix-detect.js";
 import { loadVoiceConfig } from "./notification/voice-config.js";
 import { buildEnabledChannels } from "./notification/channel-factory.js";
-import { loadNotifyConfig } from "./notification/notify-config.js";
+import { channelConfig, loadNotifyConfig } from "./notification/notify-config.js";
 import { enabledServers, loadHubConfig } from "./mcp-hub/config.js";
 import { missingSecrets } from "./mcp-hub/manage.js";
 import { loadOrg, OrgValidationError } from "./org/org.js";
@@ -1120,6 +1120,16 @@ export function checkNotifyChannels(): CheckResult {
       message: issues.join("; "),
       remediation:
         "Fix the listed fields in notify.yaml, then route levels with e.g. `foreman notify route critical telegram slack`.",
+    };
+  }
+  const telegram = channelConfig(config, "telegram");
+  if (channels.has("telegram") && !telegram?.approval_bot_token_ref) {
+    return {
+      name: "notify_channels",
+      status: "ok",
+      message:
+        `ready: ${[...channels.keys()].join(", ")} · tip: \`foreman notify approval-bot\` keeps ` +
+        "Telegram approvals away from your chat agent",
     };
   }
   return {

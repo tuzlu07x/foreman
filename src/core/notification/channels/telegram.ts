@@ -1,5 +1,6 @@
 import { formatApprovalIdForDisplay } from '../../approval-id.js'
-import { compactBlockActionId } from '../../approval-token.js'
+import { timingSafeEqual } from 'node:crypto'
+import { compactBlockActionId, parseApprovalToken } from '../../approval-token.js'
 import {
   intentForActionId,
   type ChannelAction,
@@ -52,6 +53,36 @@ export interface TelegramChannelOptions {
    *  buttons carry `<approvalId>.<tag>` and the message text offers only
    *  the (harmless) typed deny: anything that grants access needs a tap. */
   signApproval?: (approvalId: string, actionId: string) => string
+  /** Dedicated approval bot (#610): a second bot whose token only Foreman
+   *  holds. Approval prompts are sent through it and Foreman polls it for
+   *  the taps itself, so no agent ever sees an approval button. */
+  approvalBotToken?: string
+  /** Trouble with the approval bot (another poller, a revoked token). */
+  onWarning?: (message: string) => void
+  /** Long-poll timeout in seconds (tests use 0). */
+  pollTimeoutSeconds?: number
+  /** Wait after a failed poll, in ms. */
+  pollBackoffMs?: number
+  /** Minimum time between polls, in case long polling isn't honoured
+   *  (a proxy answering at once) — never a hot loop. */
+  minPollIntervalMs?: number
+}
+
+/** Button actions the approval bot resolves itself. */
+const APPROVAL_BOT_ACTIONS = new Set(['allow', 'deny', 'allow_always', 'deny_always'])
+/** Message refs sent through the approval bot carry this prefix, so edits
+ *  go through the same bot. */
+const APPROVAL_REF_PREFIX = 'a:'
+
+interface TelegramUpdate {
+  update_id: number
+  callback_query?: {
+    id: string
+    from?: { id?: number | string }
+    data?: string
+    message?: { message_id: number; chat?: { id?: number | string } }
+  }
+  message?: { text?: string; chat?: { id?: number | string } }
 }
 
 interface TelegramSendResponse {
@@ -69,11 +100,22 @@ export class TelegramChannel implements NotificationChannel {
   private readonly chatId: string
   private readonly fetchImpl: TelegramFetch
   private readonly signApproval?: (approvalId: string, actionId: string) => string
+  private readonly approvalBotToken?: string
+  private readonly onWarning: (message: string) => void
+  private readonly pollTimeoutSeconds: number
+  private readonly pollBackoffMs: number
+  private readonly minPollIntervalMs: number
+  private polling: { stop: boolean; abort: AbortController; done: Promise<void> } | null = null
 
   constructor(opts: TelegramChannelOptions) {
     this.botToken = opts.botToken
     this.chatId = opts.chatId
     this.signApproval = opts.signApproval
+    this.approvalBotToken = opts.approvalBotToken
+    this.onWarning = opts.onWarning ?? (() => {})
+    this.pollTimeoutSeconds = opts.pollTimeoutSeconds ?? 25
+    this.pollBackoffMs = opts.pollBackoffMs ?? 5_000
+    this.minPollIntervalMs = opts.minPollIntervalMs ?? 1_000
     this.fetchImpl =
       opts.fetchImpl ?? ((url, init) => fetch(url, init) as never)
   }
@@ -89,30 +131,48 @@ export class TelegramChannel implements NotificationChannel {
     // attach an inline keyboard so a tap also resolves the approval. The
     // agent's existing `getUpdates` consumer sees both `message` and
     // `callback_query` updates and routes each into `submit_approval`.
-    const text = this.renderText(n)
+    // Approvals go through the dedicated bot when there is one: taps come
+    // back to Foreman only, never to the chat agent sharing the main bot.
+    const viaApprovalBot =
+      this.approvalBotToken !== undefined && n.actions.some((a) => APPROVAL_BOT_ACTIONS.has(a.id))
+    const text = viaApprovalBot ? this.renderApprovalBotText(n) : this.renderText(n)
     const body: Record<string, unknown> = {
       chat_id: this.chatId,
       text,
       parse_mode: 'MarkdownV2',
       disable_web_page_preview: true,
     }
-    const reply_markup = renderInlineKeyboard(n.actions, n.id, this.targets(n))
+    const actions = viaApprovalBot ? n.actions.filter((a) => APPROVAL_BOT_ACTIONS.has(a.id)) : n.actions
+    const reply_markup = renderInlineKeyboard(actions, n.id, this.targets(n))
     if (reply_markup) body.reply_markup = reply_markup
-    const res = (await this.call('sendMessage', body)) as TelegramSendResponse
+    const res = (await this.call(
+      'sendMessage',
+      body,
+      viaApprovalBot ? this.approvalBotToken : this.botToken,
+    )) as TelegramSendResponse
 
     if (!res?.ok || !res.result) {
       throw new TelegramApiError(res?.description ?? 'sendMessage failed')
     }
-    return { channelMessageId: String(res.result.message_id) }
+    const id = String(res.result.message_id)
+    return { channelMessageId: viaApprovalBot ? `${APPROVAL_REF_PREFIX}${id}` : id }
   }
 
   async updateMessage(ref: ChannelMessageRef, body: string): Promise<void> {
-    await this.call('editMessageText', {
-      chat_id: this.chatId,
-      message_id: Number(ref.channelMessageId),
-      text: escapeMd(body),
-      parse_mode: 'MarkdownV2',
-    })
+    const viaApprovalBot = ref.channelMessageId.startsWith(APPROVAL_REF_PREFIX)
+    const messageId = viaApprovalBot
+      ? ref.channelMessageId.slice(APPROVAL_REF_PREFIX.length)
+      : ref.channelMessageId
+    await this.call(
+      'editMessageText',
+      {
+        chat_id: this.chatId,
+        message_id: Number(messageId),
+        text: escapeMd(body),
+        parse_mode: 'MarkdownV2',
+      },
+      viaApprovalBot ? this.approvalBotToken : this.botToken,
+    )
   }
 
   // #406 — Listen + shutdown are kept so NotificationChannel stays
@@ -120,12 +180,24 @@ export class TelegramChannel implements NotificationChannel {
   // anymore; decision routing happens via the `submit_approval` MCP
   // tool. The `onDecision` handler is intentionally retained for type
   // compatibility but never invoked from here.
-  async listen(_onDecision: (d: UserDecision) => Promise<void>): Promise<void> {
-    // intentional no-op (#406)
+  //
+  // #610 — The exception is the dedicated approval bot: its token is
+  // Foreman's alone, so Foreman is its only `getUpdates` consumer and there
+  // is no conflict with the chat agent.
+  async listen(onDecision: (d: UserDecision) => Promise<void>): Promise<void> {
+    if (!this.approvalBotToken || this.polling) return
+    const state = { stop: false, abort: new AbortController(), done: Promise.resolve() }
+    state.done = this.pollApprovalBot(state, onDecision)
+    this.polling = state
   }
 
   async shutdown(): Promise<void> {
-    // intentional no-op (#406)
+    const state = this.polling
+    if (!state) return
+    this.polling = null
+    state.stop = true
+    state.abort.abort()
+    await state.done.catch(() => undefined)
   }
 
   // ============================================================================
@@ -161,8 +233,139 @@ export class TelegramChannel implements NotificationChannel {
     return `${head}\n\n${summary}\n\n${sep}\n${commands}${tapHint}`
   }
 
-  private async call(method: string, body: unknown): Promise<unknown> {
-    const url = `${TELEGRAM_API}/bot${this.botToken}/${method}`
+  /** Approval-bot messages: no typed commands, just the buttons. */
+  private renderApprovalBotText(n: Notification): string {
+    return `*${escapeMd(n.title)}*\n\n${escapeMd(n.body)}`
+  }
+
+  // ---------------------------------------------------------------------------
+  // Approval bot polling (#610)
+  // ---------------------------------------------------------------------------
+
+  private async pollApprovalBot(
+    state: { stop: boolean; abort: AbortController },
+    onDecision: (d: UserDecision) => Promise<void>,
+  ): Promise<void> {
+    let offset = 0
+    let warnedUnreachable = false
+    while (!state.stop) {
+      const startedAt = Date.now()
+      let res: Awaited<ReturnType<TelegramFetch>>
+      try {
+        res = await this.fetchImpl(`${TELEGRAM_API}/bot${this.approvalBotToken}/getUpdates`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            offset,
+            timeout: this.pollTimeoutSeconds,
+            allowed_updates: ['callback_query', 'message'],
+          }),
+          signal: state.abort.signal,
+        })
+      } catch (err) {
+        if (state.stop) return
+        if (!warnedUnreachable) {
+          warnedUnreachable = true
+          this.onWarning(
+            `Telegram approval bot unreachable (${err instanceof Error ? err.message : String(err)}); retrying.`,
+          )
+        }
+        await pause(this.pollBackoffMs, state.abort.signal)
+        continue
+      }
+      warnedUnreachable = false
+      if (res.status === 409) {
+        this.onWarning(
+          'Another process is polling the Telegram approval bot. It must be a bot only Foreman uses — see docs/notifications.md.',
+        )
+        await pause(Math.max(this.pollBackoffMs, 30_000), state.abort.signal)
+        continue
+      }
+      if (res.status === 401 || res.status === 404) {
+        this.onWarning('Telegram rejected the approval bot token; approvals fall back to the TUI.')
+        return
+      }
+      if (!res.ok) {
+        await pause(this.pollBackoffMs, state.abort.signal)
+        continue
+      }
+      const body = (await res.json().catch(() => null)) as { result?: TelegramUpdate[] } | null
+      const updates = body?.result ?? []
+      for (const update of updates) {
+        offset = Math.max(offset, update.update_id + 1)
+        try {
+          await this.handleApprovalBotUpdate(update, onDecision)
+        } catch {
+          // One bad update must not stop the poller.
+        }
+      }
+      const elapsed = Date.now() - startedAt
+      if (updates.length === 0 && elapsed < this.minPollIntervalMs) {
+        await pause(this.minPollIntervalMs - elapsed, state.abort.signal)
+      }
+    }
+  }
+
+  private async handleApprovalBotUpdate(
+    update: TelegramUpdate,
+    onDecision: (d: UserDecision) => Promise<void>,
+  ): Promise<void> {
+    const tap = update.callback_query
+    if (!tap) {
+      const msg = update.message
+      if (msg && String(msg.chat?.id) === this.chatId && msg.text?.startsWith('/start')) {
+        await this.call(
+          'sendMessage',
+          {
+            chat_id: this.chatId,
+            text: 'Foreman approval bot connected. Approval requests will appear here; tap a button to decide.',
+          },
+          this.approvalBotToken,
+        )
+      }
+      return
+    }
+    const answer = (text: string): Promise<unknown> =>
+      this.call('answerCallbackQuery', { callback_query_id: tap.id, text }, this.approvalBotToken)
+    // Only the configured user, in the configured private chat.
+    const fromId = String(tap.from?.id ?? '')
+    const chatId = String(tap.message?.chat?.id ?? '')
+    if (chatId !== this.chatId || fromId !== this.chatId) {
+      await answer('Not allowed.')
+      return
+    }
+    const match = /^fa:([a-z_]+):(.+)$/.exec(tap.data ?? '')
+    const action = match?.[1]
+    if (!match || !action || !APPROVAL_BOT_ACTIONS.has(action)) {
+      await answer('Unsupported button.')
+      return
+    }
+    const { approvalId, tag } = parseApprovalToken(match[2]!)
+    if (!this.signApproval || !tag || !sameText(this.signApproval(approvalId, action), tag)) {
+      await answer('This button is no longer valid.')
+      return
+    }
+    await onDecision({
+      notificationId: '',
+      requestId: approvalId,
+      decision: action as UserDecision['decision'],
+      decidedBy: `telegram:${fromId}`,
+      decidedAt: Date.now(),
+      channel: 'telegram',
+    })
+    await answer(action.startsWith('allow') ? 'Allowed ✓' : 'Denied ✗')
+    // Take the buttons away so a second tap can't race the first.
+    if (tap.message) {
+      await this.call(
+        'editMessageReplyMarkup',
+        { chat_id: this.chatId, message_id: tap.message.message_id, reply_markup: { inline_keyboard: [] } },
+        this.approvalBotToken,
+      ).catch(() => undefined)
+    }
+  }
+
+  private async call(method: string, body: unknown, token: string = this.botToken): Promise<unknown> {
+    const url = `${TELEGRAM_API}/bot${token}/${method}`
     const res = await this.fetchImpl(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -355,4 +558,25 @@ const MD_ESCAPE_RE = /([_*\[\]()~`>#+\-=|{}.!\\])/g
 
 export function escapeMd(s: string): string {
   return s.replace(MD_ESCAPE_RE, '\\$1')
+}
+
+function sameText(a: string, b: string): boolean {
+  const x = Buffer.from(a)
+  const y = Buffer.from(b)
+  return x.length === y.length && timingSafeEqual(x, y)
+}
+
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve()
+    const t = setTimeout(resolve, ms)
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(t)
+        resolve()
+      },
+      { once: true },
+    )
+  })
 }

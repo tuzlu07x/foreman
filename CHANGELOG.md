@@ -22,6 +22,12 @@ All notable changes to Foreman are documented here. The format follows
   - Inbox (#613). Approvals, blocked calls, crashed or missing agents, task
     results, budget alerts and updates are kept with read state. The TUI
     shows an unread badge and toasts; `foreman inbox` works from any shell.
+- **Telegram approval bot** (#610, `foreman notify approval-bot`).
+  - Approvals go through a second bot that only Foreman holds and polls, so
+    no agent ever sees an approval button.
+  - Taps are accepted only from your chat and only with the button's HMAC
+    tag, and the buttons are removed after the first tap.
+  - `foreman doctor` suggests it when Telegram approvals are relayed.
 - `assign` and `org` chat verbs: route a task through `org.yaml` from
   Telegram or the TUI.
 - `NO_COLOR` is honoured by the TUI.

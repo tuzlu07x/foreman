@@ -289,6 +289,10 @@ export function startForeman(
     notifyConfigPath: paths.notifyConfigPath,
     notifyStatePath: paths.notifyStatePath,
     llmConfigPath: paths.llmConfigPath,
+    // Channel trouble (e.g. someone else polling the approval bot) lands
+    // in the inbox, once per distinct message.
+    onChannelWarning: (message) =>
+      inbox.add({ level: "warning", kind: "system", title: message, dedupeKey: `channel:${message}` }),
   });
   const notificationBridge = notificationSetup?.bridge ?? null;
   const dailyScheduler = notificationSetup?.scheduler ?? null;
@@ -1041,6 +1045,7 @@ function setupNotificationBridge(args: {
   notifyConfigPath: string;
   notifyStatePath: string;
   llmConfigPath: string;
+  onChannelWarning?: (message: string) => void;
 }): {
   bridge: NotificationBridge;
   scheduler: DailyScheduler | null;
@@ -1061,6 +1066,7 @@ function setupNotificationBridge(args: {
     // Buttons carry HMAC-tagged approval ids so the relaying chat agent
     // cannot approve a call the user never tapped.
     signApproval: approvalSigner(loadOrCreateSecretsMasterKey()),
+    ...(args.onChannelWarning ? { onChannelWarning: args.onChannelWarning } : {}),
   });
 
   if (channels.size === 0) return null;

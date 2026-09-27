@@ -374,8 +374,9 @@ export class NotificationBridge {
   }
 
   private async handleOobDecision(d: UserDecision): Promise<void> {
-    const row = this.service.getNotification(d.notificationId)
-    if (!row || !row.requestId) return
+    const row = d.notificationId ? this.service.getNotification(d.notificationId) : null
+    const requestId = d.requestId ?? row?.requestId
+    if (!requestId) return
     // Translate channel verbs into the approval:resolved shape that
     // ApprovalBridge + BusApprovalService already understand.
     const decision = d.decision === 'allow' || d.decision === 'allow_always' ? 'allowed' : 'denied'
@@ -386,13 +387,13 @@ export class NotificationBridge {
           ? 'deny'
           : undefined
     this.bus.emit('approval:resolved', {
-      requestId: row.requestId,
+      requestId,
       decision,
       remember,
       resolvedBy: 'user',
       // #302 — tag the channel so the mediator's decidedBy carries
       // "user:telegram" instead of bare "user".
-      via: channelToVia(row.channel),
+      via: channelToVia(row?.channel ?? d.channel ?? ''),
     })
   }
 }

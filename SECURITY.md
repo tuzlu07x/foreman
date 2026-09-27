@@ -54,15 +54,16 @@ Known limits, which we track as roadmap items rather than hide:
 - **Self-declared agent ids.** `--source` identifies an agent on the MCP
   path. Per-agent identity tokens are planned. Blocked and paused agents
   are denied on every transport today.
-- **Relayed approvals.** Telegram decisions reach Foreman through the chat
-  agent that polls the bot. Each allow button carries an HMAC tag bound to
-  that action. Other agents can't approve anything, and the chat agent
-  can't approve before you tap, because allow tokens never appear in the
-  message text. But once you tap *any* button on a message, Telegram hands
-  the chat agent the whole keyboard. So against a compromised chat agent,
-  the tags are defence in depth only. Approve that agent's own risky calls
-  in the TUI. A dedicated approval bot that Foreman polls itself is
-  planned. Push-only channels (Slack, Discord, email, ntfy) never carry
-  approval tokens.
+- **Relayed approvals.** By default, Telegram decisions reach Foreman
+  through the chat agent that polls the bot. Each allow button carries an
+  HMAC tag bound to that action. Other agents can't approve anything, and
+  the chat agent can't approve before you tap, because allow tokens never
+  appear in the message text. But once you tap *any* button on a message,
+  Telegram hands the chat agent the whole keyboard, so against a
+  compromised chat agent the tags are defence in depth only.
+  **Close this with the approval bot** (`foreman notify approval-bot`): a
+  second bot that only Foreman holds and polls. Approvals then never pass
+  through an agent. Push-only channels (Slack, Discord, email, ntfy) never
+  carry approval tokens.
 - **Pre-execution only.** Foreman decides before a call runs; it does not
   roll back side effects of calls you approved.
