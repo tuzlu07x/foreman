@@ -26,21 +26,6 @@
     "db:generate": "drizzle-kit generate",
     "db:check": "drizzle-kit check"
   },
-  "pkg": {
-    "scripts": [],
-    "assets": [
-      "dist/db/migrations/**/*",
-      "dist/assets/mascot/**/*",
-      "dist/registry/**/*"
-    ],
-    "targets": [
-      "node22-macos-arm64",
-      "node22-macos-x64",
-      "node22-linux-x64",
-      "node22-linux-arm64"
-    ],
-    "outputPath": "dist-binaries"
-  },
   "engines": {
     "node": ">=22.12"
   },
