@@ -151,14 +151,22 @@ export class AgentDaemonManager {
       stdio: ["ignore", "pipe", "pipe"],
       detached: false,
     });
-    if (!child.pid) {
-      this.emit({
-        kind: "skipped",
-        agentId,
-        reason: `failed to spawn ${command}`,
-      });
-      return;
-    }
+    // A missing binary (`hermes` registered but not installed) surfaces as
+    // an async 'error' event. Unhandled, it took down `foreman start`.
+    child.on("error", (err: NodeJS.ErrnoException) => {
+      const notFound = err.code === "ENOENT";
+      const stderr = notFound
+        ? `${command}: command not found. Install it, or run \`foreman agent disable ${agentId}\`.`
+        : `${command}: ${err.message}`;
+      if (this.tracked.get(agentId)?.process === child) {
+        this.tracked.delete(agentId);
+        this.removePidfile(agentId);
+      }
+      const exitCode = notFound ? 127 : 1;
+      this.lastCrash.set(agentId, { exitCode, stderr });
+      this.emit({ kind: "crashed", agentId, pid: child.pid ?? 0, exitCode, stderr });
+    });
+    if (!child.pid) return;
     const tracked: TrackedDaemon = {
       agentId,
       pid: child.pid,
