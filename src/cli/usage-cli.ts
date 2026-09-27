@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { closeDb, getDb } from "../db/client.js";
-import { foremanSpend, formatTokens, formatUsd, parsePeriod, spendBy } from "../core/usage/report.js";
+import { foremanSpend, formatCost, formatTokens, formatUsd, parsePeriod, spendBy } from "../core/usage/report.js";
 import { codexTelemetrySnippet, loadOrCreateUsageKey, otlpPort, telemetryEnv } from "../core/usage/telemetry-env.js";
 import { getForemanPaths } from "../utils/config.js";
 import { bold, dim, green, orange, red } from "./colors.js";
@@ -45,12 +45,15 @@ usageCommand
         return;
       }
       for (const r of rows) {
-        console.log(`  ${r.key.padEnd(22)} ${formatUsd(r.costUsd, r.estimated).padStart(10)}  ${dim(`${formatTokens(r.tokens)} tokens`)}`);
+        console.log(`  ${r.key.padEnd(22)} ${formatCost(r).padStart(10)}  ${dim(`${formatTokens(r.tokens)} tokens`)}`);
       }
       if (foreman) {
         console.log(`  ${"foreman (itself)".padEnd(22)} ${formatUsd(foreman.costUsd).padStart(10)}  ${dim(`${formatTokens(foreman.tokens)} tokens`)}`);
       }
       if (estimated) console.log(dim("  ≈ estimated from list prices (the agent reported tokens, not cost)"));
+      if (rows.some((r) => r.unpricedTokens > 0)) {
+        console.log(dim("  unpriced: the agent didn't say which model it used; set one with `foreman org add-role … --model` or the agent's model"));
+      }
     } finally {
       closeDb();
     }
