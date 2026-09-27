@@ -9,6 +9,7 @@ import type { JSX } from "react";
 import { WizardProgress } from "../components/wizard-progress.js";
 import { theme } from "../theme.js";
 import type { WizardContext } from "./context.js";
+import { stepProgress } from "./progress.js";
 import {
   applyProvidersPickerSubmit,
   buildProviderPromptList,
@@ -52,7 +53,7 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
     }));
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <WizardProgress current={1} total={4} label="LLM Providers" phase="pick which to configure" />
+        <WizardProgress {...stepProgress("providers")} label="LLM Providers" phase="pick which to configure" />
         <Text color={theme.fg.muted}>
           ↑↓ move · <Text bold>Space toggle</Text> · Enter confirm. Pick the
           LLM providers you already have access to. Each one stores its key
@@ -119,8 +120,7 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
       return (
         <Box flexDirection="column" gap={1} paddingY={1}>
           <WizardProgress
-            current={1}
-            total={4}
+            {...stepProgress("providers")}
             label="LLM Providers"
             phase={`auth mode ${theme.symbols.bullet} ${providerLabel}`}
           />
@@ -178,8 +178,7 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <WizardProgress
-          current={1}
-          total={4}
+          {...stepProgress("providers")}
           label="LLM Providers"
           phase={`value ${providerIdx + 1} of ${providerPrompts.length} ${theme.symbols.bullet} ${provider.name}`}
         />
@@ -278,7 +277,7 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
     const skippedCount = providersSkipped.length;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <WizardProgress current={1} total={4} label="LLM Providers" phase="summary" />
+        <WizardProgress {...stepProgress("providers")} label="LLM Providers" phase="summary" />
         {savedCount > 0 ? (
           <Box flexDirection="column">
             <Text color={theme.accent.success}>

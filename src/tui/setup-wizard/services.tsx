@@ -6,6 +6,7 @@ import { osc8 } from "../osc8.js";
 import { persistVoiceConfig } from "../setup-wizard-voice-persist.js";
 import { theme } from "../theme.js";
 import type { WizardContext } from "./context.js";
+import { stepProgress } from "./progress.js";
 import {
   applyServicesPickerSubmit,
   applyServiceValueSubmit,
@@ -50,7 +51,7 @@ if (servicesPhase === "picker") {
   });
   return (
     <Box flexDirection="column" gap={1} paddingY={1}>
-      <WizardProgress current={3} total={4} label="Services" phase="pick which to configure" />
+      <WizardProgress {...stepProgress("services")} label="Services" phase="pick which to configure" />
       <Text color={theme.fg.muted}>
         ↑↓ move · <Text bold>Space toggle</Text> · Enter confirm. 3rd-party
         tokens (Telegram, Discord, Slack, GitHub, …). Each one stores its
@@ -99,8 +100,7 @@ if (servicesPhase === "values") {
   return (
     <Box flexDirection="column" gap={1} paddingY={1}>
       <WizardProgress
-        current={3}
-        total={4}
+        {...stepProgress("services")}
         label="Services"
         phase={`prompt ${serviceIdx + 1} of ${servicePrompts.length} ${theme.symbols.bullet} ${headerLabel}`}
       />
@@ -204,7 +204,7 @@ if (servicesPhase === "summary") {
     !servicesSaved.some((n) => n.startsWith("telegram-"));
   return (
     <Box flexDirection="column" gap={1} paddingY={1}>
-      <WizardProgress current={3} total={4} label="Services" phase="summary" />
+      <WizardProgress {...stepProgress("services")} label="Services" phase="summary" />
       {savedCount > 0 ? (
         <Box flexDirection="column">
           <Text color={theme.accent.success}>

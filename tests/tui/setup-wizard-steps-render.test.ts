@@ -252,6 +252,20 @@ describe('welcome step', () => {
   })
 })
 
+describe('step numbering', () => {
+  it.each([
+    ['providers', 'Step 1 of 5 ▸ LLM Providers'],
+    ['foreman-llm', "Step 2 of 5 ▸ Foreman's brain"],
+    ['agents', 'Step 3 of 5 ▸ Agents'],
+    ['services', 'Step 4 of 5 ▸ Services'],
+    ['required-setup', 'Step 5 of 5 ▸ Required setup'],
+    ['install', 'Step 5 of 5 ▸ Install + configure'],
+  ] as const)('%s shows "%s"', async (step, header) => {
+    const w = await mount(step)
+    await w.until(header)
+  })
+})
+
 describe('providers step', () => {
   it('stores a pasted key in the encrypted store and summarises it', async () => {
     const w = await mount('providers')

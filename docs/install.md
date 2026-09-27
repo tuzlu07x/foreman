@@ -98,13 +98,13 @@ foreman start
 
 The wizard auto-launches because the foreman home doesn't exist yet. Walk through:
 
-1. **Welcome** → `y` to continue.
-2. **Step 1 / 4 — API keys** — three keys are pre-checked (`anthropic-key`, `openai-key`, `telegram-bot-token`). Toggle off any you don't have today with Space; Enter confirms.
-3. The wizard then prompts for each selected key's value with a help URL (e.g. `Get yours at: https://console.anthropic.com/settings/keys`). Paste; Enter.
-4. **Step 2 / 4 — Agents** — `hermes` + `claude-code` are pre-checked. Space to toggle `openclaw` / `codex` / `zeroclaw` / `generic-mcp` if you want them, Enter confirms.
-5. **Step 3 / 4 — Install + configure** — Foreman prints `Selected agents: …` and `Will install: …`, then runs the install / config-inject / Foreman-identity-write for each agent.
-6. **Step 4 / 4 — Policy** — `n` to skip the editor (defaults are sensible) or `y` to review.
-7. **Done** — the TUI mounts.
+1. **Welcome** → Enter to start.
+2. **Step 1 of 5 — LLM Providers** — Space toggles the providers you have, Enter confirms. For Anthropic / OpenAI you can sign in with your Claude / ChatGPT subscription instead of pasting a key; otherwise paste each key at its prompt (a help URL is shown, e.g. `Get yours at: https://console.anthropic.com/settings/keys`).
+3. **Step 2 of 5 — Foreman's brain** — pick the LLM Foreman itself uses: a configured cloud provider (and model), local Ollama, an OpenAI-compatible preset, or Skip.
+4. **Step 3 of 5 — Agents** — `hermes` + `claude-code` are pre-checked; agents whose LLM isn't configured are hidden. Per agent, pick its LLM, route and model plus an optional responsibility note, then confirm.
+5. **Step 4 of 5 — Services** — optional tokens (Telegram, Discord, Slack, GitHub, …). If two chat agents share a channel, you pick which one is primary.
+6. **Step 5 of 5 — Install + Verify** — required setup lists any keys the chosen routes still need (paste or skip), then Foreman installs, configures and registers each agent.
+7. **Done** — a summary; press Enter to open the TUI.
 
 The dashboard shows three panels (Agents · Activity · Today) and the status bar lists every hotkey:
 ```

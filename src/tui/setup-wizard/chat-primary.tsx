@@ -5,6 +5,7 @@ import type { AgentEntry } from "../../core/registry-catalog.js";
 import { WizardProgress } from "../components/wizard-progress.js";
 import { theme } from "../theme.js";
 import type { WizardContext } from "./context.js";
+import { stepProgress } from "./progress.js";
 import type { WizardState } from "./state.js";
 
 export interface ChatPrimaryChannel {
@@ -144,8 +145,7 @@ export function renderChatPrimaryStep(ctx: WizardContext): JSX.Element {
   return (
     <Box flexDirection="column" gap={1} paddingY={1}>
       <WizardProgress
-        current={4}
-        total={5}
+        {...stepProgress("chat-primary")}
         label={`Primary ${channelLabel} agent`}
         phase={`${chatPrimaryChannelIdx + 1} of ${chatPrimaryChannelsNeeded.length}`}
       />

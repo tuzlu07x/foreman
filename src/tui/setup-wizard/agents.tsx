@@ -11,6 +11,7 @@ import {
   computeAgentDiff,
 } from "./agents-logic.js";
 import type { WizardContext } from "./context.js";
+import { stepProgress } from "./progress.js";
 import { configuredProviderIds, DEFAULT_AGENTS } from "./shared.js";
 
 // Step 3 — Agents: picker → per-agent config (agent-config.tsx) → confirm.
@@ -79,7 +80,7 @@ export function renderAgentsStep(ctx: WizardContext): JSX.Element | null {
     const defaults = compatibleDefaults;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <WizardProgress current={2} total={4} label="Agents" phase="pick which to install" />
+        <WizardProgress {...stepProgress("agents")} label="Agents" phase="pick which to install" />
         <Text color={theme.fg.muted}>
           ↑↓ move · <Text bold>Space toggle</Text> · Enter confirm. Defaults
           are pre-checked — toggle off any you don't want, toggle on any you
@@ -142,7 +143,7 @@ export function renderAgentsStep(ctx: WizardContext): JSX.Element | null {
     const nothingSelected = agentsSelected.length === 0;
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
-        <WizardProgress current={2} total={4} label="Agents" phase="confirm" />
+        <WizardProgress {...stepProgress("agents")} label="Agents" phase="confirm" />
         <Text color={theme.fg.muted}>
           Selected:{" "}
           {agentsSelected.length > 0 ? agentsSelected.join(", ") : "(none)"}

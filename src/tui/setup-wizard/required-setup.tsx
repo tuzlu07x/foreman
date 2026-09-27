@@ -11,6 +11,7 @@ import { openInBrowser } from "../../utils/browser-open.js";
 import { WizardProgress } from "../components/wizard-progress.js";
 import { theme } from "../theme.js";
 import type { WizardContext } from "./context.js";
+import { stepProgress } from "./progress.js";
 import type { WizardState } from "./state.js";
 
 // #408 / #411 Phase 3 — required-setup resolution.
@@ -252,8 +253,7 @@ export function renderRequiredSetupStep(ctx: WizardContext): JSX.Element {
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <WizardProgress
-          current={5}
-          total={5}
+          {...stepProgress("required-setup")}
           label="Required setup"
           phase={`paste ${cur?.slotName ?? "key"}`}
         />
@@ -286,8 +286,7 @@ export function renderRequiredSetupStep(ctx: WizardContext): JSX.Element {
   return (
     <Box flexDirection="column" gap={1} paddingY={1}>
       <WizardProgress
-        current={5}
-        total={5}
+        {...stepProgress("required-setup")}
         label="Required setup"
         phase={complete ? "all set" : "missing keys"}
       />

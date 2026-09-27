@@ -6,6 +6,7 @@ import { classifyInstallLog } from "../install-log-classify.js";
 import { singleBorder, theme } from "../theme.js";
 import { computeAgentDiff } from "./agents-logic.js";
 import type { WizardContext } from "./context.js";
+import { stepProgress } from "./progress.js";
 import { runInstallStep } from "./install-runner.js";
 import type { AgentInstallFailure, FailureResolution } from "./types.js";
 
@@ -168,8 +169,7 @@ export function renderInstallStep(ctx: WizardContext): JSX.Element {
   return (
     <Box flexDirection="column" gap={1} paddingY={1}>
       <WizardProgress
-        current={4}
-        total={4}
+        {...stepProgress("install")}
         label="Install + configure"
         phase={installRunning ? "running" : "ready"}
       />

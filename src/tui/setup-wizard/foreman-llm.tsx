@@ -8,6 +8,7 @@ import { planOllamaInstall } from "../../core/ollama-installer.js";
 import { WizardProgress } from "../components/wizard-progress.js";
 import { theme } from "../theme.js";
 import type { WizardContext } from "./context.js";
+import { stepProgress } from "./progress.js";
 import {
   brainPickerChoices,
   brainPickerCursor,
@@ -127,8 +128,7 @@ export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <WizardProgress
-          current={2}
-          total={5}
+          {...stepProgress("foreman-llm")}
           label="Foreman's brain"
           phase="pick an LLM"
         />
@@ -188,8 +188,7 @@ export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
       return (
         <Box flexDirection="column" gap={1} paddingY={1}>
           <WizardProgress
-            current={2}
-            total={5}
+            {...stepProgress("foreman-llm")}
             label="Foreman's brain"
             phase={`fetching ${providerLabel} models`}
           />
@@ -206,8 +205,7 @@ export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
       return (
         <Box flexDirection="column" gap={1} paddingY={1}>
           <WizardProgress
-            current={2}
-            total={5}
+            {...stepProgress("foreman-llm")}
             label="Foreman's brain"
             phase={
               cloudModelInfo
@@ -232,8 +230,7 @@ export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <WizardProgress
-          current={2}
-          total={5}
+          {...stepProgress("foreman-llm")}
           label="Foreman's brain"
           phase={`pick a ${providerLabel} model`}
         />
@@ -300,8 +297,7 @@ export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <WizardProgress
-          current={2}
-          total={5}
+          {...stepProgress("foreman-llm")}
           label="Foreman's brain"
           phase="Ollama not installed"
         />
@@ -356,8 +352,7 @@ export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <WizardProgress
-          current={2}
-          total={5}
+          {...stepProgress("foreman-llm")}
           label="Foreman's brain"
           phase="Ollama ▸ pick a model"
         />
@@ -443,8 +438,7 @@ export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <WizardProgress
-          current={2}
-          total={5}
+          {...stepProgress("foreman-llm")}
           label="Foreman's brain"
           phase="OpenAI-compatible ▸ pick a preset"
         />
@@ -487,8 +481,7 @@ export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <WizardProgress
-          current={2}
-          total={5}
+          {...stepProgress("foreman-llm")}
           label="Foreman's brain"
           phase={`${preset.name} ▸ API key`}
         />

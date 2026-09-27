@@ -8,6 +8,7 @@ import {
   findSiblingCredHint,
 } from "./agents-logic.js";
 import type { WizardContext } from "./context.js";
+import { stepProgress } from "./progress.js";
 import { computePickerViewport } from "./shared.js";
 
 // ---------------- Agents — per-agent config ----------------
@@ -71,8 +72,7 @@ export function renderAgentConfigStep(ctx: WizardContext): JSX.Element {
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <WizardProgress
-          current={2}
-          total={4}
+          {...stepProgress("agents")}
           label="Agents"
           phase={`${agent.name} ${progress}`}
         />
@@ -137,8 +137,7 @@ export function renderAgentConfigStep(ctx: WizardContext): JSX.Element {
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <WizardProgress
-          current={2}
-          total={4}
+          {...stepProgress("agents")}
           label="Agents"
           phase={`${agent.name} ${progress} · how to reach ${providerLabel}`}
         />
@@ -242,8 +241,7 @@ export function renderAgentConfigStep(ctx: WizardContext): JSX.Element {
       return (
         <Box flexDirection="column" gap={1} paddingY={1}>
           <WizardProgress
-            current={2}
-            total={4}
+            {...stepProgress("agents")}
             label="Agents"
             phase={`${agent.name} ${progress} · fetching ${providerLabel} models`}
           />
@@ -258,8 +256,7 @@ export function renderAgentConfigStep(ctx: WizardContext): JSX.Element {
       return (
         <Box flexDirection="column" gap={1} paddingY={1}>
           <WizardProgress
-            current={2}
-            total={4}
+            {...stepProgress("agents")}
             label="Agents"
             phase={`${agent.name} ${progress} · model discovery failed`}
           />
@@ -276,8 +273,7 @@ export function renderAgentConfigStep(ctx: WizardContext): JSX.Element {
     return (
       <Box flexDirection="column" gap={1} paddingY={1}>
         <WizardProgress
-          current={2}
-          total={4}
+          {...stepProgress("agents")}
           label="Agents"
           phase={`${agent.name} ${progress} · pick a ${providerLabel} model`}
         />
@@ -335,8 +331,7 @@ export function renderAgentConfigStep(ctx: WizardContext): JSX.Element {
   return (
     <Box flexDirection="column" gap={1} paddingY={1}>
       <WizardProgress
-        current={2}
-        total={4}
+        {...stepProgress("agents")}
         label="Agents"
         phase={`${agent.name} — responsibility note ${progress}`}
       />
