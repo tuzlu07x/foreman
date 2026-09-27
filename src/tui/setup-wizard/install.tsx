@@ -8,8 +8,12 @@ import { computeAgentDiff } from "./agents-logic.js";
 import type { WizardContext } from "./context.js";
 import { stepProgress } from "./progress.js";
 import { runInstallStep } from "./install-runner.js";
-import { INSTALL_QUIT_NOTICE } from "./quit.js";
-import type { AgentInstallFailure, FailureResolution } from "./types.js";
+import { installQuitNoticeText } from "./quit.js";
+import type {
+  AgentInstallFailure,
+  FailureResolution,
+  InstallStepSummary,
+} from "./types.js";
 
 // #459 — Braille spinner frames used by the install step. 10-frame rotation
 // at 80ms = 8 frames/sec — matches the snappy boot-mascot vibe.
@@ -52,6 +56,20 @@ export function useInstallSpinner(ctx: WizardContext): void {
   }, [installRunning, installSummary, installStartedAt]);
 }
 
+/** Summary for an install whose runner threw: nothing is known to have
+ *  succeeded, so every agent it was adding counts as failed. */
+export function failedInstallSummary(toAdd: string[]): InstallStepSummary {
+  return {
+    registered: [],
+    identityPushed: [],
+    identitySkipped: [],
+    identityNotApplicable: [],
+    failed: [...toAdd],
+    removed: [],
+    mcpRegisterFailed: [],
+  };
+}
+
 // Starts the install once, when the wizard reaches the install step. It
 // used to start from inside render (guarded by `installRunning`), a side
 // effect React is free to repeat or discard. The ref guard keeps it to one
@@ -77,6 +95,7 @@ export function useInstallKickoff(ctx: WizardContext): void {
     setInstallSummary,
     setPendingFailure,
     setInstallStartedAt,
+    setInstallSettled,
   } = ctx.set;
   const started = useRef(false);
   useEffect(() => {
@@ -120,10 +139,23 @@ export function useInstallKickoff(ctx: WizardContext): void {
       agentConfigs,
       onFailure,
       { providersSelected, servicesSelected },
-    ).then((summary) => {
-      setInstallSummary(summary);
-      advance("install");
-    });
+    ).then(
+      (summary) => {
+        setInstallSettled(true);
+        setInstallSummary(summary);
+        advance("install");
+      },
+      (err: unknown) => {
+        // A runner that throws used to leave the wizard stuck on this
+        // screen (and the rejection unhandled). Record every agent as
+        // failed, keep the reason in the install log, and move on to Done.
+        const reason = err instanceof Error ? err.message : String(err);
+        setInstallLog((prev) => [...prev, `✗ install step failed: ${reason}`]);
+        setInstallSettled(true);
+        setInstallSummary(failedInstallSummary(toAdd));
+        advance("install");
+      },
+    );
     // Runs once per wizard; the step's inputs are fixed by the time it
     // starts (back-navigation is disabled during install).
   }, [currentStep]);
@@ -289,7 +321,9 @@ export function renderInstallStep(ctx: WizardContext): JSX.Element {
         </Text>
       )}
       {installQuitNotice ? (
-        <Text color={theme.accent.warning}>{INSTALL_QUIT_NOTICE}</Text>
+        <Text color={theme.accent.warning}>
+          {installQuitNoticeText(pendingFailure !== null)}
+        </Text>
       ) : null}
     </Box>
   );

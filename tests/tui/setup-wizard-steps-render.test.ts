@@ -17,6 +17,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, t
 
 const install = vi.hoisted(() => ({
   resolution: null as string | null,
+  /** When set, the runner waits for it before doing anything ("running"). */
+  hold: null as Promise<void> | null,
+  /** When true, the runner throws (a crashed installer). */
+  reject: false,
 }))
 
 vi.mock('../../src/core/llm/models-discovery.js', async (orig) => {
@@ -87,6 +91,8 @@ vi.mock('../../src/tui/setup-wizard/install-runner.js', () => ({
         manualHint: string
       }) => Promise<string>,
     ) => {
+      if (install.hold) await install.hold
+      if (install.reject) throw new Error('fake installer crashed')
       // Hermes' install "fails" so the failure prompt can be driven.
       if (toAdd.includes('hermes')) {
         log('▸ Hermes')
@@ -169,6 +175,8 @@ afterAll(() => {
 })
 beforeEach(() => {
   install.resolution = null
+  install.hold = null
+  install.reject = false
 })
 afterEach(() => {
   unmount?.()
@@ -332,18 +340,39 @@ describe('Ctrl-C and modified hotkeys', () => {
     expect(w.onQuit).not.toHaveBeenCalled()
   })
 
-  it('Ctrl-C during install shows a notice, then quits once install is done', async () => {
+  it('Ctrl-C while the installer runs shows a notice, then quits once it is done', async () => {
     const before = vi.mocked(runInstallStep).mock.calls.length
+    let release: () => void = () => undefined
+    install.hold = new Promise<void>((r) => {
+      release = r
+    })
     const w = await mount('install')
     await w.startInstall()
-    await w.until('✗ Hermes — install failed')
     await w.press(CTRL_C, 'Install in progress — Ctrl-C again after it finishes')
+    expect(w.onQuit).not.toHaveBeenCalled()
+    release()
+    await w.until('✗ Hermes — install failed')
+    // Paused on a failure prompt: the notice says what unblocks it.
+    await w.press(CTRL_C, 'Install paused on a failure — press [r] retry or [s] skip')
     expect(w.onQuit).not.toHaveBeenCalled()
     expect(install.resolution).toBeNull()
     await w.press('s', 'Setup complete')
     await w.press(CTRL_C)
     expect(w.onQuit).toHaveBeenCalledTimes(1)
     expect(vi.mocked(runInstallStep).mock.calls.length - before).toBe(1)
+  })
+
+  it('a crashed installer records a failed summary and moves on to Done', async () => {
+    install.reject = true
+    const w = await mount('install')
+    await w.startInstall()
+    // Used to stay on the install screen forever (Ctrl-C refused too).
+    await w.until('Setup complete')
+    await w.press('l', 'Install log')
+    expect(w.frame()).toContain('✗ install step failed: fake installer crashed')
+    await w.press('b', 'What next?')
+    await w.press(CTRL_C)
+    expect(w.onQuit).toHaveBeenCalledTimes(1)
   })
 })
 
