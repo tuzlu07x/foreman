@@ -496,8 +496,8 @@ export const AgentEntrySchema = z
             section: z.string().min(1),
           })
           .optional(),
-        /** TOML file + simple top-level key=value writes (Codex's
-         *  `preferred_auth_method = "apikey"`, ZeroClaw's `api_key = "…"`). */
+        /** TOML file + simple top-level key=value writes (ZeroClaw's
+         *  `default_provider` and `api_key = "…"`). */
         toml_writes: z
           .array(
             z.object({

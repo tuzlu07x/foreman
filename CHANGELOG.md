@@ -187,6 +187,10 @@ All notable changes to Foreman are documented here. The format follows
     servers). The ignored `[mcpServers.foreman]` table is removed. When the
     file declares no agent alias, `foreman agent add` / `rewire` say how to
     grant the bundle.
+  - **Codex:** Foreman no longer writes `preferred_auth_method` into
+    `~/.codex/config.toml`; that key is gone from Codex's config schema.
+    Nothing replaces it. API keys still go to `~/.codex/auth.json`, and
+    ChatGPT sign-in is `codex login`.
 - **Opening a browser on Windows** no longer goes through `cmd /c start`.
   A URL with `&` or `|` in it could be cut short there or run a command.
   Foreman now uses `rundll32 url.dll,FileProtocolHandler` with no shell.

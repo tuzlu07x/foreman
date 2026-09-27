@@ -406,13 +406,6 @@
           "variants": {
             "oauth": {
               "label": "ChatGPT account OAuth (recommended — covered by your subscription)",
-              "toml_writes": [
-                {
-                  "path": "~/.codex/config.toml",
-                  "key": "preferred_auth_method",
-                  "value": "chatgpt"
-                }
-              ],
               "interactive_setup": "codex login",
               "post_setup_verify": "codex login status",
               "required_secret": null,
@@ -423,13 +416,6 @@
             },
             "api-key": {
               "label": "OpenAI API key (pay-per-token)",
-              "toml_writes": [
-                {
-                  "path": "~/.codex/config.toml",
-                  "key": "preferred_auth_method",
-                  "value": "apikey"
-                }
-              ],
               "auth_json_writes": {
                 "path": "~/.codex/auth.json",
                 "key": "OPENAI_API_KEY",
@@ -445,9 +431,6 @@
         }
       },
       "secret_projection": {
-        "toml_writes": [
-          { "path": "~/.codex/config.toml", "key": "preferred_auth_method", "value": "apikey" }
-        ],
         "auth_json": {
           "path": "~/.codex/auth.json",
           "key": "OPENAI_API_KEY",

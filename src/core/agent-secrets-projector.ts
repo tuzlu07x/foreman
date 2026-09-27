@@ -34,7 +34,7 @@ import type { SecretStore } from './secret-store.js'
 //   - dotenv          → Hermes (`~/.hermes/.env`)
 //   - json env block  → Claude Code, OpenClaw (`env` key inside settings.json)
 //   - json channels   → OpenClaw (`channels.telegram.botToken` etc, deep merge)
-//   - toml writes     → Codex (`preferred_auth_method`), ZeroClaw (`api_key`)
+//   - toml writes     → ZeroClaw (`default_provider`, `api_key`)
 //   - auth json file  → Codex (`~/.codex/auth.json` — flat JSON map)
 //
 // All writers are atomic (tmpfile + rename), chmod 0600, and deep-merge so
@@ -262,7 +262,7 @@ export function projectSecretsForAgent(
   // -----------------------------------------------------------------------
   // 3) toml_writes → flat key=value
   //    When the resolver won, it carries the agent's provider-related TOML
-  //    writes (Codex `preferred_auth_method`, ZeroClaw `default_provider`).
+  //    writes (ZeroClaw `default_provider`).
   //    Legacy `toml_writes` block today has no `if_service` filter — every
   //    entry is provider-implicit — so the whole block stays gated. If a
   //    future agent adds a service-gated TOML write, refactor to per-entry

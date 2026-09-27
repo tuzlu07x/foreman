@@ -233,7 +233,7 @@ describe("Bundled registry — each shipped agent's provider_mapping (#408 phase
     const codex = doc.agents.find((a) => a.id === "codex");
     const apiKey = codex?.provider_mapping?.openai?.variants["api-key"];
     expect(apiKey?.auth_json_writes?.key).toBe("OPENAI_API_KEY");
-    expect(apiKey?.toml_writes?.[0]?.value).toBe("apikey");
+    expect(apiKey?.toml_writes ?? []).toEqual([]); // #591: no preferred_auth_method
     expect(apiKey?.required_secret).toBe("openai-key");
   });
 

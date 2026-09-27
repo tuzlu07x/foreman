@@ -99,7 +99,8 @@ describe("resolveAgentProviderConfig — happy paths", () => {
     expect(result.config.interactiveSetup).toBe("codex login");
     expect(result.config.postSetupVerify).toBe("codex login status");
     expect(result.config.requiredSecret).toBeNull();
-    expect(result.config.tomlWrites[0]?.value).toBe("chatgpt");
+    // #591: no preferred_auth_method write; Codex dropped the key.
+    expect(result.config.tomlWrites).toEqual([]);
   });
 
   it("Codex + openai with api-key override gets auth_json_writes", () => {
@@ -115,7 +116,7 @@ describe("resolveAgentProviderConfig — happy paths", () => {
     expect(result.config.authJsonWrites[0]?.value).toBe(
       "${secret:openai-key}",
     );
-    expect(result.config.tomlWrites[0]?.value).toBe("apikey");
+    expect(result.config.tomlWrites).toEqual([]);
   });
 
   it("Claude Code + anthropic resolves to direct variant with ANTHROPIC_API_KEY", () => {

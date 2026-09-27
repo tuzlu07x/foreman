@@ -162,6 +162,31 @@ describe('MCP wiring targets', () => {
     })
   })
 
+  describe('Codex', () => {
+    it("writes no `preferred_auth_method`: it is no longer a key of Codex's ConfigToml", () => {
+      const entry = findAgent(loadBundledRegistry(), 'codex')
+      expect(JSON.stringify(entry)).not.toContain('preferred_auth_method')
+      expect(entry.secret_projection?.toml_writes ?? []).toEqual([])
+      for (const variant of Object.values(entry.provider_mapping?.openai?.variants ?? {})) {
+        expect(variant.toml_writes ?? []).toEqual([])
+      }
+    })
+
+    it('keeps MCP wiring in [mcp_servers.foreman] of config.toml', () => {
+      const entry = bundled('codex', home)
+      const config = join(home, '.codex', 'config.toml')
+      mkdirSync(join(home, '.codex'))
+      writeFileSync(config, 'model = "gpt-5"\n')
+      rewireAgent(store, 'codex', entry)
+      const doc = parseToml(readFileSync(config, 'utf-8')) as unknown as {
+        model: string
+        mcp_servers: { foreman: { env: Record<string, string> } }
+      }
+      expect(doc.model).toBe('gpt-5')
+      expect(verifyAgentToken(store, 'codex', doc.mcp_servers.foreman.env.FOREMAN_AGENT_TOKEN!)).toBe(true)
+    })
+  })
+
   describe('ZeroClaw', () => {
     interface ZcDoc {
       default_provider?: string

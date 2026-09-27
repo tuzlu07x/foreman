@@ -182,7 +182,7 @@ Foreman's MCP transport handles policy + audit at runtime, but every tier-1 agen
 | Hermes | `~/.hermes/.env` | dotenv (mode 0600, merges with user's own keys) |
 | Claude Code | `~/.claude/settings.json` → `env` block | deep-merged JSON |
 | OpenClaw | `~/.openclaw/openclaw.json` → `env` + `channels.*` | deep-merged JSON |
-| Codex | `~/.codex/config.toml` (`preferred_auth_method`) + `~/.codex/auth.json` (`OPENAI_API_KEY`) | line-level TOML + flat JSON |
+| Codex | `~/.codex/auth.json` (`OPENAI_API_KEY`) | flat JSON |
 | ZeroClaw | `~/.zeroclaw/config.toml` (`default_provider` + `api_key`) | line-level TOML |
 | generic-mcp | (no auto-write) | — |
 
