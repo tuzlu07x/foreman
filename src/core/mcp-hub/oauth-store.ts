@@ -64,13 +64,16 @@ export class McpOAuthRecordError extends Error {
   }
 }
 
+/** `touch: true` records an access on the secret; status reads and the
+ *  hub's per-request re-check leave it alone. */
 export function loadMcpOAuthRecord(
   store: Pick<SecretStore, "get">,
   server: string,
+  opts: { touch?: boolean } = {},
 ): McpOAuthRecord | null {
   let json: string;
   try {
-    json = store.get(mcpOAuthSecretName(server));
+    json = store.get(mcpOAuthSecretName(server), { touch: opts.touch === true });
   } catch (err) {
     if (err instanceof SecretNotFoundError) return null;
     throw err;
@@ -90,12 +93,40 @@ export function loadMcpOAuthRecord(
   return parsed.data;
 }
 
-/** Replace the server's whole bundle in one write. */
+/** Store a new login: replace the server's whole bundle in one write. */
 export function saveMcpOAuthRecord(store: McpOAuthSecretStore, record: McpOAuthRecord): void {
   const name = mcpOAuthSecretName(record.server);
   const json = JSON.stringify(McpOAuthRecordSchema.parse(record));
   if (store.exists(name)) store.rotate(name, json);
   else store.add(name, json);
+}
+
+/** Replace the bundle only if the stored one is still `expected` (same login
+ *  and token pair). Never creates one: a session removed meanwhile (logout)
+ *  stays removed. Returns whether it wrote. */
+export function replaceMcpOAuthRecordIfUnchanged(
+  store: McpOAuthSecretStore,
+  expected: McpOAuthRecord,
+  next: McpOAuthRecord,
+): boolean {
+  let current: McpOAuthRecord | null;
+  try {
+    current = loadMcpOAuthRecord(store, expected.server);
+  } catch {
+    return false;
+  }
+  if (!current || !sameSession(current, expected)) return false;
+  store.rotate(mcpOAuthSecretName(next.server), JSON.stringify(McpOAuthRecordSchema.parse(next)));
+  return true;
+}
+
+function sameSession(a: McpOAuthRecord, b: McpOAuthRecord): boolean {
+  return (
+    a.obtained_at === b.obtained_at &&
+    a.tokens.access_token === b.tokens.access_token &&
+    a.tokens.refresh_token === b.tokens.refresh_token &&
+    a.client.client_id === b.client.client_id
+  );
 }
 
 /** Returns whether a session existed. */
@@ -118,16 +149,25 @@ export function recordSecretValues(record: McpOAuthRecord | null): string[] {
 // Status (no network: `foreman mcp list` and `doctor` read only the store)
 // -----------------------------------------------------------------------------
 
-/** Refresh this long before the stated expiry. */
+/** Refresh up to this long before the stated expiry… */
 export const EXPIRY_SKEW_MS = 60_000;
+/** …but never within this long of obtaining the token. */
+const JUST_OBTAINED_MS = 5_000;
 
 export type McpOAuthStatus =
   | { state: "logged-in"; expiresAt: number | null }
   | { state: "expired"; expiresAt: number }
   | { state: "needs-login"; reason: string };
 
+/** Due for a refresh: within min(60 s, half its lifetime) of expiry. A
+ *  short-lived token (say 30 s) is therefore used for half its life instead
+ *  of being refreshed on every request. */
 export function isExpiring(record: McpOAuthRecord, now: number): boolean {
-  return record.expires_at !== null && now >= record.expires_at - EXPIRY_SKEW_MS;
+  if (record.expires_at === null) return false;
+  if (now - record.obtained_at < JUST_OBTAINED_MS) return false;
+  const lifetime = Math.max(0, record.expires_at - record.obtained_at);
+  const skew = Math.min(EXPIRY_SKEW_MS, lifetime / 2);
+  return now >= record.expires_at - skew;
 }
 
 export function mcpOAuthStatus(

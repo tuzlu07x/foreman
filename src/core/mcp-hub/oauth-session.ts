@@ -1,10 +1,9 @@
-import { closeSync, mkdirSync, openSync, rmSync, statSync } from "node:fs";
-import { dirname } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { refreshAuthorization } from "@modelcontextprotocol/sdk/client/auth.js";
 import { OAuthMetadataSchema, type OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { withLockFile } from "./oauth-lock.js";
 import {
+  assertSecureEndpoint,
   describeOAuthFailure,
   hardenedOAuthFetch,
   isInvalidGrant,
@@ -12,9 +11,11 @@ import {
   McpOAuthRequiredError,
 } from "./oauth-http.js";
 import {
+  clearMcpOAuthRecord,
   isExpiring,
   loadMcpOAuthRecord,
   recordSecretValues,
+  replaceMcpOAuthRecordIfUnchanged,
   saveMcpOAuthRecord,
   type McpOAuthRecord,
   type McpOAuthSecretStore,
@@ -30,33 +31,31 @@ import {
 // `Authorization: Bearer …`. Agents never see the token: it is added after
 // mediation, on the hub's own connection.
 //
-// Refresh-token rotation: several `foreman mcp-stdio` processes (one per
-// agent) share one stored session. A refresh runs under a lock file, re-reads
-// the store first (another process may already have rotated the pair), and
-// persists the new access + refresh token in a single write before using
-// them. A rotated-away refresh token is therefore never presented twice.
+// The stored session is re-read on every use, so a `foreman mcp logout`
+// takes effect on the next request of a running hub. Every write to it
+// (refresh, login, logout, remove) runs under one cross-process lock
+// (oauth-lock), and a refresh only replaces the exact session it started
+// from: a rotated refresh token is never presented twice, and a logout or
+// re-login during a refresh is never undone.
 
 export interface McpOAuthSessionOptions {
   server: string;
   /** The URL from mcp.yaml; the stored session must have been issued for it. */
   serverUrl: string;
   store: McpOAuthSecretStore;
-  /** Cross-process refresh lock; `null` = in-process only (tests). */
+  /** Cross-process session lock; `null` = in-process only (tests). */
   lockPath: string | null;
   /** Upstream fetch (MCP requests and token refresh). */
   fetchFn?: FetchLike;
   now?: () => number;
 }
 
-const LOCK_WAIT_MS = 20_000;
-const LOCK_STALE_MS = 60_000;
-
 export class McpOAuthSession {
-  private record: McpOAuthRecord | null = null;
   private refreshing: Promise<McpOAuthRecord> | null = null;
   private readonly baseFetch: FetchLike;
   private readonly now: () => number;
-  /** Every token value this session has held, for error scrubbing. */
+  private touched = false;
+  /** Every token value this session has held, for scrubbing. */
   private readonly seen = new Set<string>();
 
   constructor(private readonly opts: McpOAuthSessionOptions) {
@@ -67,7 +66,7 @@ export class McpOAuthSession {
   /** A usable access token. `rejected` is a token the server just refused:
    *  if it is still the current one, it is refreshed rather than reused. */
   async accessToken(opts: { rejected?: string } = {}): Promise<string> {
-    const record = this.current();
+    const record = this.load();
     const stale = opts.rejected !== undefined && record.tokens.access_token === opts.rejected;
     if (!stale && !isExpiring(record, this.now())) return record.tokens.access_token;
     if (!this.refreshing) {
@@ -84,19 +83,20 @@ export class McpOAuthSession {
   }
 
   /** Fetch for the upstream transport: attaches the bearer token, and on a
-   *  401 refreshes once and retries. Requests to any other origin are
-   *  refused, so the token can only ever reach the server it was issued for. */
+   *  401 refreshes once and retries. Requests to any other origin, and
+   *  redirects (same-origin included), are refused, so the token only ever
+   *  reaches the server it was issued for. */
   readonly fetch: FetchLike = async (url, init) => {
     const target = new URL(url instanceof URL ? url.href : url);
     if (target.origin !== new URL(this.opts.serverUrl).origin) {
       throw new McpOAuthError(`refusing to send '${this.opts.server}' credentials to ${target.origin}`);
     }
     const token = await this.accessToken();
-    const first = await this.baseFetch(url, withBearer(init, token));
+    const first = await this.send(url, init, token);
     if (first.status !== 401) return first;
     await first.body?.cancel().catch(() => undefined);
     const fresh = await this.accessToken({ rejected: token });
-    const second = await this.baseFetch(url, withBearer(init, fresh));
+    const second = await this.send(url, init, fresh);
     if (second.status === 401) {
       await second.body?.cancel().catch(() => undefined);
       throw new McpOAuthRequiredError(this.opts.server, "the server rejected a freshly refreshed token");
@@ -104,14 +104,22 @@ export class McpOAuthSession {
     return second;
   };
 
-  private current(): McpOAuthRecord {
-    const record = this.record ?? this.load();
-    this.record = record;
-    return record;
+  private async send(url: string | URL, init: RequestInit | undefined, token: string): Promise<Response> {
+    const headers = new Headers(init?.headers);
+    headers.set("Authorization", `Bearer ${token}`);
+    const res = await this.baseFetch(url, { ...init, headers, redirect: "manual" });
+    if (res.status >= 300 && res.status < 400) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new McpOAuthError(
+        `MCP server '${this.opts.server}' answered with a redirect (HTTP ${res.status}); Foreman does not follow redirects with credentials — update its url in mcp.yaml`,
+      );
+    }
+    return res;
   }
 
   private load(): McpOAuthRecord {
-    const record = loadMcpOAuthRecord(this.opts.store, this.opts.server);
+    const record = loadMcpOAuthRecord(this.opts.store, this.opts.server, { touch: !this.touched });
+    this.touched = true;
     if (!record) throw new McpOAuthRequiredError(this.opts.server, "not logged in");
     if (record.server_url !== this.opts.serverUrl) {
       throw new McpOAuthRequiredError(this.opts.server, "the server URL in mcp.yaml changed since login");
@@ -122,13 +130,10 @@ export class McpOAuthSession {
   }
 
   private async refresh(heldAccessToken: string): Promise<McpOAuthRecord> {
-    return withLockFile(this.opts.lockPath, async () => {
+    return withSessionLock(this.opts.lockPath, async () => {
       // Another process may have refreshed (and rotated) while we waited.
       const latest = this.load();
-      if (latest.tokens.access_token !== heldAccessToken && !isExpiring(latest, this.now())) {
-        this.record = latest;
-        return latest;
-      }
+      if (latest.tokens.access_token !== heldAccessToken && !isExpiring(latest, this.now())) return latest;
       const refreshToken = latest.tokens.refresh_token;
       if (!refreshToken) {
         throw new McpOAuthRequiredError(this.opts.server, "the access token expired and there is no refresh token");
@@ -137,6 +142,7 @@ export class McpOAuthSession {
       if (!metadata.success) {
         throw new McpOAuthRequiredError(this.opts.server, "stored authorization-server metadata is unreadable");
       }
+      assertSecureEndpoint(metadata.data.token_endpoint, "token endpoint");
       let tokens: OAuthTokens;
       try {
         tokens = await refreshAuthorization(latest.authorization_server_url, {
@@ -149,15 +155,11 @@ export class McpOAuthSession {
       } catch (err) {
         if (isInvalidGrant(err)) {
           const reason = "the authorization server refused the refresh token";
-          saveMcpOAuthRecord(this.opts.store, { ...latest, needs_login: reason });
-          this.record = null;
+          replaceMcpOAuthRecordIfUnchanged(this.opts.store, latest, { ...latest, needs_login: reason });
           throw new McpOAuthRequiredError(this.opts.server, reason);
         }
         throw new McpOAuthError(
-          `token refresh for '${this.opts.server}' failed: ${describeOAuthFailure(err, [
-            ...this.seen,
-            refreshToken,
-          ])}`,
+          `token refresh for '${this.opts.server}' failed: ${describeOAuthFailure(err, [...this.seen, refreshToken])}`,
         );
       }
       const obtainedAt = this.now();
@@ -175,49 +177,86 @@ export class McpOAuthSession {
         obtained_at: obtainedAt,
       };
       for (const v of recordSecretValues(next)) this.seen.add(v);
-      // Persist before use: if this process dies now, the rotated refresh
-      // token is not lost.
-      saveMcpOAuthRecord(this.opts.store, next);
-      this.record = next;
+      // Persist before use, and only over the session we refreshed: a
+      // logout or new login in the meantime wins.
+      if (!replaceMcpOAuthRecordIfUnchanged(this.opts.store, latest, next)) return this.load();
       return next;
     });
   }
 }
 
-function withBearer(init: RequestInit | undefined, token: string): RequestInit {
-  const headers = new Headers(init?.headers);
-  headers.set("Authorization", `Bearer ${token}`);
-  return { ...init, headers };
+export function withSessionLock<T>(lockPath: string | null, fn: () => Promise<T>): Promise<T> {
+  return lockPath ? withLockFile(lockPath, fn) : fn();
 }
 
-/** Exclusive-create lock file with a stale-lock breaker. */
-async function withLockFile<T>(path: string | null, fn: () => Promise<T>): Promise<T> {
-  if (!path) return fn();
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  for (;;) {
+/** Store a completed login under the session lock. */
+export async function storeMcpOAuthLogin(
+  store: McpOAuthSecretStore,
+  record: McpOAuthRecord,
+  lockPath: string | null,
+): Promise<void> {
+  await withSessionLock(lockPath, async () => saveMcpOAuthRecord(store, record));
+}
+
+/** Delete a session under the session lock. Returns the removed session
+ *  (for revocation), or null when there was none or it was unreadable. */
+export async function removeMcpOAuthSession(
+  store: McpOAuthSecretStore,
+  server: string,
+  lockPath: string | null,
+): Promise<{ removed: boolean; record: McpOAuthRecord | null }> {
+  return withSessionLock(lockPath, async () => {
+    let record: McpOAuthRecord | null = null;
     try {
-      closeSync(openSync(path, "wx", 0o600));
-      break;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      try {
-        if (Date.now() - statSync(path).mtimeMs > LOCK_STALE_MS) {
-          rmSync(path, { force: true });
-          continue;
-        }
-      } catch {
-        continue;
-      }
-      if (Date.now() > deadline) {
-        throw new McpOAuthError("timed out waiting for another Foreman process to finish a token refresh");
-      }
-      await delay(25 + Math.floor(Math.random() * 50));
+      record = loadMcpOAuthRecord(store, server);
+    } catch {
+      // corrupt: delete it all the same
     }
+    return { removed: clearMcpOAuthRecord(store, server), record };
+  });
+}
+
+export interface RevocationResult {
+  revoked: boolean;
+  detail: string;
+}
+
+/** Best-effort RFC 7009 revocation of a removed session's tokens. Never
+ *  throws: logout has already deleted the local copy. */
+export async function revokeMcpOAuthTokens(
+  record: McpOAuthRecord,
+  fetchFn?: FetchLike,
+): Promise<RevocationResult> {
+  const endpoint = record.metadata["revocation_endpoint"];
+  if (typeof endpoint !== "string") {
+    return { revoked: false, detail: "the server does not offer token revocation" };
   }
+  const secrets = recordSecretValues(record);
   try {
-    return await fn();
-  } finally {
-    rmSync(path, { force: true });
+    assertSecureEndpoint(endpoint, "revocation endpoint");
+    const post = hardenedOAuthFetch(fetchFn);
+    const pairs: Array<[string | undefined, string]> = [
+      [record.tokens.refresh_token, "refresh_token"],
+      [record.tokens.access_token, "access_token"],
+    ];
+    for (const [token, hint] of pairs) {
+      if (!token) continue;
+      const body = new URLSearchParams({ token, token_type_hint: hint });
+      const headers = new Headers({ "content-type": "application/x-www-form-urlencoded" });
+      if (record.client.client_secret) {
+        headers.set(
+          "Authorization",
+          `Basic ${Buffer.from(`${record.client.client_id}:${record.client.client_secret}`).toString("base64")}`,
+        );
+      } else {
+        body.set("client_id", record.client.client_id);
+      }
+      const res = await post(endpoint, { method: "POST", headers, body });
+      await res.body?.cancel().catch(() => undefined);
+      if (!res.ok) return { revoked: false, detail: `the revocation endpoint answered HTTP ${res.status}` };
+    }
+    return { revoked: true, detail: "revoked at the provider" };
+  } catch (err) {
+    return { revoked: false, detail: describeOAuthFailure(err, secrets) };
   }
 }

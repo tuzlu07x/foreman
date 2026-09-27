@@ -17,14 +17,18 @@ import {
   setMode,
   setServerEnabled,
 } from "../core/mcp-hub/manage.js";
-import { hubOAuthSessions } from "../core/mcp-hub/boot.js";
-import { DEFAULT_LOGIN_TIMEOUT_MS, runMcpOAuthLogin } from "../core/mcp-hub/oauth-login.js";
+import { hubOAuthSessions, mcpOAuthLockPath } from "../core/mcp-hub/boot.js";
 import {
-  clearMcpOAuthRecord,
-  describeMcpOAuthStatus,
-  mcpOAuthStatus,
-  saveMcpOAuthRecord,
-} from "../core/mcp-hub/oauth-store.js";
+  DEFAULT_LOGIN_TIMEOUT_MS,
+  MAX_LOGIN_TIMEOUT_MS,
+  runMcpOAuthLogin,
+} from "../core/mcp-hub/oauth-login.js";
+import {
+  removeMcpOAuthSession,
+  revokeMcpOAuthTokens,
+  storeMcpOAuthLogin,
+} from "../core/mcp-hub/oauth-session.js";
+import { describeMcpOAuthStatus, mcpOAuthStatus } from "../core/mcp-hub/oauth-store.js";
 import { ToolPinStore } from "../core/mcp-hub/pins.js";
 import { SecretStore } from "../core/secret-store.js";
 import { closeDb, getDb } from "../db/client.js";
@@ -176,26 +180,31 @@ mcpCommand
 mcpCommand
   .command("remove <name>")
   .description("Remove a server (and its pinned tool definitions)")
-  .action((name: string) => {
+  .action(async (name: string) => {
     requireInitialised();
     const paths = getForemanPaths();
     try {
       saveHubConfig(paths.mcpConfigPath, removeServer(readConfig(paths.mcpConfigPath), name));
+      new ToolPinStore(paths.mcpPinsPath).forget(name);
+      await removeMcpOAuthSession(openSecretStore(), name, mcpOAuthLockPath(paths, name));
     } catch (err) {
       fail(err);
+    } finally {
+      closeDb();
     }
-    new ToolPinStore(paths.mcpPinsPath).forget(name);
-    clearMcpOAuthRecord(openSecretStore(), name);
-    closeDb();
     console.log(`${green("✓")} removed ${bold(name)}`);
   });
 
 mcpCommand
   .command("login <name>")
   .description("Sign in to a server marked `auth: oauth` (MCP authorization flow in your browser)")
-  .option("--scope <scopes>", "space-separated scopes (default: what the server advertises)")
+  .option("--scope <scopes>", "space-separated scopes to request (default: none — the server's default grant)")
   .option("--no-browser", "only print the URL; do not try to open a browser")
-  .option("--timeout <seconds>", "how long to wait for the browser sign-in", String(DEFAULT_LOGIN_TIMEOUT_MS / 1000))
+  .option(
+    "--timeout <seconds>",
+    `how long to wait for the browser sign-in (max ${MAX_LOGIN_TIMEOUT_MS / 1000})`,
+    String(DEFAULT_LOGIN_TIMEOUT_MS / 1000),
+  )
   .action(async (name: string, opts: { scope?: string; browser: boolean; timeout: string }) => {
     requireInitialised();
     const paths = getForemanPaths();
@@ -208,10 +217,11 @@ mcpCommand
         ),
       );
     }
-    const timeoutSeconds = Number(opts.timeout);
-    if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+    const requested = Number(opts.timeout);
+    if (!Number.isFinite(requested) || requested <= 0) {
       fail(new Error("--timeout must be a positive number of seconds"));
     }
+    const timeoutSeconds = Math.min(requested, MAX_LOGIN_TIMEOUT_MS / 1000);
     const autoOpen = opts.browser && !isHeadlessEnvironment();
     try {
       const record = await runMcpOAuthLogin({
@@ -232,7 +242,7 @@ mcpCommand
         },
       });
       const store = openSecretStore();
-      saveMcpOAuthRecord(store, record);
+      await storeMcpOAuthLogin(store, record, mcpOAuthLockPath(paths, name));
       const status = mcpOAuthStatus(store, name, server.url);
       console.log(`${green("✓")} ${name}: ${describeMcpOAuthStatus(name, status)}`);
       console.log(dim("Tokens are stored encrypted; only the hub attaches them upstream — agents never see them."));
@@ -245,14 +255,27 @@ mcpCommand
 
 mcpCommand
   .command("logout <name>")
-  .description("Delete the stored OAuth session for a server")
-  .action((name: string) => {
+  .description("Delete the stored OAuth session for a server (and revoke it at the provider if it can)")
+  .action(async (name: string) => {
     requireInitialised();
-    const removed = clearMcpOAuthRecord(openSecretStore(), name);
-    closeDb();
-    console.log(
-      removed ? `${green("✓")} logged out of ${bold(name)} (local tokens deleted)` : dim(`${name}: not logged in`),
-    );
+    const paths = getForemanPaths();
+    let removed: Awaited<ReturnType<typeof removeMcpOAuthSession>>;
+    try {
+      removed = await removeMcpOAuthSession(openSecretStore(), name, mcpOAuthLockPath(paths, name));
+    } catch (err) {
+      fail(err);
+    } finally {
+      closeDb();
+    }
+    if (!removed.removed) {
+      console.log(dim(`${name}: not logged in`));
+      return;
+    }
+    console.log(`${green("✓")} logged out of ${bold(name)} (local tokens deleted)`);
+    if (removed.record) {
+      const revocation = await revokeMcpOAuthTokens(removed.record);
+      console.log(dim(revocation.revoked ? `  ${revocation.detail}` : `  not revoked at the provider: ${revocation.detail}`));
+    }
   });
 
 for (const [verb, enabled] of [
