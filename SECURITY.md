@@ -58,8 +58,9 @@ Known limits, which we track as roadmap items rather than hide:
   it), and writes it into the agent's MCP config as the
   `FOREMAN_AGENT_TOKEN` env var, never as an argument. Files that carry it
   are owner-only. A connection with no token, a wrong one, or another
-  agent's runs as `untrusted:<id>`: none of that agent's allow rules, no
-  org role, no delegation, no MCP hub servers, and no remembered "always
+  agent's runs as `untrusted:<id>`: none of that agent's allow rules,
+  nothing auto-allowed (`identity.untrusted` in `policy.yaml`: `ask` by
+  default, or `deny` / `allow_wildcards`), no secrets, no org role, no delegation, no MCP hub servers, and no remembered "always
   allow". The claimed agent's deny and ask rules, block and pause still
   apply, so dropping the token never loosens anything. Tokens are
   compared in constant time, re-checked on every message (so

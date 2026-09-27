@@ -132,8 +132,8 @@ policy rules and org role.
   `/proc/<pid>/environ`.
 - **No token, a wrong token, or another agent's token** runs the connection
   as `untrusted:<claimed id>`, the lowest privilege there is: none of the
-  claimed agent's allow rules (wildcard `*` rules apply, as to any unknown
-  agent), no org role, no delegation, no MCP hub servers, and no "always
+  claimed agent's allow rules, nothing auto-allowed by default (see
+  `identity.untrusted` below), no secrets, no org role, no delegation, no MCP hub servers, and no "always
   allow" remembered for it. The claimed agent's deny and ask rules and its
   `block` / `disable` and its rate limits (counting calls under both ids)
   still apply, so dropping the token never loosens anything. All untrusted
@@ -153,6 +153,18 @@ policy rules and org role.
   issued) and shows the snippet with a placeholder. `foreman secrets show`
   refuses agent tokens, and so does the MCP `secrets/get` tool.
 - `foreman agent remove` revokes the token.
+
+**Quarantine or relax untrusted connections** in `policy.yaml`:
+
+```yaml
+identity:
+  untrusted: ask   # default: every call they make comes to you
+  # untrusted: deny            # refuse them outright
+  # untrusted: allow_wildcards # `source: "*"` allow rules apply to them
+```
+
+In every mode the claimed agent's denials, block, pause and rate limits
+still bind the connection.
 
 **Upgrading an install from before tokens.** Existing agents keep working,
 but as `untrusted:<id>` until they are rewired. `foreman doctor` (the

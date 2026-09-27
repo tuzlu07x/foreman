@@ -190,8 +190,23 @@ export const DEFAULT_SESSION_LIMITS: SessionLimits = {
   tokenBudgetWarningPct: 80,
 };
 
+/** #618 — what an unverified (`untrusted:<id>`) MCP connection may do:
+ *  `deny` quarantines it, `ask` (default) never auto-allows it, so every
+ *  call it makes comes to you, and `allow_wildcards` lets `source: "*"`
+ *  allow rules apply to it like to any unknown agent. The claimed agent's
+ *  denials and limits bind it in every mode. */
+const IdentitySchema = z
+  .object({
+    untrusted: z.enum(["deny", "ask", "allow_wildcards"]).optional(),
+  })
+  .strict();
+
+export type UntrustedMode = "deny" | "ask" | "allow_wildcards";
+export const DEFAULT_UNTRUSTED_MODE: UntrustedMode = "ask";
+
 const PolicyDocSchema = z
   .object({
+    identity: IdentitySchema.optional(),
     agents: z.record(z.string(), AgentEntrySchema).optional(),
     rules: z.array(RulesArrayItemSchema).optional(),
     buckets: BucketOverridesSchema.optional(),
@@ -226,6 +241,7 @@ export class PolicyEngine {
   // boundary) + the loop-detection rule (advisory warning). Per-call
   // accessor so YAML reload applies without a restart.
   private sessionLimits: SessionLimits = { ...DEFAULT_SESSION_LIMITS };
+  private untrustedMode: UntrustedMode = DEFAULT_UNTRUSTED_MODE;
 
   constructor(
     private readonly db: ForemanDb,
@@ -245,6 +261,7 @@ export class PolicyEngine {
     const now = Date.now();
     this.bucketOverrides = doc.buckets ?? {};
     this.responsibilityPolicies = doc.responsibility_policies ?? [];
+    this.untrustedMode = doc.identity?.untrusted ?? DEFAULT_UNTRUSTED_MODE;
     // #529 — Merge with defaults so a partial `session_limits:` block (only
     // `token_limit:` set) keeps the warning pct at 80 instead of becoming
     // undefined. Omitting the block entirely also restores defaults — a
@@ -341,6 +358,11 @@ export class PolicyEngine {
     });
 
     const winner = candidates[0];
+    // #618 — only `identity.untrusted: allow_wildcards` lets an unverified
+    // connection read secrets through a `*` rule at all.
+    if (isUntrustedSource(sourceAgent) && this.untrustedMode !== "allow_wildcards") {
+      return { decision: "deny", decidedBy: "policy:identity:untrusted" };
+    }
     // #618 — the claimed agent's secret denials bind an unverified connection.
     if (winner && winner.effect === "allow" && isUntrustedSource(sourceAgent)) {
       const claimedDeny = this.db
@@ -420,7 +442,19 @@ export class PolicyEngine {
     undominated.sort((a, b) => EFFECT_ORDER[a.effect] - EFFECT_ORDER[b.effect] || a.id - b.id);
     const winner = undominated[0];
     const result: Evaluation = winner ? { decision: winner.effect, matchedRuleId: winner.id } : { decision: "ask" };
-    return this.withClaimedRestrictions(req, target, result);
+    return this.withUntrustedMode(req, this.withClaimedRestrictions(req, target, result));
+  }
+
+  getUntrustedMode(): UntrustedMode {
+    return this.untrustedMode;
+  }
+
+  /** `identity.untrusted` from policy.yaml (#618). */
+  private withUntrustedMode(req: EvaluateRequest, result: Evaluation): Evaluation {
+    if (!isUntrustedSource(req.sourceAgent) || result.decision === "deny") return result;
+    if (this.untrustedMode === "deny") return { decision: "deny", label: "identity:untrusted" };
+    if (this.untrustedMode === "ask" && result.decision === "allow") return { decision: "ask", label: "identity:untrusted" };
+    return result;
   }
 
   /** An unverified `untrusted:<id>` connection (#618) gets none of <id>'s

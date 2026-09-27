@@ -71,6 +71,14 @@ rules:
     target: "tool:read_file"
     effect: allow
 
+# MCP connections without a valid agent token run as untrusted:<id>
+# ('foreman agent rewire' fixes them). ask (default): nothing is
+# auto-allowed for them. deny: quarantine them. allow_wildcards: the
+# "*" allow rules above apply to them too.
+#
+# identity:
+#   untrusted: ask
+
 # Per-agent rules and rate limits go here. Example:
 #
 # agents:

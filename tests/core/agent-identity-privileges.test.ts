@@ -80,19 +80,50 @@ rules:
     expect(approval.request).toHaveBeenCalledOnce() // it had to ask, and was refused
   })
 
-  it("still gets the agent's deny rules and wildcard rules like any unknown agent", async () => {
-    policy.loadYamlText(`
+  describe('identity.untrusted in policy.yaml', () => {
+    const wildcard = `
 rules:
   - source: "*"
     target: "tool:status"
     effect: allow
-`)
-    const out = await mediator().handleRequest({ sourceAgent: spoofed(), targetTool: 'status', message: call('status') })
-    expect(out.decision).toBe('allowed')
+`
+    it('defaults to ask: even a wildcard allow comes to you', async () => {
+      policy.loadYamlText(wildcard)
+      expect(policy.getUntrustedMode()).toBe('ask')
+      expect(policy.evaluate({ sourceAgent: spoofed(), targetTool: 'status' })).toEqual({
+        decision: 'ask',
+        label: 'identity:untrusted',
+      })
+      const out = await mediator().handleRequest({ sourceAgent: spoofed(), targetTool: 'status', message: call('status') })
+      expect(out.decision).toBe('denied') // asked, and the (test) human said no
+      expect(approval.request).toHaveBeenCalledOnce()
+      // Verified agents keep the wildcard.
+      expect(policy.evaluate({ sourceAgent: 'codex', targetTool: 'status' }).decision).toBe('allow')
+    })
+
+    it('allow_wildcards lets wildcard rules apply like to any unknown agent', async () => {
+      policy.loadYamlText(`identity:\n  untrusted: allow_wildcards\n${wildcard}`)
+      const out = await mediator().handleRequest({ sourceAgent: spoofed(), targetTool: 'status', message: call('status') })
+      expect(out.decision).toBe('allowed')
+    })
+
+    it('deny quarantines every untrusted call without asking', async () => {
+      policy.loadYamlText(`identity:\n  untrusted: deny\n${wildcard}`)
+      const out = await mediator().handleRequest({ sourceAgent: spoofed(), targetTool: 'status', message: call('status') })
+      expect(out).toMatchObject({ decision: 'denied', decidedBy: 'policy:identity:untrusted' })
+      expect(approval.request).not.toHaveBeenCalled()
+      expect(policy.evaluate({ sourceAgent: 'codex', targetTool: 'status' }).decision).toBe('allow')
+    })
+
+    it('rejects an unknown mode', () => {
+      expect(() => policy.loadYamlText('identity:\n  untrusted: sometimes\n')).toThrow()
+    })
   })
 
   it("stays bound by the agent's deny and ask rules, even where a wildcard allows", () => {
     policy.loadYamlText(`
+identity:
+  untrusted: allow_wildcards
 rules:
   - source: "*"
     target: "tool:deploy"
@@ -213,6 +244,8 @@ rules:
 
   it("stays bound by the agent's secret denials", () => {
     policy.loadYamlText(`
+identity:
+  untrusted: allow_wildcards
 rules:
   - source: "*"
     target: "secret:github-pat"
@@ -223,6 +256,17 @@ agents:
 `)
     expect(policy.evaluateSecretAccess('untrusted:hermes', 'github-pat').decision).toBe('allow')
     expect(policy.evaluateSecretAccess(spoofed(), 'github-pat').decision).toBe('deny')
+    // By default (ask) no untrusted connection reads secrets at all.
+    policy.loadYamlText(`
+rules:
+  - source: "*"
+    target: "secret:github-pat"
+    effect: allow
+`)
+    expect(policy.evaluateSecretAccess('untrusted:hermes', 'github-pat')).toMatchObject({
+      decision: 'deny',
+      decidedBy: 'policy:identity:untrusted',
+    })
   })
 
   it("can't read the agent's secrets", async () => {
