@@ -121,9 +121,9 @@ export interface RewireResult extends WiringResult {
 
 /**
  * Give `agentId` a token (its current one, or a new one when rotating or
- * when it has none) and write it into the wiring. Refuses to mint a token
- * it has nowhere to put: that would leave the agent untrusted with no way
- * to fix it short of another rewire.
+ * when it has none) and write it into the wiring. With nowhere to write
+ * it (no config, no `tokenOut`) the token is still minted and stored, so
+ * `rewire <id> --token-out <file>` can hand it over later.
  */
 export function rewireAgent(
   store: AgentTokenStore,
@@ -134,11 +134,14 @@ export function rewireAgent(
   const hadToken = hasAgentToken(store, agentId);
   const configPath = options.configPath ?? (entry ? pickMcpConfigPath(entry) : null);
   const hasWrapper = Boolean(entry?.mcp_register_cli?.wrapper);
-  if (!configPath && !hasWrapper && !options.tokenOut) {
-    return { configPath: null, config: "none", wrapperPath: null, wrapperWritten: false, minted: false, tokenOutPath: null };
-  }
+  // A rotation revokes the old token first, whatever happens next: a
+  // rotation that can't deliver the new token must still cut the old one
+  // off (the caller says so and how to fetch the new one).
   const token = options.rotate || !hadToken ? issueAgentToken(store, agentId) : ensureAgentToken(store, agentId);
   const minted = options.rotate === true || !hadToken;
+  if (!configPath && !hasWrapper && !options.tokenOut) {
+    return { configPath: null, config: "none", wrapperPath: null, wrapperWritten: false, minted, tokenOutPath: null };
+  }
   const wiring: WiringResult = entry
     ? writeAgentWiring(agentId, entry, token, { ...options, ...(configPath ? { configPath } : {}) })
     : { configPath: null, config: "none", wrapperPath: null, wrapperWritten: false };

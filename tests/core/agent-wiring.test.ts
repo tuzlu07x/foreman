@@ -123,15 +123,37 @@ describe('agent MCP wiring with identity tokens', () => {
     expect(verifyAgentToken(store, 'claude-code', rotated)).toBe(true)
   })
 
-  it('writes the token to --token-out (0600) for agents wired by hand, and mints nothing it cannot deliver', () => {
-    expect(rewireAgent(store, 'bot', null)).toMatchObject({ minted: false, config: 'none' })
-    expect(hasAgentToken(store, 'bot')).toBe(false)
+  it('writes the token to --token-out (0600) for agents wired by hand', () => {
+    // Nowhere to write it: minted and stored, handed over by a later --token-out.
+    expect(rewireAgent(store, 'bot', null)).toMatchObject({ minted: true, config: 'none', tokenOutPath: null })
+    expect(hasAgentToken(store, 'bot')).toBe(true)
     const out = join(dir, 'bot.token')
     writeFileSync(out, 'old', { mode: 0o644 })
     const res = rewireAgent(store, 'bot', null, { tokenOut: out })
-    expect(res).toMatchObject({ minted: true, tokenOutPath: out })
+    expect(res).toMatchObject({ minted: false, tokenOutPath: out })
     expect(verifyAgentToken(store, 'bot', readFileSync(out, 'utf-8').trim())).toBe(true)
     expect(mode(out)).toBe(0o600)
+  })
+
+  it('rotating a hand-wired agent with nowhere to write still invalidates the old token', () => {
+    const out = join(dir, 'bot.token')
+    rewireAgent(store, 'bot', null, { tokenOut: out })
+    const old = readFileSync(out, 'utf-8').trim()
+    const res = rewireAgent(store, 'bot', null, { rotate: true })
+    expect(res).toMatchObject({ minted: true, config: 'none', tokenOutPath: null })
+    expect(verifyAgentToken(store, 'bot', old)).toBe(false)
+    // The new one can be fetched afterwards without another rotation.
+    rewireAgent(store, 'bot', null, { tokenOut: out })
+    expect(verifyAgentToken(store, 'bot', readFileSync(out, 'utf-8').trim())).toBe(true)
+  })
+
+  it('rotating revokes the old token even when writing the wiring fails', () => {
+    const path = join(dir, 'settings.json')
+    rewireAgent(store, 'claude-code', entry({}), { configPath: path })
+    const old = readWiredAgentToken(path)!
+    writeFileSync(path, '{ not json')
+    expect(() => rewireAgent(store, 'claude-code', entry({}), { configPath: path, rotate: true })).toThrow(/doesn't parse/)
+    expect(verifyAgentToken(store, 'claude-code', old)).toBe(false)
   })
 
   it('audit finds agents with no token and wiring that lost or kept an old token', () => {

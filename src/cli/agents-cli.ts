@@ -467,6 +467,13 @@ function throwNotFound(agentId: string): never {
   throw new AgentNotFoundError(agentId);
 }
 
+function oldTokenInvalid(agentId: string): string {
+  return (
+    `The OLD token for ${agentId} is now INVALID: its MCP calls run untrusted until the new one is wired. ` +
+    `Get the new one with 'foreman agent rewire ${agentId} --token-out <file>'.`
+  );
+}
+
 /** Rewire (or rotate) one agent and report it. `manual` when the token has
  *  nowhere to go, so the agent would still run untrusted. */
 function rewireOne(
@@ -485,6 +492,9 @@ function rewireOne(
     });
   } catch (err) {
     console.log(`  ${red("✗")} ${err instanceof Error ? err.message : String(err)}`);
+    if (options.rotate && hasAgentToken(getTokenStore(), agent.id)) {
+      console.log(`  ${orange("!")} ${oldTokenInvalid(agent.id)}`);
+    }
     return "failed";
   }
   if (entry && (result.config !== "none" || result.wrapperPath)) {
@@ -498,6 +508,7 @@ function rewireOne(
         (entry ? "" : " (not from the registry)") +
         `. Run 'foreman agent rewire ${agent.id} --token-out <file>' and set FOREMAN_AGENT_TOKEN in its MCP server env.`,
     );
+    if (options.rotate) console.log(`  ${orange("!")} ${oldTokenInvalid(agent.id)}`);
     return "manual";
   }
   const changed =

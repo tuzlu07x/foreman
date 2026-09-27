@@ -107,6 +107,16 @@ describe('foreman mcp-stdio agent identity', () => {
     await fresh.close()
   }, 30_000)
 
+  it('rotate with no wiring to write still cuts off the old token, and says so', async () => {
+    const rotated = run('agent', 'token', 'rotate', 'codex', '--yes')
+    expect(rotated.stdout).toContain('The OLD token for codex is now INVALID')
+    expect(rotated.stdout).toContain("foreman agent rewire codex --token-out")
+    expect(rotated.stdout + rotated.stderr).not.toMatch(/fat_[A-Za-z0-9_-]{43}/)
+    const s = await connect({ FOREMAN_AGENT_TOKEN: token })
+    expect(await s.post('engineering', 'still me?')).toContain('Not sent')
+    await s.close()
+  }, 20_000)
+
   it('doctor warns about agents without a token and points at rewire', () => {
     run('agent', 'add', 'openclaw', '--type', 'generic-mcp', '--skip-config')
     const doctor = run('doctor', '--json')
