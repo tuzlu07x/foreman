@@ -71,6 +71,9 @@ export interface ApprovalDecision {
 export interface SubmitApprovalFromAgentOpts {
   approvalId: string;
   decision: "allow" | "deny";
+  /** The relaying agent isn't verified (#618): even a plain deny must
+   *  carry the tag from the button the user tapped. */
+  requireTag?: boolean;
   /** When true, remember the same source/target/tool combination so future
    *  identical calls auto-resolve without prompting again. */
   remember?: boolean;
@@ -471,7 +474,14 @@ export class DbApprovalService implements ApprovalService {
     // A remembered deny changes policy too, so it needs the token as well.
     const grants =
       opts.decision === "allow" || Boolean(opts.actionId) || opts.remember === true;
-    if (this.approvalKey && grants) {
+    const mustVerify = grants || opts.requireTag === true;
+    if (opts.requireTag === true && !this.approvalKey) {
+      return {
+        ok: false,
+        error: `approval ${opts.approvalId}: an unverified agent can't relay decisions without a signed button`,
+      };
+    }
+    if (this.approvalKey && mustVerify) {
       const actionId = actionIdForDecision(
         opts.decision,
         opts.remember === true,

@@ -912,6 +912,9 @@ export async function handleMessage(
         remember,
         sourceAgent,
         actionId,
+        // An unverified connection proves nothing itself: every decision it
+        // relays, deny included, needs the tag from the user's tap.
+        ...(isUntrustedSource(sourceAgent) ? { requireTag: true } : {}),
       });
       if (result.ok) {
         const tail = result.policyRuleId
