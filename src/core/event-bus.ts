@@ -5,6 +5,7 @@ import type {
   RiskFactor,
 } from "./risk-rules/types.js";
 import type { SecurityReport } from "./security-report.js";
+import type { InboxItem } from "../db/schema.js";
 
 /**
  * Payload shapes for every v0.1 event. Adding a new event = add a key
@@ -372,6 +373,10 @@ export interface ForemanEventMap {
     error: string;
     failedAt: number;
   };
+  /** #613 — an item landed in the in-app inbox (TUI notification centre). */
+  "inbox:added": { item: InboxItem };
+  /** #613 — items were marked read (`ids` empty = several / all). */
+  "inbox:read": { ids: string[] };
 }
 
 export type ForemanEvent = keyof ForemanEventMap;
