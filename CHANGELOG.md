@@ -102,6 +102,12 @@ All notable changes to Foreman are documented here. The format follows
   - Node 22/24 test matrix.
 
 ### Fixed
+- **Claude Code hook:** `mcp__foreman__*` tools skip the hook only when they are tools Foreman actually serves, and no project `.mcp.json` or local-scope config swaps in another `foreman` server. Anything else is gated (#619).
+- **MCP hub:** a call withheld as a possible rug pull is logged as denied (`mcp:withheld:<server>`), not as the policy's allow (#635). `foreman mcp tools <server>` shows the rug pull even without `--refresh` (#634).
+- **Webhook:**
+  - the outcome message carries the approval's `id` and `requestId`, and is sent once instead of on every countdown refresh;
+  - the URL must be `https://` (plain `http://` only to this machine) (#636).
+- **TUI:** `q` on the approval screen asks to quit; it never decides the approval. Decisions made in the TUI, or in chat, are recorded as `user:tui`, `user:telegram` and so on across processes (migration `0026`) (#637).
 - **Security**
   - The Claude Code hook now fails closed. Before, any error (a locked DB, bad
     JSON) let the tool run.
