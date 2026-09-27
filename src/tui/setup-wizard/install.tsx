@@ -1,6 +1,6 @@
 import { Box, Text } from "ink";
 import type { Key } from "ink";
-import { type JSX, useEffect } from "react";
+import { type JSX, useEffect, useRef } from "react";
 import { WizardProgress } from "../components/wizard-progress.js";
 import { classifyInstallLog } from "../install-log-classify.js";
 import { singleBorder, theme } from "../theme.js";
@@ -51,58 +51,24 @@ export function useInstallSpinner(ctx: WizardContext): void {
   }, [installRunning, installSummary, installStartedAt]);
 }
 
-export function handleInstallFailureInput(
-  ctx: WizardContext,
-  input: string,
-  key: Key,
-): boolean {
-  const { failureResolverRef } = ctx;
-  const { pendingFailure, manualFixOpen } = ctx.state;
-  const { setPendingFailure, setManualFixOpen } = ctx.set;
-  // Install-failure prompt (#177). When pendingFailure is set, runInstall
-  // is awaiting a resolution — [r] retry, [s] skip, [m] open manual-fix
-  // overlay. Esc on the overlay just closes it (re-shows the prompt).
-  if (pendingFailure) {
-    if (manualFixOpen) {
-      if (key.escape) setManualFixOpen(false);
-      return true;
-    }
-    if (input === "r") {
-      failureResolverRef.current?.("retry");
-      failureResolverRef.current = null;
-      setPendingFailure(null);
-      return true;
-    }
-    if (input === "s") {
-      failureResolverRef.current?.("skip");
-      failureResolverRef.current = null;
-      setPendingFailure(null);
-      return true;
-    }
-    if (input === "m") {
-      setManualFixOpen(true);
-      return true;
-    }
-    return true;
-  }
-  return false;
-}
-
-// ---------------- Install ----------------
-export function renderInstallStep(ctx: WizardContext): JSX.Element {
-  const { services, advance, initialRegistered, failureResolverRef } = ctx;
+// Starts the install once, when the wizard reaches the install step. It
+// used to start from inside render (guarded by `installRunning`), a side
+// effect React is free to repeat or discard. The ref guard keeps it to one
+// start even if the effect is ever re-run (e.g. React's dev-only StrictMode
+// effect remount).
+export function useInstallKickoff(ctx: WizardContext): void {
+  const {
+    services,
+    currentStep,
+    advance,
+    initialRegistered,
+    failureResolverRef,
+  } = ctx;
   const {
     providersSelected,
     agentsSelected,
     agentConfigs,
     servicesSelected,
-    installLog,
-    installRunning,
-    installSummary,
-    pendingFailure,
-    installStartedAt,
-    spinnerFrame,
-    manualFixOpen,
   } = ctx.state;
   const {
     setInstallLog,
@@ -111,7 +77,10 @@ export function renderInstallStep(ctx: WizardContext): JSX.Element {
     setPendingFailure,
     setInstallStartedAt,
   } = ctx.set;
-  if (!installRunning) {
+  const started = useRef(false);
+  useEffect(() => {
+    if (currentStep !== "install" || started.current) return;
+    started.current = true;
     setInstallRunning(true);
     setInstallStartedAt(Date.now());
     const { toAdd, toRemove } = computeAgentDiff(
@@ -154,7 +123,59 @@ export function renderInstallStep(ctx: WizardContext): JSX.Element {
       setInstallSummary(summary);
       advance("install");
     });
+    // Runs once per wizard; the step's inputs are fixed by the time it
+    // starts (back-navigation is disabled during install).
+  }, [currentStep]);
+}
+
+export function handleInstallFailureInput(
+  ctx: WizardContext,
+  input: string,
+  key: Key,
+): boolean {
+  const { failureResolverRef } = ctx;
+  const { pendingFailure, manualFixOpen } = ctx.state;
+  const { setPendingFailure, setManualFixOpen } = ctx.set;
+  // Install-failure prompt (#177). When pendingFailure is set, runInstall
+  // is awaiting a resolution — [r] retry, [s] skip, [m] open manual-fix
+  // overlay. Esc on the overlay just closes it (re-shows the prompt).
+  if (pendingFailure) {
+    if (manualFixOpen) {
+      if (key.escape) setManualFixOpen(false);
+      return true;
+    }
+    if (input === "r") {
+      failureResolverRef.current?.("retry");
+      failureResolverRef.current = null;
+      setPendingFailure(null);
+      return true;
+    }
+    if (input === "s") {
+      failureResolverRef.current?.("skip");
+      failureResolverRef.current = null;
+      setPendingFailure(null);
+      return true;
+    }
+    if (input === "m") {
+      setManualFixOpen(true);
+      return true;
+    }
+    return true;
   }
+  return false;
+}
+
+// ---------------- Install ----------------
+export function renderInstallStep(ctx: WizardContext): JSX.Element {
+  const {
+    installLog,
+    installRunning,
+    installSummary,
+    pendingFailure,
+    installStartedAt,
+    spinnerFrame,
+    manualFixOpen,
+  } = ctx.state;
   // #459 — Render path. Split the streamed log into Foreman's own
   // headline markers (✓/✗/⚠/▸) + a single rotating milestone line
   // sourced from the upstream installer chatter. On error

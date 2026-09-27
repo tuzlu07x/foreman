@@ -224,18 +224,17 @@ async function mount(
     voiceConfigPath: join(dir, 'voice.yaml'),
     launchEditor,
   }
-  const inst = render(
-    React.createElement(SetupWizard, {
-      initialState: opts.initialState ?? {
-        version: 1,
-        completed: ALL_BEFORE[step],
-        startedAt: 1,
-        lastUpdatedAt: 1,
-      },
-      services,
-      ...(opts.afterExit ? { afterExit: opts.afterExit } : {}),
-    }),
-  )
+  const wizard = React.createElement(SetupWizard, {
+    initialState: opts.initialState ?? {
+      version: 1,
+      completed: ALL_BEFORE[step],
+      startedAt: 1,
+      lastUpdatedAt: 1,
+    },
+    services,
+    ...(opts.afterExit ? { afterExit: opts.afterExit } : {}),
+  })
+  const inst = render(wizard)
   unmount = () => inst.unmount()
   const frame = (): string => stripAnsi(inst.lastFrame() ?? '')
   const until = async (text: string): Promise<void> => {
@@ -475,6 +474,18 @@ describe('required-setup step [s] skip', () => {
     await w.press(DOWN)
     await w.press('s', 'openrouter-key  for: hermes · status: skipped')
   }, 20_000)
+})
+
+describe('install step start', () => {
+  it('starts the installer exactly once while the screen re-renders', async () => {
+    const before = vi.mocked(runInstallStep).mock.calls.length
+    const w = await mount('install')
+    await w.until('✗ Hermes — install failed')
+    // Spinner ticks + log lines re-render the install screen many times.
+    await sleep(400)
+    await w.press('s', 'Setup complete')
+    expect(vi.mocked(runInstallStep).mock.calls.length - before).toBe(1)
+  })
 })
 
 describe('resume keeps session-only choices', () => {

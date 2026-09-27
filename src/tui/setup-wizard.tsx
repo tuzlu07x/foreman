@@ -46,6 +46,7 @@ import { renderForemanLlmStep } from "./setup-wizard/foreman-llm.js";
 import {
   handleInstallFailureInput,
   renderInstallStep,
+  useInstallKickoff,
   useInstallSpinner,
 } from "./setup-wizard/install.js";
 import {
@@ -206,6 +207,7 @@ export function SetupWizard({
   // Effects, in their original declaration order.
   useChatPrimaryAutoAdvance(ctx);
   useAgentConfigEffects(ctx);
+  useInstallKickoff(ctx);
   useInstallSpinner(ctx);
 
   // Esc handler — phase-aware back navigation (#153). Stays out of the way
