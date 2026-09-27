@@ -28,6 +28,7 @@ const THRESHOLDS = [0.8, 1] as const;
 
 export class BudgetWatcher {
   private timer: NodeJS.Timeout | null = null;
+  private soon: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly db: ForemanDb,
@@ -44,6 +45,18 @@ export class BudgetWatcher {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    if (this.soon) clearTimeout(this.soon);
+    this.soon = null;
+  }
+
+  /** Check shortly, once, after new usage arrives (bursts coalesce). */
+  checkSoon(delayMs = 1_000): void {
+    if (this.soon) return;
+    this.soon = setTimeout(() => {
+      this.soon = null;
+      this.check();
+    }, delayMs);
+    this.soon.unref?.();
   }
 
   /** One pass; exposed for tests. */

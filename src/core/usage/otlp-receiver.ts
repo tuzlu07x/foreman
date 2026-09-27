@@ -42,6 +42,8 @@ export interface OtlpReceiverOptions {
   key: string;
   port?: number;
   onError?: (message: string) => void;
+  /** Called after usage was recorded (budgets are checked right away). */
+  onRecorded?: () => void;
 }
 
 export class OtlpReceiver {
@@ -149,6 +151,7 @@ export class OtlpReceiver {
       const booked = task ? { ...entry, agentId: task.agentId, taskRef: task.taskRef } : entry;
       if (this.opts.ledger.record(booked)) recorded += 1;
     }
+    if (recorded > 0) this.opts.onRecorded?.();
     return recorded;
   }
 }
