@@ -102,7 +102,7 @@ it('TUI command console: status, write, approve', async (context) => {
     await tui.command('approve')
     await tui.waitForText('Allowed read_file for claude-code.', { from: beforeApprove })
     const res = await reply
-    expect(replyText(res)).toBe('(foreman) read_file allowed by user')
+    expect(replyText(res)).toBe('(foreman) read_file allowed by user:tui')
     const row = await sb.row<{ decision: string; decided_by: string }>(
       'the requests row',
       'SELECT decision, decided_by FROM requests WHERE id = ?',

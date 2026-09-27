@@ -1,3 +1,4 @@
+import { eq } from 'drizzle-orm'
 import type { ForemanDb } from '../db/client.js'
 import { auditEvents, requests } from '../db/schema.js'
 import { redactSecretsDeep } from './risk-rules/secret-patterns.js'
@@ -17,6 +18,7 @@ type AuditEventRow = typeof auditEvents.$inferInsert
 type QueueEntry =
   | { kind: 'request'; row: RequestRow }
   | { kind: 'event'; row: AuditEventRow }
+  | { kind: 'amend'; id: string; decision: RequestRow['decision']; decidedBy: string }
 
 export interface AuditLoggerOptions {
   /** Override the 100ms timer (mostly for tests). */
@@ -75,6 +77,15 @@ export class AuditLogger {
     this.scheduleFlush()
   }
 
+  /** Correct a request's recorded decision after the fact, e.g. a call the
+   *  policy allowed that the MCP hub then withheld (#635). Queued behind the
+   *  request's own row, so it always lands after the insert, and flushed
+   *  at once so the log is right before the agent hears back. */
+  amendDecision(requestId: string, decision: RequestRow['decision'], decidedBy: string): void {
+    this.queue.push({ kind: 'amend', id: requestId, decision, decidedBy })
+    this.flush()
+  }
+
   /** Drain the queue immediately. Idempotent on an empty queue. */
   flush(): void {
     if (this.flushTimer) {
@@ -87,7 +98,12 @@ export class AuditLogger {
     this.db.transaction((tx) => {
       for (const entry of batch) {
         if (entry.kind === 'request') tx.insert(requests).values(entry.row).run()
-        else tx.insert(auditEvents).values(entry.row).run()
+        else if (entry.kind === 'amend') {
+          tx.update(requests)
+            .set({ decision: entry.decision, decidedBy: entry.decidedBy })
+            .where(eq(requests.id, entry.id))
+            .run()
+        } else tx.insert(auditEvents).values(entry.row).run()
       }
     })
   }

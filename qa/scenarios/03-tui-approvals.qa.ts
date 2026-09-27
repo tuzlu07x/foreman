@@ -74,7 +74,7 @@ it('Approve and deny from the TUI across processes', async (context) => {
     tui.press('a')
     const res = await reply
     expect(res.error).toBeUndefined()
-    expect(replyText(res)).toBe('(foreman) read_file allowed by user')
+    expect(replyText(res)).toBe('(foreman) read_file allowed by user:tui')
     ev(`agent reply: "${replyText(res)}"`)
     const row = await sb.row<Decision>('the requests row', 'SELECT id, decision, decided_by, risk_bucket FROM requests WHERE id = ?', requestId)
     expect(row).toMatchObject({ decision: 'allowed', risk_bucket: 'high' })
@@ -93,7 +93,7 @@ it('Approve and deny from the TUI across processes', async (context) => {
     await sleep(KEY_SETTLE_MS)
     tui.press('d')
     const res = await reply
-    expect(res.error?.message).toBe('Denied by user')
+    expect(res.error?.message).toBe('Denied by user:tui')
     ev(`agent reply: error "${res.error?.message}"`)
     const row = await sb.row<Decision>('the requests row', 'SELECT id, decision, decided_by, risk_bucket FROM requests WHERE id = ?', requestId)
     expect(row.decision).toBe('denied')
@@ -109,11 +109,8 @@ it('Approve and deny from the TUI across processes', async (context) => {
     expect(log.find((r) => r.id === requestId)).toMatchObject({ decision: 'denied', decidedBy: row.decided_by })
     expect(log.find((r) => r.id === allowedId)).toMatchObject({ decision: 'allowed', decidedBy: row.decided_by })
     ev(`foreman log tail --json lists both decisions (allowed, denied) with decidedBy=${row.decided_by}`)
-    if (row.decided_by === 'user') {
-      j.note(
-        'Across processes the requests row (and `foreman log tail`) records decided_by "user", not "user:tui"; the TUI as the deciding surface only shows in the inbox ("by you in the TUI").',
-      )
-    }
+    // #637: the deciding surface travels across processes.
+    expect(row.decided_by).toBe('user:tui')
   })
 
   await j.step('the agent disconnects and `foreman start` shuts down cleanly', async (ev) => {

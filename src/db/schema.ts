@@ -222,6 +222,10 @@ export const pendingApprovals = sqliteTable(
     decision: text("decision", { enum: ["allowed", "denied"] }),
     remember: text("remember", { enum: ["allow", "deny"] }),
     resolvedBy: text("resolved_by", { enum: ["user", "timeout", "agent", "cancelled"] }),
+    // #637 — the surface that decided it (see ApprovalDecision.via).
+    resolvedVia: text("resolved_via", {
+      enum: ["tui", "telegram", "discord", "slack", "webhook", "agent_mcp"],
+    }),
     requestedAt: integer("requested_at").notNull(),
     resolvedAt: integer("resolved_at"),
     // #525 — Absolute Unix ms timestamp when the approval auto-resolves to

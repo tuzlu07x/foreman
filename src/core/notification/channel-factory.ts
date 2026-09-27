@@ -5,7 +5,7 @@ import { NtfyChannel } from "./channels/ntfy.js";
 import { SlackChannel, type SlackChannelOptions } from "./channels/slack.js";
 import { SystemNotifyChannel } from "./channels/system.js";
 import { TelegramChannel } from "./channels/telegram.js";
-import { WebhookChannel } from "./channels/webhook.js";
+import { WebhookChannel, webhookUrlProblem } from "./channels/webhook.js";
 import { channelConfig, isChannelEnabled, type ChannelToggle, type NotifyConfig } from "./notify-config.js";
 import type { SmtpSecurity } from "./smtp.js";
 import { KNOWN_CHANNELS, type ChannelId, type NotificationChannel } from "./types.js";
@@ -94,9 +94,12 @@ export function buildChannel(id: ChannelId, toggle: ChannelToggle, deps: Channel
       }
       case "webhook": {
         if (!toggle.webhook_url_ref) return { problem: "webhook needs webhook_url_ref in notify.yaml" };
+        const url = secret(toggle.webhook_url_ref);
+        const urlProblem = webhookUrlProblem(url);
+        if (urlProblem) return { problem: urlProblem };
         return {
           channel: new WebhookChannel({
-            url: secret(toggle.webhook_url_ref),
+            url,
             // A configured-but-missing signing secret keeps the channel off:
             // the receiver expects signed payloads, so never send unsigned.
             ...(toggle.signing_secret_ref ? { signingSecret: secret(toggle.signing_secret_ref) } : {}),

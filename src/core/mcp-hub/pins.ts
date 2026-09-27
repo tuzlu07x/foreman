@@ -37,10 +37,19 @@ const PinnedToolSchema = z.object({
   trustedDespiteFindings: z.boolean().optional(),
 });
 
+/** What the last live check found different from the pins (#634), so a
+ *  listing from the pinned cache can still show it. Cleared by a re-pin. */
+const PinDriftSchema = z.object({
+  seenAt: z.number(),
+  changed: z.array(z.string()),
+  added: z.array(z.string()),
+});
+
 const ServerPinsSchema = z.object({
   pinnedAt: z.number(),
   fingerprint: z.string(),
   tools: z.record(z.string(), PinnedToolSchema),
+  drift: PinDriftSchema.optional(),
 });
 
 const PinFileSchema = z.object({
@@ -49,6 +58,7 @@ const PinFileSchema = z.object({
 });
 
 export type PinnedTool = z.infer<typeof PinnedToolSchema>;
+export type PinDrift = z.infer<typeof PinDriftSchema>;
 export type ServerPins = z.infer<typeof ServerPinsSchema>;
 type PinFile = z.infer<typeof PinFileSchema>;
 
@@ -124,6 +134,21 @@ export class ToolPinStore {
     });
   }
 
+  /** Remember (or clear, when nothing differs) what the last live check
+   *  found changed or added since pinning. */
+  recordDrift(server: string, fingerprint: string, drift: { changed: string[]; added: string[] }, now = Date.now()): void {
+    const current = this.get(server, fingerprint)?.drift;
+    const empty = drift.changed.length === 0 && drift.added.length === 0;
+    if (empty && !current) return;
+    if (current && sameNames(current.changed, drift.changed) && sameNames(current.added, drift.added)) return;
+    this.update((data) => {
+      const pins = data.servers[server];
+      if (!pins || pins.fingerprint !== fingerprint) return;
+      if (empty) delete pins.drift;
+      else pins.drift = { seenAt: now, changed: [...drift.changed].sort(), added: [...drift.added].sort() };
+    });
+  }
+
   forget(server: string): void {
     this.update((data) => {
       delete data.servers[server];
@@ -171,6 +196,10 @@ function readPinFile(path: string): PinFile {
     // a fresh trust-on-first-use cycle that `foreman mcp tools` shows.
     return { version: 1, servers: {} };
   }
+}
+
+function sameNames(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && [...a].sort().every((name, i) => name === [...b].sort()[i]);
 }
 
 /** Deterministic JSON — object keys sorted recursively. */

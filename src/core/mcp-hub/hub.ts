@@ -67,6 +67,9 @@ export interface ServerStatus {
   error: string | null;
   tools: number;
   quarantined: number;
+  /** Listed from the pinned cache: tools the last live check found that
+   *  weren't pinned, withheld until you review them (#634). */
+  newSincePinning: string[];
 }
 
 export type HubCallResolution =
@@ -166,6 +169,10 @@ export class McpHub {
       error: s.error,
       tools: (s.tools ?? []).filter((t) => t.status === "available").length,
       quarantined: (s.tools ?? []).filter((t) => t.status === "quarantined").length,
+      newSincePinning:
+        s.source === "pinned-cache" && this.opts.config.security.pin_tool_definitions
+          ? (this.opts.pins.get(s.name, s.fingerprint)?.drift?.added ?? [])
+          : [],
     }));
   }
 
@@ -359,6 +366,10 @@ export class McpHub {
       this.opts.pins.pin(state.name, state.fingerprint, live, { now: this.now() });
       justPinned = true;
     }
+    if (pinning && !justPinned) {
+      const diff = this.opts.pins.diff(state.name, state.fingerprint, live);
+      this.opts.pins.recordDrift(state.name, state.fingerprint, { changed: diff.changed, added: diff.added }, this.now());
+    }
     state.tools = this.evaluate(state, live, { justPinned });
     state.source = "live";
     state.verified = true;
@@ -401,9 +412,17 @@ export class McpHub {
               .join("; ")}`,
           );
         }
+        const driftSeen = ctx.fromCache && pins?.drift?.changed.includes(t.name) ? pins.drift.seenAt : null;
         if (diff?.changed.includes(t.name)) {
           status = "quarantined";
           reasons.push("definition changed since it was pinned (possible rug pull)");
+        } else if (driftSeen !== null) {
+          // From the cache: the live server was last seen with a different
+          // definition, so keep it withheld until you review it (#634).
+          status = "quarantined";
+          reasons.push(
+            `definition changed since it was pinned (possible rug pull; seen ${new Date(driftSeen).toISOString().slice(0, 16).replace("T", " ")} UTC)`,
+          );
         } else if (diff?.added.includes(t.name)) {
           status = "quarantined";
           reasons.push("new tool appeared after the server was pinned");
@@ -577,7 +596,7 @@ function unavailableMessage(tool: HubTool): string {
   const hint =
     tool.status === "denied"
       ? "Remove it from tools.deny in mcp.yaml to enable it."
-      : `Review it with \`foreman mcp tools ${tool.server}\`, then \`foreman mcp trust ${tool.server}\` if you accept it.`;
+      : `Review it with \`foreman mcp tools ${tool.server} --refresh\`, then \`foreman mcp trust ${tool.server}\` if you accept it.`;
   return `Foreman withheld '${tool.exposedName}': ${why}. ${hint}`;
 }
 
