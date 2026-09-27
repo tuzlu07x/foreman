@@ -106,8 +106,8 @@ describe('TelegramChannel — send (outbound only, #406)', () => {
     const body = calls[0]!.body as { text: string }
     // PR 5 surfaces the approval id with a visible aprv_ prefix so
     // operators distinguish Foreman approval ids from agent session ids.
-    expect(body.text).toContain('/approve aprv_notif-abc123')
-    expect(body.text).toContain('/deny aprv_notif-abc123')
+    expect(body.text).toContain('/approve aprv_req-99')
+    expect(body.text).toContain('/deny aprv_req-99')
   })
 
   it('embeds /approve_remember and /deny_remember (with aprv_ prefix) for allow_always / deny_always actions', async () => {
@@ -123,10 +123,10 @@ describe('TelegramChannel — send (outbound only, #406)', () => {
       }),
     )
     const body = calls[0]!.body as { text: string }
-    expect(body.text).toContain('/approve aprv_notif-abc123')
-    expect(body.text).toContain('/approve_remember aprv_notif-abc123')
-    expect(body.text).toContain('/deny aprv_notif-abc123')
-    expect(body.text).toContain('/deny_remember aprv_notif-abc123')
+    expect(body.text).toContain('/approve aprv_req-99')
+    expect(body.text).toContain('/approve_remember aprv_req-99')
+    expect(body.text).toContain('/deny aprv_req-99')
+    expect(body.text).toContain('/deny_remember aprv_req-99')
   })
 
   // #522 — Foreman now attaches an inline keyboard. The no-polling rule
@@ -142,12 +142,59 @@ describe('TelegramChannel — send (outbound only, #406)', () => {
     expect(buttons.map((b) => b.text)).toEqual(['Allow once', 'Deny'])
   })
 
-  it('encodes callback_data as `fa:<id>:<notifId>` so the agent can parse it (#522)', async () => {
+  it('encodes callback_data as `fa:<id>:<approvalId>` — the pending approval, not the notification ULID', async () => {
+    // submit_approval looks the id up in pending_approvals; the notification's
+    // own ULID is unknown there, which made every relayed tap "not found".
     const { channel, calls } = setupChannel()
     await channel.send(makeNotification())
     const body = calls[0]!.body as { reply_markup?: { inline_keyboard: Array<Array<{ callback_data: string }>> } }
     const data = body.reply_markup!.inline_keyboard.flat().map((b) => b.callback_data)
-    expect(data).toEqual(['fa:allow:notif-abc123', 'fa:deny:notif-abc123'])
+    expect(data).toEqual(['fa:allow:req-99', 'fa:deny:req-99'])
+  })
+
+  it('signs approval buttons and commands per action when a signer is configured', async () => {
+    const f = makeFetch([
+      { body: { ok: true, result: { message_id: 42, chat: { id: 12345 } } } },
+    ])
+    const channel = new TelegramChannel({
+      botToken: 'TEST_TOKEN',
+      chatId: '12345',
+      fetchImpl: f.fetchImpl,
+      signApproval: (id, action) => `${action.toUpperCase()}${id.length}`,
+    })
+    await channel.send(makeNotification())
+    const body = f.calls[0]!.body as {
+      text: string
+      reply_markup: { inline_keyboard: Array<Array<{ callback_data: string }>> }
+    }
+    const data = body.reply_markup.inline_keyboard.flat().map((b) => b.callback_data)
+    expect(data).toEqual(['fa:allow:req-99.ALLOW6', 'fa:deny:req-99.DENY6'])
+    expect(body.text).toContain('/approve aprv_req-99.ALLOW6')
+    expect(body.text).toContain('/deny aprv_req-99.DENY6')
+  })
+
+  it('drops a button whose callback_data would exceed Telegram\'s 64-byte cap', async () => {
+    const { channel, calls } = setupChannel()
+    await channel.send(
+      makeNotification({
+        requestId: '01J9ZZZZZZZZZZZZZZZZZZZZZZ',
+        actions: [
+          { id: 'deny', label: 'Deny' },
+          {
+            id: 'block_injection_system_override_very_long',
+            label: 'Block pattern',
+            intent: 'custom',
+            payload: { action: 'add-deny-rule' },
+          },
+        ],
+      }),
+    )
+    const body = calls[0]!.body as {
+      reply_markup: { inline_keyboard: Array<Array<{ callback_data: string }>> }
+    }
+    const data = body.reply_markup.inline_keyboard.flat().map((b) => b.callback_data)
+    expect(data).toEqual(['fa:deny:01J9ZZZZZZZZZZZZZZZZZZZZZZ'])
+    for (const d of data) expect(Buffer.byteLength(d)).toBeLessThanOrEqual(64)
   })
 
   it('keeps the text-command fallback alive alongside the inline keyboard (#522)', async () => {
@@ -158,8 +205,8 @@ describe('TelegramChannel — send (outbound only, #406)', () => {
     const body = calls[0]!.body as { text: string; reply_markup?: unknown }
     expect(body.reply_markup).toBeDefined()
     // PR 5: ids surface with the aprv_ display prefix.
-    expect(body.text).toContain('/approve aprv_notif-abc123')
-    expect(body.text).toContain('/deny aprv_notif-abc123')
+    expect(body.text).toContain('/approve aprv_req-99')
+    expect(body.text).toContain('/deny aprv_req-99')
   })
 
   it('renders body only (no slash-command block) when actions is empty (info-only alert)', async () => {
@@ -189,8 +236,8 @@ describe('TelegramChannel — send (outbound only, #406)', () => {
       text: string
       reply_markup?: { inline_keyboard: Array<Array<{ text: string }>> }
     }
-    expect(body.text).toContain('/approve aprv_notif-abc123')
-    expect(body.text).toContain('/deny aprv_notif-abc123')
+    expect(body.text).toContain('/approve aprv_req-99')
+    expect(body.text).toContain('/deny aprv_req-99')
     expect(body.text).not.toContain('/inspect')
     // Inspect is render-only (intent: 'custom' with no payload). It must
     // also be excluded from the inline keyboard so the user can't tap a

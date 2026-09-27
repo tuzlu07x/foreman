@@ -47,6 +47,10 @@ export interface TelegramChannelOptions {
   chatId: string
   /** Injected so tests can supply a mocked transport. Defaults to global fetch. */
   fetchImpl?: TelegramFetch
+  /** Approval-token signer (see approval-token.ts). When set, approval
+   *  buttons and commands carry `<approvalId>.<tag>` so the relaying agent
+   *  can only submit decisions the user actually tapped or typed. */
+  signApproval?: (approvalId: string, actionId: string) => string
 }
 
 interface TelegramSendResponse {
@@ -63,10 +67,12 @@ export class TelegramChannel implements NotificationChannel {
   private readonly botToken: string
   private readonly chatId: string
   private readonly fetchImpl: TelegramFetch
+  private readonly signApproval?: (approvalId: string, actionId: string) => string
 
   constructor(opts: TelegramChannelOptions) {
     this.botToken = opts.botToken
     this.chatId = opts.chatId
+    this.signApproval = opts.signApproval
     this.fetchImpl =
       opts.fetchImpl ?? ((url, init) => fetch(url, init) as never)
   }
@@ -89,7 +95,7 @@ export class TelegramChannel implements NotificationChannel {
       parse_mode: 'MarkdownV2',
       disable_web_page_preview: true,
     }
-    const reply_markup = renderInlineKeyboard(n.actions, n.id)
+    const reply_markup = renderInlineKeyboard(n.actions, n.id, this.targets(n))
     if (reply_markup) body.reply_markup = reply_markup
     const res = (await this.call('sendMessage', body)) as TelegramSendResponse
 
@@ -125,10 +131,23 @@ export class TelegramChannel implements NotificationChannel {
   // Internals
   // ============================================================================
 
+  /** How each button / command identifies what it acts on. Approval
+   *  actions reference the pending approval (`n.requestId`, signed when a
+   *  signer is configured) — the notification's own ULID is unknown to
+   *  `submit_approval`, which is why relayed approvals used to fail with
+   *  "not found". */
+  private targets(n: Notification): KeyboardTargets {
+    return {
+      approvalId: n.requestId,
+      ...(this.signApproval ? { sign: this.signApproval } : {}),
+      chatId: this.chatId,
+    }
+  }
+
   private renderText(n: Notification): string {
     const head = `*${escapeMd(n.title)}*`
     const summary = escapeMd(n.body)
-    const commands = renderActionCommands(n)
+    const commands = renderActionCommands(n, this.targets(n))
     if (commands.length === 0) {
       return `${head}\n\n${summary}`
     }
@@ -168,13 +187,17 @@ export class TelegramApiError extends Error {
 // types one of these, the agent calls `submit_approval(approval_id,
 // decision, remember?)`.
 
-function actionToCommand(a: NotificationAction, notifId: string): string | null {
+function actionToCommand(
+  a: NotificationAction,
+  notifId: string,
+  targets: KeyboardTargets = {},
+): string | null {
   // #552 PR 5 — Surface the approval id with a visible `aprv_` prefix so
   // operators don't confuse it with codex / claude-code session/thread
   // ids (those are UUIDs; ours are ULIDs, but at a glance they can both
   // look like "long random string"). submit_approval strips the prefix
   // back off so the underlying DB id stays unchanged.
-  const displayId = formatApprovalIdForDisplay(notifId)
+  const displayId = formatApprovalIdForDisplay(approvalTargetFor(a.id, notifId, targets))
   switch (a.id) {
     case 'allow':
       return `/approve ${displayId}`
@@ -192,10 +215,10 @@ function actionToCommand(a: NotificationAction, notifId: string): string | null 
   }
 }
 
-function renderActionCommands(n: Notification): string {
+function renderActionCommands(n: Notification, targets: KeyboardTargets = {}): string {
   const lines: string[] = []
   for (const a of n.actions) {
-    const cmd = actionToCommand(a, n.id)
+    const cmd = actionToCommand(a, n.id, targets)
     if (!cmd) continue
     // Code-format the command + plain-text label.
     // MarkdownV2 inside backticks doesn't need extra escaping for the
@@ -237,17 +260,53 @@ interface InlineKeyboardMarkup {
 /** Build a Telegram inline_keyboard payload from a ChannelAction set.
  *  Returns `undefined` when there are no actionable buttons so callers
  *  can omit `reply_markup` entirely. Exported for tests. */
+export interface KeyboardTargets {
+  /** The pending approval this notification is about (Notification.requestId). */
+  approvalId?: string | null
+  /** Approval-token signer; see TelegramChannelOptions.signApproval. */
+  sign?: (approvalId: string, actionId: string) => string
+  /** Chat id — the documented tail of `ask_…` callbacks. */
+  chatId?: string
+}
+
+/** Telegram rejects the WHOLE message when any callback_data exceeds 64
+ *  bytes, so an over-long button is dropped instead (the text commands
+ *  and the TUI still work). */
+const MAX_CALLBACK_BYTES = 64
+
+const APPROVAL_ACTION_IDS = new Set(['allow', 'deny', 'allow_always', 'deny_always'])
+
+function isApprovalAction(actionId: string): boolean {
+  return APPROVAL_ACTION_IDS.has(actionId) || actionId.startsWith('block_')
+}
+
+/** The id an approval action's button / command carries: the signed
+ *  approval token when possible, the notification id otherwise. */
+function approvalTargetFor(actionId: string, notifId: string, t: KeyboardTargets): string {
+  if (!t.approvalId || !isApprovalAction(actionId)) return notifId
+  if (!t.sign) return t.approvalId
+  return `${t.approvalId}.${t.sign(t.approvalId, actionId)}`
+}
+
+function callbackTailFor(a: ChannelAction, notifId: string, t: KeyboardTargets): string {
+  if (isApprovalAction(a.id)) return approvalTargetFor(a.id, notifId, t)
+  const sessionId = a.payload?.sessionId
+  if (a.id.startsWith('resolve_') && typeof sessionId === 'string') return sessionId
+  if (a.id.startsWith('ask_') && t.chatId) return t.chatId
+  return notifId
+}
+
 export function renderInlineKeyboard(
   actions: ChannelAction[],
   notifId: string,
+  targets: KeyboardTargets = {},
 ): InlineKeyboardMarkup | undefined {
   const buttons: InlineKeyboardButton[] = []
   for (const a of actions) {
     if (!isInteractiveAction(a)) continue
-    buttons.push({
-      text: a.label,
-      callback_data: `${CALLBACK_DATA_PREFIX}:${a.id}:${notifId}`,
-    })
+    const data = `${CALLBACK_DATA_PREFIX}:${a.id}:${callbackTailFor(a, notifId, targets)}`
+    if (Buffer.byteLength(data, 'utf8') > MAX_CALLBACK_BYTES) continue
+    buttons.push({ text: a.label, callback_data: data })
   }
   if (buttons.length === 0) return undefined
   // 2-up rows keep buttons big enough to tap reliably on mobile while still
