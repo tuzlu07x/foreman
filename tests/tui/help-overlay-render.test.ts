@@ -25,8 +25,8 @@ describe('HelpOverlay — new 3-column grid layout', () => {
     expect(out).toContain('Foreman Help')
   })
 
-  it('renders Navigation / Pages / Approval modal columns on the first row', () => {
-    expect(out).toContain('Navigation')
+  it('renders Everywhere / Pages / Approval modal columns on the first row', () => {
+    expect(out).toContain('Everywhere')
     expect(out).toContain('Pages')
     expect(out).toContain('Approval modal')
   })

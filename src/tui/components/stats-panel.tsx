@@ -1,7 +1,7 @@
 import { Box, Text } from "ink";
 import type { JSX } from "react";
 import { percentBar, percentLabel } from "../format.js";
-import { singleBorder, theme } from "../theme.js";
+import { roundBorder, theme } from "../theme.js";
 import { useDashboardState } from "../use-dashboard-state.js";
 import { PageHeader } from "./typography.js";
 
@@ -23,7 +23,7 @@ export function StatsPanel({ width }: StatsPanelProps): JSX.Element {
     <Box
       width={width}
       flexDirection="column"
-      borderStyle={singleBorder()}
+      borderStyle={roundBorder()}
       borderDimColor
       paddingX={1}
     >

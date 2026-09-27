@@ -4,7 +4,7 @@ import { type JSX, useEffect, useState } from "react";
 import type { RegisteredAgent } from "../../core/registry.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { formatTime } from "../format.js";
-import { singleBorder, theme } from "../theme.js";
+import { roundBorder, theme } from "../theme.js";
 import { EmptyState } from "../components/empty-state.js";
 
 export interface ChatPageProps {
@@ -56,7 +56,7 @@ export function ChatPage({
   return (
     <Box
       flexDirection="column"
-      borderStyle={singleBorder()}
+      borderStyle={roundBorder()}
       borderDimColor
       paddingX={1}
       flexGrow={1}

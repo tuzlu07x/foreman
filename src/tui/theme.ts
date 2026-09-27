@@ -47,6 +47,10 @@ export interface SymbolSet {
   arrow: string;
   cursor: string;
   loading: string;
+  /** Inbox / notifications badge. */
+  inbox: string;
+  /** Brand mark in the header. */
+  brand: string;
 }
 
 export interface ThemeSpec {
@@ -127,6 +131,8 @@ const UNICODE_SYMBOLS: SymbolSet = {
   arrow: "→",
   cursor: "❯",
   loading: "⟳",
+  inbox: "✉",
+  brand: "🦫",
 };
 
 const ASCII_SYMBOLS: SymbolSet = {
@@ -143,6 +149,8 @@ const ASCII_SYMBOLS: SymbolSet = {
   arrow: "->",
   cursor: ">",
   loading: "/",
+  inbox: "#",
+  brand: "[F]",
 };
 
 // -----------------------------------------------------------------------------
@@ -274,6 +282,11 @@ const ASCII_BOLD = {
 // concrete shape object built from ASCII glyphs when the env asks for it.
 export function singleBorder(): "single" | typeof ASCII_SINGLE {
   return isAsciiMode() ? ASCII_SINGLE : "single";
+}
+
+/** Rounded panels — the default frame for pages and panels. */
+export function roundBorder(): "round" | typeof ASCII_SINGLE {
+  return isAsciiMode() ? ASCII_SINGLE : "round";
 }
 
 export function doubleBorder(): "double" | typeof ASCII_DOUBLE {
