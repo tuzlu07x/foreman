@@ -226,20 +226,26 @@ export async function runInstallStep(
           ? resolveBundledTemplatePath(entry.install.config_template_path)
           : null;
         let seeded = false;
-        if (!existsSync(configPath) && templatePath) {
+        if (templatePath) {
           try {
             const raw = readFileSync(templatePath, "utf-8");
             const expanded = raw.replace(/~\//g, `${homedir()}/`);
             mkdirSync(dirname(configPath), { recursive: true });
-            writeFileSync(configPath, expanded, { mode: 0o600 });
+            // "wx" (O_CREAT | O_EXCL) is the existence check: an existing
+            // config (or a symlink at its path) is never overwritten or
+            // written through.
+            writeFileSync(configPath, expanded, { mode: 0o600, flag: "wx" });
             seeded = true;
             log(
               `  ✓ seeded ${entry.name} config from bundled template → ${configPath}`,
             );
           } catch (seedErr) {
-            log(
-              `  ⚠ template seed failed: ${seedErr instanceof Error ? seedErr.message : String(seedErr)}`,
-            );
+            // EEXIST: the agent already has a config — keep it.
+            if ((seedErr as NodeJS.ErrnoException).code !== "EEXIST") {
+              log(
+                `  ⚠ template seed failed: ${seedErr instanceof Error ? seedErr.message : String(seedErr)}`,
+              );
+            }
           }
         }
         // #377 fallback — when no template is bundled AND the registry
