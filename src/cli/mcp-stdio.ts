@@ -50,7 +50,12 @@ import {
   resolveAgentIdentity,
   type ResolvedIdentity,
 } from "../core/agent-token.js";
-import { claimedAgentOf, isUntrustedSource } from "../core/agent-identity.js";
+import {
+  claimedAgentOf,
+  displayAgentId,
+  isUntrustedSource,
+  isValidAgentId,
+} from "../core/agent-identity.js";
 import { InboxService } from "../core/inbox.js";
 import { OrgComms, renderMessages, silencedReason, type MessageKind } from "../core/org/comms.js";
 import { ApprovalReviews } from "../core/org/review.js";
@@ -89,6 +94,14 @@ export const mcpStdioCommand = new Command("mcp-stdio")
     }
     // Human surfaces skip org delegation rules; an agent must not be able
     // to pass itself off as one.
+    // The id lands in audit rows, the inbox and stderr: one plain charset.
+    if (options.source !== undefined && !isValidAgentId(options.source)) {
+      process.stderr.write(
+        red("error: ") +
+          `--source '${displayAgentId(options.source)}' is not a valid agent id (letters, digits, '.', '_', '-'; at most 64).\n`,
+      );
+      process.exit(1);
+    }
     if (options.source !== undefined && isHumanSource(options.source)) {
       process.stderr.write(
         red("error: ") +
@@ -227,13 +240,14 @@ function announceIdentity(services: Services, identity: ResolvedIdentity): void 
   const message = describeUntrustedIdentity(identity);
   warn(message);
   try {
+    // One item a day for all untrusted connections, so cycling claimed ids
+    // can't flood the inbox; every connection is still audited above.
     new InboxService(getDb(), bus).add({
       level: "warning",
       kind: "system",
-      title: `${identity.claimed} is connected without a valid agent token`,
+      title: `${displayAgentId(identity.claimed)} is connected without a valid agent token`,
       body: message,
-      agentId: identity.claimed,
-      dedupeKey: `identity:${identity.source}:${identity.reason}`,
+      dedupeKey: `identity:untrusted:${new Date().toISOString().slice(0, 10)}`,
     });
   } catch {
     // The inbox is a convenience; stderr and the audit event already say it.

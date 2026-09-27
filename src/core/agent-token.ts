@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
-import { isUntrustedSource, untrustedSource } from "./agent-identity.js";
+import { displayAgentId, isUntrustedSource, isValidAgentId, untrustedSource } from "./agent-identity.js";
 import { isHumanSource } from "./org/guard.js";
 import {
   isReservedSecretName,
@@ -81,10 +81,10 @@ export function mintAgentToken(): string {
   return `${TOKEN_PREFIX}${randomBytes(TOKEN_BYTES).toString("base64url")}`;
 }
 
-/** Ids no agent may take: empty or padded, one of yours (`cli`, `tui`, …),
- *  or the `untrusted:` namespace. */
+/** Ids no agent may take: outside `[A-Za-z0-9._-]{1,64}`, one of yours
+ *  (`cli`, `tui`, …), or the `untrusted:` namespace. */
 export function isReservedAgentId(agentId: string): boolean {
-  return agentId.trim().length === 0 || agentId !== agentId.trim() || isHumanSource(agentId) || isUntrustedSource(agentId);
+  return !isValidAgentId(agentId) || isHumanSource(agentId) || isUntrustedSource(agentId);
 }
 
 function assertTokenableAgentId(agentId: string): void {
@@ -223,12 +223,13 @@ export function describeUntrustedIdentity(identity: ResolvedIdentity): string {
       : identity.reason === "invalid-token"
         ? `its ${AGENT_TOKEN_ENV} matches no agent (rotated or revoked?)`
         : `its ${AGENT_TOKEN_ENV} belongs to a different agent`;
+  const claimed = displayAgentId(identity.claimed);
   const fix =
     identity.claimed === DEFAULT_CLAIMED_SOURCE
       ? "Fix: register it with `foreman agent add` so its MCP wiring carries a token"
-      : `Fix: foreman agent rewire ${identity.claimed}`;
+      : `Fix: foreman agent rewire ${claimed}`;
   return (
-    `'${identity.claimed}' connected without proof of identity (${why}), so it runs as ` +
-    `${identity.source}, without that agent's allow rules, org role or MCP hub servers. ${fix}`
+    `'${claimed}' connected without proof of identity (${why}), so it runs as ` +
+    `${displayAgentId(identity.source)}, without that agent's allow rules, org role or MCP hub servers. ${fix}`
   );
 }

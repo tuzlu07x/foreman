@@ -145,7 +145,10 @@ policy rules and org role.
   `submit_approval` without the tag from a Foreman button. Human ids (`cli`,
   `tui`, `telegram`, …) stay refused outright.
   Foreman warns on stderr, in the inbox and in the audit log
-  (`agent:identity` events); the token itself is never printed or logged.
+  (`agent:identity` events; the inbox keeps one item a day for all untrusted
+  connections); the token itself is never printed or logged. `--source`
+  must be letters, digits, `.`, `_` or `-` (at most 64); anything else is
+  refused, and ids are shown without control characters.
 - `foreman agent show` says whether the agent has a token (and when it was
   issued) and shows the snippet with a placeholder. `foreman secrets show`
   refuses agent tokens, and so does the MCP `secrets/get` tool.

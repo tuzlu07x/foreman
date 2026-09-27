@@ -18,7 +18,13 @@ import {
   takeAgentToken,
   verifyAgentToken,
 } from '../../src/core/agent-token.js'
-import { claimedAgentOf, isUntrustedSource, untrustedSource } from '../../src/core/agent-identity.js'
+import {
+  claimedAgentOf,
+  displayAgentId,
+  isUntrustedSource,
+  isValidAgentId,
+  untrustedSource,
+} from '../../src/core/agent-identity.js'
 import { redactSecretShapes, secretPatternRule } from '../../src/core/risk-rules/secret-patterns.js'
 import type { RiskContext } from '../../src/core/risk-rules/types.js'
 import { ReservedSecretError, SecretStore } from '../../src/core/secret-store.js'
@@ -226,6 +232,16 @@ describe('agent tokens', () => {
       trusted: false,
       source: 'untrusted:codex',
     })
+  })
+
+  it('shows ids without control characters or ANSI escapes', () => {
+    expect(displayAgentId('codex\u001b[31mred\u001b[0m')).toBe('codexred')
+    expect(displayAgentId('a b\u0007c')).toBe('a?bc')
+    expect(displayAgentId('untrusted:codex')).toBe('untrusted:codex')
+    expect(displayAgentId('\u001b[2J')).toBe('?')
+    expect(isValidAgentId('claude-code')).toBe(true)
+    expect(isValidAgentId('x'.repeat(65))).toBe(false)
+    expect(() => issueAgentToken(store, 'bad id')).toThrow(InvalidTokenAgentIdError)
   })
 
   it('untrusted ids round-trip to the claimed agent', () => {

@@ -149,6 +149,35 @@ describe('foreman mcp-stdio agent identity', () => {
     await real.close()
   }, 30_000)
 
+  it('refuses a --source with control characters or outside the id charset, without echoing them', () => {
+    for (const bad of ['codex\u001b[31mRED', 'a b', 'x'.repeat(65), 'codex\n']) {
+      const out = spawnSync('node', [FM_BIN, 'mcp-stdio', '--source', bad], { env, encoding: 'utf-8', input: '' })
+      expect(out.status).toBe(1)
+      expect(out.stderr).toContain('is not a valid agent id')
+      expect(out.stderr).not.toContain('\u001b[31m')
+    }
+  })
+
+  it('cycling claimed ids adds one inbox item, while every connection is audited', async () => {
+    for (const id of ['spoof-a', 'spoof-b', 'spoof-c']) {
+      const s = new Session(spawn('node', [FM_BIN, 'mcp-stdio', '--source', id], { env }))
+      await s.request('initialize')
+      await s.close()
+    }
+    const items = (JSON.parse(run('inbox', '--json').stdout) as Array<{ dedupeKey: string | null }>).filter((i) =>
+      i.dedupeKey?.startsWith('identity:untrusted'),
+    )
+    expect(items).toHaveLength(1)
+    const db = new Database(join(home, 'foreman.db'), { readonly: true })
+    const audited = db.prepare("SELECT payload FROM audit_events WHERE event_type = 'agent:identity'").all() as Array<{
+      payload: string
+    }>
+    db.close()
+    expect(audited.map((r) => (JSON.parse(r.payload) as { claimed: string }).claimed)).toEqual(
+      expect.arrayContaining(['spoof-a', 'spoof-b', 'spoof-c']),
+    )
+  }, 30_000)
+
   it('rotate with no wiring to write still cuts off the old token, and says so', async () => {
     const rotated = run('agent', 'token', 'rotate', 'codex', '--yes')
     expect(rotated.stdout).toContain('The OLD token for codex is now INVALID')
