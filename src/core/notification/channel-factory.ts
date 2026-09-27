@@ -81,9 +81,9 @@ export function buildChannel(id: ChannelId, toggle: ChannelToggle, deps: Channel
         return {
           channel: new WebhookChannel({
             url: secret(toggle.webhook_url_ref),
-            ...(toggle.signing_secret_ref && deps.secrets.exists(toggle.signing_secret_ref)
-              ? { signingSecret: deps.secrets.get(toggle.signing_secret_ref) }
-              : {}),
+            // A configured-but-missing signing secret keeps the channel off:
+            // the receiver expects signed payloads, so never send unsigned.
+            ...(toggle.signing_secret_ref ? { signingSecret: secret(toggle.signing_secret_ref) } : {}),
           }),
         };
       }
