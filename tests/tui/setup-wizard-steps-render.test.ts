@@ -394,15 +394,20 @@ describe("foreman-llm step (Foreman's brain)", () => {
     expect(w.frame()).toContain('openai-fake-large')
   })
 
-  it('walks the Ollama-not-installed and preset sub-screens', async () => {
+  it('shows Ollama and OpenAI-compatible as coming in v0.2, not selectable', async () => {
+    // The LLM factory has no client for these yet; the picker used to let
+    // the user save a brain that failed on its first call.
     const w = await mount('foreman-llm')
     await w.until('pick an LLM')
-    await w.press(ENTER, 'Ollama not detected on this machine')
-    await w.press(ESC, 'pick an LLM')
+    expect(w.frame()).toMatch(/✗ Local — Ollama on this machine\s+\(coming in v0\.2\)/)
+    expect(w.frame()).toMatch(/✗ Custom — OpenAI-compatible\s+\(coming in v0\.2\)/)
+    // With no cloud provider configured, Skip is the only selectable row.
+    expect(w.frame()).toContain('❯ ✓ Skip — heuristics only')
     await w.press(DOWN)
-    await w.press(ENTER, 'OpenAI-compatible ▸ pick a preset')
-    await w.press(ENTER, '▸ API key')
-    expect(w.frame()).toContain('Paste your')
+    await w.press('\u001B[A')
+    expect(w.frame()).toContain('❯ ✓ Skip — heuristics only')
+    await w.press(ENTER, 'Agents ▸ pick which to install')
+    expect(readFileSync(w.services.llmConfigPath, 'utf-8')).toContain('enabled: false')
   })
 })
 

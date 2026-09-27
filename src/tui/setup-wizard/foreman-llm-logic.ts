@@ -1,4 +1,5 @@
 import { loadLlmConfig, saveLlmConfig } from "../../core/llm/config.js";
+import { hasRuntimeClient } from "../../core/llm/factory.js";
 import type { LlmPreset } from "../../core/llm-provider-presets.js";
 import {
   isOAuthProviderId,
@@ -32,6 +33,20 @@ export type ForemanLlmChoice =
 
 export type BrainCloudProvider = "anthropic" | "openai" | "gemini";
 
+/** LLM provider behind the Ollama / OpenAI-compatible picker rows. */
+const BRAIN_ROW_PROVIDER = {
+  ollama: "ollama",
+  preset: "openai_compatible",
+} as const;
+
+/** False for brains the LLM factory can't run yet (Ollama and
+ *  OpenAI-compatible land in v0.2): the picker shows them disabled with
+ *  "(coming in v0.2)" instead of letting the user configure a brain that
+ *  fails on its first call. */
+export function brainRowAvailable(row: keyof typeof BRAIN_ROW_PROVIDER): boolean {
+  return hasRuntimeClient(BRAIN_ROW_PROVIDER[row]);
+}
+
 /** The picker rows the cursor can land on, in display order. `configured`
  *  must be `configuredBrainProviderIds(...)` — the same set the render uses
  *  to grey rows out — so what's drawn and what Enter acts on can't diverge
@@ -44,7 +59,9 @@ export function brainPickerChoices(
   for (const id of ["anthropic", "openai", "gemini"] as const) {
     if (configured.has(id)) choices.push(id);
   }
-  choices.push("ollama", "preset", "skip");
+  if (brainRowAvailable("ollama")) choices.push("ollama");
+  if (brainRowAvailable("preset")) choices.push("preset");
+  choices.push("skip");
   return choices;
 }
 

@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { saveOAuthTokens } from '../../src/core/llm/oauth/token-store.js'
 import { SecretStore } from '../../src/core/secret-store.js'
 import { createInMemoryDb } from '../../src/db/client.js'
+import { hasRuntimeClient } from '../../src/core/llm/factory.js'
 import {
   brainPickerChoices,
   brainPickerCursor,
+  brainRowAvailable,
   resolveBrainModelSource,
 } from '../../src/tui/setup-wizard/foreman-llm-logic.js'
 
@@ -19,14 +21,21 @@ import {
 describe('brainPickerChoices / brainPickerCursor', () => {
   it('lets the cursor land on a provider enabled only by a sign-in', () => {
     const choices = brainPickerChoices(new Set(['anthropic']))
-    expect(choices).toEqual(['anthropic', 'ollama', 'preset', 'skip'])
+    // Ollama / OpenAI-compatible have no runtime client yet (v0.2).
+    expect(choices).toEqual(['anthropic', 'skip'])
     expect(brainPickerCursor(null, choices)).toBe('anthropic')
   })
 
   it('ignores a draft that is no longer selectable', () => {
     const choices = brainPickerChoices(new Set(['openai']))
     expect(brainPickerCursor('anthropic', choices)).toBe('openai')
-    expect(brainPickerCursor('preset', choices)).toBe('preset')
+    expect(brainPickerCursor('preset', choices)).toBe('openai')
+    expect(brainPickerCursor('skip', choices)).toBe('skip')
+  })
+
+  it('keeps the Ollama / OpenAI-compatible rows in step with the LLM factory', () => {
+    expect(brainRowAvailable('ollama')).toBe(hasRuntimeClient('ollama'))
+    expect(brainRowAvailable('preset')).toBe(hasRuntimeClient('openai_compatible'))
   })
 })
 

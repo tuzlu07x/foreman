@@ -100,7 +100,7 @@ The wizard auto-launches because the foreman home doesn't exist yet. Walk throug
 
 1. **Welcome** → Enter to start.
 2. **Step 1 of 5 — LLM Providers** — Space toggles the providers you have, Enter confirms. For Anthropic / OpenAI you can sign in with your Claude / ChatGPT subscription instead of pasting a key; otherwise paste each key at its prompt (a help URL is shown, e.g. `Get yours at: https://console.anthropic.com/settings/keys`).
-3. **Step 2 of 5 — Foreman's brain** — pick the LLM Foreman itself uses: a configured cloud provider (and model), local Ollama, an OpenAI-compatible preset, or Skip.
+3. **Step 2 of 5 — Foreman's brain** — pick the LLM Foreman itself uses: a configured cloud provider (and model), or Skip. Local Ollama and OpenAI-compatible brains are listed as "coming in v0.2".
 4. **Step 3 of 5 — Agents** — `hermes` + `claude-code` are pre-checked; agents whose LLM isn't configured are hidden. Per agent, pick its LLM, route and model plus an optional responsibility note, then confirm.
 5. **Step 4 of 5 — Services** — optional tokens (Telegram, Discord, Slack, GitHub, …). If two chat agents share a channel, you pick which one is primary.
 6. **Step 5 of 5 — Install + Verify** — required setup lists any keys the chosen routes still need (paste or skip), then Foreman installs, configures and registers each agent.

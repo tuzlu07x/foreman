@@ -12,6 +12,7 @@ import { stepProgress } from "./progress.js";
 import {
   brainPickerChoices,
   brainPickerCursor,
+  brainRowAvailable,
   formatOllamaRunTag,
   persistForemanLlmChoice,
   type ForemanLlmChoice,
@@ -23,6 +24,10 @@ import {
 
 // ---------------- Foreman's brain (#367) ----------------
 // Key handling for every phase lives in foreman-llm-input.ts.
+// Shown in place of the description for brains the LLM factory can't run
+// yet; kept short so the row never truncates it.
+const COMING_IN_V02 = "(coming in v0.2)";
+
 export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
   const {
     services,
@@ -62,7 +67,8 @@ export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
     // #370 — Universal picker. All cloud rows surface regardless of
     // Step 1 configuration; rows without a configured key render
     // dimmed + are skipped by ↑↓ nav (no-op on Enter with hint).
-    // ollama / preset / skip are always available.
+    // skip is always available; ollama / preset only once the LLM factory
+    // has a client for them (brainRowAvailable — v0.2).
     const allRows: {
       value: ForemanLlmChoice;
       label: string;
@@ -97,19 +103,28 @@ export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
         disabled: !configured.has("gemini"),
         disabledReason: "needs Gemini key in Step 1 — Esc to go back",
       },
+      // Rows for brains the LLM factory can't run yet stay visible but
+      // disabled (brainRowAvailable) — picking one used to save a brain
+      // that failed on its first call.
       {
         value: "ollama",
         label: "Local — Ollama on this machine",
-        sub: ollamaDetection.installed
-          ? `free · ${ollamaDetection.installedModels.length} model${
-              ollamaDetection.installedModels.length === 1 ? "" : "s"
-            } already pulled`
-          : "free · install + model wizard",
+        sub: !brainRowAvailable("ollama")
+          ? COMING_IN_V02
+          : ollamaDetection.installed
+            ? `free · ${ollamaDetection.installedModels.length} model${
+                ollamaDetection.installedModels.length === 1 ? "" : "s"
+              } already pulled`
+            : "free · install + model wizard",
+        disabled: !brainRowAvailable("ollama"),
       },
       {
         value: "preset",
         label: "Custom — OpenAI-compatible",
-        sub: "open-source hosts + closed clouds (xAI, Cohere, Mistral, Perplexity)",
+        sub: !brainRowAvailable("preset")
+          ? COMING_IN_V02
+          : "open-source hosts + closed clouds (xAI, Cohere, Mistral, Perplexity)",
+        disabled: !brainRowAvailable("preset"),
       },
       {
         value: "skip",

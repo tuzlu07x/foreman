@@ -30,6 +30,19 @@ import { OpenAILlmClient } from './providers/openai.js'
 //   - LlmOAuthLoginRequiredError   → `auth_mode: oauth` but no token bundle
 //     in the store. Surface "run `foreman llm login <provider>`".
 
+/** Providers the schema accepts but this build has no client for yet
+ *  (v0.2, #312). buildLlmClient throws LlmProviderUnavailableError for them. */
+const PROVIDERS_WITHOUT_RUNTIME: ReadonlySet<ProviderId> = new Set<ProviderId>([
+  'ollama',
+  'openai_compatible',
+])
+
+/** Whether buildLlmClient can build a client for this provider. The setup
+ *  wizard's brain picker reads this so it only offers brains that work. */
+export function hasRuntimeClient(provider: ProviderId): boolean {
+  return !PROVIDERS_WITHOUT_RUNTIME.has(provider)
+}
+
 export class LlmProviderUnavailableError extends Error {
   constructor(public readonly providerId: ProviderId) {
     super(
