@@ -1084,7 +1084,7 @@ async function runAgentUpdateOne(
   return 0;
 }
 
-async function runAgentUpdateAll(
+export async function runAgentUpdateAll(
   agents: RegisteredAgent[],
   doc: ReturnType<typeof loadActiveRegistry>["doc"],
 ): Promise<void> {
