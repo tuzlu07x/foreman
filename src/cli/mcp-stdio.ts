@@ -20,7 +20,7 @@ import {
   approvalIdMissHint,
   classifyApprovalIdInput,
 } from "../core/approval-id.js";
-import { deriveApprovalKey } from "../core/approval-token.js";
+import { deriveApprovalKey, parseApprovalToken } from "../core/approval-token.js";
 import { createMediatorStack } from "../core/mediator-stack.js";
 import { loadHub, scopeForAgent } from "../core/mcp-hub/boot.js";
 import { HubToolUnavailableError } from "../core/mcp-hub/hub.js";
@@ -50,7 +50,7 @@ import {
   resolveAgentIdentity,
   type ResolvedIdentity,
 } from "../core/agent-token.js";
-import { claimedAgentOf } from "../core/agent-identity.js";
+import { claimedAgentOf, isUntrustedSource } from "../core/agent-identity.js";
 import { InboxService } from "../core/inbox.js";
 import { OrgComms, renderMessages, silencedReason, type MessageKind } from "../core/org/comms.js";
 import { ApprovalReviews } from "../core/org/review.js";
@@ -671,6 +671,12 @@ export async function handleMessage(
     ).params;
     const toolName = params?.name;
 
+    const refusal = untrustedRelayRefusal(sourceAgent, toolName, params?.arguments);
+    if (refusal) {
+      services.audit.logEvent("agent:identity-refused", { sourceAgent, tool: toolName ?? null });
+      return reply(id, { content: [{ type: "text", text: refusal }], isError: true });
+    }
+
     if (toolName === "secrets/get") {
       const secretName = params?.arguments?.name;
       if (typeof secretName !== "string" || secretName.length === 0) {
@@ -1261,6 +1267,47 @@ export async function handleMessage(
     return replyError(id, -32601, `Method not found: ${method ?? "(unknown)"}`);
   }
   return null;
+}
+
+/** `/foreman` verbs that only read, which an unverified connection may
+ *  still relay. Everything else changes state or spends money. */
+const READ_ONLY_COMMANDS: ReadonlySet<string> = new Set([
+  "help",
+  "status",
+  "agent",
+  "agents",
+  "activity",
+  "org",
+  "spend",
+]);
+
+/** The relay tools act for the human (answers, resolutions, commands,
+ *  approvals). An unverified connection (#618) may use them only where
+ *  something else proves the human: an HMAC-tagged approval button, or a
+ *  read-only command. Returns the refusal text, or null. */
+export function untrustedRelayRefusal(
+  sourceAgent: string,
+  toolName: string | undefined,
+  args: Record<string, unknown> | undefined,
+): string | null {
+  if (!isUntrustedSource(sourceAgent)) return null;
+  let what: string | null = null;
+  if (toolName === "submit_resolution" || toolName === "submit_user_answer") {
+    what = toolName;
+  } else if (toolName === "submit_command") {
+    const command = typeof args?.command === "string" ? args.command.trim().toLowerCase() : "";
+    if (!READ_ONLY_COMMANDS.has(command)) what = `submit_command ${command || "(no command)"}`;
+  } else if (toolName === "submit_approval") {
+    const raw = typeof args?.approval_id === "string" ? args.approval_id : "";
+    if (!parseApprovalToken(classifyApprovalIdInput(raw).stripped).tag) {
+      what = "submit_approval without the tag from a Foreman button";
+    }
+  }
+  if (!what) return null;
+  return (
+    `Not available: ${what} needs a verified agent, and this connection has no valid agent token ` +
+    `(it runs as ${sourceAgent}). Ask the user to run \`foreman agent rewire ${claimedAgentOf(sourceAgent)}\`.`
+  );
 }
 
 /** Hub tools for `tools/list`. A failing upstream must never break the

@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 // #618 end to end: `foreman mcp-stdio --source <id>` is that agent only with
@@ -119,6 +120,34 @@ describe('foreman mcp-stdio agent identity', () => {
     expect(await viaFile.post('engineering', 'three')).toMatch(/^Posted/)
     await viaFile.close()
   }, 20_000)
+
+  it('`submit_command write` from an untrusted connection is refused and queues nothing', async () => {
+    run('agent', 'add', 'claude-code', '--type', 'generic-mcp', '--skip-config')
+    const write = async (s: Session): Promise<string> => {
+      const res = await s.request('tools/call', {
+        name: 'submit_command',
+        arguments: { command: 'write', args: ['claude-code', 'review', 'the', 'parser'] },
+      })
+      return res.result?.content?.[0]?.text ?? res.error?.message ?? ''
+    }
+    const spoof = await connect()
+    expect(await write(spoof)).toContain('needs a verified agent')
+    // Read-only commands still work for it.
+    const status = await spoof.request('tools/call', { name: 'submit_command', arguments: { command: 'status' } })
+    expect(status.result?.isError).toBeFalsy()
+    await spoof.close()
+    const db = new Database(join(home, 'foreman.db'), { readonly: true })
+    const queued = (): number =>
+      (db.prepare("SELECT count(*) AS n FROM control_commands WHERE command = 'write'").get() as { n: number }).n
+    expect(queued()).toBe(0)
+
+    db.close()
+    // The verified agent gets past the identity gate (to the usual owner
+    // and org checks).
+    const real = await connect({ FOREMAN_AGENT_TOKEN: token })
+    expect(await write(real)).not.toContain('needs a verified agent')
+    await real.close()
+  }, 30_000)
 
   it('rotate with no wiring to write still cuts off the old token, and says so', async () => {
     const rotated = run('agent', 'token', 'rotate', 'codex', '--yes')

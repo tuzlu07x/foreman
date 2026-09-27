@@ -139,7 +139,11 @@ policy rules and org role.
   still apply, so dropping the token never loosens anything. All untrusted
   connections together get at most 30 calls a minute and 3 approval
   prompts waiting at once, so cycling claimed ids can't flood you with
-  prompts. Human ids (`cli`, `tui`, `telegram`, …) stay refused outright.
+  prompts. The relay tools that act for you are closed to it too:
+  `submit_user_answer`, `submit_resolution`, `submit_command` other than
+  read-only verbs (`help`, `status`, `org`, `spend`, `activity`), and
+  `submit_approval` without the tag from a Foreman button. Human ids (`cli`,
+  `tui`, `telegram`, …) stay refused outright.
   Foreman warns on stderr, in the inbox and in the audit log
   (`agent:identity` events); the token itself is never printed or logged.
 - `foreman agent show` says whether the agent has a token (and when it was
