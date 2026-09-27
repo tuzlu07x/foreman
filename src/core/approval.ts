@@ -60,6 +60,8 @@ export interface ApprovalDecision {
     | "slack"
     | "webhook"
     | "agent_mcp";
+  /** Nobody answered before the deadline; the default (deny) applied. */
+  timedOut?: boolean;
 }
 
 export interface SubmitApprovalFromAgentOpts {
@@ -376,6 +378,7 @@ export class DbApprovalService implements ApprovalService {
           decision: row.decision ?? "denied",
           ...(row.remember ? { remember: row.remember } : {}),
           ...(row.resolvedBy === "agent" ? { via: "agent_mcp" as const } : {}),
+          ...(row.resolvedBy === "timeout" ? { timedOut: true } : {}),
         };
         this.bus.emit("approval:resolved", {
           requestId: req.requestId,
@@ -410,7 +413,7 @@ export class DbApprovalService implements ApprovalService {
       decision: "denied",
       resolvedBy: "timeout",
     });
-    return { decision: "denied" };
+    return { decision: "denied", timedOut: true };
   }
 
   cancelPending(requestIds: readonly string[]): void {
