@@ -87,6 +87,10 @@ export interface SubmitApprovalFromAgentOpts {
    *  the new rule without re-asking). Decision is always coerced to
    *  `deny` for `block_*` actions. */
   actionId?: string;
+  /** Require the approval token even for a plain deny. Set when the
+   *  relaying agent was sent this approval to review (#623): a reviewer
+   *  may recommend, but only the human's own tap can decide. */
+  requireToken?: boolean;
 }
 
 export interface SubmitApprovalResult {
@@ -471,7 +475,13 @@ export class DbApprovalService implements ApprovalService {
     // A remembered deny changes policy too, so it needs the token as well.
     const grants =
       opts.decision === "allow" || Boolean(opts.actionId) || opts.remember === true;
-    if (this.approvalKey && grants) {
+    if (opts.requireToken && !this.approvalKey) {
+      return {
+        ok: false,
+        error: `approval ${opts.approvalId}: you were asked to review this approval; only the human can decide it`,
+      };
+    }
+    if (this.approvalKey && (grants || opts.requireToken)) {
       const actionId = actionIdForDecision(
         opts.decision,
         opts.remember === true,

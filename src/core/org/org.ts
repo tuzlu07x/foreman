@@ -24,7 +24,9 @@ import { z } from "zod";
 //   * responsibilities are pushed into the registry so the existing
 //     responsibility-violation risk rule knows what each agent is for.
 //
-// The human stays at the top: approvals always come to you.
+// The human stays at the top: approvals always come to you. With
+// `approvals.escalate_via_manager`, a manager agent may add a recommendation
+// to its reports' low- and medium-risk approvals, but you still decide.
 
 export const HUMAN = "human";
 
@@ -112,6 +114,16 @@ export const OrgDocSchema = z
       })
       .strict()
       .default({}),
+    /** Approval escalation along reporting lines (#623). */
+    approvals: z
+      .object({
+        /** Low- and medium-risk approvals an agent asks for also go to its
+         *  manager agent, who may recommend allow or deny. Advice only:
+         *  you still decide every approval. */
+        escalate_via_manager: z.boolean().default(false),
+      })
+      .strict()
+      .optional(),
     departments: z.record(z.string(), DepartmentSchema).default({}),
     roles: z.record(z.string(), RoleSchema),
     /** Company-wide channel mirrors (#630): all-hands, leadership,
@@ -269,6 +281,41 @@ export function directReports(doc: OrgDoc, roleId: string): string[] {
   return Object.entries(doc.roles)
     .filter(([, r]) => r.reports_to === roleId)
     .map(([id]) => id);
+}
+
+/** Does org.yaml send low- and medium-risk approvals to the requester's
+ *  manager agent for a recommendation (#623)? */
+export function escalatesViaManager(doc: OrgDoc | null): boolean {
+  return doc?.approvals?.escalate_via_manager === true;
+}
+
+export interface ReviewLine {
+  /** The requester's role. */
+  requesterRole: string;
+  /** Its manager's role, which is asked to review. */
+  managerRole: string;
+  /** The agent filling the manager role (lowercase). */
+  managerAgent: string;
+}
+
+/** Who reviews an approval `requesterAgent` asked for: the manager of each
+ *  of its roles, when that manager is an agent. Never you (you decide
+ *  anyway), and never the requesting agent itself. */
+export function reviewLinesFor(doc: OrgDoc, requesterAgent: string): ReviewLine[] {
+  const requester = requesterAgent.trim().toLowerCase();
+  if (HUMAN_SOURCES.has(requester)) return [];
+  const lines: ReviewLine[] = [];
+  for (const requesterRole of rolesForAgent(doc, requester)) {
+    const managerRole = doc.roles[requesterRole]?.reports_to;
+    if (!managerRole || managerRole === HUMAN) continue;
+    const manager = doc.roles[managerRole];
+    if (!manager) continue;
+    const managerAgent = manager.agent.trim().toLowerCase();
+    if (managerAgent === requester) continue;
+    if (lines.some((l) => l.managerRole === managerRole)) continue;
+    lines.push({ requesterRole, managerRole, managerAgent });
+  }
+  return lines;
 }
 
 export function isHead(doc: OrgDoc, roleId: string): boolean {

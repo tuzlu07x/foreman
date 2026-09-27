@@ -43,6 +43,7 @@ import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { redactSecretShapes } from "../core/risk-rules/secret-patterns.js";
 import { isHumanSource } from "../core/org/guard.js";
 import { OrgComms, renderMessages, type MessageKind } from "../core/org/comms.js";
+import { ApprovalReviews } from "../core/org/review.js";
 import { createDecoder, encodeMessage } from "../mcp/framing.js";
 import type { JSONRPCMessage } from "../mcp/types.js";
 import { getForemanPaths } from "../utils/config.js";
@@ -110,6 +111,8 @@ interface Services {
   hubScope?: AgentScope;
   /** Department channels (#630). */
   comms?: OrgComms;
+  /** Manager reviews of approvals (#623). */
+  reviews?: ApprovalReviews;
 }
 
 function bootServices(): Services {
@@ -160,6 +163,7 @@ function bootServices(): Services {
   }
   const controlChannel = new ControlChannel(db, bus);
   const pendingQuestions = new PendingQuestionsService(db, { bus });
+  const comms = new OrgComms(db, { orgConfigPath: paths.orgConfigPath });
   return {
     registry,
     policy,
@@ -177,7 +181,8 @@ function bootServices(): Services {
     controlChannel,
     pendingRequestIds: new Set<string>(),
     hub: loadHub(paths, secretStore, warn),
-    comms: new OrgComms(db, { orgConfigPath: paths.orgConfigPath }),
+    comms,
+    reviews: new ApprovalReviews(db, comms),
   };
 }
 
@@ -436,6 +441,20 @@ export async function handleMessage(
             type: "object",
             required: ["text"],
             properties: { text: { type: "string" } },
+          },
+        },
+        {
+          name: "org_recommend",
+          description:
+            "Answer a Foreman review request (#623): when one of your direct reports is waiting for the human to approve a low- or medium-risk call, Foreman sends you a `[review]` message with its approval_id, the tool, the arguments and the risk. Recommend `allow` or `deny` with a short reason. This is advice only: the human sees it next to the approval and still decides; it never approves, denies or changes the approval. Only the requester's manager can recommend, once per approval.",
+          inputSchema: {
+            type: "object",
+            required: ["approval_id", "recommendation", "reason"],
+            properties: {
+              approval_id: { type: "string", description: "the approval_id from the review request" },
+              recommendation: { type: "string", enum: ["allow", "deny"] },
+              reason: { type: "string", description: "why, in a sentence or two (up to 500 characters)" },
+            },
           },
         },
         {
@@ -805,12 +824,16 @@ export async function handleMessage(
       }
       const classification = classifyApprovalIdInput(rawApprovalId);
       const approvalId = classification.stripped;
+      // #623 — an agent that was sent this approval to review may only
+      // recommend: deciding it, even a plain deny, needs the human's tap.
+      const reviewer = services.reviews?.isReviewer(approvalId, sourceAgent) === true;
       const result = await services.approval.submitFromAgent({
         approvalId,
         decision,
         remember,
         sourceAgent,
         actionId,
+        ...(reviewer ? { requireToken: true } : {}),
       });
       if (result.ok) {
         const tail = result.policyRuleId
@@ -832,6 +855,50 @@ export async function handleMessage(
       return reply(id, {
         content: [{ type: "text", text: `${storeError}\n\n${hint}` }],
         isError: true,
+      });
+    }
+
+    if (toolName === "org_recommend") {
+      const args = params?.arguments ?? {};
+      const reviews = services.reviews;
+      if (!reviews) return replyError(id, -32603, "approval reviews are not available in this process");
+      const self = services.registry.get?.(sourceAgent);
+      const result =
+        self && (self.status === "blocked" || self.status === "disabled")
+          ? { ok: false as const, reason: `${sourceAgent} is ${self.status} in Foreman` }
+          : reviews.recommend({
+              from: sourceAgent,
+              approvalId: typeof args.approval_id === "string" ? args.approval_id : "",
+              recommendation: typeof args.recommendation === "string" ? args.recommendation : "",
+              reason: typeof args.reason === "string" ? args.reason : "",
+            });
+      services.audit.logEvent("org:recommendation", {
+        sourceAgent,
+        ok: result.ok,
+        approvalId: result.ok
+          ? result.recommendation.approvalId
+          : typeof args.approval_id === "string"
+            ? args.approval_id.slice(0, 64)
+            : null,
+        ...(result.ok
+          ? {
+              managerRole: result.recommendation.managerRole,
+              requesterAgent: result.recommendation.requesterAgent,
+              recommendation: result.recommendation.recommendation,
+              reason: result.recommendation.reason,
+            }
+          : { error: result.reason }),
+      });
+      return reply(id, {
+        content: [
+          {
+            type: "text",
+            text: result.ok
+              ? `Recommended ${result.recommendation.recommendation} on ${result.recommendation.approvalId}. The human sees it next to the approval and decides.`
+              : `Not recorded: ${result.reason}.`,
+          },
+        ],
+        isError: !result.ok,
       });
     }
 
