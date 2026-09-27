@@ -14,7 +14,7 @@ import { checkDelegation, HUMAN_SOURCES, loadOrg, type DelegationVerdict } from 
 /** The person at the keyboard (CLI or TUI), not an agent: nobody to nudge,
  *  and no agent chain to watch for runaway loops. */
 export function isHumanSource(sourceAgent: string | null | undefined): boolean {
-  return sourceAgent !== null && sourceAgent !== undefined && HUMAN_SOURCES.has(sourceAgent.toLowerCase());
+  return sourceAgent !== null && sourceAgent !== undefined && HUMAN_SOURCES.has(sourceAgent.trim().toLowerCase());
 }
 
 export function orgDelegationVerdict(

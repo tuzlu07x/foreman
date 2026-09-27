@@ -24,22 +24,44 @@ export type SocketFactory = (url: string) => SocketLike;
 
 export const defaultSocketFactory: SocketFactory = (url) => new WebSocket(url) as unknown as SocketLike;
 
-/** Resolves when the socket closes (or fails to open). */
-export function whenClosed(socket: SocketLike): Promise<SocketCloseEvent> {
-  return new Promise((resolve) => {
+export interface TrackedSocket {
+  socket: SocketLike;
+  /** Resolves when the socket is closed, or given up on. */
+  closed: Promise<SocketCloseEvent>;
+  /** Close from our side. A peer that never answers the close handshake
+   *  (a dead link) would leave the socket CLOSING forever, so `closed`
+   *  resolves after `graceMs` regardless. */
+  close(code: number, reason: string): void;
+}
+
+export function trackSocket(socket: SocketLike, graceMs = 2_000): TrackedSocket {
+  let finish: (ev: SocketCloseEvent) => void = () => {};
+  const closed = new Promise<SocketCloseEvent>((resolve) => {
     let done = false;
-    const finish = (ev: SocketCloseEvent): void => {
+    finish = (ev) => {
       if (done) return;
       done = true;
       resolve(ev);
     };
-    socket.addEventListener("close", (ev) => finish({ code: ev.code, reason: ev.reason }));
-    socket.addEventListener("error", () => {
-      // An error is followed by close in browsers and Node; this covers a
-      // socket that never opened and never closes.
-      setTimeout(() => finish({ code: 1006, reason: "error" }), 1_000).unref?.();
-    });
   });
+  socket.addEventListener("close", (ev) => finish({ code: ev.code, reason: ev.reason }));
+  socket.addEventListener("error", () => {
+    // An error is normally followed by close; this covers a socket that
+    // never opened and never closes.
+    setTimeout(() => finish({ code: 1006, reason: "error" }), 1_000).unref?.();
+  });
+  return {
+    socket,
+    closed,
+    close(code, reason) {
+      try {
+        socket.close(code, reason);
+      } catch {
+        // already closed
+      }
+      setTimeout(() => finish({ code, reason }), graceMs).unref?.();
+    },
+  };
 }
 
 export function messageText(ev: SocketMessageEvent): string | null {

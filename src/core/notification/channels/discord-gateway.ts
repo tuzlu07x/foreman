@@ -9,7 +9,7 @@ import {
 } from "./approval-buttons.js";
 import { clipText, defaultFetch, postWithTimeout, type HttpFetch } from "./http-post.js";
 import type { ChatCommandRunner } from "./slack-socket.js";
-import { defaultSocketFactory, messageText, whenClosed, type SocketFactory, type SocketLike } from "./socket.js";
+import { defaultSocketFactory, messageText, trackSocket, type SocketFactory, type TrackedSocket } from "./socket.js";
 
 // =============================================================================
 // Discord Gateway listener (#615)
@@ -53,6 +53,8 @@ export interface DiscordGatewayOptions {
   /** Heartbeat jitter source (tests pin it). */
   random?: () => number;
   timeoutMs?: number;
+  /** How long a close we started may wait for the peer (tests shorten it). */
+  closeGraceMs?: number;
 }
 
 type Json = Record<string, unknown>;
@@ -63,7 +65,7 @@ export class DiscordGatewayListener {
   private readonly socketFactory: SocketFactory;
   private readonly abort = new AbortController();
   private readonly timeoutMs: number;
-  private socket: SocketLike | null = null;
+  private current: TrackedSocket | null = null;
   private running = false;
   private loop: Promise<void> | null = null;
   private heartbeat: NodeJS.Timeout | null = null;
@@ -91,7 +93,7 @@ export class DiscordGatewayListener {
     this.abort.abort();
     this.stopHeartbeat();
     // 1000 ends the session on Discord's side too.
-    this.socket?.close(1000, "shutdown");
+    this.current?.close(1000, "shutdown");
     await this.loop?.catch(() => undefined);
   }
 
@@ -101,20 +103,24 @@ export class DiscordGatewayListener {
     while (!this.abort.signal.aborted) {
       const resuming = this.sessionId !== null && this.seq !== null;
       const base = resuming && this.resumeUrl ? this.resumeUrl : (this.opts.gatewayUrl ?? DEFAULT_GATEWAY);
-      const socket = this.socketFactory(`${base.replace(/\/+$/, "")}/?v=10&encoding=json`);
-      this.socket = socket;
-      const closed = whenClosed(socket);
-      socket.addEventListener("message", (ev) => {
+      const tracked = trackSocket(
+        this.socketFactory(`${base.replace(/\/+$/, "")}/?v=10&encoding=json`),
+        this.opts.closeGraceMs,
+      );
+      this.current = tracked;
+      tracked.socket.addEventListener("message", (ev) => {
+        // Frames from a socket we already gave up on are ignored.
+        if (this.current !== tracked) return;
         const text = messageText(ev);
         if (text === null) return;
-        this.onPayload(socket, text, onDecision, () => {
+        this.onPayload(tracked, text, onDecision, () => {
           backoff.reset();
           offlineWarned = false;
         });
       });
-      const { code } = await closed;
+      const { code } = await tracked.closed;
       this.stopHeartbeat();
-      this.socket = null;
+      this.current = null;
       if (this.abort.signal.aborted) return;
       if (FATAL_CLOSE.has(code)) {
         this.opts.onWarning?.(
@@ -136,7 +142,7 @@ export class DiscordGatewayListener {
   }
 
   private onPayload(
-    socket: SocketLike,
+    tracked: TrackedSocket,
     raw: string,
     onDecision: (d: UserDecision) => Promise<void>,
     onReady: () => void,
@@ -152,11 +158,11 @@ export class DiscordGatewayListener {
     switch (payload.op) {
       case 10: {
         const interval = typeof d?.heartbeat_interval === "number" ? d.heartbeat_interval : 41_250;
-        this.startHeartbeat(socket, interval);
+        this.startHeartbeat(tracked, interval);
         if (this.sessionId && this.seq !== null) {
-          send(socket, { op: 6, d: { token: this.opts.botToken, session_id: this.sessionId, seq: this.seq } });
+          send(tracked, { op: 6, d: { token: this.opts.botToken, session_id: this.sessionId, seq: this.seq } });
         } else {
-          send(socket, {
+          send(tracked, {
             op: 2,
             d: {
               token: this.opts.botToken,
@@ -171,16 +177,16 @@ export class DiscordGatewayListener {
         this.acked = true;
         return;
       case 1:
-        send(socket, { op: 1, d: this.seq });
+        send(tracked, { op: 1, d: this.seq });
         return;
       case 7:
         // Discord asks for a reconnect; a non-1000 close keeps the session.
         this.reconnectNow = true;
-        socket.close(4000, "reconnect");
+        tracked.close(4000, "reconnect");
         return;
       case 9:
         if (payload.d !== true) this.forgetSession();
-        socket.close(4000, "invalid session");
+        tracked.close(4000, "invalid session");
         return;
       case 0:
         break;
@@ -203,18 +209,19 @@ export class DiscordGatewayListener {
     }
   }
 
-  private startHeartbeat(socket: SocketLike, interval: number): void {
+  private startHeartbeat(tracked: TrackedSocket, interval: number): void {
     this.stopHeartbeat();
     this.acked = true;
     const beat = (): void => {
       if (!this.acked) {
         // No ACK since the last beat: the connection is a zombie.
+        this.stopHeartbeat();
         this.reconnectNow = true;
-        socket.close(4000, "heartbeat timeout");
+        tracked.close(4000, "heartbeat timeout");
         return;
       }
       this.acked = false;
-      send(socket, { op: 1, d: this.seq });
+      send(tracked, { op: 1, d: this.seq });
     };
     const first = setTimeout(() => {
       beat();
@@ -297,7 +304,12 @@ export class DiscordGatewayListener {
       try {
         await onDecision(decisionFromButton(check, { channel: "discord", userId }));
       } catch (err) {
-        outcome = err instanceof StaleDecisionError ? "Already decided." : "Couldn't record that decision.";
+        if (!(err instanceof StaleDecisionError)) {
+          // Keep the buttons so the user can try again.
+          await ephemeral("Couldn't record that decision. Try again, or decide in the Foreman TUI.");
+          return;
+        }
+        outcome = "This approval is no longer open here (decided, or re-sent after a restart).";
       }
       // UPDATE_MESSAGE: drop the buttons so a second tap can't race the first.
       await callback({
@@ -348,9 +360,9 @@ export class DiscordGatewayListener {
   }
 }
 
-function send(socket: SocketLike, payload: Json): void {
+function send(tracked: TrackedSocket, payload: Json): void {
   try {
-    socket.send(JSON.stringify(payload));
+    tracked.socket.send(JSON.stringify(payload));
   } catch {
     // The close handler reconnects.
   }

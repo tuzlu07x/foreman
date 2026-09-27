@@ -1106,7 +1106,11 @@ export function checkNotifyChannels(): CheckResult {
   }
   // Built to validate only (nothing is started); the signer is a stand-in
   // so two-way Slack / Discord configs get checked too.
-  const { channels, problems } = buildEnabledChannels(config, { secrets, signApproval: () => "" });
+  const { channels, problems } = buildEnabledChannels(config, {
+    secrets,
+    signApproval: () => "",
+    signButton: () => "",
+  });
   const routed = new Set(
     Object.values(config.routing).flatMap((r) => (r ? r.channels : [])),
   );

@@ -27,8 +27,12 @@ export interface ChannelSecrets {
 
 export interface ChannelFactoryDeps {
   secrets: ChannelSecrets;
-  /** Approval-token signer for Telegram buttons (see approval-token.ts). */
+  /** Approval-token signer for relayed Telegram buttons (see approval-token.ts). */
   signApproval?: (approvalId: string, actionId: string) => string;
+  /** Signer for buttons Foreman receives itself: the Telegram approval
+   *  bot, Slack and Discord. A separate key, so these never work as relay
+   *  tokens. */
+  signButton?: (approvalId: string, actionId: string) => string;
   fetchImpl?: HttpFetch;
   /** Channels that keep a connection open (the Telegram approval bot,
    *  Slack Socket Mode, the Discord Gateway) report trouble here: a
@@ -83,6 +87,7 @@ export function buildChannel(id: ChannelId, toggle: ChannelToggle, deps: Channel
             ...(toggle.approval_bot_token_ref
               ? { approvalBotToken: secret(toggle.approval_bot_token_ref) }
               : {}),
+            ...(deps.signButton ? { signButton: deps.signButton } : {}),
             ...(deps.onChannelWarning ? { onWarning: deps.onChannelWarning } : {}),
           }),
         };
@@ -107,12 +112,12 @@ export function buildChannel(id: ChannelId, toggle: ChannelToggle, deps: Channel
           if (users.length === 0) {
             return { problem: "two-way slack needs allowed_user_ids — run `foreman notify slack-interactive`" };
           }
-          if (!deps.signApproval) return { problem: "two-way slack needs Foreman's approval signer" };
+          if (!deps.signButton) return { problem: "two-way slack needs Foreman's button signer" };
           const onChatCommand = deps.onChatCommand;
           interactive = {
             appToken: secret(toggle.app_token_ref),
             allowedUserIds: users,
-            sign: deps.signApproval,
+            sign: deps.signButton,
             ...(onChatCommand ? { onCommand: (text: string, user: string) => onChatCommand("slack", text, user) } : {}),
             ...(deps.onChannelWarning ? { onWarning: deps.onChannelWarning } : {}),
           };
@@ -148,11 +153,11 @@ export function buildChannel(id: ChannelId, toggle: ChannelToggle, deps: Channel
             if (users.length === 0) {
               return { problem: "two-way discord needs allowed_user_ids — run `foreman notify discord-interactive`" };
             }
-            if (!deps.signApproval) return { problem: "two-way discord needs Foreman's approval signer" };
+            if (!deps.signButton) return { problem: "two-way discord needs Foreman's button signer" };
             const onChatCommand = deps.onChatCommand;
             interactive = {
               allowedUserIds: users,
-              sign: deps.signApproval,
+              sign: deps.signButton,
               ...(onChatCommand
                 ? { onCommand: (text: string, user: string) => onChatCommand("discord", text, user) }
                 : {}),

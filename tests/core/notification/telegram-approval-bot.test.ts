@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
-import { approvalSigner } from '../../../src/core/approval-token.js'
+import { approvalButtonSigner, approvalSigner } from '../../../src/core/approval-token.js'
 import { TelegramChannel, type TelegramFetch } from '../../../src/core/notification/channels/telegram.js'
 import type { Notification, UserDecision } from '../../../src/core/notification/types.js'
 
@@ -12,7 +12,9 @@ import type { Notification, UserDecision } from '../../../src/core/notification/
 const MAIN = 'MAIN_TOKEN'
 const APPROVAL = 'APPROVAL_TOKEN'
 const CHAT = '424242'
-const sign = approvalSigner(randomBytes(32))
+const masterKey = randomBytes(32)
+const sign = approvalButtonSigner(masterKey)
+const relaySign = approvalSigner(masterKey)
 
 interface Call {
   token: string
@@ -47,7 +49,8 @@ function harness(updates: unknown[][], status: number[] = []) {
     botToken: MAIN,
     chatId: CHAT,
     fetchImpl,
-    signApproval: sign,
+    signApproval: relaySign,
+    signButton: sign,
     approvalBotToken: APPROVAL,
     onWarning: (w) => warnings.push(w),
     pollTimeoutSeconds: 0,
@@ -243,7 +246,8 @@ describe('approval bot end to end: agent call → Telegram tap → agent unblock
       botToken: MAIN,
       chatId: CHAT,
       fetchImpl,
-      signApproval: sign,
+      signApproval: relaySign,
+      signButton: sign,
       approvalBotToken: APPROVAL,
       pollTimeoutSeconds: 0,
       minPollIntervalMs: 10,
