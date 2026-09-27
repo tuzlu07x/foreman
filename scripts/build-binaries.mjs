@@ -269,8 +269,9 @@ async function main() {
     execFileSync("codesign", ["--verify", "--strict", "--verbose=2", outPath], { stdio: "inherit" });
   }
 
-  const size = statSync(outPath).size;
-  const digest = sha256(readFileSync(outPath));
+  const built = readFileSync(outPath);
+  const size = built.length;
+  const digest = sha256(built);
   console.log("");
   console.log(`  ${size <= MAX_BYTES ? "✓" : "✗"} ${relative(REPO_ROOT, outPath)}  ${(size / 1024 / 1024).toFixed(1)} MB`);
   console.log(`    sha256 ${digest}`);
