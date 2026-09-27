@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type Database from 'better-sqlite3'
@@ -8,8 +8,9 @@ import { InboxService } from '../../../src/core/inbox.js'
 import { parseOrgText } from '../../../src/core/org/org.js'
 import { BudgetWatcher } from '../../../src/core/usage/budget-watcher.js'
 import { UsageLedger } from '../../../src/core/usage/ledger.js'
-import { OtlpReceiver, USAGE_KEY_HEADER } from '../../../src/core/usage/otlp-receiver.js'
+import { OtlpReceiver, USAGE_KEY_HEADER, usageEntriesFromLogs } from '../../../src/core/usage/otlp-receiver.js'
 import { buildOrgReport, parsePeriod } from '../../../src/core/usage/report.js'
+import { loadOrCreateUsageKey } from '../../../src/core/usage/telemetry-env.js'
 import { createInMemoryDb, type ForemanDb } from '../../../src/db/client.js'
 import { agentUsage } from '../../../src/db/schema.js'
 
@@ -137,5 +138,52 @@ describe('spend and budgets — review fixes', () => {
     const y = parsePeriod('yesterday', now)!
     expect(new Date(y.since).getDate()).toBe(29)
     expect(new Date(y.since).getHours()).toBe(0)
+  })
+})
+
+describe('telemetry input hardening', () => {
+  it('treats attribute keys as data: __proto__ and friends pollute nothing', () => {
+    const kv = (key: string, stringValue: string) => ({ key, value: { stringValue } })
+    const entries = usageEntriesFromLogs({
+      resourceLogs: [
+        {
+          resource: { attributes: [kv('__proto__', 'x'), kv('constructor', 'y'), kv('foreman.agent', 'claude-code')] },
+          scopeLogs: [
+            {
+              logRecords: [
+                {
+                  attributes: [
+                    kv('__proto__', 'polluted'),
+                    kv('event.name', 'api_request'),
+                    kv('model', 'claude-sonnet-4-5'),
+                    { key: 'input_tokens', value: { intValue: '10' } },
+                    { key: 'toString', value: { stringValue: 'nope' } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    })
+    expect(entries.map((e) => [e.agentId, e.model, e.input])).toEqual([['claude-code', 'claude-sonnet-4-5', 10]])
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+    expect(Object.prototype.toString.call([])).toBe('[object Array]')
+  })
+
+  it('creates the usage key once, reuses it, and replaces a damaged one', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'foreman-usage-key-'))
+    try {
+      const key = loadOrCreateUsageKey(dir)
+      expect(key).toMatch(/^[a-f0-9]{48}$/)
+      expect(statSync(join(dir, 'usage.key')).mode & 0o777).toBe(0o600)
+      expect(loadOrCreateUsageKey(dir)).toBe(key)
+      writeFileSync(join(dir, 'usage.key'), 'not a key\n')
+      const fresh = loadOrCreateUsageKey(dir)
+      expect(fresh).not.toBe(key)
+      expect(readFileSync(join(dir, 'usage.key'), 'utf-8').trim()).toBe(fresh)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

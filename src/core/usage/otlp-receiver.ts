@@ -214,14 +214,16 @@ function agentFromResource(resource: Record<string, unknown>): string | null {
 }
 
 function attrs(list: unknown[]): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
+  // Keys come from the request body: collect them in a Map, and let
+  // fromEntries define own properties, so `__proto__` can't pollute anything.
+  const out = new Map<string, unknown>();
   for (const item of list) {
     const kv = obj(item) as KeyValue | null;
-    if (!kv?.key || !kv.value) continue;
+    if (typeof kv?.key !== "string" || !kv.value) continue;
     const v = kv.value;
-    out[kv.key] = v.stringValue ?? v.intValue ?? v.doubleValue ?? v.boolValue;
+    out.set(kv.key, v.stringValue ?? v.intValue ?? v.doubleValue ?? v.boolValue);
   }
-  return out;
+  return Object.fromEntries(out);
 }
 
 function numAttr(v: unknown): number | undefined {

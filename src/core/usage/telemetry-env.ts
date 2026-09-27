@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_OTLP_PORT, USAGE_KEY_HEADER } from "./otlp-receiver.js";
 
@@ -12,18 +12,30 @@ import { DEFAULT_OTLP_PORT, USAGE_KEY_HEADER } from "./otlp-receiver.js";
 
 export function loadOrCreateUsageKey(foremanRoot: string): string {
   const path = join(foremanRoot, "usage.key");
-  if (existsSync(path)) {
-    const key = readFileSync(path, "utf-8").trim();
-    if (/^[a-f0-9]{32,}$/.test(key)) return key;
-  }
+  const existing = readKey(path);
+  if (existing) return existing;
   const key = randomBytes(24).toString("hex");
   try {
-    writeFileSync(path, `${key}\n`, { mode: 0o600, flag: "w" });
+    // A missing file is created exclusively, so two processes starting at
+    // once agree on one key; a damaged file is replaced.
+    writeFileSync(path, `${key}\n`, { mode: 0o600, flag: existing === null ? "wx" : "w" });
     chmodSync(path, 0o600);
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return readKey(path) || key;
     // Read-only home: the key still works for this process.
   }
   return key;
+}
+
+/** The stored key; `""` when the file is damaged, `null` when it is missing. */
+function readKey(path: string): string | null {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8").trim();
+  } catch {
+    return null;
+  }
+  return /^[a-f0-9]{32,}$/.test(raw) ? raw : "";
 }
 
 export function otlpPort(env: NodeJS.ProcessEnv = process.env): number {
