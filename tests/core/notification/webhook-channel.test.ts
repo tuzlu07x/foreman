@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   WebhookChannel,
   WebhookDeliveryError,
+  webhookUrlProblem,
   type WebhookFetch,
 } from '../../../src/core/notification/channels/webhook.js'
 import type { Notification } from '../../../src/core/notification/types.js'
@@ -53,7 +54,7 @@ describe('WebhookChannel — send', () => {
       fetchImpl: f.fetchImpl,
     })
     const ref = await channel.send(makeNotification())
-    expect(ref.channelMessageId).toMatch(/^webhook-/)
+    expect(ref.channelMessageId).toMatch(/^webhook:1:notif-1:req-99$/)
     expect(f.calls).toHaveLength(1)
     expect(f.calls[0]!.url).toBe('https://hooks.example.com/foreman')
     expect((f.calls[0]!.init.headers as Record<string, string>)['content-type']).toBe(
@@ -147,9 +148,15 @@ describe('WebhookChannel — isReady + lifecycle', () => {
     expect(await channel.isReady()).toBe(true)
   })
 
-  it('isReady returns false for an empty URL', async () => {
-    const channel = new WebhookChannel({ url: '' })
-    expect(await channel.isReady()).toBe(false)
+  it('refuses an empty URL, and plain http:// except to this machine (#636)', () => {
+    expect(() => new WebhookChannel({ url: '' })).toThrow(WebhookDeliveryError)
+    expect(() => new WebhookChannel({ url: 'http://hooks.example.com/x' })).toThrow(/plain http/)
+    expect(() => new WebhookChannel({ url: 'ftp://hooks.example.com/x' })).toThrow(/https/)
+    expect(webhookUrlProblem('http://127.0.0.1:8080/hook')).toBeNull()
+    expect(webhookUrlProblem('http://localhost/hook')).toBeNull()
+    expect(webhookUrlProblem('http://[::1]:9/hook')).toBeNull()
+    expect(webhookUrlProblem('http://127.evil.example/hook')).not.toBeNull()
+    expect(webhookUrlProblem('https://hooks.example.com/x')).toBeNull()
   })
 
   it('listen is a no-op (outbound-only — see file header)', async () => {
@@ -160,20 +167,38 @@ describe('WebhookChannel — isReady + lifecycle', () => {
     await channel.shutdown()
   })
 
-  it('updateMessage sends a fresh follow-up POST', async () => {
+  it('sends the outcome once, matched to the original approval (#636)', async () => {
     const f = makeFetch([{ status: 200 }, { status: 200 }])
     const channel = new WebhookChannel({
       url: 'https://hooks.example.com/foreman',
       fetchImpl: f.fetchImpl,
+      signingSecret: 's3cret',
     })
-    await channel.send(makeNotification())
-    await channel.updateMessage(
-      { channelMessageId: 'webhook-1' },
-      'Resolved at 14:18',
-    )
+    const ref = await channel.send(makeNotification())
+    // Countdown refreshes are not sent: a webhook can't edit a delivery.
+    await channel.updateMessage(ref, 'Waiting · 30s left')
+    expect(f.calls).toHaveLength(1)
+    await channel.updateMessage(ref, 'Resolved at 14:18', { final: true })
     expect(f.calls).toHaveLength(2)
-    const body = JSON.parse(String(f.calls[1]!.init.body))
-    expect(body.body).toBe('Resolved at 14:18')
-    expect(body.level).toBe('info')
+    const first = JSON.parse(String(f.calls[0]!.init.body))
+    const outcome = JSON.parse(String(f.calls[1]!.init.body))
+    expect(first.kind).toBe('notification')
+    expect(outcome).toMatchObject({
+      kind: 'outcome',
+      id: 'notif-1',
+      requestId: 'req-99',
+      inReplyTo: first.messageId,
+      body: 'Resolved at 14:18',
+      level: 'info',
+    })
+    const sig = (f.calls[1]!.init.headers as Record<string, string>)['x-foreman-signature']
+    expect(sig).toBe(`sha256=${createHmac('sha256', 's3cret').update(String(f.calls[1]!.init.body)).digest('hex')}`)
+  })
+
+  it('still matches an outcome after a restart (ids travel in the message id)', async () => {
+    const f = makeFetch([{ status: 200 }])
+    const channel = new WebhookChannel({ url: 'https://hooks.example.com/foreman', fetchImpl: f.fetchImpl })
+    await channel.updateMessage({ channelMessageId: 'webhook:7:notif%3A9:req-1' }, 'Denied', { final: true })
+    expect(JSON.parse(String(f.calls[0]!.init.body))).toMatchObject({ id: 'notif:9', requestId: 'req-1' })
   })
 })
