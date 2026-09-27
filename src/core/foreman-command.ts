@@ -1,4 +1,6 @@
 import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { orgDelegationVerdict } from "./org/guard.js";
 import type { ForemanDb } from "../db/client.js";
 import { DelegationTracker } from "./delegation-tracker.js";
 import {
@@ -121,7 +123,8 @@ export interface ForemanCommandResult {
     // Runaway-loop guard fires: this agent has too many unresolved
     // delegations to the same target inside the runaway window.
     // Caller surfaces this as a hard stop, not a retry signal.
-    | "RUNAWAY_LOOP";
+    | "RUNAWAY_LOOP"
+    | "ORG_POLICY";
 }
 
 export type ForemanCommandHandler = (
@@ -811,6 +814,21 @@ function writeHandler(
         `OTHER agents. To say "${message}" to ${ctx.sourceAgent}, just type ` +
         `it directly (without the \`foreman write\` prefix).`,
       errorCode: "UNKNOWN_SUBCOMMAND",
+    };
+  }
+  // Foreman Org — delegation follows the reporting lines in org.yaml.
+  const orgVerdict = orgDelegationVerdict(
+    join(ctx.configDir, "org.yaml"),
+    ctx.sourceAgent?.toLowerCase().trim(),
+    targetAgent,
+  );
+  if (orgVerdict && !orgVerdict.allowed) {
+    return {
+      ok: false,
+      text:
+        `Blocked by the org chart: ${orgVerdict.reason}. ` +
+        "Hand the task to your manager (or a department head) instead, or ask the user to assign it.",
+      errorCode: "ORG_POLICY",
     };
   }
   // Runaway-loop guard. When an LLM-driven agent (or even the user

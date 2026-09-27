@@ -20,6 +20,7 @@ import { detectProviderByPrefix } from "./key-prefix-detect.js";
 import { loadVoiceConfig } from "./notification/voice-config.js";
 import { enabledServers, loadHubConfig } from "./mcp-hub/config.js";
 import { missingSecrets } from "./mcp-hub/manage.js";
+import { loadOrg, OrgValidationError } from "./org/org.js";
 import { findDuplicateSlots } from "./secret-slot-migration.js";
 import { SecretStore } from "./secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
@@ -1125,6 +1126,59 @@ export function checkMcpHub(): CheckResult {
   };
 }
 
+// Foreman Org — org.yaml loads and every role's agent is registered.
+export function checkOrg(): CheckResult {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.orgConfigPath)) {
+    return {
+      name: "org",
+      status: "ok",
+      message: "no org.yaml — agents work without an org chart (try `foreman org templates`)",
+    };
+  }
+  let org;
+  try {
+    org = loadOrg(paths.orgConfigPath);
+  } catch (err) {
+    const detail =
+      err instanceof OrgValidationError
+        ? err.issues.map((i) => i.message).join("; ")
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    return {
+      name: "org",
+      status: "fail",
+      message: `org.yaml is invalid: ${detail}`,
+      remediation:
+        "Run `foreman org validate`. Until it loads, agent-to-agent delegation is blocked and agents get no MCP hub servers (fail closed).",
+    };
+  }
+  if (!org) return { name: "org", status: "ok", message: "no org.yaml" };
+  let registered = new Set<string>();
+  try {
+    registered = new Set(new RegistryService(getDb()).listAll().map((a) => a.id));
+  } catch {
+    // database check reports DB problems
+  }
+  const missing = [...new Set(Object.values(org.roles).map((r) => r.agent))].filter(
+    (a) => !registered.has(a),
+  );
+  if (missing.length > 0) {
+    return {
+      name: "org",
+      status: "warn",
+      message: `${org.company}: roles use unregistered agents — ${missing.join(", ")}`,
+      remediation: "Register them with `foreman agent add <id>` or change the role's agent in org.yaml.",
+    };
+  }
+  return {
+    name: "org",
+    status: "ok",
+    message: `${org.company}: ${Object.keys(org.roles).length} roles, ${Object.keys(org.departments).length} departments`,
+  };
+}
+
 const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkNodeVersion,
   checkPaths,
@@ -1146,6 +1200,7 @@ const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkProviderMapping,
   checkMcpGateway,
   checkMcpHub,
+  checkOrg,
   checkLegacyHome,
   checkUpdate,
   () => checkChafa(),

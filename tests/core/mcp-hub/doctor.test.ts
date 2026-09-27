@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { checkMcpHub } from '../../../src/core/doctor.js'
+import { checkMcpHub, checkOrg } from '../../../src/core/doctor.js'
+import { findOrgTemplate } from '../../../src/core/org/templates.js'
 import { closeDb } from '../../../src/db/client.js'
 
 describe('doctor: mcp_hub check', () => {
@@ -37,5 +38,33 @@ describe('doctor: mcp_hub check', () => {
     const result = checkMcpHub()
     expect(result.status).toBe('warn')
     expect(result.message).toContain('gh: github-pat')
+  })
+})
+
+describe('doctor: org check', () => {
+  let home: string
+  let prev: string | undefined
+  beforeEach(() => {
+    prev = process.env.FOREMAN_HOME
+    home = mkdtempSync(join(tmpdir(), 'foreman-doctor-org-'))
+    process.env.FOREMAN_HOME = home
+  })
+  afterEach(() => {
+    closeDb()
+    if (prev === undefined) delete process.env.FOREMAN_HOME
+    else process.env.FOREMAN_HOME = prev
+    rmSync(home, { recursive: true, force: true })
+  })
+
+  it('warns about roles whose agents are not registered', () => {
+    writeFileSync(join(home, 'org.yaml'), findOrgTemplate('solo')!.render('Me'))
+    const result = checkOrg()
+    expect(result.status).toBe('warn')
+    expect(result.message).toContain('hermes')
+  })
+
+  it('fails on a broken org chart', () => {
+    writeFileSync(join(home, 'org.yaml'), 'version: 1\ncompany: X\nroles: {}\n')
+    expect(checkOrg().status).toBe('fail')
   })
 })
