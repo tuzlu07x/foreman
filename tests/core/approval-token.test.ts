@@ -111,6 +111,25 @@ describe('relayed approvals (submit_approval) across processes', () => {
     await expect(waiting).resolves.toMatchObject({ decision: 'denied' })
   })
 
+  it("never accepts a button value from Slack, Discord or the approval bot as a relay token", async () => {
+    // Those values sit in chat history, readable by any agent with a Slack
+    // or Discord integration; they are signed with a different key.
+    const { approvalButtonSigner } = await import('../../src/core/approval-token.js')
+    const { encodeApprovalButton } = await import('../../src/core/notification/channels/approval-buttons.js')
+    const button = encodeApprovalButton('req-x', 'allow_always', approvalButtonSigner(masterKey))
+    const token = button.slice('fa:allow_always:'.length)
+    const waiting = pendingRequest('req-x')
+    await waitForRow('req-x')
+    for (const [decision, remember] of [
+      ['allow', true],
+      ['allow', false],
+    ] as const) {
+      const out = await relay().submitFromAgent({ approvalId: token, decision, remember, sourceAgent: 'hermes' })
+      expect(out.ok).toBe(false)
+    }
+    await expect(waiting).resolves.toMatchObject({ decision: 'denied' })
+  })
+
   it('refuses to replay a Deny tap as an Allow', async () => {
     const waiting = pendingRequest('req-c')
     await waitForRow('req-c')

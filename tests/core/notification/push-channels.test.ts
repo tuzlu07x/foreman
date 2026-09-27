@@ -143,19 +143,20 @@ describe('channel factory', () => {
     const vals = secrets({ 'slack-webhook': 'https://hooks.slack.com/x', 'slack-app': 'xapp-1', 'discord-bot': 't', 'discord-hook': 'https://discord.com/api/webhooks/1/x' })
     const sign = () => 'tag'
     const slack = { enabled: true, webhook_url_ref: 'slack-webhook', app_token_ref: 'slack-app' }
-    expect(buildChannel('slack', slack, { secrets: vals, signApproval: sign })).toMatchObject({
+    expect(buildChannel('slack', slack, { secrets: vals, signButton: sign })).toMatchObject({
       problem: expect.stringMatching(/allowed_user_ids/),
     })
-    expect(buildChannel('slack', { ...slack, allowed_user_ids: ['U1'] }, { secrets: vals })).toMatchObject({
-      problem: expect.stringMatching(/signer/),
+    // The relay signer alone is not enough: listener buttons need their own key.
+    expect(buildChannel('slack', { ...slack, allowed_user_ids: ['U1'] }, { secrets: vals, signApproval: sign })).toMatchObject({
+      problem: expect.stringMatching(/button signer/),
     })
-    expect(buildChannel('slack', { ...slack, allowed_user_ids: ['U1'] }, { secrets: vals, signApproval: sign })).toHaveProperty('channel')
+    expect(buildChannel('slack', { ...slack, allowed_user_ids: ['U1'] }, { secrets: vals, signButton: sign })).toHaveProperty('channel')
     const discordHook = { enabled: true, webhook_url_ref: 'discord-hook', interactive: true, allowed_user_ids: ['1'] }
-    expect(buildChannel('discord', discordHook, { secrets: vals, signApproval: sign })).toMatchObject({
+    expect(buildChannel('discord', discordHook, { secrets: vals, signButton: sign })).toMatchObject({
       problem: expect.stringMatching(/needs a bot/),
     })
     const discordBot = { enabled: true, bot_token_ref: 'discord-bot', channel: '123', interactive: true, allowed_user_ids: ['1'] }
-    expect(buildChannel('discord', discordBot, { secrets: vals, signApproval: sign })).toHaveProperty('channel')
+    expect(buildChannel('discord', discordBot, { secrets: vals, signButton: sign })).toHaveProperty('channel')
   })
 
   it('keeps a webhook off, rather than unsigned, when its signing secret is missing', () => {

@@ -182,6 +182,36 @@ describe('DiscordGatewayListener', () => {
     expect(second).toBeDefined()
   })
 
+  it('recovers from a dead link that never answers our close, and stops promptly', async () => {
+    const server = fakeSocketServer({ silent: true })
+    const listener = new DiscordGatewayListener({
+      botToken: 'bot-token',
+      allowedUserIds: [OWNER],
+      sign,
+      fetchImpl: discordApi().fetchImpl,
+      socketFactory: server.factory,
+      backoffMs: { min: 10, max: 20 },
+      random: () => 0,
+      closeGraceMs: 30,
+    })
+    listeners.push(listener)
+    listener.start(async () => {})
+    const first = await server.connection(1)
+    first.receive({ op: 10, d: { heartbeat_interval: 20 } })
+    // No ACK and no close frame ever comes back.
+    const second = await server.connection(2)
+    expect(first.closed?.code).toBe(4000)
+    // Frames from the abandoned socket are ignored.
+    const before = first.sent.length
+    first.receive({ op: 10, d: { heartbeat_interval: 20 } })
+    await settle(10)
+    expect(first.sent).toHaveLength(before)
+    expect(second).toBeDefined()
+    const started = Date.now()
+    await listener.stop()
+    expect(Date.now() - started).toBeLessThan(1_000)
+  })
+
   it('stops with a warning when the token is rejected', async () => {
     const { listener, server, warnings } = make()
     listener.start(async () => {})

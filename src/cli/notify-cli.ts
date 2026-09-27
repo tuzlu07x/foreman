@@ -12,7 +12,7 @@ import {
   saveNotifyConfig,
   type ChannelToggle,
 } from '../core/notification/notify-config.js'
-import { approvalSigner } from '../core/approval-token.js'
+import { approvalButtonSigner, approvalSigner } from '../core/approval-token.js'
 import { buildChannel } from '../core/notification/channel-factory.js'
 import {
   defaultNotifyState,
@@ -452,7 +452,11 @@ async function buildChannelForCli(
   const masterKey = loadOrCreateSecretsMasterKey()
   const store = new SecretStore(getDb(), masterKey)
   // The signer lets two-way Slack / Discord build; a test only sends.
-  const built = buildChannel(channelId, toggle, { secrets: store, signApproval: approvalSigner(masterKey) })
+  const built = buildChannel(channelId, toggle, {
+    secrets: store,
+    signApproval: approvalSigner(masterKey),
+    signButton: approvalButtonSigner(masterKey),
+  })
   if ('problem' in built) {
     console.error(red('error: ') + built.problem)
     return null

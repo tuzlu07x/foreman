@@ -9,6 +9,8 @@ type Listener = ((ev: SocketMessageEvent) => void) | ((ev: SocketCloseEvent) => 
 export class FakeSocket implements SocketLike {
   readonly sent: Array<Record<string, unknown>> = []
   closed: SocketCloseEvent | null = null
+  /** A dead link: our close() never gets the peer's close frame back. */
+  silent = false
   private readonly listeners: Record<string, Listener[]> = { open: [], message: [], close: [], error: [] }
 
   constructor(readonly url: string) {}
@@ -21,6 +23,7 @@ export class FakeSocket implements SocketLike {
   close(code = 1000, reason = ''): void {
     if (this.closed) return
     this.closed = { code, reason }
+    if (this.silent) return
     queueMicrotask(() => {
       for (const l of this.listeners.close!) (l as (ev: SocketCloseEvent) => void)({ code, reason })
     })
@@ -41,10 +44,11 @@ export class FakeSocket implements SocketLike {
   }
 }
 
-export function fakeSocketServer() {
+export function fakeSocketServer(opts: { silent?: boolean } = {}) {
   const sockets: FakeSocket[] = []
   const factory = (url: string): FakeSocket => {
     const s = new FakeSocket(url)
+    s.silent = opts.silent === true
     sockets.push(s)
     return s
   }

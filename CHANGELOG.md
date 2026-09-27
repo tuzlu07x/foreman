@@ -36,7 +36,7 @@ All notable changes to Foreman are documented here. The format follows
     Gateway, on Node's built-in WebSocket), so no public URL and no new
     dependency are needed.
   - Only the listed user ids can act. Buttons carry HMAC tags, stale buttons
-    answer "Already decided", and reconnects back off.
+    say so instead of deciding anything, and reconnects back off.
 - `assign` and `org` chat verbs: route a task through `org.yaml` from
   Telegram or the TUI.
 - `NO_COLOR` is honoured by the TUI.

@@ -8,7 +8,7 @@ import {
   type ApprovalSigner,
 } from "./approval-buttons.js";
 import { ChannelDeliveryError, clipText, defaultFetch, postWithTimeout, type HttpFetch } from "./http-post.js";
-import { defaultSocketFactory, messageText, whenClosed, type SocketFactory, type SocketLike } from "./socket.js";
+import { defaultSocketFactory, messageText, trackSocket, type SocketFactory, type TrackedSocket } from "./socket.js";
 
 // =============================================================================
 // Slack Socket Mode listener (#615)
@@ -29,6 +29,7 @@ import { defaultSocketFactory, messageText, whenClosed, type SocketFactory, type
 // the payload; anything that is not a hooks.slack.com URL is ignored.
 
 const SLACK_API = "https://slack.com/api";
+const STALE_TEXT = "This approval is no longer open here (decided, or re-sent after a restart).";
 const RESPONSE_URL_PREFIX = "https://hooks.slack.com/";
 /** Slack answers these when the token itself is wrong: stop retrying. */
 const AUTH_ERRORS = new Set([
@@ -55,6 +56,8 @@ export interface SlackSocketOptions {
   socketFactory?: SocketFactory;
   backoffMs?: { min: number; max: number };
   timeoutMs?: number;
+  /** How long a close we started may wait for the peer (tests shorten it). */
+  closeGraceMs?: number;
 }
 
 type Json = Record<string, unknown>;
@@ -65,7 +68,7 @@ export class SlackSocketListener {
   private readonly socketFactory: SocketFactory;
   private readonly abort = new AbortController();
   private readonly timeoutMs: number;
-  private socket: SocketLike | null = null;
+  private current: TrackedSocket | null = null;
   private running = false;
   private refreshRequested = false;
   private loop: Promise<void> | null = null;
@@ -85,7 +88,7 @@ export class SlackSocketListener {
 
   async stop(): Promise<void> {
     this.abort.abort();
-    this.socket?.close(1000, "shutdown");
+    this.current?.close(1000, "shutdown");
     await this.loop?.catch(() => undefined);
   }
 
@@ -110,19 +113,22 @@ export class SlackSocketListener {
         await pause(backoff.next(), this.abort.signal);
         continue;
       }
-      const socket = this.socketFactory(url);
-      this.socket = socket;
-      const closed = whenClosed(socket);
-      socket.addEventListener("message", (ev) => {
+      // stop() may have run while the URL was being fetched.
+      if (this.abort.signal.aborted) return;
+      const tracked = trackSocket(this.socketFactory(url), this.opts.closeGraceMs);
+      this.current = tracked;
+      tracked.socket.addEventListener("message", (ev) => {
+        // Frames from a socket we already gave up on are ignored.
+        if (this.current !== tracked) return;
         const text = messageText(ev);
         if (text === null) return;
-        void this.onEnvelope(socket, text, onDecision, () => {
+        void this.onEnvelope(tracked, text, onDecision, () => {
           backoff.reset();
           offlineWarned = false;
         });
       });
-      await closed;
-      this.socket = null;
+      await tracked.closed;
+      this.current = null;
       if (this.abort.signal.aborted) return;
       // Slack refreshes connections every few hours, announcing it with a
       // `disconnect` envelope: reconnect straight away after those.
@@ -170,7 +176,7 @@ export class SlackSocketListener {
   }
 
   private async onEnvelope(
-    socket: SocketLike,
+    tracked: TrackedSocket,
     raw: string,
     onDecision: (d: UserDecision) => Promise<void>,
     onHello: () => void,
@@ -187,12 +193,16 @@ export class SlackSocketListener {
     }
     if (envelope.type === "disconnect") {
       this.refreshRequested = true;
-      socket.close(1000, "refresh");
+      tracked.close(1000, "refresh");
       return;
     }
     // Acknowledge first: Slack redelivers envelopes not acked within 3 s.
     if (typeof envelope.envelope_id === "string") {
-      socket.send(JSON.stringify({ envelope_id: envelope.envelope_id }));
+      try {
+        tracked.socket.send(JSON.stringify({ envelope_id: envelope.envelope_id }));
+      } catch {
+        return; // the socket is going away; Slack will redeliver
+      }
     }
     const payload = isObject(envelope.payload) ? envelope.payload : null;
     if (!payload) return;
@@ -227,7 +237,12 @@ export class SlackSocketListener {
     try {
       await onDecision(decisionFromButton(check, { channel: "slack", userId }));
     } catch (err) {
-      outcome = err instanceof StaleDecisionError ? "Already decided." : "Couldn't record that decision.";
+      if (!(err instanceof StaleDecisionError)) {
+        // Keep the buttons so the user can try again.
+        await this.respond(responseUrl, ephemeral("Couldn't record that decision. Try again, or decide in the Foreman TUI."));
+        return;
+      }
+      outcome = STALE_TEXT;
     }
     // Swap the buttons for the outcome so a second tap can't race the first.
     const message = isObject(payload.message) ? payload.message : null;

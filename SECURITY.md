@@ -67,7 +67,9 @@ Known limits, which we track as roadmap items rather than hide:
   carry approval tokens. In two-way mode (`foreman notify
   slack-interactive` / `discord-interactive`), Slack and Discord buttons
   reach Foreman over a Socket Mode / Gateway connection only Foreman holds.
-  Only the configured user ids can act, and each button is HMAC-tagged.
+  Only the configured user ids can act, and each button is HMAC-tagged
+  with a key separate from relay tokens, so button values readable in chat
+  history can't be replayed through `submit_approval`.
   Commands typed there run as the owner, like the TUI, and are audited.
 - **Pre-execution only.** Foreman decides before a call runs; it does not
   roll back side effects of calls you approved.

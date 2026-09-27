@@ -42,10 +42,19 @@ export interface NotificationBridgeOptions {
    *  When omitted, a default ticker is constructed; tests inject a
    *  fake-timer version for deterministic ticks. */
   countdownTicker?: CountdownTicker
+  /** Who decided, on which channel — for the audit log. A cross-process
+   *  approval row only records that "the user" decided. */
+  onChannelDecision?: (info: {
+    requestId: string
+    channel: string | null
+    decidedBy: string
+    decision: UserDecision['decision']
+  }) => void
 }
 
 export class NotificationBridge {
   private readonly bus: EventBus<ForemanEventMap>
+  private readonly onChannelDecision: NotificationBridgeOptions['onChannelDecision']
   private readonly getState: () => NotifyState
   private readonly countdownTicker: CountdownTicker
   private offRequested: (() => void) | null = null
@@ -74,6 +83,10 @@ export class NotificationBridge {
    *  CountdownTicker has the original text to splice an updated tail
    *  into on each tick. Cleared on resolution alongside `outstanding`. */
   private readonly approvalBodies = new Map<string, string>()
+  /** Requests a decision has already been taken for (claimed synchronously,
+   *  before any network edit), so a second tap can't slip in while the
+   *  first outcome is still being written to the chat. */
+  private readonly claimed = new Set<string>()
 
   constructor(
     private readonly service: NotificationService,
@@ -83,6 +96,7 @@ export class NotificationBridge {
     this.getState =
       opts.getState ?? (() => ({ silencedUntil: null, mutedAgents: [] }))
     this.countdownTicker = opts.countdownTicker ?? new CountdownTicker()
+    this.onChannelDecision = opts.onChannelDecision
   }
 
   async start(): Promise<void> {
@@ -264,6 +278,7 @@ export class NotificationBridge {
     // ticker (it knows how to strip the countdown tail cleanly). Done
     // before the outstanding-map iteration below so the countdown
     // doesn't get one more tick after the resolution event fires.
+    this.claimed.add(res.requestId)
     const footer = renderResolvedFooter(res)
     await this.countdownTicker.resolve(res.requestId, footer)
     this.approvalBodies.delete(res.requestId)
@@ -271,34 +286,38 @@ export class NotificationBridge {
     const ids = this.outstanding.get(res.requestId)
     if (!ids || ids.size === 0) {
       this.outstanding.delete(res.requestId)
+      this.claimed.delete(res.requestId)
       return
     }
     for (const notificationId of ids) {
-      const ref = this.service.getMessageRef(notificationId)
       const row = this.service.getNotification(notificationId)
-      if (!ref || !row) continue
-      const channel = this.service.channelById(ref.channel as ChannelId)
-      if (!channel) continue
-      // If the ticker already pushed the final edit for this channel,
-      // re-editing here would just produce an identical "no change"
-      // edit (Telegram returns 400 on those). Telegram channels are
-      // already handled by the ticker.resolve() above; non-Telegram
-      // channels (system, webhook) didn't have the countdown tail in
-      // the first place — append the footer the old way.
-      const hasCountdownTail = (row.body ?? '').includes('\n⏱')
-      if (hasCountdownTail) continue
-      try {
-        await channel.updateMessage(
-          { channelMessageId: ref.channelMessageId },
-          `${row.body}\n\n${footer}`,
-          { final: true },
-        )
-      } catch {
-        // Message edit failed (Telegram rate limit, channel down, …) —
-        // non-fatal; the decision is still recorded in the DB.
+      if (!row) continue
+      // One message per channel the notification went to.
+      for (const ref of this.service.getMessageRefs(notificationId)) {
+        const channel = this.service.channelById(ref.channel as ChannelId)
+        if (!channel) continue
+        // If the ticker already pushed the final edit for this channel,
+        // re-editing here would just produce an identical "no change"
+        // edit (Telegram returns 400 on those). Telegram channels are
+        // already handled by the ticker.resolve() above; non-Telegram
+        // channels (system, webhook) didn't have the countdown tail in
+        // the first place — append the footer the old way.
+        const hasCountdownTail = (row.body ?? '').includes('\n⏱')
+        if (hasCountdownTail) continue
+        try {
+          await channel.updateMessage(
+            { channelMessageId: ref.channelMessageId },
+            `${row.body}\n\n${footer}`,
+            { final: true },
+          )
+        } catch {
+          // Message edit failed (Telegram rate limit, channel down, …) —
+          // non-fatal; the decision is still recorded in the DB.
+        }
       }
     }
     this.outstanding.delete(res.requestId)
+    this.claimed.delete(res.requestId)
   }
 
   /**
@@ -385,7 +404,11 @@ export class NotificationBridge {
     // Buttons that carry the approval id directly (approval bot, Slack,
     // Discord) count only while this bridge still has that prompt open:
     // a tap on an old message must not overwrite the real outcome.
-    if (d.requestId && !this.outstanding.has(requestId)) throw new StaleDecisionError()
+    if (d.requestId && (!this.outstanding.has(requestId) || this.claimed.has(requestId))) {
+      throw new StaleDecisionError()
+    }
+    this.claimed.add(requestId)
+    this.onChannelDecision?.({ requestId, channel: d.channel ?? row?.channel ?? null, decidedBy: d.decidedBy, decision: d.decision })
     // Translate channel verbs into the approval:resolved shape that
     // ApprovalBridge + BusApprovalService already understand.
     const decision = d.decision === 'allow' || d.decision === 'allow_always' ? 'allowed' : 'denied'

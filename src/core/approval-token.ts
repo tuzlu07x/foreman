@@ -47,6 +47,16 @@ export function approvalSigner(masterKey: Buffer): (approvalId: string, actionId
   return (approvalId, actionId) => approvalTag(key, approvalId, actionId);
 }
 
+/** Signer for buttons Foreman receives itself (the Telegram approval bot,
+ *  Slack Socket Mode, the Discord Gateway). A different key from the relay
+ *  tokens above: these button values sit in chat history where an agent
+ *  with a Slack or Discord integration can read them, so they must never
+ *  be accepted by `submit_approval`. */
+export function approvalButtonSigner(masterKey: Buffer): (approvalId: string, actionId: string) => string {
+  const key = createHmac("sha256", masterKey).update("foreman/approval-button/v1").digest();
+  return (approvalId, actionId) => approvalTag(key, approvalId, actionId);
+}
+
 export function formatApprovalToken(approvalId: string, tag: string): string {
   return `${approvalId}${SEPARATOR}${tag}`;
 }

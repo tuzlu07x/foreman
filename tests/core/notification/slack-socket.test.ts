@@ -134,7 +134,7 @@ describe('SlackSocketListener', () => {
     const socket = await server.connection(1)
     socket.receive(blockActions(OWNER, encodeApprovalButton('req-1', 'allow', sign)))
     await waitFor(() => responses(api.calls).length > 0)
-    expect(JSON.stringify(responses(api.calls)[0])).toContain('Already decided.')
+    expect(JSON.stringify(responses(api.calls)[0])).toContain('no longer open')
   })
 
   it('runs /foreman for allowed users and answers privately', async () => {
@@ -184,6 +184,48 @@ describe('SlackSocketListener', () => {
     const third = await server.connection(3)
     expect(third.url).toContain('ticket=3')
     expect(api.calls.filter((c) => c.url.endsWith('/apps.connections.open'))).toHaveLength(3)
+  })
+
+  it('opens no socket when stopped while the URL is being fetched, and stops promptly on a dead link', async () => {
+    let release: (() => void) | null = null
+    const server = fakeSocketServer({ silent: true })
+    const slow = httpRecorder(() => ({ body: { ok: true, url: 'wss://wss-primary.slack.com/link/?ticket=1' } }))
+    const gated = async (url: string, init: RequestInit) => {
+      await new Promise<void>((r) => {
+        release = r
+      })
+      return slow.fetchImpl(url, init)
+    }
+    const listener = new SlackSocketListener({
+      appToken: 'xapp-1',
+      allowedUserIds: [OWNER],
+      sign,
+      fetchImpl: gated,
+      socketFactory: server.factory,
+      closeGraceMs: 30,
+    })
+    listener.start(async () => {})
+    await waitFor(() => release !== null)
+    const stopping = listener.stop()
+    release!()
+    await stopping
+    expect(server.sockets).toHaveLength(0)
+
+    // Connected, then the link dies silently: stop() still returns.
+    const api = slackApi()
+    const second = new SlackSocketListener({
+      appToken: 'xapp-1',
+      allowedUserIds: [OWNER],
+      sign,
+      fetchImpl: api.fetchImpl,
+      socketFactory: server.factory,
+      closeGraceMs: 30,
+    })
+    second.start(async () => {})
+    await server.connection(1)
+    const started = Date.now()
+    await second.stop()
+    expect(Date.now() - started).toBeLessThan(1_000)
   })
 
   it('stops with a warning when Slack rejects the app token', async () => {
@@ -309,7 +351,7 @@ describe('Slack end to end: agent call → Slack button → agent unblocked', ()
       // The same button pressed again (another device, a double tap).
       socket.receive(blockActions(OWNER, allow))
       await waitFor(() => responses(api.calls).length === 2)
-      expect(JSON.stringify(responses(api.calls)[1])).toContain('Already decided.')
+      expect(JSON.stringify(responses(api.calls)[1])).toContain('no longer open')
     } finally {
       await bridge.stop()
       sqlite.close()

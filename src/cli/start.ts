@@ -63,7 +63,7 @@ import { runOauthFlows } from "./run-oauth-flow.js";
 import { runLoginWithSuspendedTui } from "../tui/run-login-in-tui.js";
 import { SecretStore } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
-import { approvalSigner } from "../core/approval-token.js";
+import { approvalButtonSigner, approvalSigner } from "../core/approval-token.js";
 import { buildEnabledChannels } from "../core/notification/channel-factory.js";
 import { isHumanSource } from "../core/org/guard.js";
 import {
@@ -79,7 +79,7 @@ import {
 } from "../core/llm/factory.js";
 import { LlmVerifier } from "../core/llm/verifier.js";
 import { BudgetAlertBridge } from "../core/llm/budget-alert-bridge.js";
-import { NotificationBridge } from "../core/notification/notification-bridge.js";
+import { NotificationBridge, type NotificationBridgeOptions } from "../core/notification/notification-bridge.js";
 import { NotificationService } from "../core/notification/notification-service.js";
 import { ForemanVoice } from "../core/notification/foreman-voice.js";
 import {
@@ -325,6 +325,7 @@ export function startForeman(
     db,
     secretStore,
     onChatCommand: runChatCommand,
+    onChannelDecision: (info) => audit.logEvent("approval:channel-decision", info),
     notifyConfigPath: paths.notifyConfigPath,
     notifyStatePath: paths.notifyStatePath,
     llmConfigPath: paths.llmConfigPath,
@@ -529,9 +530,14 @@ export function startForeman(
     if (patternDetector) patternDetector.stop();
     if (voice) voice.dispose();
     if (notificationBridge) {
-      await notificationBridge.stop().catch(() => {
-        /* best-effort cleanup */
-      });
+      // Bounded: a chat connection that won't close must not keep agent
+      // daemons running and the pidfile behind.
+      await Promise.race([
+        notificationBridge.stop().catch(() => {
+          /* best-effort cleanup */
+        }),
+        new Promise((resolve) => setTimeout(resolve, 5_000).unref()),
+      ]);
     }
     // SIGTERM every tracked agent daemon, wait up to 5s, then SIGKILL.
     // Awaited so foreman doesn't exit with stranded children.
@@ -1077,6 +1083,7 @@ function setupNotificationBridge(args: {
   llmConfigPath: string;
   onChannelWarning?: (message: string) => void;
   onChatCommand?: (channel: "slack" | "discord", text: string, userId: string) => Promise<string>;
+  onChannelDecision?: NotificationBridgeOptions["onChannelDecision"];
 }): {
   bridge: NotificationBridge;
   scheduler: DailyScheduler | null;
@@ -1097,6 +1104,8 @@ function setupNotificationBridge(args: {
     // Buttons carry HMAC-tagged approval ids so the relaying chat agent
     // cannot approve a call the user never tapped.
     signApproval: approvalSigner(loadOrCreateSecretsMasterKey()),
+    // Buttons Foreman receives itself get their own key (never a relay token).
+    signButton: approvalButtonSigner(loadOrCreateSecretsMasterKey()),
     ...(args.onChannelWarning ? { onChannelWarning: args.onChannelWarning } : {}),
     ...(args.onChatCommand ? { onChatCommand: args.onChatCommand } : {}),
   });
@@ -1109,6 +1118,9 @@ function setupNotificationBridge(args: {
   const bridge = new NotificationBridge(service, {
     bus,
     getState: () => loadNotifyState(args.notifyStatePath),
+    // Which person on which channel decided: the approval row itself only
+    // records "the user".
+    ...(args.onChannelDecision ? { onChannelDecision: args.onChannelDecision } : {}),
   });
   void bridge.start().catch(() => {
     /* best-effort */

@@ -255,7 +255,7 @@ export function checkDelegation(
   fromAgent: string,
   toAgent: string,
 ): DelegationVerdict | null {
-  if (HUMAN_SOURCES.has(fromAgent.toLowerCase())) return { allowed: true, reason: "assigned by the human" };
+  if (HUMAN_SOURCES.has(fromAgent.trim().toLowerCase())) return { allowed: true, reason: "assigned by the human" };
   const fromRoles = rolesForAgent(doc, fromAgent);
   const toRoles = rolesForAgent(doc, toAgent);
   if (fromRoles.length === 0 || toRoles.length === 0) return null;

@@ -64,6 +64,9 @@ export interface TelegramChannelOptions {
    *  holds. Approval prompts are sent through it and Foreman polls it for
    *  the taps itself, so no agent ever sees an approval button. */
   approvalBotToken?: string
+  /** Signer for the approval bot's buttons: a different key from
+   *  signApproval, so a relay can never replay one (approval-token.ts). */
+  signButton?: (approvalId: string, actionId: string) => string
   /** Trouble with the approval bot (another poller, a revoked token). */
   onWarning?: (message: string) => void
   /** Long-poll timeout in seconds (tests use 0). */
@@ -99,6 +102,7 @@ interface TelegramSendResponse {
 }
 
 const TELEGRAM_API = 'https://api.telegram.org'
+const MAX_OPEN_KEYBOARDS = 500
 
 export class TelegramChannel implements NotificationChannel {
   readonly id = 'telegram' as const
@@ -108,17 +112,22 @@ export class TelegramChannel implements NotificationChannel {
   private readonly fetchImpl: TelegramFetch
   private readonly signApproval?: (approvalId: string, actionId: string) => string
   private readonly approvalBotToken?: string
+  private readonly signButton?: (approvalId: string, actionId: string) => string
   private readonly onWarning: (message: string) => void
   private readonly pollTimeoutSeconds: number
   private readonly pollBackoffMs: number
   private readonly minPollIntervalMs: number
   private polling: { stop: boolean; abort: AbortController; done: Promise<void> } | null = null
+  /** Keyboards of messages still open, so a countdown edit keeps them
+   *  (editMessageText without reply_markup removes the buttons). */
+  private readonly keyboards = new Map<string, unknown>()
 
   constructor(opts: TelegramChannelOptions) {
     this.botToken = opts.botToken
     this.chatId = opts.chatId
     this.signApproval = opts.signApproval
     this.approvalBotToken = opts.approvalBotToken
+    this.signButton = opts.signButton
     this.onWarning = opts.onWarning ?? (() => {})
     this.pollTimeoutSeconds = opts.pollTimeoutSeconds ?? 25
     this.pollBackoffMs = opts.pollBackoffMs ?? 5_000
@@ -150,7 +159,7 @@ export class TelegramChannel implements NotificationChannel {
       disable_web_page_preview: true,
     }
     const actions = viaApprovalBot ? n.actions.filter((a) => APPROVAL_BOT_ACTIONS.has(a.id)) : n.actions
-    const reply_markup = renderInlineKeyboard(actions, n.id, this.targets(n))
+    const reply_markup = renderInlineKeyboard(actions, n.id, this.targets(n, viaApprovalBot))
     if (reply_markup) body.reply_markup = reply_markup
     const res = (await this.call(
       'sendMessage',
@@ -162,14 +171,25 @@ export class TelegramChannel implements NotificationChannel {
       throw new TelegramApiError(res?.description ?? 'sendMessage failed')
     }
     const id = String(res.result.message_id)
-    return { channelMessageId: viaApprovalBot ? `${APPROVAL_REF_PREFIX}${id}` : id }
+    const channelMessageId = viaApprovalBot ? `${APPROVAL_REF_PREFIX}${id}` : id
+    if (reply_markup) {
+      this.keyboards.set(channelMessageId, reply_markup)
+      if (this.keyboards.size > MAX_OPEN_KEYBOARDS) {
+        const oldest = this.keyboards.keys().next().value
+        if (oldest !== undefined) this.keyboards.delete(oldest)
+      }
+    }
+    return { channelMessageId }
   }
 
-  async updateMessage(ref: ChannelMessageRef, body: string): Promise<void> {
+  async updateMessage(ref: ChannelMessageRef, body: string, opts: { final?: boolean } = {}): Promise<void> {
     const viaApprovalBot = ref.channelMessageId.startsWith(APPROVAL_REF_PREFIX)
     const messageId = viaApprovalBot
       ? ref.channelMessageId.slice(APPROVAL_REF_PREFIX.length)
       : ref.channelMessageId
+    // A countdown refresh keeps the buttons; the outcome removes them.
+    const keyboard = opts.final ? { inline_keyboard: [] } : this.keyboards.get(ref.channelMessageId)
+    if (opts.final) this.keyboards.delete(ref.channelMessageId)
     await this.call(
       'editMessageText',
       {
@@ -177,6 +197,7 @@ export class TelegramChannel implements NotificationChannel {
         message_id: Number(messageId),
         text: escapeMd(body),
         parse_mode: 'MarkdownV2',
+        ...(keyboard ? { reply_markup: keyboard } : {}),
       },
       viaApprovalBot ? this.approvalBotToken : this.botToken,
     )
@@ -216,10 +237,11 @@ export class TelegramChannel implements NotificationChannel {
    *  signer is configured) — the notification's own ULID is unknown to
    *  `submit_approval`, which is why relayed approvals used to fail with
    *  "not found". */
-  private targets(n: Notification): KeyboardTargets {
+  private targets(n: Notification, viaApprovalBot = false): KeyboardTargets {
+    const sign = viaApprovalBot ? this.signButton : this.signApproval
     return {
       approvalId: n.requestId,
-      ...(this.signApproval ? { sign: this.signApproval } : {}),
+      ...(sign ? { sign } : {}),
       chatId: this.chatId,
     }
   }
@@ -341,7 +363,7 @@ export class TelegramChannel implements NotificationChannel {
       await answer('Not allowed.')
       return
     }
-    const check = verifyApprovalButton(tap.data ?? '', this.signApproval)
+    const check = verifyApprovalButton(tap.data ?? '', this.signButton)
     if (!check.ok) {
       await answer(check.reason === 'invalid' ? 'This button is no longer valid.' : 'Unsupported button.')
       return
@@ -350,7 +372,12 @@ export class TelegramChannel implements NotificationChannel {
     try {
       await onDecision(decisionFromButton(check, { channel: 'telegram', userId: fromId }))
     } catch (err) {
-      reply = err instanceof StaleDecisionError ? 'Already decided.' : "Couldn't record that decision."
+      if (!(err instanceof StaleDecisionError)) {
+        // Keep the buttons so the user can try again.
+        await answer("Couldn't record that decision. Try again.")
+        return
+      }
+      reply = 'No longer open here.'
     }
     await answer(reply)
     // Take the buttons away so a second tap can't race the first.
