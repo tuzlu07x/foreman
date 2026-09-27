@@ -132,6 +132,21 @@ export interface UserDecision {
   /** Identifier of who tapped (channel-specific — e.g. Telegram user id). */
   decidedBy: string;
   decidedAt: number;
+  /** The approval itself, when the channel knows it directly (the
+   *  Telegram approval bot's buttons carry it). Preferred over looking the
+   *  request up through `notificationId`. */
+  requestId?: string;
+  /** Channel that received the decision, for the audit trail. */
+  channel?: ChannelId;
+}
+
+/** Thrown by the decision handler for a button whose approval was already
+ *  decided (elsewhere, or by an earlier tap). Listeners tell the user. */
+export class StaleDecisionError extends Error {
+  constructor() {
+    super("This approval was already decided.");
+    this.name = "StaleDecisionError";
+  }
 }
 
 export interface NotificationChannel {
@@ -141,9 +156,10 @@ export interface NotificationChannel {
   /** Deliver the notification. Returns the channel-side message ref so the
    *  caller can later edit ("✓ Resolved by you") or cancel. */
   send(n: Notification): Promise<ChannelMessageRef>;
-  /** Best-effort message edit when a decision lands via another path
-   *  (TUI / different channel). */
-  updateMessage(ref: ChannelMessageRef, body: string): Promise<void>;
+  /** Best-effort message edit: a countdown refresh, or — with `final` —
+   *  the outcome once the approval is decided, which also removes any
+   *  buttons. */
+  updateMessage(ref: ChannelMessageRef, body: string, opts?: { final?: boolean }): Promise<void>;
   /** Begin listening for decision callbacks. The handler is called once per
    *  validated callback. */
   listen(onDecision: (d: UserDecision) => Promise<void>): Promise<void>;

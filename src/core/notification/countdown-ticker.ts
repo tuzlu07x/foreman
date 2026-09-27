@@ -66,7 +66,8 @@ export class CountdownTicker {
   private readonly now: () => number
   private readonly setIntervalFn: typeof setInterval
   private readonly clearIntervalFn: typeof clearInterval
-  private readonly registry = new Map<string, RegisteredApproval>()
+  /** approvalId → one entry per channel the approval was sent to. */
+  private readonly registry = new Map<string, RegisteredApproval[]>()
   private timer: ReturnType<typeof setInterval> | null = null
 
   constructor(opts: CountdownTickerOptions = {}) {
@@ -98,7 +99,8 @@ export class CountdownTicker {
   register(input: CountdownRegistration): void {
     // Re-registering the same id is idempotent (replaces — bridge
     // should normally not double-register, but defensive).
-    this.registry.set(input.approvalId, {
+    const entries = (this.registry.get(input.approvalId) ?? []).filter((e) => e.channel.id !== input.channel.id)
+    entries.push({
       channel: input.channel,
       ref: input.ref,
       body: input.body,
@@ -106,6 +108,7 @@ export class CountdownTicker {
       decision: input.decision ?? 'deny',
       expired: false,
     })
+    this.registry.set(input.approvalId, entries)
   }
 
   unregister(approvalId: string): void {
@@ -117,17 +120,20 @@ export class CountdownTicker {
    *  countdown tail is stripped + replaced with a one-line footer the
    *  bridge supplies; the registration is then dropped. */
   async resolve(approvalId: string, footer: string): Promise<void> {
-    const entry = this.registry.get(approvalId)
+    const entries = this.registry.get(approvalId) ?? []
     this.registry.delete(approvalId)
-    if (!entry) return
-    const stripped = stripCountdownTail(entry.body)
-    try {
-      await entry.channel.updateMessage(entry.ref, `${stripped}\n\n${footer}`)
-    } catch {
-      // Message edit failure is non-fatal; the decision is still
-      // recorded in the audit log and the original message body
-      // already showed what was at stake.
-    }
+    await Promise.all(
+      entries.map(async (entry) => {
+        const stripped = stripCountdownTail(entry.body)
+        try {
+          await entry.channel.updateMessage(entry.ref, `${stripped}\n\n${footer}`, { final: true })
+        } catch {
+          // Message edit failure is non-fatal; the decision is still
+          // recorded in the audit log and the original message body
+          // already showed what was at stake.
+        }
+      }),
+    )
   }
 
   /** Exposed for tests so they can advance the clock + tick deterministically
@@ -135,7 +141,7 @@ export class CountdownTicker {
   async tick(): Promise<void> {
     const now = this.now()
     const work: Promise<void>[] = []
-    for (const [approvalId, entry] of this.registry) {
+    for (const entry of [...this.registry.values()].flat()) {
       if (entry.expired) continue
       const remaining = entry.deadlineMs - now
       const newTail = formatCountdownLine(entry.deadlineMs, now, entry.decision)

@@ -170,6 +170,18 @@ export class NotificationService {
       .all()
   }
 
+  /** Every channel message a notification became (one per channel). */
+  getMessageRefs(notificationId: string): Array<{ channel: string; channelMessageId: string }> {
+    return this.deps.db
+      .select({
+        channel: notificationMessages.channel,
+        channelMessageId: notificationMessages.channelMessageId,
+      })
+      .from(notificationMessages)
+      .where(eq(notificationMessages.notificationId, notificationId))
+      .all()
+  }
+
   /** Look up the channel-side message id for a given notification so the
    *  bridge can call `channel.updateMessage` when a decision lands. */
   getMessageRef(
@@ -228,6 +240,9 @@ export class NotificationService {
         status: 'sent',
         sentAt: args.sentAt,
       })
+      // One notification can go to several channels: the row is shared,
+      // the messages are per channel (below).
+      .onConflictDoUpdate({ target: notifications.id, set: { status: 'sent' } })
       .run()
     this.deps.db
       .insert(notificationMessages)
@@ -261,6 +276,7 @@ export class NotificationService {
         sentAt: args.sentAt,
         error: args.error,
       })
+      .onConflictDoNothing()
       .run()
   }
 
