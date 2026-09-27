@@ -25,6 +25,9 @@ on:
       - ".github/workflows/test-windows-wsl2.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   wsl2:
     name: windows-latest · WSL2 (Ubuntu-22.04)
@@ -47,7 +50,7 @@ jobs:
           set -eu
           sudo apt-get update
           sudo apt-get install -y curl ca-certificates git python3 chafa
-          curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+          curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
           sudo apt-get install -y nodejs
           node --version
           npm --version

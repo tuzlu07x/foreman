@@ -1,8 +1,10 @@
+import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { Command } from 'commander'
 import { ulid } from 'ulid'
 import { NotificationService } from '../core/notification/notification-service.js'
 import {
+  addChannelToRoutes,
   channelConfig,
   defaultNotifyConfig,
   isChannelEnabled,
@@ -10,9 +12,7 @@ import {
   saveNotifyConfig,
   type ChannelToggle,
 } from '../core/notification/notify-config.js'
-import { SystemNotifyChannel } from '../core/notification/channels/system.js'
-import { TelegramChannel } from '../core/notification/channels/telegram.js'
-import { WebhookChannel } from '../core/notification/channels/webhook.js'
+import { buildChannel } from '../core/notification/channel-factory.js'
 import {
   defaultNotifyState,
   isAgentMuted,
@@ -35,7 +35,7 @@ import {
   type Notification,
   type NotificationChannel,
 } from '../core/notification/types.js'
-import { SecretNotFoundError, SecretStore } from '../core/secret-store.js'
+import { SecretStore } from '../core/secret-store.js'
 import { closeDb, getDb } from '../db/client.js'
 import { loadOrCreateSecretsMasterKey } from '../identity/master-key.js'
 import { getForemanPaths } from '../utils/config.js'
@@ -423,6 +423,9 @@ function describeChannel(id: string, ch: ChannelToggle): string {
   if (ch.webhook_url_ref) bits.push(`url=${ch.webhook_url_ref}`)
   if (ch.signing_secret_ref) bits.push(`sig=${ch.signing_secret_ref}`)
   if (ch.channel) bits.push(`#${ch.channel}`)
+  if (ch.smtp_host) bits.push(`smtp=${ch.smtp_host}${ch.smtp_port ? `:${ch.smtp_port}` : ''}`)
+  if (ch.email_to?.length) bits.push(`to=${ch.email_to.join(',')}`)
+  if (ch.topic_ref) bits.push(`topic=${ch.topic_ref}${ch.server ? ` @ ${ch.server}` : ''}`)
   return bits.length > 0 ? dim(bits.join(' · ')) : dim('(credentials missing)')
 }
 
@@ -443,99 +446,91 @@ async function buildChannelForCli(
   channelId: string,
   config: Awaited<ReturnType<typeof loadNotifyConfig>>,
 ): Promise<NotificationChannel | null> {
-  if (channelId === 'telegram') return buildTelegramChannel(config)
-  if (channelId === 'webhook') return buildWebhookChannel(config)
-  if (channelId === 'system') return new SystemNotifyChannel()
-  console.error(
-    red('error: ') +
-      `${channelId} channel ships in C11b-2 (#235) — only telegram / webhook / system are implemented`,
+  if (!isKnownChannel(channelId)) return null
+  const toggle = channelConfig(config, channelId) ?? { enabled: true }
+  const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
+  const built = buildChannel(channelId, toggle, { secrets: store })
+  if ('problem' in built) {
+    console.error(red('error: ') + built.problem)
+    return null
+  }
+  return built.channel
+}
+
+notifyCommand
+  .command('route <level> [channels...]')
+  .description(
+    'Choose which channels receive a level (critical, warning, info, summary, budget_alert, risk_deny, activity_summary, session_lifecycle). No channels = mute that level.',
   )
-  return null
-}
-
-async function buildWebhookChannel(
-  config: Awaited<ReturnType<typeof loadNotifyConfig>>,
-): Promise<WebhookChannel | null> {
-  const wh = channelConfig(config, 'webhook')
-  if (!wh) {
-    console.error(red('error: ') + 'webhook block missing from notify.yaml')
-    return null
-  }
-  if (!wh.webhook_url_ref) {
-    console.error(red('error: ') + 'webhook.webhook_url_ref is unset')
-    console.error(
-      dim('  → store the URL: `foreman secrets add ' + 'webhook-url' + '`'),
-    )
-    return null
-  }
-  const db = getDb()
-  const store = new SecretStore(db, loadOrCreateSecretsMasterKey())
-  let url: string
-  try {
-    url = store.get(wh.webhook_url_ref)
-  } catch (err) {
-    if (err instanceof SecretNotFoundError) {
-      console.error(
-        red('error: ') +
-          `secret '${wh.webhook_url_ref}' not found — \`foreman secrets add ${wh.webhook_url_ref}\``,
-      )
-      return null
+  .action((level: string, channels: string[]) => {
+    requireInitialised()
+    if (!ROUTE_LEVELS.includes(level as (typeof ROUTE_LEVELS)[number])) {
+      console.error(red('error: ') + `unknown level "${level}" — try ${ROUTE_LEVELS.join(' / ')}`)
+      process.exit(1)
     }
-    throw err
-  }
-  let signingSecret: string | undefined
-  if (wh.signing_secret_ref) {
-    try {
-      signingSecret = store.get(wh.signing_secret_ref)
-    } catch (err) {
-      if (!(err instanceof SecretNotFoundError)) throw err
-      // Optional — fall through without signing
+    for (const c of channels) {
+      if (!isKnownChannel(c)) {
+        console.error(red('error: ') + `unknown channel "${c}" — try ${KNOWN_CHANNELS.join(' / ')}`)
+        process.exit(1)
+      }
     }
-  }
-  return new WebhookChannel({ url, signingSecret })
-}
-
-async function buildTelegramChannel(
-  config: Awaited<ReturnType<typeof loadNotifyConfig>>,
-): Promise<TelegramChannel | null> {
-  const tg = channelConfig(config, 'telegram')
-  if (!tg) {
-    console.error(red('error: ') + 'telegram block missing from notify.yaml')
-    return null
-  }
-  if (!tg.bot_token_ref) {
-    console.error(red('error: ') + 'telegram.bot_token_ref is unset')
-    console.error(
-      dim('  → store the token: `foreman secrets add ' + (tg.bot_token_ref ?? 'telegram-bot-token') + '`'),
-    )
-    return null
-  }
-  if (!tg.chat_id) {
-    console.error(red('error: ') + 'telegram.chat_id is unset')
-    console.error(
-      dim('  → message your bot once, then `curl https://api.telegram.org/bot<token>/getUpdates`'),
-    )
-    return null
-  }
-  const db = getDb()
-  const store = new SecretStore(db, loadOrCreateSecretsMasterKey())
-  let token: string
-  try {
-    token = store.get(tg.bot_token_ref)
-  } catch (err) {
-    if (err instanceof SecretNotFoundError) {
-      console.error(
-        red('error: ') +
-          `secret '${tg.bot_token_ref}' not found — \`foreman secrets add ${tg.bot_token_ref}\``,
-      )
-      return null
-    }
-    throw err
-  }
-  return new TelegramChannel({
-    botToken: token,
-    chatId: tg.chat_id,
+    const paths = getForemanPaths()
+    const config = existsSync(paths.notifyConfigPath)
+      ? safeLoadConfig(paths.notifyConfigPath, loadNotifyConfig, { label: 'notify.yaml' })
+      : defaultNotifyConfig()
+    const routing = config.routing as Record<string, { channels: string[]; timeout_seconds: number; default_action: 'allow' | 'deny'; schedule?: string } | undefined>
+    const current = routing[level] ?? { channels: [], timeout_seconds: 0, default_action: 'deny' as const }
+    routing[level] = { ...current, channels: [...new Set(channels)] }
+    saveNotifyConfig(paths.notifyConfigPath, config)
+    console.log(`${green('✓')} ${level} → ${channels.length > 0 ? channels.join(', ') : dim('(muted)')}`)
   })
-}
+
+notifyCommand
+  .command('ntfy-setup')
+  .description('Phone push in one step: create a private ntfy topic, store it, enable + route it')
+  .option('--server <url>', 'ntfy server (self-hosted recommended for sensitive setups)', 'https://ntfy.sh')
+  .action((opts: { server: string }) => {
+    requireInitialised()
+    const paths = getForemanPaths()
+    const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
+    // The topic name is the only secret on a public ntfy server: make it
+    // unguessable and keep it in the encrypted store.
+    const topic = `foreman-${randomBytes(15).toString('base64url')}`
+    if (store.exists(NTFY_TOPIC_SECRET)) store.rotate(NTFY_TOPIC_SECRET, topic)
+    else store.add(NTFY_TOPIC_SECRET, topic)
+    const config = existsSync(paths.notifyConfigPath)
+      ? safeLoadConfig(paths.notifyConfigPath, loadNotifyConfig, { label: 'notify.yaml' })
+      : defaultNotifyConfig()
+    setChannel(config, 'ntfy', {
+      ...(channelConfig(config, 'ntfy') ?? {}),
+      enabled: true,
+      server: opts.server,
+      topic_ref: NTFY_TOPIC_SECRET,
+    })
+    addChannelToRoutes(config, 'ntfy', ['critical', 'warning', 'risk_deny', 'budget_alert', 'summary'])
+    saveNotifyConfig(paths.notifyConfigPath, config)
+    closeDb()
+    console.log(`${green('✓')} ntfy enabled — critical, warning, blocked-call, budget and summary alerts go to your phone`)
+    console.log('')
+    console.log(`  1. Install the ntfy app (iOS / Android / desktop): https://ntfy.sh`)
+    console.log(`  2. Subscribe to this topic${opts.server === 'https://ntfy.sh' ? '' : ` on ${opts.server}`}:`)
+    console.log(`       ${orange(topic)}`)
+    console.log(`  3. Check it: foreman notify test ntfy`)
+    console.log('')
+    console.log(dim('  Keep the topic private — anyone who knows it can read your alerts. Rotate: re-run this command.'))
+  })
+
+const NTFY_TOPIC_SECRET = 'ntfy-topic'
+
+const ROUTE_LEVELS = [
+  'critical',
+  'warning',
+  'info',
+  'summary',
+  'budget_alert',
+  'risk_deny',
+  'activity_summary',
+  'session_lifecycle',
+] as const
 
 void ulid // re-export reservation for future cli verbs (silence, mute …)

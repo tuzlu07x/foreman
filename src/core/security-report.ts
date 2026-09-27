@@ -1,3 +1,4 @@
+import { redactSecretShapes } from './risk-rules/secret-patterns.js'
 import { templateNarrative, type FallbackReason, type Narrative } from './narrative-templates.js'
 import type {
   LlmVerification,
@@ -236,7 +237,10 @@ function renderArgSnippet(args: unknown): string {
 }
 
 function truncate(s: string, max: number): string {
-  return s.length > max ? `${s.slice(0, max - 1)}…` : s
+  // The summary rides along in notifications and the audit row — mask
+  // credential-shaped values before clipping.
+  const safe = redactSecretShapes(s).text
+  return safe.length > max ? `${safe.slice(0, max - 1)}…` : safe
 }
 
 // =============================================================================

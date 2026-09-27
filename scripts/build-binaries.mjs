@@ -9,10 +9,10 @@ const OUT_DIR = join(REPO_ROOT, "dist-binaries");
 const MAX_BYTES = 80 * 1024 * 1024;
 
 const SHORT_TO_PKG = new Map([
-  ["darwin-arm64", "node20-macos-arm64"],
-  ["darwin-x64", "node20-macos-x64"],
-  ["linux-x64", "node20-linux-x64"],
-  ["linux-arm64", "node20-linux-arm64"],
+  ["darwin-arm64", "node22-macos-arm64"],
+  ["darwin-x64", "node22-macos-x64"],
+  ["linux-x64", "node22-linux-x64"],
+  ["linux-arm64", "node22-linux-arm64"],
 ]);
 
 const RENAME = new Map([
@@ -28,7 +28,7 @@ async function main() {
   const targets = explicit
     ? explicit.map((t) => {
         const pkg = SHORT_TO_PKG.get(t) ?? t;
-        if (!pkg.startsWith("node20-")) {
+        if (!pkg.startsWith("node22-")) {
           throw new Error(`unknown target: ${t}`);
         }
         return pkg;

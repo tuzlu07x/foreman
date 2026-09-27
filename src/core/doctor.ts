@@ -18,6 +18,11 @@ import { loadOAuthTokens } from "./llm/oauth/token-store.js";
 import { loadActiveProviders, loadActiveRegistry } from "./registry-catalog.js";
 import { detectProviderByPrefix } from "./key-prefix-detect.js";
 import { loadVoiceConfig } from "./notification/voice-config.js";
+import { buildEnabledChannels } from "./notification/channel-factory.js";
+import { loadNotifyConfig } from "./notification/notify-config.js";
+import { enabledServers, loadHubConfig } from "./mcp-hub/config.js";
+import { missingSecrets } from "./mcp-hub/manage.js";
+import { loadOrg, OrgValidationError } from "./org/org.js";
 import { findDuplicateSlots } from "./secret-slot-migration.js";
 import { SecretStore } from "./secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
@@ -52,7 +57,7 @@ export interface DoctorOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-const MIN_NODE_MAJOR = 20;
+const MIN_NODE_MAJOR = 22;
 
 export function checkPaths(): CheckResult {
   const paths = getForemanPaths();
@@ -1074,6 +1079,158 @@ export function checkAcpAgents(
   return out;
 }
 
+// Notification channels — every enabled channel can actually be built
+// (credentials + required fields) and receives at least one level. The
+// wizard can enable Slack / Discord from an agent bot token without a
+// channel id; this makes that gap visible instead of silent.
+export function checkNotifyChannels(): CheckResult {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.notifyConfigPath)) {
+    return { name: "notify_channels", status: "ok", message: "no notify.yaml" };
+  }
+  let config;
+  try {
+    config = loadNotifyConfig(paths.notifyConfigPath);
+  } catch {
+    // notify_config reports parse errors
+    return { name: "notify_channels", status: "ok", message: "skipped (notify.yaml does not parse)" };
+  }
+  let secrets: { exists(n: string): boolean; get(n: string): string } = {
+    exists: () => false,
+    get: () => "",
+  };
+  try {
+    secrets = new SecretStore(getDb(), loadOrCreateSecretsMasterKey());
+  } catch {
+    // database check reports DB problems
+  }
+  const { channels, problems } = buildEnabledChannels(config, { secrets });
+  const routed = new Set(
+    Object.values(config.routing).flatMap((r) => (r ? r.channels : [])),
+  );
+  const unrouted = [...channels.keys()].filter((c) => !routed.has(c));
+  const issues = [
+    ...problems.map((p) => `${p.channel}: ${p.problem}`),
+    ...unrouted.map((c) => `${c}: enabled but no level routes to it`),
+  ];
+  if (issues.length > 0) {
+    return {
+      name: "notify_channels",
+      status: "warn",
+      message: issues.join("; "),
+      remediation:
+        "Fix the listed fields in notify.yaml, then route levels with e.g. `foreman notify route critical telegram slack`.",
+    };
+  }
+  return {
+    name: "notify_channels",
+    status: "ok",
+    message: channels.size > 0 ? `ready: ${[...channels.keys()].join(", ")}` : "no channels enabled",
+  };
+}
+
+// MCP hub — mcp.yaml parses, and every enabled server has its secrets.
+// Connectivity is checked on demand by `foreman mcp tools` (it spawns
+// servers, which doctor must not do).
+export function checkMcpHub(): CheckResult {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.mcpConfigPath)) {
+    return {
+      name: "mcp_hub",
+      status: "ok",
+      message: "no mcp.yaml — MCP hub not configured (try `foreman mcp catalog`)",
+    };
+  }
+  let config;
+  try {
+    config = loadHubConfig(paths.mcpConfigPath);
+  } catch (err) {
+    return {
+      name: "mcp_hub",
+      status: "fail",
+      message: `mcp.yaml is invalid: ${err instanceof Error ? err.message : String(err)}`,
+      remediation: `Fix ${paths.mcpConfigPath} — agents get no hub tools until it parses.`,
+    };
+  }
+  const enabled = enabledServers(config);
+  let exists: (name: string) => boolean = () => true;
+  try {
+    const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey());
+    exists = (name) => store.exists(name);
+  } catch {
+    // secret store unavailable — the database check reports it
+  }
+  const missing = enabled.flatMap(([name]) =>
+    missingSecrets(config, name, exists).map((s) => `${name}: ${s}`),
+  );
+  if (missing.length > 0) {
+    return {
+      name: "mcp_hub",
+      status: "warn",
+      message: `${enabled.length} server(s) enabled; missing secrets — ${missing.join(", ")}`,
+      remediation: `Store them with \`foreman secrets add <name>\`.`,
+    };
+  }
+  return {
+    name: "mcp_hub",
+    status: "ok",
+    message: `${enabled.length} MCP server(s) enabled, mode ${config.mode}`,
+  };
+}
+
+// Foreman Org — org.yaml loads and every role's agent is registered.
+export function checkOrg(): CheckResult {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.orgConfigPath)) {
+    return {
+      name: "org",
+      status: "ok",
+      message: "no org.yaml — agents work without an org chart (try `foreman org templates`)",
+    };
+  }
+  let org;
+  try {
+    org = loadOrg(paths.orgConfigPath);
+  } catch (err) {
+    const detail =
+      err instanceof OrgValidationError
+        ? err.issues.map((i) => i.message).join("; ")
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    return {
+      name: "org",
+      status: "fail",
+      message: `org.yaml is invalid: ${detail}`,
+      remediation:
+        "Run `foreman org validate`. Until it loads, agent-to-agent delegation is blocked and agents get no MCP hub servers (fail closed).",
+    };
+  }
+  if (!org) return { name: "org", status: "ok", message: "no org.yaml" };
+  let registered = new Set<string>();
+  try {
+    registered = new Set(new RegistryService(getDb()).listAll().map((a) => a.id));
+  } catch {
+    // database check reports DB problems
+  }
+  const missing = [...new Set(Object.values(org.roles).map((r) => r.agent))].filter(
+    (a) => !registered.has(a),
+  );
+  if (missing.length > 0) {
+    return {
+      name: "org",
+      status: "warn",
+      message: `${org.company}: roles use unregistered agents — ${missing.join(", ")}`,
+      remediation: "Register them with `foreman agent add <id>` or change the role's agent in org.yaml.",
+    };
+  }
+  return {
+    name: "org",
+    status: "ok",
+    message: `${org.company}: ${Object.keys(org.roles).length} roles, ${Object.keys(org.departments).length} departments`,
+  };
+}
+
 const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkNodeVersion,
   checkPaths,
@@ -1085,6 +1242,7 @@ const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkFts5,
   checkPolicyYaml,
   checkNotifyConfig,
+  checkNotifyChannels,
   checkLlmConfig,
   checkLlmCredentials,
   checkLlmBudget,
@@ -1094,6 +1252,8 @@ const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkAcpAgents,
   checkProviderMapping,
   checkMcpGateway,
+  checkMcpHub,
+  checkOrg,
   checkLegacyHome,
   checkUpdate,
   () => checkChafa(),

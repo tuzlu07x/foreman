@@ -317,6 +317,15 @@ describe('acp-stdio-v1 adapter — encodeDecision (family fallback)', () => {
     expect(out.result.outcome.optionId).toBe('opt-allow')
   })
 
+  it('a one-time allow never escalates to allow_always (the agent would stop asking)', () => {
+    const alwaysOnly: AcpPermissionOption[] = [
+      { optionId: 'opt-allow-always', name: 'Allow + remember', kind: 'allow_always' },
+      { optionId: 'opt-reject', name: 'Reject once', kind: 'reject_once' },
+    ]
+    const out = encode({ kind: 'allow' }, 'c1', alwaysOnly)
+    expect(out.result.outcome.outcome).toBe('cancelled')
+  })
+
   it('deny falls back to any reject_* option', () => {
     const reduced: AcpPermissionOption[] = [
       { optionId: 'opt-allow', name: 'Allow once', kind: 'allow_once' },

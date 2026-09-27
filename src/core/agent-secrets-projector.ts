@@ -950,8 +950,10 @@ function arraysEqualShallow(a: unknown[], b: unknown[]): boolean {
 function atomicWrite0600(path: string, content: string): void {
   const dir = dirname(path)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  const tmp = `${path}.foreman.tmp`
-  writeFileSync(tmp, content, { mode: 0o600 })
+  // Unpredictable name + O_EXCL ('wx'): a pre-planted symlink at a fixed
+  // temp path can no longer redirect projected secrets elsewhere.
+  const tmp = `${path}.${randomBytes(8).toString('hex')}.foreman.tmp`
+  writeFileSync(tmp, content, { mode: 0o600, flag: 'wx' })
   try {
     chmodSync(tmp, 0o600)
   } catch {

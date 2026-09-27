@@ -1,8 +1,18 @@
 # Out-of-band notifications (#235 — C11)
 
-How Foreman reaches you when you're not at the terminal. **Telegram-first** for v0.1; Discord / Slack / Webhook / System notifications ship in C11b. Daily digest + silence / mute commands in C11c.
+How Foreman reaches you when you're not at the terminal. Channels:
+**Telegram** (alerts + tap-to-approve), **Slack**, **Discord**, **email**
+(SMTP), **ntfy** (phone push, no account), a signed **webhook**, and native
+**system** notifications. Approvals are decided in the TUI or in Telegram;
+the push-only channels tell you where to decide and never carry the
+approval token.
 
-This doc covers the **C11a-1 foundation slice**: config, Telegram channel, CLI, audit persistence. The mediator-blocking flow (agent paused until you tap Allow/Deny) lands in C11a-2.
+Fastest way to get alerts on your phone:
+
+```bash
+foreman notify ntfy-setup      # creates a private topic, enables + routes it
+foreman notify test ntfy
+```
 
 ---
 
@@ -31,11 +41,32 @@ channels:
   system:                               # macOS / Linux native notifications
     enabled: false
 
-  # Discord / Slack — placeholders, implemented in C11b-2 (next slice)
-  discord:
+  slack:                                # incoming webhook (simplest) …
     enabled: false
-  slack:
+    webhook_url_ref: slack-webhook-url
+    # … or a bot token + channel (lets Foreman edit resolved alerts):
+    # bot_token_ref: slack-bot-token
+    # channel: C0123ABCD
+
+  discord:                              # channel webhook or bot + channel id
     enabled: false
+    webhook_url_ref: discord-webhook-url
+    # bot_token_ref: discord-bot-token
+    # channel: "123456789012345678"
+
+  email:                                # any SMTP submission server
+    enabled: false
+    smtp_host: smtp.gmail.com
+    smtp_port: 465                      # 465 → implicit TLS, 587 → STARTTLS
+    smtp_username: you@gmail.com
+    password_ref: smtp-app-password     # app password, stored encrypted
+    email_from: you@gmail.com
+    email_to: [you@gmail.com]
+
+  ntfy:                                 # `foreman notify ntfy-setup` writes this
+    enabled: false
+    server: https://ntfy.sh
+    topic_ref: ntfy-topic               # the topic name is the secret
 
 routing:
   critical:                              # high/critical risk → must ask
@@ -305,3 +336,26 @@ C11a-2 ships the **`NotificationBridge`** — the missing wire from `onAnyDecisi
 - [Telegram Bot API — inline keyboards + callback queries](https://core.telegram.org/bots/api)
 - [PagerDuty / OpsGenie / VictorOps](https://www.pagerduty.com/) — out-of-band incident workflows, the spiritual model for "Foreman pauses the agent until you decide"
 - [Apprise (Python)](https://github.com/caronc/apprise) — multi-channel notification reference
+
+
+---
+
+## Channel setup
+
+| Channel | Credentials | Notes |
+| --- | --- | --- |
+| Telegram | `foreman secrets add telegram-bot-token` + `chat_id` | Interactive: inline Allow / Deny buttons carry an HMAC-tagged approval id. Only the typed `/deny` fallback appears in the text. Other agents can't approve; for the chat agent's own calls, see [SECURITY.md](../SECURITY.md#threat-model-in-brief). |
+| Slack | incoming webhook URL → `foreman secrets add slack-webhook-url` | Or `bot_token_ref` + `channel` (needs `chat:write`). Agent text is escaped (no `<!channel>` pings). |
+| Discord | channel webhook URL → `foreman secrets add discord-webhook-url` | Or `bot_token_ref` + `channel` id. Mentions are always disabled. |
+| Email | `foreman secrets add smtp-app-password` | Gmail / iCloud / Fastmail need an app password. Credentials are never sent over an unencrypted connection to a remote host. |
+| ntfy | `foreman notify ntfy-setup` | Install the ntfy app and subscribe to the printed topic. Self-host ntfy or set `access_token_ref` for stricter privacy. |
+| Webhook | `webhook_url_ref` (+ `signing_secret_ref`) | JSON POST with `X-Foreman-Signature: sha256=…`. |
+
+Then route levels to channels:
+
+```bash
+foreman notify route critical telegram ntfy
+foreman notify route summary email slack
+foreman notify status
+foreman doctor        # notify_channels: flags enabled-but-unbuildable or unrouted channels
+```

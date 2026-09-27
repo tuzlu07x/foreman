@@ -100,9 +100,23 @@ export function applyForemanSoul(
   const existing = existsSync(target) ? readFileSync(target, "utf-8") : null;
   if (existing === desired) return { path: target, changed: false };
   mkdirSync(dirname(target), { recursive: true });
+  // Identity hooks can be the user's own files (Codex reads
+  // ~/.codex/AGENTS.md as global instructions). Keep a one-time copy of
+  // anything Foreman did not write before replacing it.
+  if (existing !== null && !existing.includes(SOUL_HEADER_MARKER)) {
+    // "wx": keep the first backup; never overwrite one that exists.
+    try {
+      writeFileSync(`${target}.pre-foreman.bak`, existing, { encoding: "utf-8", flag: "wx" });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+  }
   writeFileSync(target, desired, "utf-8");
   return { path: target, changed: true };
 }
+
+/** First line of every rendered SOUL — identifies Foreman-authored files. */
+const SOUL_HEADER_MARKER = "Foreman-mediated agent identity";
 
 function isApplyInput(
   v: AgentEntry | ApplyForemanSoulInput,

@@ -32,6 +32,12 @@ export interface ForemanPaths {
    *  drives ForemanVoice (#303) + PatternDetectionService (#304). Absent
    *  file = built-in defaults. */
   voiceConfigPath: string;
+  /** MCP hub — upstream MCP servers shared by every agent (`<configDir>/mcp.yaml`). */
+  mcpConfigPath: string;
+  /** MCP hub — pinned tool definitions / listing cache (`<stateDir>/mcp-pins.json`). */
+  mcpPinsPath: string;
+  /** Foreman Org — company chart of agents (`<configDir>/org.yaml`). */
+  orgConfigPath: string;
   identityPath: string;
   /**
    * Canonical Foreman persona file (`<configDir>/SOUL.md`). Foreman writes its
@@ -124,6 +130,9 @@ export function getForemanPaths(): ForemanPaths {
     notifyStatePath: resolve(dirs.stateDir, "notify-state.json"),
     llmConfigPath: resolve(dirs.configDir, "llm.yaml"),
     voiceConfigPath: resolve(dirs.configDir, "voice.yaml"),
+    mcpConfigPath: resolve(dirs.configDir, "mcp.yaml"),
+    mcpPinsPath: resolve(dirs.stateDir, "mcp-pins.json"),
+    orgConfigPath: resolve(dirs.configDir, "org.yaml"),
     identityPath: resolve(dirs.configDir, "identity.key"),
     soulPath: resolve(dirs.configDir, "SOUL.md"),
     secretsKeyPath: resolve(dirs.configDir, "secrets.key"),

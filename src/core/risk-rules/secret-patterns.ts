@@ -98,6 +98,19 @@ const SSH_GIT_PATHS: PathPattern[] = [
     reason: 'SSH PEM private key under ~/.ssh',
   },
   {
+    // Any other private key: suffixed names (id_ed25519_work — `\b` never
+    // matched before the `_`) and shell globs (`cat ~/.ssh/id_*`).
+    pattern: /\.ssh\/id_[A-Za-z0-9_.*?[\]-]*(?<!\.pub)(?=["'\s;|&)]|$)/i,
+    points: 80,
+    reason: 'SSH private key (~/.ssh/id_*)',
+  },
+  {
+    // The whole directory (tar / cp -r / zip / glob).
+    pattern: /\.ssh\/?(?:\*|(?=["'\s;|&)]|$))/i,
+    points: 70,
+    reason: 'Entire ~/.ssh directory',
+  },
+  {
     pattern: /\.ssh\/known_hosts\b/i,
     points: 25,
     reason: 'SSH known_hosts (host fingerprints, not a secret but identity-revealing)',
@@ -440,7 +453,9 @@ const CONTENT_PATTERNS: ContentPattern[] = [
     label: 'PEM-encoded private key',
   },
   {
-    pattern: /\b(?:postgres|postgresql|mysql|mongodb|redis|amqp):\/\/[^\s:"]+:[^\s@"]+@/,
+    // Bounded quantifiers: an unbounded `[^\s@"]+` backtracked quadratically
+    // on inputs like "postgres://a:" repeated (97 s of CPU at 1 MB).
+    pattern: /\b(?:postgres|postgresql|mysql|mongodb|redis|amqp):\/\/[^\s:"/@]{1,256}:[^\s@"]{1,256}@/,
     label: 'Database URL with embedded credentials',
   },
   {
@@ -604,6 +619,112 @@ export const secretPatternRule: RiskRule = {
 
     return factors
   },
+}
+
+// =============================================================================
+// Redaction — mask credential-shaped strings before text leaves the gateway
+// =============================================================================
+//
+// The detection rule above only fingerprints secrets in risk factors. The
+// same values also flow into places that must never hold them verbatim:
+// notification bodies (Telegram, Slack, webhooks), the LLM verifier prompt
+// (a third-party provider), the audit log, and MCP tool results handed to
+// agents. `redactSecretShapes` masks every match; the database-URL case
+// keeps the scheme / user / host and masks only the password.
+
+const REDACTION_PATTERNS: ReadonlyArray<{ pattern: RegExp; label: string }> = [
+  ...CONTENT_PATTERNS.filter((p) => !p.label.startsWith('PEM') && !p.label.startsWith('Database')).map(
+    (p) => ({ pattern: new RegExp(p.pattern.source, p.pattern.flags.includes('g') ? p.pattern.flags : `${p.pattern.flags}g`), label: p.label }),
+  ),
+]
+
+const DB_URL_PASSWORD_RE =
+  /\b((?:postgres|postgresql|mysql|mongodb|redis|amqp):\/\/[^\s:"/@]{1,256}:)([^\s@"]{1,256})(@)/g
+
+export interface RedactionResult {
+  text: string
+  count: number
+  labels: string[]
+}
+
+const PEM_BEGIN_RE = /-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----/g
+const PEM_END_RE = /-----END (?:RSA |DSA |EC |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----/g
+const PEM_BODY_CHAR_RE = /[A-Za-z0-9+/=\s:,.-]/
+const PEM_MAX_BODY_CHARS = 20_000
+
+/** Mask private-key blocks in one linear pass. A lazy BEGIN…END regex
+ *  backtracks quadratically on text full of BEGIN headers (seconds per MB,
+ *  on the mcp-stdio event loop); pairing header positions does not. A key
+ *  whose END line is missing (cut-off output) is masked through its body. */
+function redactPemBlocks(text: string): { text: string; count: number } {
+  if (!text.includes('PRIVATE KEY-----')) return { text, count: 0 }
+  const ends: number[][] = []
+  PEM_END_RE.lastIndex = 0
+  for (let m = PEM_END_RE.exec(text); m; m = PEM_END_RE.exec(text)) {
+    ends.push([m.index, m.index + m[0].length])
+  }
+  let out = ''
+  let cursor = 0
+  let next = 0
+  let count = 0
+  PEM_BEGIN_RE.lastIndex = 0
+  for (let m = PEM_BEGIN_RE.exec(text); m; m = PEM_BEGIN_RE.exec(text)) {
+    const bodyStart = m.index + m[0].length
+    while (next < ends.length && ends[next]![0]! < bodyStart) next++
+    const end = ends[next]
+    let stop: number
+    if (end && end[0]! - bodyStart <= PEM_MAX_BODY_CHARS) {
+      stop = end[1]!
+    } else {
+      stop = bodyStart
+      const limit = Math.min(text.length, bodyStart + PEM_MAX_BODY_CHARS)
+      while (stop < limit && PEM_BODY_CHAR_RE.test(text[stop]!)) stop++
+    }
+    out += `${text.slice(cursor, m.index)}[REDACTED private key]`
+    cursor = stop
+    count++
+    PEM_BEGIN_RE.lastIndex = stop
+  }
+  return { text: out + text.slice(cursor), count }
+}
+
+export function redactSecretShapes(text: string): RedactionResult {
+  const labels = new Set<string>()
+  const pem = redactPemBlocks(text)
+  let count = pem.count
+  if (count > 0) labels.add('private key')
+  let out = pem.text
+  for (const { pattern, label } of REDACTION_PATTERNS) {
+    pattern.lastIndex = 0
+    out = out.replace(pattern, () => {
+      count++
+      labels.add(label)
+      return `[REDACTED ${label}]`
+    })
+  }
+  DB_URL_PASSWORD_RE.lastIndex = 0
+  out = out.replace(DB_URL_PASSWORD_RE, (_m, head: string, _pw: string, at: string) => {
+    count++
+    labels.add('database password')
+    return `${head}[REDACTED]${at}`
+  })
+  return { text: out, count, labels: [...labels] }
+}
+
+/** Deep-redact a JSON-shaped value (strings anywhere inside objects/arrays).
+ *  Non-JSON values are returned untouched. */
+export function redactSecretsDeep<T>(value: T, depth = 0): T {
+  if (depth > 32) return value
+  if (typeof value === 'string') return redactSecretShapes(value).text as T
+  if (Array.isArray(value)) return value.map((v) => redactSecretsDeep(v, depth + 1)) as T
+  if (value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = redactSecretsDeep(v, depth + 1)
+    }
+    return out as T
+  }
+  return value
 }
 
 // Test-only export — internal counts so the suite can assert the curated set

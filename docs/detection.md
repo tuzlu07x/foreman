@@ -42,8 +42,8 @@ Five rules ship in `DEFAULT_RISK_RULES`:
 | Rule name | Category | Source file |
 |---|---|---|
 | `secret_pattern` | secret | [`secret-patterns.ts`](../src/core/risk-rules/secret-patterns.ts) |
-| `outbound_network` | network | [`outbound-network.ts`](../src/core/risk-rules/outbound-network.ts) |
-| `shell_exec` | shell | [`shell-exec.ts`](../src/core/risk-rules/shell-exec.ts) |
+| `outbound_network` | network | [`network-patterns.ts`](../src/core/risk-rules/network-patterns.ts) |
+| `shell_exec` | shell | [`shell-patterns.ts`](../src/core/risk-rules/shell-patterns.ts) |
 | `first_agent_to_agent` | structural | [`first-agent-to-agent.ts`](../src/core/risk-rules/first-agent-to-agent.ts) |
 | `previously_denied_pattern` | structural | [`previously-denied-pattern.ts`](../src/core/risk-rules/previously-denied-pattern.ts) |
 

@@ -22,6 +22,9 @@
  *   MultiEdit    → file_write       (args.path from tool_input.file_path)
  *   WebFetch     → network_fetch    (args.url + parsed args.host)
  *   WebSearch    → network_fetch    (args.url='search:'+query for rule match)
+ *   Read         → read_file        (args.path from tool_input.file_path)
+ *   NotebookEdit → file_write       (args.path from tool_input.notebook_path)
+ *   Grep / Glob  → search_files     (args.path + args.pattern)
  *   mcp__*       → mcp_call         (args.server + args.tool from tool_name)
  *   anything else→ tool_name (lowercased) — leaves room for future
  *                  claude-code tools without an adapter update
@@ -92,7 +95,13 @@ function normaliseToolName(toolName: string): string {
     case 'Write':
     case 'Edit':
     case 'MultiEdit':
+    case 'NotebookEdit':
       return 'file_write'
+    case 'Read':
+      return 'read_file'
+    case 'Grep':
+    case 'Glob':
+      return 'search_files'
     case 'WebFetch':
     case 'WebSearch':
       return 'network_fetch'
@@ -108,14 +117,29 @@ function normaliseArgs(toolName: string, toolInput: Record<string, unknown>): Re
       cwd: typeof toolInput.cwd === 'string' ? toolInput.cwd : undefined,
     }
   }
-  if (toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit') {
+  if (
+    toolName === 'Write' ||
+    toolName === 'Edit' ||
+    toolName === 'MultiEdit' ||
+    toolName === 'NotebookEdit' ||
+    toolName === 'Read'
+  ) {
     return {
       path:
         typeof toolInput.file_path === 'string'
           ? toolInput.file_path
-          : typeof toolInput.path === 'string'
-            ? toolInput.path
-            : '',
+          : typeof toolInput.notebook_path === 'string'
+            ? toolInput.notebook_path
+            : typeof toolInput.path === 'string'
+              ? toolInput.path
+              : '',
+    }
+  }
+  if (toolName === 'Grep' || toolName === 'Glob') {
+    return {
+      path: typeof toolInput.path === 'string' ? toolInput.path : '',
+      pattern: typeof toolInput.pattern === 'string' ? toolInput.pattern : '',
+      ...(typeof toolInput.glob === 'string' ? { glob: toolInput.glob } : {}),
     }
   }
   if (toolName === 'WebFetch') {

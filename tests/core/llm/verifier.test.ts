@@ -341,16 +341,44 @@ describe('combineAssessment', () => {
     expect(out.bucket).toBe('critical')
   })
 
-  it('clamps adjusted score to [0, 100]', () => {
+  it('clamps adjusted score at 100', () => {
     const high = combineAssessment(
       { ...baseHeuristic(), totalScore: 90 },
       makeVerification({ additional_risk_score: 30 }),
     )
     expect(high.totalScore).toBe(100)
+  })
+
+  it('never lowers the heuristic score (negative adjustments are ignored)', () => {
     const low = combineAssessment(
-      { ...baseHeuristic(), totalScore: 10 },
+      { ...baseHeuristic(), totalScore: 10, bucket: 'low' },
       makeVerification({ additional_risk_score: -30 }),
     )
-    expect(low.totalScore).toBe(0)
+    expect(low.totalScore).toBe(10)
+    expect(low.bucket).toBe('low')
+  })
+
+  it('cannot relax ask → allow even at high confidence (prompt-injection guard)', () => {
+    const llm = makeVerification({
+      confidence: 0.99,
+      recommended_action: 'allow',
+      is_real_threat: false,
+      additional_risk_score: -30,
+    })
+    const out = combineAssessment(baseHeuristic(), llm)
+    expect(out.recommendation).toBe('ask')
+    expect(out.totalScore).toBe(60)
+  })
+
+  it('cannot relax deny → ask', () => {
+    const llm = makeVerification({ confidence: 0.95, recommended_action: 'ask' })
+    const out = combineAssessment({ ...baseHeuristic(), recommendation: 'deny' }, llm)
+    expect(out.recommendation).toBe('deny')
+  })
+
+  it('can escalate allow → ask', () => {
+    const llm = makeVerification({ confidence: 0.8, recommended_action: 'ask' })
+    const out = combineAssessment({ ...baseHeuristic(), recommendation: 'allow' }, llm)
+    expect(out.recommendation).toBe('ask')
   })
 })

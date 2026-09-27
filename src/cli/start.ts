@@ -58,8 +58,10 @@ import {
 import { SetupWizard, type WizardOauthRunStep } from "../tui/setup-wizard.js";
 import { runOauthFlows } from "./run-oauth-flow.js";
 import { runLoginWithSuspendedTui } from "../tui/run-login-in-tui.js";
-import { SecretStore, SecretNotFoundError } from "../core/secret-store.js";
+import { SecretStore } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
+import { approvalSigner } from "../core/approval-token.js";
+import { buildEnabledChannels } from "../core/notification/channel-factory.js";
 import {
   costBySession,
   recordUsageAndCheckBudget,
@@ -72,9 +74,6 @@ import {
   LlmProviderUnavailableError,
 } from "../core/llm/factory.js";
 import { LlmVerifier } from "../core/llm/verifier.js";
-import { TelegramChannel } from "../core/notification/channels/telegram.js";
-import { SystemNotifyChannel } from "../core/notification/channels/system.js";
-import { WebhookChannel } from "../core/notification/channels/webhook.js";
 import { BudgetAlertBridge } from "../core/llm/budget-alert-bridge.js";
 import { NotificationBridge } from "../core/notification/notification-bridge.js";
 import { NotificationService } from "../core/notification/notification-service.js";
@@ -85,8 +84,6 @@ import {
 } from "../core/notification/voice-config.js";
 import { PatternDetectionService } from "../core/pattern-detection-service.js";
 import {
-  channelConfig,
-  isChannelEnabled,
   loadNotifyConfig,
   routeFor,
 } from "../core/notification/notify-config.js";
@@ -96,10 +93,6 @@ import {
   parseSchedule,
 } from "../core/notification/scheduler.js";
 import { generateSmartSummaryPayload } from "../core/notification/summary-generator.js";
-import type {
-  ChannelId,
-  NotificationChannel,
-} from "../core/notification/types.js";
 import { launchEditor } from "../tui/launch-editor.js";
 import { getForemanPaths } from "../utils/config.js";
 import { runInit } from "./init.js";
@@ -346,6 +339,9 @@ export function startForeman(
   let instance: Instance | null = null;
   let exitResolve: (() => void) | null = null;
   let keepAlive: NodeJS.Timeout | null = null;
+  // Assigned once the delegation watchdog starts (below); cleared on
+  // shutdown so it can't tick against a closed database.
+  let watchdogTimer: NodeJS.Timeout | null = null;
 
   void checkForUpdate(APP_VERSION).then((result) => {
     if (result && result.hasUpdate) {
@@ -435,6 +431,10 @@ export function startForeman(
     if (keepAlive) {
       clearInterval(keepAlive);
       keepAlive = null;
+    }
+    if (watchdogTimer) {
+      clearInterval(watchdogTimer);
+      watchdogTimer = null;
     }
     if (exitResolve) {
       const r = exitResolve;
@@ -865,7 +865,7 @@ export function startForeman(
   const nudgeChatId = secretStore.exists("telegram-chat-id")
     ? secretStore.get("telegram-chat-id")
     : undefined;
-  const watchdogTimer = setInterval(() => {
+  watchdogTimer = setInterval(() => {
     void runDelegationWatchdog({
       tracker: delegationTracker,
       telegramBotToken: nudgeBotToken,
@@ -992,46 +992,15 @@ function setupNotificationBridge(args: {
     return null;
   }
 
-  const channels = new Map<ChannelId, NotificationChannel>();
-
-  if (isChannelEnabled(config, "telegram")) {
-    const tg = channelConfig(config, "telegram");
-    if (tg?.bot_token_ref && tg.chat_id) {
-      try {
-        const token = args.secretStore.get(tg.bot_token_ref);
-        channels.set(
-          "telegram",
-          new TelegramChannel({ botToken: token, chatId: tg.chat_id }),
-        );
-      } catch (err) {
-        if (!(err instanceof SecretNotFoundError)) throw err;
-        // Token wasn't in the store — skip Telegram quietly. User will see
-        // the misconfiguration via `foreman doctor` / `foreman notify test`.
-      }
-    }
-  }
-
-  if (isChannelEnabled(config, "webhook")) {
-    const wh = channelConfig(config, "webhook");
-    if (wh?.webhook_url_ref) {
-      try {
-        const url = args.secretStore.get(wh.webhook_url_ref);
-        const signingSecret = wh.signing_secret_ref
-          ? args.secretStore.get(wh.signing_secret_ref)
-          : undefined;
-        channels.set("webhook", new WebhookChannel({ url, signingSecret }));
-      } catch (err) {
-        if (!(err instanceof SecretNotFoundError)) throw err;
-      }
-    }
-  }
-
-  if (isChannelEnabled(config, "system")) {
-    const sys = new SystemNotifyChannel();
-    // isReady is async — skip the await because the failure mode is "send
-    // throws on unsupported platforms" and we want to keep setup synchronous.
-    channels.set("system", sys);
-  }
+  // One factory for every channel type (Slack, Discord, email and ntfy
+  // included) — the same one `foreman notify test` uses. Misconfigured
+  // channels are skipped here and reported by `foreman doctor`.
+  const { channels } = buildEnabledChannels(config, {
+    secrets: args.secretStore,
+    // Buttons carry HMAC-tagged approval ids so the relaying chat agent
+    // cannot approve a call the user never tapped.
+    signApproval: approvalSigner(loadOrCreateSecretsMasterKey()),
+  });
 
   if (channels.size === 0) return null;
 

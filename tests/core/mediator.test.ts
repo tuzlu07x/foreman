@@ -71,6 +71,79 @@ describe('MediatorService — unit', () => {
     expect(approval.request).not.toHaveBeenCalled()
   })
 
+  it('denies every call from a blocked agent without scoring or asking', async () => {
+    registry.register({ id: 'hermes', displayName: 'H', transport: 'stdio' })
+    registry.block('hermes')
+    const mediator = new MediatorService({ registry, policy, risk, approval, bus })
+    const result = await mediator.handleRequest({
+      sourceAgent: 'hermes',
+      targetTool: 'list_files',
+      message: callMessage(1, 'list_files', { path: '.' }),
+    })
+    expect(result.decision).toBe('denied')
+    expect(result.decidedBy).toBe('agent:blocked')
+    expect(approval.request).not.toHaveBeenCalled()
+  })
+
+  it('denies calls from a paused (disabled) agent', async () => {
+    registry.register({ id: 'codex', displayName: 'C', transport: 'stdio' })
+    registry.disable('codex')
+    const mediator = new MediatorService({ registry, policy, risk, approval, bus })
+    const result = await mediator.handleRequest({
+      sourceAgent: 'codex',
+      targetTool: 'list_files',
+      message: callMessage(1, 'list_files', { path: '.' }),
+    })
+    expect(result.decidedBy).toBe('agent:disabled')
+  })
+
+  it('applies policyFallback only when policy.yaml has no matching rule', async () => {
+    const mediator = new MediatorService({ registry, policy, risk, approval, bus })
+    const allowed = await mediator.handleRequest({
+      sourceAgent: 'hermes',
+      targetTool: 'github__list_issues',
+      message: callMessage(1, 'github__list_issues', {}),
+      policyFallback: { effect: 'allow', source: 'mcp.yaml:github' },
+    })
+    expect(allowed.decision).toBe('allowed')
+    expect(allowed.decidedBy).toBe('policy:mcp.yaml:github')
+    expect(approval.request).not.toHaveBeenCalled()
+
+    policy.loadYamlText(`
+rules:
+  - source: "*"
+    target: "tool:github__list_issues"
+    effect: deny
+`)
+    const overridden = await mediator.handleRequest({
+      sourceAgent: 'hermes',
+      targetTool: 'github__list_issues',
+      message: callMessage(2, 'github__list_issues', {}),
+      policyFallback: { effect: 'allow', source: 'mcp.yaml:github' },
+    })
+    expect(overridden.decision).toBe('denied')
+    expect(overridden.decidedBy).toMatch(/^policy:\d+$/)
+  })
+
+  it('policyFallback deny refuses without asking; ask escalates to approval', async () => {
+    const mediator = new MediatorService({ registry, policy, risk, approval, bus })
+    const denied = await mediator.handleRequest({
+      sourceAgent: 'hermes',
+      targetTool: 'stripe__create_refund',
+      message: callMessage(1, 'stripe__create_refund', {}),
+      policyFallback: { effect: 'deny', source: 'mcp.yaml:stripe' },
+    })
+    expect(denied.decidedBy).toBe('policy:mcp.yaml:stripe')
+    expect(approval.request).not.toHaveBeenCalled()
+    await mediator.handleRequest({
+      sourceAgent: 'hermes',
+      targetTool: 'stripe__create_refund',
+      message: callMessage(2, 'stripe__create_refund', {}),
+      policyFallback: { effect: 'ask', source: 'mcp.yaml:stripe' },
+    })
+    expect(approval.request).toHaveBeenCalledTimes(1)
+  })
+
   it('short-circuits on policy deny without asking for approval', async () => {
     policy.loadYamlText(`
 agents:

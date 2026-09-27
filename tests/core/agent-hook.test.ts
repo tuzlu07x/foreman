@@ -10,7 +10,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_PRETOOLUSE_MATCHER,
+  defaultHookCommand,
   FOREMAN_HOOK_MARKER,
+  FOREMAN_HOOK_TIMEOUT_SECONDS,
   installPreToolUseHook,
   mergeHook,
   uninstallPreToolUseHook,
@@ -130,6 +132,12 @@ describe("installPreToolUseHook — disk I/O", () => {
     expect(written.hooks.PreToolUse[0]!.matcher).toBe(
       DEFAULT_PRETOOLUSE_MATCHER,
     );
+    // Every tool that can read or change files is gated; Grep prints file
+    // contents, so it is as sensitive as Read.
+    const matcher = new RegExp(`^(${DEFAULT_PRETOOLUSE_MATCHER})$`);
+    for (const tool of ["Bash", "Read", "Grep", "Glob", "Write", "NotebookEdit", "mcp__x__y"]) {
+      expect(matcher.test(tool)).toBe(true);
+    }
   });
 
   it("merges into an existing settings file without dropping user keys", () => {
@@ -332,5 +340,47 @@ describe("uninstallPreToolUseHook", () => {
     const result = uninstallPreToolUseHook(settingsPath, { dryRun: true });
     expect(result.removed).toBe(true);
     expect(readFileSync(settingsPath, "utf-8")).toBe(before);
+  });
+});
+
+describe("hook entry hardening", () => {
+  it("writes a runner timeout longer than Foreman's own approval window", () => {
+    const { next } = mergeHook(
+      {},
+      { matcher: "Bash", hookCommand: "foreman hook claude-code" },
+    );
+    const entry = next.hooks!.PreToolUse![0]!.hooks![0]!;
+    expect(entry.timeout).toBe(FOREMAN_HOOK_TIMEOUT_SECONDS);
+    expect(FOREMAN_HOOK_TIMEOUT_SECONDS).toBeGreaterThan(600);
+  });
+
+  it("gates Read and third-party MCP tools by default", () => {
+    const re = new RegExp(`^(?:${DEFAULT_PRETOOLUSE_MATCHER})$`);
+    for (const tool of ["Bash", "Read", "Write", "Edit", "WebFetch", "mcp__github__create_issue"]) {
+      expect(re.test(tool)).toBe(true);
+    }
+  });
+});
+
+describe("defaultHookCommand", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "foreman-hook-path-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("prefers the lightweight foreman-hook binary when it is on PATH", () => {
+    writeFileSync(join(dir, "foreman-hook"), "#!/bin/sh\n");
+    expect(defaultHookCommand("claude-code", { PATH: dir })).toBe(
+      "foreman-hook claude-code",
+    );
+  });
+
+  it("falls back to `foreman hook` (standalone binaries ship only foreman)", () => {
+    expect(defaultHookCommand("claude-code", { PATH: dir })).toBe(
+      "foreman hook claude-code",
+    );
   });
 });

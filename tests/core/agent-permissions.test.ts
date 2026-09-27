@@ -335,3 +335,11 @@ describe("applyPermissions — format dispatch (#517 Faz 2)", () => {
     }
   });
 });
+
+describe("safe allowlists never include an arbitrary-command wrapper", () => {
+  it("drops `env`, which runs any command (`env curl …`) without a prompt", () => {
+    for (const [agent, set] of Object.entries(DEFAULT_PERMISSIONS)) {
+      expect(set.allow, agent).not.toContain("Bash(env:*)");
+    }
+  });
+});

@@ -28,6 +28,9 @@ on:
       - ".github/workflows/test-linux.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   ubuntu:
     name: ubuntu-${{ matrix.ubuntu }} · node-${{ matrix.node }}
@@ -36,7 +39,7 @@ jobs:
       fail-fast: false
       matrix:
         ubuntu: ["22.04", "24.04"]
-        node: ["20"]
+        node: ["22", "24"]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7

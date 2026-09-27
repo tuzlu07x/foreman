@@ -108,7 +108,6 @@ export const DEFAULT_PERMISSIONS: Record<string, PermissionSet> = {
       "Bash(wc:*)",
       "Bash(file:*)",
       "Bash(which:*)",
-      "Bash(env:*)",
       "Bash(echo:*)",
       "Bash(pwd:*)",
       // Project-tree read/write/edit — scoped to the user's home + /tmp.
@@ -181,7 +180,6 @@ export const DEFAULT_PERMISSIONS: Record<string, PermissionSet> = {
       "Bash(wc:*)",
       "Bash(file:*)",
       "Bash(which:*)",
-      "Bash(env:*)",
       "Bash(echo:*)",
       "Bash(pwd:*)",
       // Project tree

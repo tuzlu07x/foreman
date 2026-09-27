@@ -13,6 +13,8 @@ import {
   type RegisteredAgent,
 } from "../core/registry.js";
 import {
+  DEFAULT_PRETOOLUSE_MATCHER,
+  defaultHookCommand,
   installPreToolUseHook,
   uninstallPreToolUseHook,
 } from "../core/agent-hook.js";
@@ -618,11 +620,11 @@ hookSub
   .option(
     "--matcher <regex>",
     "Tool name regex Claude Code matches before invoking the hook",
-    "Bash|Write|Edit|WebFetch",
+    DEFAULT_PRETOOLUSE_MATCHER,
   )
   .option(
     "--command <cmd>",
-    "Override the hook command (default: `foreman hook <agentId>`)",
+    "Override the hook command (default: `foreman-hook <agentId>` when on PATH, else `foreman hook <agentId>`)",
   )
   .option("--dry-run", "Show what would change without writing", false)
   .action(
@@ -662,7 +664,7 @@ hookSub
       const hookCmd =
         opts.command && opts.command.trim().length > 0
           ? opts.command
-          : `foreman hook ${agentId}`;
+          : defaultHookCommand(agentId);
       let result;
       try {
         result = installPreToolUseHook({
@@ -1082,7 +1084,7 @@ async function runAgentUpdateOne(
   return 0;
 }
 
-async function runAgentUpdateAll(
+export async function runAgentUpdateAll(
   agents: RegisteredAgent[],
   doc: ReturnType<typeof loadActiveRegistry>["doc"],
 ): Promise<void> {

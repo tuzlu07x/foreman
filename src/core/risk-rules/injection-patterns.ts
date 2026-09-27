@@ -394,35 +394,42 @@ export const injectionPatternRule: RiskRule = {
     } catch {
       return []
     }
-    if (text.length === 0) return []
+    return findInjectionFactors(text)
+  },
+}
 
-    const factors: RiskFactor[] = []
+/** Scan raw text (a tool description, a tool result) with the same corpus
+ *  the rule applies to tool args. Used by the MCP hub, which has text
+ *  rather than a request. */
+export function findInjectionFactors(text: string): RiskFactor[] {
+  if (text.length === 0) return []
 
-    // 1–4: phrase-based categories. One factor per category (first match wins).
-    for (const cat of CATEGORIES) {
-      for (const p of cat.patterns) {
-        const m = p.pattern.exec(text)
-        if (m) {
-          factors.push({
-            rule: cat.id,
-            category: 'injection',
-            points: cat.points,
-            reason: p.reason,
-            evidence: shortFingerprint(m[0]),
-          })
-          break
-        }
+  const factors: RiskFactor[] = []
+
+  // 1–4: phrase-based categories. One factor per category (first match wins).
+  for (const cat of CATEGORIES) {
+    for (const p of cat.patterns) {
+      const m = p.pattern.exec(text)
+      if (m) {
+        factors.push({
+          rule: cat.id,
+          category: 'injection',
+          points: cat.points,
+          reason: p.reason,
+          evidence: shortFingerprint(m[0]),
+        })
+        break
       }
     }
+  }
 
-    // 5: encoding category — only fires when the encoded block is NOT inside a
-    // recognised hash/signature field. Multiple encoding factors can fire if
-    // distinct kinds appear (base64 + unicode escape + url encoded).
-    const encodingFactors = detectEncoding(text)
-    for (const f of encodingFactors) factors.push(f)
+  // 5: encoding category — only fires when the encoded block is NOT inside a
+  // recognised hash/signature field. Multiple encoding factors can fire if
+  // distinct kinds appear (base64 + unicode escape + url encoded).
+  const encodingFactors = detectEncoding(text)
+  for (const f of encodingFactors) factors.push(f)
 
-    return factors
-  },
+  return factors
 }
 
 function detectEncoding(text: string): RiskFactor[] {

@@ -250,6 +250,14 @@ export class JsonRpcStdioBridge<TApprovalRequest = unknown, TApprovalResponse = 
       )
       return
     }
+    // A child that prints `null`, a number or an array must not crash the
+    // host process: `'id' in parsed` throws on non-objects.
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      this.opts.hooks?.onTransportError?.(
+        new Error('ignored non-object JSON-RPC frame from child'),
+      )
+      return
+    }
     if ('id' in parsed && !('method' in parsed)) {
       this.handleResponse(parsed as JsonRpcResponseResult | JsonRpcResponseError)
       return

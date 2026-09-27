@@ -4,7 +4,8 @@
   "description": "Your local AI agents talk to each other. You should know what they're saying.",
   "type": "module",
   "bin": {
-    "foreman": "./dist/cli/index.js"
+    "foreman": "./dist/cli/index.js",
+    "foreman-hook": "./dist/cli/hook.js"
   },
   "files": [
     "dist",
@@ -32,15 +33,15 @@
       "dist/registry/**/*"
     ],
     "targets": [
-      "node20-macos-arm64",
-      "node20-macos-x64",
-      "node20-linux-x64",
-      "node20-linux-arm64"
+      "node22-macos-arm64",
+      "node22-macos-x64",
+      "node22-linux-x64",
+      "node22-linux-arm64"
     ],
     "outputPath": "dist-binaries"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12"
   },
   "keywords": [
     "mcp",
@@ -65,8 +66,8 @@
   },
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "better-sqlite3": "^11.0.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "better-sqlite3": "^12.11.1",
     "commander": "^15.0.0",
     "drizzle-orm": "^0.45.2",
     "ink": "^7.1.1",
