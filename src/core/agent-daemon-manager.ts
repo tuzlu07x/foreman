@@ -248,6 +248,10 @@ export class AgentDaemonManager {
         /* already dead */
       }
     }
+    // A process the daemon left behind can still hold its pipes open, and
+    // an open pipe would keep `foreman start` from exiting after you quit.
+    tracked.process.stdout?.destroy();
+    tracked.process.stderr?.destroy();
     // The exit handler will clean up the map + pidfile, but call them
     // explicitly to avoid a race where stopOne returns before 'exit' fires.
     this.tracked.delete(agentId);
