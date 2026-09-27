@@ -17,8 +17,7 @@ jobs:
     name: Bump Homebrew formula
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Resolve target version
         id: version
         run: |
@@ -36,7 +35,9 @@ jobs:
       - name: Wait for npm to publish
         run: |
           v="${{ steps.version.outputs.value }}"
-          for i in 1 2 3 4 5 6; do
+          # release-npm runs the full test suite before publishing, so give
+          # it up to 20 minutes.
+          for i in $(seq 1 40); do
             if curl -fsSL "https://registry.npmjs.org/foreman-agent/${v}" >/dev/null 2>&1; then
               echo "npm has foreman-agent@${v}"
               exit 0
@@ -44,7 +45,7 @@ jobs:
             echo "attempt $i — npm not ready yet, sleeping 30s"
             sleep 30
           done
-          echo "::error::npm registry did not publish foreman-agent@${v} within 3 minutes"
+          echo "::error::npm registry did not publish foreman-agent@${v} within 20 minutes"
           exit 1
 
       - name: Compute tarball sha256
@@ -73,7 +74,7 @@ jobs:
         if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: tuzlu07x/homebrew-foreman
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -115,7 +116,7 @@ jobs:
           echo "::warning::HOMEBREW_TAP_TOKEN secret is not configured — rendered formula is in the job artifacts but no PR was opened."
 
       - name: Upload rendered formula as artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: foreman-formula
           path: _render/Formula/foreman-agent.rb
