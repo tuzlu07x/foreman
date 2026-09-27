@@ -37,6 +37,19 @@ All notable changes to Foreman are documented here. The format follows
     dependency are needed.
   - Only the listed user ids can act. Buttons carry HMAC tags, stale buttons
     say so instead of deciding anything, and reconnects back off.
+- **Org spend and reports** (#629).
+  - `foreman org report marketing month` and `/foreman report marketing month`
+    show what a department, role or agent did and what it cost, with no LLM.
+  - `foreman usage` shows spend by department, agent or model.
+  - Numbers come from OpenTelemetry sent by the agents: `foreman start`
+    listens on 127.0.0.1 and keeps counts only. Tasks Foreman starts report
+    automatically, and `foreman usage env <agent>` covers the rest. Usage
+    printed by an agent CLI is the fallback.
+  - Department budgets (`foreman org budget marketing 50 --pause`) alert at
+    80% and 100%. With `--pause`, agents can't delegate into a department
+    that has spent its budget.
+- **Grow the org from the CLI:** `foreman org add-department` and
+  `foreman org add-role`. Both validate the chart and keep your comments.
 - `assign` and `org` chat verbs: route a task through `org.yaml` from
   Telegram or the TUI.
 - `NO_COLOR` is honoured by the TUI.

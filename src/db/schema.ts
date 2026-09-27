@@ -559,6 +559,38 @@ export const inboxItems = sqliteTable(
 export type InboxItem = typeof inboxItems.$inferSelect;
 export type NewInboxItem = typeof inboxItems.$inferInsert;
 
+// Agent spend ledger (#629). See 0024_agent_usage.sql.
+export const agentUsage = sqliteTable(
+  "agent_usage",
+  {
+    id: text("id").primaryKey(),
+    ts: integer("ts").notNull(),
+    agentId: text("agent_id").notNull(),
+    role: text("role"),
+    department: text("department"),
+    source: text("source", { enum: ["telemetry", "task-output", "foreman"] }).notNull(),
+    model: text("model"),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    totalTokens: integer("total_tokens").notNull().default(0),
+    costUsd: real("cost_usd").notNull().default(0),
+    costEstimated: integer("cost_estimated").notNull().default(0),
+    taskRef: text("task_ref"),
+    sessionRef: text("session_ref"),
+  },
+  (t) => ({
+    tsIdx: index("agent_usage_ts_idx").on(t.ts),
+    departmentIdx: index("agent_usage_department_idx").on(t.department, t.ts),
+    agentIdx: index("agent_usage_agent_idx").on(t.agentId, t.ts),
+    taskIdx: index("agent_usage_task_idx").on(t.taskRef),
+  }),
+);
+
+export type AgentUsage = typeof agentUsage.$inferSelect;
+export type NewAgentUsage = typeof agentUsage.$inferInsert;
+
 // FTS5 virtual table and triggers live in a hand-written migration
 // (drizzle-kit cannot emit virtual tables). See:
 // src/db/migrations/0001_fts5_requests.sql

@@ -54,6 +54,9 @@ export interface ExecuteDirectiveInput {
    *  + forwards it here; without this wiring the trust CLI's DB flag
    *  was a silent no-op (#544 out-of-scope finished here). */
   taskSkipPermissions?: boolean;
+  /** Extra environment for the spawned agent — the telemetry exporter
+   *  settings that report its token usage to Foreman (#629). */
+  extraEnv?: Record<string, string>;
   /** Working directory for the spawned process. Drain handler derives
    *  this from the task text via `extractCwdFromTask(message)` so an
    *  agent task that mentions an absolute project path lands inside
@@ -295,6 +298,7 @@ export async function executeWriteDirective(
     // own checkout. Without this, codex's writable roots exclude the
     // target and the implementation never starts.
     ...(input.cwd ? { cwd: input.cwd } : {}),
+    ...(input.extraEnv ? { env: input.extraEnv } : {}),
     spawnImpl: deps.spawnImpl,
   });
 
