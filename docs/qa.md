@@ -48,6 +48,18 @@ Scenarios 3, 4, 6 and 7 drive `foreman start` through util-linux `script`
 (Linux only). Where it is missing they are reported as skipped with the
 reason. `QA_NO_PTY=1` skips them on purpose.
 
+## In CI
+
+`.github/workflows/qa.yml` runs the suite on Linux for every pull request
+that touches code, and on `main`. The report appears in the job summary and
+is kept as the `qa-report` artifact for 30 days. The job needs no secrets.
+
+## Known gaps
+
+The Claude Code PreToolUse hook journey (allow, ask then approve, deny,
+fail-closed) is not covered yet. The hook's own unit and CLI tests cover it
+in the meantime.
+
 ## Working on the suite
 
 ```bash
