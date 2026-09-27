@@ -3,6 +3,7 @@ import { pickMcpConfigPath } from "./agent-add-flow.js";
 import {
   applyInjection,
   planInjection,
+  isFilesystemError,
   planZeroclawInjection,
   readWiredAgentToken,
   UnsupportedConfigFormatError,
@@ -70,7 +71,7 @@ export class WiringParseError extends Error {
  *  (which may hold a token): ours, or a filesystem error naming a path. */
 export function describeWiringError(err: unknown): string {
   if (err instanceof WiringParseError || err instanceof UnsafeTokenPathError) return err.message;
-  if (err instanceof Error && "code" in err && typeof err.code === "string") return `${err.code}: ${err.message}`;
+  if (isFilesystemError(err)) return err.message;
   return "the agent's MCP config could not be updated";
 }
 
@@ -104,7 +105,7 @@ export function writeAgentWiring(
       } catch (err) {
         if (err instanceof UnsupportedConfigFormatError) {
           config = "unsupported";
-        } else if (err instanceof UnsafeTokenPathError || (err instanceof Error && "code" in err)) {
+        } else if (err instanceof UnsafeTokenPathError || isFilesystemError(err)) {
           throw err; // a filesystem error names the path, never the content
         } else {
           // Parser messages quote the file, which may hold a token.

@@ -169,8 +169,17 @@ describe('agent MCP wiring with identity tokens', () => {
     expect(describeWiringError(caught)).not.toContain(secret)
     // Anything else unknown is summarised, never echoed.
     expect(describeWiringError(new SyntaxError(`Unexpected token in "${secret}"`))).not.toContain(secret)
-    const fsErr = Object.assign(new Error(`EACCES: permission denied, open '${path}'`), { code: 'EACCES' })
+    // A real filesystem error (from a system call) is shown as it is...
+    const fsErr = Object.assign(new Error(`EACCES: permission denied, open '${path}'`), {
+      code: 'EACCES',
+      syscall: 'open',
+    })
     expect(describeWiringError(fsErr)).toContain('EACCES')
+    // ...but a string `code` alone (YAML's BAD_INDENT) doesn't make one.
+    const yamlErr = Object.assign(new Error(`BAD_INDENT at line 3:\n  FOREMAN_AGENT_TOKEN: ${secret}`), {
+      code: 'BAD_INDENT',
+    })
+    expect(describeWiringError(yamlErr)).not.toContain(secret)
   })
 
   it('rotating revokes the old token even when writing the wiring fails', () => {

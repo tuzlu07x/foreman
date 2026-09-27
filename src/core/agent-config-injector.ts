@@ -35,6 +35,26 @@ export class UnsupportedConfigFormatError extends Error {
   }
 }
 
+/** A config file that doesn't parse. Deliberately carries no parser
+ *  message: YAML, TOML and JSON errors quote the offending lines, and an
+ *  agent's MCP config may hold its identity token (#618). */
+export class ConfigParseError extends Error {
+  constructor(
+    public readonly path: string,
+    public readonly format: ConfigFormat,
+  ) {
+    super(`${path} doesn't parse as ${format.toUpperCase()}`);
+    this.name = "ConfigParseError";
+  }
+}
+
+/** A Node filesystem error (it names a path, never file content). Parser
+ *  errors can carry a string `code` too (YAML's BAD_INDENT), so `code`
+ *  alone doesn't qualify: only errors from a system call do. */
+export function isFilesystemError(err: unknown): err is NodeJS.ErrnoException {
+  return err instanceof Error && typeof (err as NodeJS.ErrnoException).syscall === "string";
+}
+
 export function detectConfigFormat(path: string): ConfigFormat {
   const ext = extname(path).toLowerCase();
   if (ext === ".yaml" || ext === ".yml") return "yaml";
@@ -53,7 +73,7 @@ export function planInjection(
   const before = existsSync(configPath)
     ? readFileSync(configPath, "utf-8")
     : "";
-  const existing = before.length === 0 ? {} : parseDoc(before, format);
+  const existing = before.length === 0 ? {} : parseDoc(before, format, configPath);
   const target = FOREMAN_LOCATIONS.find((p) => getAt(snippet, p) !== undefined);
   if (target) {
     const canonical = getAt(snippet, target);
@@ -100,7 +120,7 @@ export function planZeroclawInjection(
 ): ZeroclawInjectionPlan {
   const format = detectConfigFormat(configPath);
   const before = existsSync(configPath) ? readFileSync(configPath, "utf-8") : "";
-  const existing = before.length === 0 ? {} : parseDoc(before, format);
+  const existing = before.length === 0 ? {} : parseDoc(before, format, configPath);
   const server = getAt(snippet, ["mcp", "servers"]);
   const bundles = getAt(snippet, ["mcp_bundles"]);
   if (!Array.isArray(server) || !isPlainObject(server[0]) || !isPlainObject(bundles)) {
@@ -197,7 +217,7 @@ export function readWiredAgentToken(
   if (!existsSync(configPath)) return undefined;
   let doc: Record<string, unknown>;
   try {
-    doc = parseDoc(readFileSync(configPath, "utf-8"), detectConfigFormat(configPath));
+    doc = parseDoc(readFileSync(configPath, "utf-8"), detectConfigFormat(configPath), configPath);
   } catch {
     return undefined;
   }
@@ -214,13 +234,18 @@ export function readWiredAgentToken(
   return typeof token === "string" && token.length > 0 ? token : null;
 }
 
-function parseDoc(text: string, format: ConfigFormat): Record<string, unknown> {
-  const raw =
-    format === "yaml"
-      ? (parseYaml(text) as unknown)
-      : format === "toml"
-        ? (parseToml(text) as unknown)
-        : (JSON.parse(text) as unknown);
+function parseDoc(text: string, format: ConfigFormat, path: string): Record<string, unknown> {
+  let raw: unknown;
+  try {
+    raw =
+      format === "yaml"
+        ? (parseYaml(text) as unknown)
+        : format === "toml"
+          ? (parseToml(text) as unknown)
+          : (JSON.parse(text) as unknown);
+  } catch {
+    throw new ConfigParseError(path, format);
+  }
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     return {};
   }

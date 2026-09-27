@@ -25,7 +25,13 @@ import {
   InvalidTokenAgentIdError,
   revokeAgentToken,
 } from "../core/agent-token.js";
-import { describeWiringError, rewireAgent, wiringDelivered } from "../core/agent-wiring.js";
+import {
+  describeWiringError,
+  rewireAgent,
+  wiringDelivered,
+  WiringParseError,
+} from "../core/agent-wiring.js";
+import { UnsafeTokenPathError } from "../core/token-file-safety.js";
 import { SecretStore } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import {
@@ -1312,6 +1318,10 @@ export async function runAgentUpdateAll(
 function handleAgentError(err: unknown): void {
   if (err instanceof AgentNotFoundError) {
     console.error(red("error: ") + `no agent with id ${err.agentId}`);
+    process.exit(1);
+  }
+  if (err instanceof WiringParseError || err instanceof UnsafeTokenPathError) {
+    console.error(red("error: ") + describeWiringError(err));
     process.exit(1);
   }
   if (err instanceof InvalidTokenAgentIdError) {
