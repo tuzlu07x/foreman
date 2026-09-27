@@ -23,7 +23,7 @@ Foreman treats LLM providers as first-class — the wizard's Step 1 and the TUI'
 ## Wizard flow
 
 ```
-Step 1/4 — LLM Providers
+Step 1 of 5 — LLM Providers
   picker  → choose providers you want to wire up
   values  → per-provider key (and endpoint when required)
   summary → "N providers configured"
@@ -42,7 +42,7 @@ Hotkey `[v]` opens the Providers page. From there:
 
 ## Agent compatibility (`llm_compat`)
 
-Every agent in `registry/agents.json` declares which providers it can talk to. The wizard's Step 2 (Agents) **grays out** agents whose required provider isn't configured — pick the provider first.
+Every agent in `registry/agents.json` declares which providers it can talk to. The wizard's Step 3 (Agents) **hides** agents whose required provider isn't configured — pick the provider first.
 
 Current matrix:
 

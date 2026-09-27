@@ -194,11 +194,11 @@ describe("setup-wizard.runInstallStep diff logic", () => {
     expect(summary.registered).toContain("generic-mcp");
     expect(summary.failed).toEqual([]);
     expect(summary.removed).toEqual([]);
-    // generic-mcp has no identity_path → skipped with a clear reason.
+    // generic-mcp has no identity_path → nothing to push. That is not a
+    // skipped/failed push (Done lists identitySkipped as failures).
     expect(summary.identityPushed).toEqual([]);
-    expect(summary.identitySkipped).toEqual([
-      { agentId: "generic-mcp", reason: "no identity_path in registry entry" },
-    ]);
+    expect(summary.identitySkipped).toEqual([]);
+    expect(summary.identityNotApplicable).toEqual(["generic-mcp"]);
   });
 
   it("does not call onFailure on the happy path (no install command, register succeeds)", async () => {

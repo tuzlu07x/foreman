@@ -13,6 +13,7 @@ import { legacyHasInterestingFiles } from "../utils/migrate-config.js";
 import { EventBus, type ForemanEventMap } from "./event-bus.js";
 import { getBudgetStatus } from "./llm/budget.js";
 import { loadLlmConfig } from "./llm/config.js";
+import { hasRuntimeClient } from "./llm/factory.js";
 import { isOAuthProviderId } from "./llm/oauth/oauth-providers.js";
 import { loadOAuthTokens } from "./llm/oauth/token-store.js";
 import { loadActiveProviders, loadActiveRegistry } from "./registry-catalog.js";
@@ -406,6 +407,48 @@ export function checkLlmConfig(): CheckResult {
   }
 }
 
+export interface LlmCredentialSlots {
+  /** Secret slot holding the API key, or null when unset. */
+  keySecret: string | null;
+  /** Field in llm.yaml the key slot comes from (for messages). */
+  keyField: "secret_name" | "key_secret";
+  /** Secret slot holding the endpoint URL, when the provider uses one. */
+  endpointSecret: string | null;
+  /** True when the provider works without an API key (local Ollama). */
+  keyOptional: boolean;
+}
+
+/**
+ * Which secret slots the active provider's credential block points at.
+ * OpenAI-compatible providers use `key_secret` / `endpoint_secret` — the
+ * names the schema defaults and the setup wizard's presets write — so the
+ * check used to warn "openai_compatible.secret_name is unset" right after a
+ * successful preset setup. `secret_name` is still read there as a fallback
+ * so an existing hand-written llm.yaml keeps working. Ollama runs keyless
+ * unless a `secret_name` is set (e.g. a remote, authenticated endpoint).
+ */
+export function llmCredentialSlots(
+  provider: string,
+  cred:
+    | { secret_name?: string | null; key_secret?: string; endpoint_secret?: string }
+    | undefined,
+): LlmCredentialSlots {
+  if (provider === "openai_compatible") {
+    return {
+      keySecret: cred?.key_secret ?? cred?.secret_name ?? null,
+      keyField: "key_secret",
+      endpointSecret: cred?.endpoint_secret ?? null,
+      keyOptional: false,
+    };
+  }
+  return {
+    keySecret: cred?.secret_name ?? null,
+    keyField: "secret_name",
+    endpointSecret: null,
+    keyOptional: provider === "ollama",
+  };
+}
+
 // LLM credentials — when LLM is globally enabled, confirm the referenced
 // provider's secret exists in the store. Otherwise verification / smart-report
 // silently fall back to heuristic-only forever and the user has no clue why
@@ -438,6 +481,19 @@ export function checkLlmCredentials(): CheckResult {
     };
   }
 
+  // A provider the schema accepts but this build has no client for
+  // (ollama, openai_compatible — v0.2): buildLlmClient throws
+  // LlmProviderUnavailableError and `foreman start` silently runs
+  // heuristic-only, so credentials being present would be a false "ok".
+  if (!hasRuntimeClient(config.provider)) {
+    return {
+      name: "llm_credentials",
+      status: "warn",
+      message: `LLM provider ${config.provider} has no client in this build yet (coming in v0.2) — verification + smart-report run heuristic-only`,
+      remediation: `Pick anthropic, openai or gemini as Foreman's brain (\`foreman setup\`, Step 2), or set \`enabled: false\` in ${paths.llmConfigPath}.`,
+    };
+  }
+
   // OAuth path (Faz 2 / #505 onwards) — check token presence in the encrypted
   // store instead of an API-key secret slot. Branch up front so the api-key
   // checks below stay focused.
@@ -451,25 +507,38 @@ export function checkLlmCredentials(): CheckResult {
   if (providerCred?.auth_mode === "oauth") {
     return checkOAuthCredentials(config.provider);
   }
-  const secretName = providerCred?.secret_name ?? null;
+  const slots = llmCredentialSlots(
+    config.provider,
+    config.credentials[config.provider],
+  );
+  const secretName = slots.keySecret;
   if (!secretName) {
+    if (slots.keyOptional) {
+      return {
+        name: "llm_credentials",
+        status: "ok",
+        message: `${config.provider} runs without an API key`,
+      };
+    }
     return {
       name: "llm_credentials",
       status: "warn",
-      message: `LLM enabled but ${config.provider}.secret_name is unset in llm.yaml`,
-      remediation: `Edit ${paths.llmConfigPath} and set credentials.${config.provider}.secret_name (then \`foreman secrets add <name>\`).`,
+      message: `LLM enabled but ${config.provider}.${slots.keyField} is unset in llm.yaml`,
+      remediation: `Edit ${paths.llmConfigPath} and set credentials.${config.provider}.${slots.keyField} (then \`foreman secrets add <name>\`).`,
     };
   }
   try {
     const db = getDb();
     const store = new SecretStore(db, loadOrCreateSecretsMasterKey());
-    if (!store.exists(secretName)) {
-      return {
-        name: "llm_credentials",
-        status: "warn",
-        message: `LLM enabled but secret "${secretName}" is missing from the store`,
-        remediation: `Run \`foreman secrets add ${secretName}\` — verification + smart-report will silently fall back to heuristic-only until this is set.`,
-      };
+    for (const slot of [secretName, slots.endpointSecret]) {
+      if (slot && !store.exists(slot)) {
+        return {
+          name: "llm_credentials",
+          status: "warn",
+          message: `LLM enabled but secret "${slot}" is missing from the store`,
+          remediation: `Run \`foreman secrets add ${slot}\` — verification + smart-report will silently fall back to heuristic-only until this is set.`,
+        };
+      }
     }
     // Prefix sanity check (#307) — catches the round 2 footgun where a user
     // pasted an OpenAI sk-proj- key into the Anthropic slot. We resolve the

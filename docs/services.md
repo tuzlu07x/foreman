@@ -17,7 +17,7 @@ Services are 3rd-party integrations (Telegram, Discord, GitHub, …) that one or
 
 ## Setup walkthroughs
 
-Each entry's `setup_steps` array drives the wizard's Step 3 (per-service walkthrough) and the TUI Services page's `[w]` overlay.
+Each entry's `setup_steps` array drives the wizard's Step 4 (per-service walkthrough) and the TUI Services page's `[w]` overlay.
 
 ### Telegram
 

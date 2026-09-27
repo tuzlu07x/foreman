@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -17,13 +17,20 @@ import { describe, expect, it } from 'vitest'
 // (or accidentally hardcodes a constant) will trip this test.
 // =============================================================================
 
-const WIZARD_PATH = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  '../../src/tui/setup-wizard.tsx',
-)
+const TUI_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../src/tui')
 
+// #621 split the wizard into step modules under src/tui/setup-wizard/, so
+// the inputs live there now. Scan the root file plus every step module.
 function readWizard(): string {
-  return readFileSync(WIZARD_PATH, 'utf-8')
+  const stepDir = resolve(TUI_DIR, 'setup-wizard')
+  const files = [
+    resolve(TUI_DIR, 'setup-wizard.tsx'),
+    ...readdirSync(stepDir)
+      .filter((f) => /\.tsx?$/.test(f))
+      .sort()
+      .map((f) => resolve(stepDir, f)),
+  ]
+  return files.map((f) => readFileSync(f, 'utf-8')).join('\n')
 }
 
 describe('setup wizard input remount keys (#219)', () => {

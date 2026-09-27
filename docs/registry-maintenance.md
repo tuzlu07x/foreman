@@ -86,7 +86,7 @@ Some agent runtimes weight their core system prompt above any user-supplied iden
    - `secret_name` — token name
    - `where_to_get` — URL
    - `format_hint`
-   - `setup_steps` — array of steps; **must be at least one** (Zod-enforced). These render verbatim in the wizard's Step 3 + the TUI Services page's `[w]` walkthrough overlay
+   - `setup_steps` — array of steps; **must be at least one** (Zod-enforced). These render verbatim in the wizard's Step 4 (Services) + the TUI Services page's `[w]` walkthrough overlay
    - `used_by_agents` — agent ids that integrate with this service
    - `open_url_hotkey: boolean` — if true, the wizard / TUI wraps `where_to_get` with OSC 8 escape sequences so the URL is clickable in modern terminals
 2. **Add the reverse mapping** in each consuming agent's `optional_services` array in `agents.json`.

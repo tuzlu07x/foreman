@@ -178,7 +178,7 @@ Pages with sub-input modes (Secrets page rotate, Chat page input) use the same s
 ### Setup wizard
 The same Ink tree used both by `foreman setup` and `foreman start` (when `looksLikeFreshInstall()` returns true). Four steps:
 1. **API keys** — MultiSelect with the five common secrets pre-checked (PR #148) + help URL per secret in the value prompt (PR #135).
-2. **Agents** — MultiSelect with `hermes` + `claude-code` pre-checked on fresh install; `Pre-checked: …` label in accent colour above the picker (PR #142).
+2. **Agents** — MultiSelect with `hermes` + `claude-code` pre-checked on fresh install; `Checked: …` label in accent colour above the picker, following the live toggles (PR #142).
 3. **Install** — Prints a `Selected agents: … / Will install: …` summary, then runs `runInstallStep` to install / register / inject MCP snippet / write Foreman identity per agent.
 4. **Policy** — Optional `$EDITOR` review of `policy.yaml`.
 
