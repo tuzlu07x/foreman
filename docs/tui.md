@@ -62,7 +62,9 @@ in chat, plus a few that only make sense on screen:
 | `assign <role\|department> <task>` | route a task through your [org chart](org.md) |
 | `org` | show the org chart |
 | `activity` | recent directives and their status |
-| `report` | an LLM summary of what your agents did (needs `foreman llm enable`) |
+| `report <department\|role\|agent> [today\|week\|month]` | what it did and what it cost ([spend](org.md#spend-and-reports)) |
+| `spend [period]` | agent spend by department |
+| `report me` | an LLM summary of what your agents did (needs `foreman llm enable`) |
 | `llm …`, `model …` | Foreman's own model |
 | `approve [always]` / `deny [always]` | decide the approval on screen |
 | `open <page>` | switch page (`open inbox`, `open logs`, …) |

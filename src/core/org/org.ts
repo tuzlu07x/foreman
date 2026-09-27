@@ -47,6 +47,16 @@ const RoleSchema = z
   })
   .strict();
 
+const BudgetSchema = z
+  .object({
+    monthly_usd: z.number().positive().max(1_000_000).optional(),
+    daily_usd: z.number().positive().max(1_000_000).optional(),
+    /** warn: alert only. pause: agents can't hand work into the department
+     *  until the period resets; you still can. */
+    on_exceed: z.enum(["warn", "pause"]).default("warn"),
+  })
+  .strict();
+
 const DepartmentSchema = z
   .object({
     name: z.string().min(1).max(80),
@@ -54,6 +64,8 @@ const DepartmentSchema = z
     description: z.string().max(400).optional(),
     /** MCP hub servers members of this department may use. Omit = no limit. */
     mcp_servers: z.array(z.string().min(1)).optional(),
+    /** Spend limit for the department's agents (#629). */
+    budget: BudgetSchema.optional(),
   })
   .strict();
 
@@ -85,6 +97,7 @@ export const OrgDocSchema = z
 export type OrgDoc = z.infer<typeof OrgDocSchema>;
 export type OrgRole = z.infer<typeof RoleSchema>;
 export type OrgDepartment = z.infer<typeof DepartmentSchema>;
+export type OrgBudget = z.infer<typeof BudgetSchema>;
 
 export interface OrgIssue {
   level: "error" | "warning";

@@ -105,6 +105,99 @@ about roles filled by agents you haven't registered yet.
 | `foreman org assign <role\|department\|agent> <task…>` | Queue a task (needs `foreman start` running) |
 | `foreman org sync` | Push titles / responsibilities / model overrides into the agent registry |
 | `foreman org upgrade` | Upgrade every agent runtime the org uses |
+| `foreman org add-department <id> --head <role> [--agent a] [--name n]` | Add a department and its head |
+| `foreman org add-role <id> --agent a [--department d] [--reports-to r]` | Add a role (defaults to reporting to the department head) |
+| `foreman org report [target] [period]` | What a department, role or agent did, and what it cost |
+| `foreman org budget <department> [usd\|off] [--daily] [--pause]` | Set or remove a spend limit |
+| `foreman usage [period] [--by department\|agent\|model]` | Spend at a glance |
+| `foreman usage env <agent>` | Turn on spend tracking for an agent you start yourself |
+
+## Grow the company
+
+Any number of departments, any names. Each one is a line:
+
+```bash
+foreman org add-department sales --head cso --agent codex --name Sales
+foreman org add-role sdr --agent hermes --department sales --title "Sales rep"
+foreman org add-role analyst --agent claude-code --department sales --model claude-haiku-4-5
+foreman org show
+```
+
+A new role reports to its department head unless you say otherwise
+(`--reports-to`). Both commands check the whole chart before saving, and
+they keep the comments in `org.yaml`. You can still edit the file by hand;
+it's read again on every delegation, so no restart is needed.
+
+## Spend and reports
+
+Ask what a department did and what it cost, from any surface:
+
+```bash
+foreman org report marketing today        # or week, month, 7d, 24h
+foreman org report                        # the whole company, by department
+foreman usage month --by agent
+```
+
+In the TUI console, Telegram, Slack or Discord:
+
+```
+/foreman report marketing month
+/foreman spend                  # today, by department
+```
+
+A report shows:
+- spend, and tokens (input, output, cache);
+- finished and failed tasks, and cost per finished task;
+- tool calls allowed and blocked;
+- the latest task results;
+- budget use.
+
+It needs no LLM. `report me` still asks Foreman's own LLM for a narrated
+summary.
+
+### Where the numbers come from
+
+| Source | How | Precision |
+| --- | --- | --- |
+| **Agent telemetry** | Claude Code (and Codex) export OpenTelemetry. `foreman start` listens on `127.0.0.1:4319` and keeps only per-request token counts, model and cost; prompts never reach Foreman. | Exact, cost included |
+| **Task output** | Usage an agent CLI prints when it finishes a task (`tokens used: N`, Claude JSON results), used only when that task sent no telemetry | Tokens exact; cost estimated (≈) from list prices |
+| **Foreman itself** | Its own LLM calls (`llm_usage`) | Exact |
+
+Tasks Foreman starts (`foreman write`, `assign`, delegation between
+agents) report automatically: the agent gets the exporter settings and a
+tag for the task. For agents **you** start, run this once:
+
+```bash
+foreman usage env claude-code   # prints the export lines for your shell profile
+foreman usage env codex         # prints the [otel] block for ~/.codex/config.toml
+```
+
+Spend is attributed to the agent's role and department at the time it
+happens. Moving an agent later doesn't rewrite history. If port 4319 is
+taken, set `FOREMAN_OTLP_PORT`. The inbox tells you when that happens.
+
+### Budgets
+
+```bash
+foreman org budget marketing 50            # $50 a month, alert at 80% and 100%
+foreman org budget marketing 5 --daily     # and $5 a day
+foreman org budget marketing 50 --pause    # when spent, agents can't hand it new work
+foreman org budget marketing off
+```
+
+The budget lands in `org.yaml`:
+
+```yaml
+departments:
+  marketing:
+    name: Marketing
+    head: cmo
+    budget: { monthly_usd: 50, daily_usd: 5, on_exceed: pause }
+```
+
+Alerts go to the TUI inbox and to the channels on your `budget_alert` route.
+With `pause`, agents can't delegate into the department until the period
+resets. You can still assign work to it yourself.
 
 ## Scaling and upgrades
 
@@ -122,5 +215,7 @@ about roles filled by agents you haven't registered yet.
   boundary. Agent ids are self-declared today (see [SECURITY.md](../SECURITY.md)).
 - A broken `org.yaml` fails closed: agent-to-agent delegation is blocked and
   agents get no hub servers until `foreman org validate` passes.
-- Budgets per department and approval escalation along the chart are on the
-  roadmap.
+- Approval escalation along the chart is on the roadmap.
+- Spend covers what agents report: tasks Foreman starts, and agents you set
+  up with `foreman usage env`. An agent that exports nothing and prints no
+  usage shows tasks and tool calls, but no spend.

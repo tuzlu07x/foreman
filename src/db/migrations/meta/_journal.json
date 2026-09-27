@@ -169,6 +169,13 @@
       "when": 1782800000000,
       "tag": "0023_inbox",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "5",
+      "when": 1782900000000,
+      "tag": "0024_agent_usage",
+      "breakpoints": true
     }
   ]
 }

@@ -420,6 +420,29 @@ describe("executeWriteDirective", () => {
     }
   });
 
+  it("hands the telemetry exporter settings to the spawned agent (#629)", async () => {
+    const env = makeScript(
+      "env.sh",
+      '#!/bin/sh\necho "$OTEL_EXPORTER_OTLP_ENDPOINT|$OTEL_RESOURCE_ATTRIBUTES|$FOREMAN_SPAWNED_BY"\n',
+    );
+    const result = await executeWriteDirective(
+      {
+        agentId: "codex",
+        message: "task",
+        entry: agent({ task_command_template: env }),
+        extraEnv: {
+          OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:4319",
+          OTEL_RESOURCE_ATTRIBUTES: "foreman.agent=codex,foreman.task=12",
+        },
+      },
+      {},
+    );
+    expect(result.spawn.kind).toBe("ok");
+    if (result.spawn.kind === "ok") {
+      expect(result.spawn.stdout.trim()).toBe("http://127.0.0.1:4319|foreman.agent=codex,foreman.task=12|codex");
+    }
+  });
+
   it("is a no-op when the catalog entry has no task_skip_permissions_flag even if trusted", async () => {
     // Hermes-style daemon agent: no flag in the catalog → trust is
     // meaningless on the spawn side. Defensive: don't append a phantom

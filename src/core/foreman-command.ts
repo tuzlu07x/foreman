@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { orgDelegationVerdict } from "./org/guard.js";
+import { isHumanSource, orgBudgetBlock, orgDelegationVerdict } from "./org/guard.js";
 import { loadOrg, renderOrgLines, resolveAssignee, type OrgDoc } from "./org/org.js";
+import { buildOrgReport, parsePeriod, renderOrgReport, resolveReportTarget } from "./usage/report.js";
 import { FOREMAN_VERSION } from "../version.js";
 import type { ForemanDb } from "../db/client.js";
 import { DelegationTracker } from "./delegation-tracker.js";
@@ -314,7 +315,12 @@ export function registerBuiltinCommands(router: ForemanCommandRouter): void {
   router.register(
     "report",
     reportHandler,
-    "LLM narration of recent agent activity. Try `/foreman report me`.",
+    "What a department, role or agent did and what it cost: `report marketing month`. `report me` asks Foreman's LLM.",
+  );
+  router.register(
+    "spend",
+    spendHandler,
+    "Agent spend by department: `spend`, `spend marketing week` (today · week · month · 7d).",
   );
   router.register(
     "activity",
@@ -408,10 +414,47 @@ const REPORT_DEFAULT_QUESTION_EN =
 const REPORT_DEFAULT_QUESTION_TR =
   "Agent'lar ne yapıyor şu an? Kısa bir durum raporu ver.";
 
+/** `report [target] [period]` / `spend [target] [period]` without an LLM:
+ *  what a department, role or agent did and what it cost (#629). Returns
+ *  null when the words don't name a target or a period. */
+function orgReport(args: string[], ctx: ForemanCommandContext, fallbackToCompany: boolean): ForemanCommandResult | null {
+  let org: OrgDoc | null = null;
+  try {
+    org = loadOrg(join(ctx.configDir, "org.yaml"));
+  } catch {
+    org = null;
+  }
+  const words = args.map((a) => a.toLowerCase()).filter((a) => a !== "me" && a !== "ben");
+  const periodWord = words.find((w) => parsePeriod(w) !== null);
+  const targetWord = words.find((w) => w !== periodWord);
+  const knownAgents = ctx.registry.list().map((a) => a.id.toLowerCase());
+  const target = resolveReportTarget(org, targetWord, knownAgents);
+  if (!target) {
+    if (!fallbackToCompany) return null;
+    const names = org ? [...Object.keys(org.departments), ...Object.keys(org.roles)] : knownAgents;
+    return {
+      ok: false,
+      text: `No department, role or agent called '${targetWord}'. Try one of: ${names.slice(0, 12).join(", ") || "(none yet)"}.`,
+    };
+  }
+  if (!targetWord && !periodWord && !fallbackToCompany) return null;
+  const period = parsePeriod(periodWord)!;
+  return { ok: true, text: renderOrgReport(buildOrgReport(ctx.db, org, target, period)) };
+}
+
+function spendHandler(args: string[], ctx: ForemanCommandContext): ForemanCommandResult {
+  return orgReport(args, ctx, true)!;
+}
+
 function reportHandler(
   args: string[],
   ctx: ForemanCommandContext,
 ): Promise<ForemanCommandResult> | ForemanCommandResult {
+  // `report marketing month`, `report codex today`: the org report, no LLM.
+  const deterministic = orgReport(args, ctx, false);
+  if (deterministic) return deterministic;
+  // Plain `report` without Foreman's LLM: the company report for today.
+  if (args.length === 0 && !ctx.orchestratorChat?.isEnabled()) return orgReport([], ctx, true)!;
   if (!ctx.orchestratorChat) {
     return {
       ok: false,
@@ -901,6 +944,18 @@ function writeHandler(
         "Hand the task to your manager (or a department head) instead, or ask the user to assign it.",
       errorCode: "ORG_POLICY",
     };
+  }
+  // Department budgets (#629): with `on_exceed: pause`, agents can't hand
+  // new work into a department that has spent its budget. The owner can.
+  if (!ctx.trustedOwner && !isHumanSource(ctx.sourceAgent)) {
+    const overBudget = orgBudgetBlock(ctx.db, join(ctx.configDir, "org.yaml"), targetAgent);
+    if (overBudget) {
+      return {
+        ok: false,
+        text: `Paused by budget: ${overBudget}. Ask the user to raise it (foreman org budget) or wait for the period to reset.`,
+        errorCode: "ORG_POLICY",
+      };
+    }
   }
   // Runaway-loop guard. When an LLM-driven agent (or even the user
   // via CLI) keeps firing delegations to the same target without
