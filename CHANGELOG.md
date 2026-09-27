@@ -11,20 +11,29 @@ All notable changes to Foreman are documented here. The format follows
   [docs](docs/agent-lifecycle.md#agent-identity-tokens)).
   - `foreman agent add` mints a token, keeps it in the encrypted secret
     store and writes it into the agent's MCP config as
-    `FOREMAN_AGENT_TOKEN` in the server's `env` (Claude Code / OpenClaw JSON,
-    Codex TOML, Hermes YAML and its MCP wrapper), never as an argument.
-    Files that carry it are made owner-only.
+    `FOREMAN_AGENT_TOKEN` in the server's `env`, never as an argument
+    (`FOREMAN_AGENT_TOKEN_FILE`, a 0600 file, works too). Files that carry
+    it are owner-only, never written through a symlink or inside a
+    project's git work tree.
   - `foreman mcp-stdio` resolves the agent from the token. `--source`
     without a valid token runs as `untrusted:<id>`: none of that agent's
-    allow rules, org role, delegation rights or MCP hub servers, while the
-    agent's deny / ask rules, block and pause still apply.
+    allow rules, org role, delegation rights, secrets or MCP hub servers,
+    and no relaying for you (answers, resolutions, state-changing
+    `/foreman` commands, untagged approvals), while the agent's deny / ask
+    rules, responsibility rules, rate limits, block and pause still apply.
+    All untrusted connections share 30 calls a minute and 3 waiting
+    approval prompts.
+  - `identity.untrusted` in `policy.yaml`: `ask` (default, nothing is
+    auto-allowed), `deny` (quarantine) or `allow_wildcards`.
   - `foreman agent rewire [<id>|--all]` gives existing agents a token and
     rewrites their wiring; `foreman agent token rotate <id>` replaces a
-    token and cuts off sessions using the old one. `--token-out <file>`
-    (0600) covers agents wired by hand.
+    token, always revoking the old one first, and cuts off sessions using
+    it. `--token-out <file>` (0600) covers agents wired by hand.
   - `foreman doctor` (`agent_tokens`) and `foreman start` (an inbox warning)
-    name the agents that still need rewiring. Unverified connections are
-    audited (`agent:identity`) and raised in the inbox; tokens never are.
+    name the agents that still need rewiring and token files others can
+    read. Unverified connections are audited (`agent:identity`) and raised
+    in the inbox once a day; tokens never are. Tamper protection flags an
+    agent reading another agent's wiring or any `/proc/*/environ`.
 - **OAuth for hosted MCP servers** (#617,
   [docs/mcp-hub.md](docs/mcp-hub.md#oauth-servers)).
   - Mark a remote server `auth: oauth` in `mcp.yaml` (or use
@@ -308,7 +317,9 @@ All notable changes to Foreman are documented here. The format follows
   `foreman agent rewire --all` and restart them. `mcp-stdio` no longer
   registers unknown `--source` ids on first connection; register agents with
   `foreman agent add`. `foreman secrets show` / `add` / `rotate` refuse the
-  reserved `foreman-agent-token:*` names.
+  reserved `foreman-agent-token:*` names. `--source` must match
+  `[A-Za-z0-9._-]{1,64}`. Until rewired, untrusted agents' calls ask for
+  approval by default (`identity.untrusted: ask`).
 
 ## [0.1.6] - 2026-06-01
 
