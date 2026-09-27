@@ -85,6 +85,16 @@ describe('planResume', () => {
     expect(removals(plan, live)).toEqual([])
   })
 
+  it('re-opens required setup when the next step would be install', () => {
+    // With or without a session: nothing may start installing on mount.
+    const upToInstall: Step[] = [...UP_TO_REQUIRED, 'required-setup']
+    const bare = planResume({ ...freshState(), completed: upToInstall }, [], catalog)
+    expect(bare.setup.completed).toEqual(UP_TO_REQUIRED)
+    const withSession = planResume(resumed({ registeredAtSnapshot: [] }, upToInstall), [], catalog)
+    expect(withSession.setup.completed).toEqual(UP_TO_REQUIRED)
+    expect(withSession.agentsPhase).toBeNull()
+  })
+
   it('leaves a run alone before the agents step and after install', () => {
     const early = planResume(resumed({}, ['welcome', 'providers']), ['codex'], catalog)
     expect(early.agentsPhase).toBeNull()

@@ -187,6 +187,9 @@ interface Mounted {
   chatPrimarySet: Mock<[string, string], void>
   launchEditor: Mock<[string], Promise<unknown>>
   onQuit: Mock<[], void>
+  /** A run resumed at install re-opens required-setup (never auto-starts):
+   *  wait for "Ready to install" and press [c]. */
+  startInstall: () => Promise<void>
 }
 
 async function mount(
@@ -264,6 +267,18 @@ async function mount(
     await sleep(60)
   }
   await sleep(60)
+  const startInstall = async (): Promise<void> => {
+    await until('Ready to install')
+    await press('c')
+    // A fast (mocked) install can go straight on to Done.
+    const deadline = Date.now() + 5_000
+    while (!/Install \+ configure|Setup complete/.test(frame())) {
+      if (Date.now() > deadline) {
+        throw new Error(`install did not start; frame:\n${frame()}`)
+      }
+      await sleep(10)
+    }
+  }
   return {
     frame,
     press,
@@ -274,6 +289,7 @@ async function mount(
     chatPrimarySet,
     launchEditor,
     onQuit,
+    startInstall,
   }
 }
 
@@ -319,6 +335,7 @@ describe('Ctrl-C and modified hotkeys', () => {
   it('Ctrl-C during install shows a notice, then quits once install is done', async () => {
     const before = vi.mocked(runInstallStep).mock.calls.length
     const w = await mount('install')
+    await w.startInstall()
     await w.until('✗ Hermes — install failed')
     await w.press(CTRL_C, 'Install in progress — Ctrl-C again after it finishes')
     expect(w.onQuit).not.toHaveBeenCalled()
@@ -350,6 +367,7 @@ describe('step numbering', () => {
     ['install', 'Step 5 of 5 ▸ Install + configure'],
   ] as const)('%s shows "%s"', async (step, header) => {
     const w = await mount(step)
+    if (step === 'install') await w.startInstall()
     await w.until(header)
   })
 })
@@ -606,10 +624,26 @@ describe('required-setup cursor', () => {
   }, 40_000)
 })
 
+describe('resume into install', () => {
+  it('re-opens required setup instead of installing with no keypress', async () => {
+    const before = vi.mocked(runInstallStep).mock.calls.length
+    // Saved state whose next step is install: the terminal closed mid-install.
+    const w = await mount('install')
+    await w.until('Ready to install')
+    await sleep(300)
+    expect(w.frame()).toContain('Required setup')
+    expect(vi.mocked(runInstallStep).mock.calls.length - before).toBe(0)
+    await w.press('c', '✗ Hermes — install failed')
+    expect(vi.mocked(runInstallStep).mock.calls.length - before).toBe(1)
+    await w.press('s', 'Setup complete')
+  })
+})
+
 describe('install step start', () => {
   it('starts the installer exactly once while the screen re-renders', async () => {
     const before = vi.mocked(runInstallStep).mock.calls.length
     const w = await mount('install')
+    await w.startInstall()
     await w.until('✗ Hermes — install failed')
     // Spinner ticks + log lines re-render the install screen many times.
     await sleep(400)
@@ -718,7 +752,7 @@ describe('resume never uninstalls on its own', () => {
 describe('install step', () => {
   it('shows the failure prompt, the manual-fix overlay, and resolves skip', async () => {
     const w = await mount('install')
-    await w.until('Install + configure')
+    await w.startInstall()
     expect(w.frame()).toContain('Selected agents: hermes, claude-code')
     await w.until('✗ Hermes — install failed')
     expect(w.frame()).toContain('[r] retry · [s] skip this agent · [m] manual fix instructions')
@@ -800,6 +834,7 @@ describe('done step identity summary', () => {
         },
       },
     })
+    await w.startInstall()
     await w.until('What next?')
     expect(w.frame()).toContain('No Foreman identity file for generic-mcp')
     expect(w.frame()).not.toContain('Identity push failed')

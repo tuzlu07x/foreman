@@ -1,5 +1,6 @@
 import {
   markUncompleted,
+  nextStep,
   sanitizeSession,
   type SessionCatalog,
   type SetupState,
@@ -38,6 +39,26 @@ function sameIds(a: readonly string[], b: readonly string[]): boolean {
  * sets the selection anyway; after, nothing acts on it any more.
  */
 export function planResume(
+  setup: SetupState,
+  liveRegistered: readonly string[],
+  catalog: SessionCatalog,
+): ResumePlan {
+  const plan = reconcileSession(setup, liveRegistered, catalog);
+  return { ...plan, setup: reopenRequiredSetup(plan.setup) };
+}
+
+/**
+ * A run whose next step is install (e.g. the terminal closed mid-install)
+ * must not start installing on mount with no keypress: re-open
+ * required-setup so the user sees the plan and presses [c] again.
+ */
+function reopenRequiredSetup(setup: SetupState): SetupState {
+  return nextStep(setup) === "install"
+    ? markUncompleted(setup, "required-setup")
+    : setup;
+}
+
+function reconcileSession(
   setup: SetupState,
   liveRegistered: readonly string[],
   catalog: SessionCatalog,
