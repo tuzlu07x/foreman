@@ -1,6 +1,13 @@
 import { loadLlmConfig, saveLlmConfig } from "../../core/llm/config.js";
 import type { LlmPreset } from "../../core/llm-provider-presets.js";
+import {
+  isOAuthProviderId,
+  type OAuthProviderId,
+} from "../../core/llm/oauth/oauth-providers.js";
+import { makeAccessTokenProvider } from "../../core/llm/oauth/token-refresh.js";
+import { loadOAuthTokens } from "../../core/llm/oauth/token-store.js";
 import type { OllamaModel, RunStatus } from "../../core/ollama-models.js";
+import type { SecretStore } from "../../core/secret-store.js";
 import type { WizardServices } from "./types.js";
 
 // #367 — Foreman's-LLM step sub-phases. `picker` is the universal choice;
@@ -22,6 +29,112 @@ export type ForemanLlmChoice =
   | "ollama"
   | "preset"
   | "skip";
+
+export type BrainCloudProvider = "anthropic" | "openai" | "gemini";
+
+/** The picker rows the cursor can land on, in display order. `configured`
+ *  must be `configuredBrainProviderIds(...)` — the same set the render uses
+ *  to grey rows out — so what's drawn and what Enter acts on can't diverge
+ *  (they did before: #575 widened the render to count sign-ins, but the key
+ *  handler still counted API keys only). */
+export function brainPickerChoices(
+  configured: ReadonlySet<string>,
+): ForemanLlmChoice[] {
+  const choices: ForemanLlmChoice[] = [];
+  for (const id of ["anthropic", "openai", "gemini"] as const) {
+    if (configured.has(id)) choices.push(id);
+  }
+  choices.push("ollama", "preset", "skip");
+  return choices;
+}
+
+/** The row the cursor is on: the draft when it's still selectable, else
+ *  the first selectable row. */
+export function brainPickerCursor(
+  draft: string | null,
+  choices: readonly ForemanLlmChoice[],
+): ForemanLlmChoice {
+  const fromDraft = choices.find((c) => c === draft);
+  return fromDraft ?? choices[0] ?? "skip";
+}
+
+/** Model persisted when the user doesn't (or can't) pick one from the live
+ *  list — e.g. discovery failed or the sign-in has no model list. */
+export const BRAIN_DEFAULT_MODELS: Record<BrainCloudProvider, string> = {
+  anthropic: "claude-haiku-4-5-20251001",
+  openai: "gpt-4o-mini",
+  gemini: "gemini-2.0-flash",
+};
+
+const SUBSCRIPTION_LABEL: Record<OAuthProviderId, string> = {
+  anthropic: "Claude",
+  openai: "ChatGPT",
+};
+
+/**
+ * #575 follow-up — how the brain step can list models for a cloud provider.
+ * A provider shows up as usable in the picker when it has an API key, a
+ * sign-in chosen this wizard run, or OAuth tokens from an earlier
+ * `foreman llm login` (`configuredBrainProviderIds`); model discovery has to
+ * honour the same three sources instead of insisting on `<provider>-key`.
+ *
+ * - `api-key` / `oauth`: list models with that credential. Only Anthropic
+ *   accepts a subscription token for listing.
+ * - `no-listing`: the provider is usable but there is nothing to list with
+ *   (sign-in still pending until after the wizard, or a ChatGPT sign-in,
+ *   whose backend has no model list). Enter keeps the default model.
+ * - `missing`: nothing configured at all.
+ */
+export type BrainModelSource =
+  | { kind: "api-key"; apiKey: string }
+  | { kind: "oauth"; accessToken: () => Promise<string> }
+  | { kind: "no-listing"; message: string }
+  | { kind: "missing"; message: string };
+
+export function resolveBrainModelSource(
+  provider: BrainCloudProvider,
+  secretStore: SecretStore,
+  signedInThisSession: readonly OAuthProviderId[],
+): BrainModelSource {
+  const keySecret = `${provider}-key`;
+  const defaultModel = BRAIN_DEFAULT_MODELS[provider];
+  const keepDefault = `Press [Enter] to use the default model (${defaultModel}); change \`model:\` in llm.yaml any time.`;
+  const oauthId = isOAuthProviderId(provider) ? provider : null;
+  const hasTokens =
+    oauthId !== null && loadOAuthTokens(secretStore, oauthId) !== null;
+
+  if (oauthId && signedInThisSession.includes(oauthId) && !hasTokens) {
+    return {
+      kind: "no-listing",
+      message:
+        `You'll sign in with your ${SUBSCRIPTION_LABEL[oauthId]} subscription after setup ` +
+        `(\`foreman llm login ${oauthId}\`), so there is no model list to show yet. ${keepDefault}`,
+    };
+  }
+  if (secretStore.exists(keySecret)) {
+    return { kind: "api-key", apiKey: secretStore.get(keySecret) };
+  }
+  if (oauthId === "anthropic" && hasTokens) {
+    const tokens = makeAccessTokenProvider(secretStore, "anthropic");
+    return {
+      kind: "oauth",
+      accessToken: async () => (await tokens()).accessToken,
+    };
+  }
+  if (oauthId === "openai" && hasTokens) {
+    return {
+      kind: "no-listing",
+      message: `Your ChatGPT sign-in doesn't offer a model list. ${keepDefault}`,
+    };
+  }
+  return {
+    kind: "missing",
+    message:
+      oauthId !== null
+        ? `No ${keySecret} and no ${SUBSCRIPTION_LABEL[oauthId]} sign-in — go back, add one in Step 1, then return here.`
+        : `No ${keySecret} in the secret store — go back, set it in Step 1, then return here.`,
+  };
+}
 
 // Format the trailing tag for an Ollama model row in the wizard's picker.
 // `[recommended]` / `[balanced]` / `[tight — N%]` for enabled rows;
@@ -90,13 +203,13 @@ export function persistForemanLlmChoice(args: {
 
     if (args.choice === "anthropic") {
       next.provider = "anthropic";
-      next.model = args.cloudModel ?? "claude-haiku-4-5-20251001";
+      next.model = args.cloudModel ?? BRAIN_DEFAULT_MODELS.anthropic;
     } else if (args.choice === "openai") {
       next.provider = "openai";
-      next.model = args.cloudModel ?? "gpt-4o-mini";
+      next.model = args.cloudModel ?? BRAIN_DEFAULT_MODELS.openai;
     } else if (args.choice === "gemini") {
       next.provider = "gemini";
-      next.model = args.cloudModel ?? "gemini-2.0-flash";
+      next.model = args.cloudModel ?? BRAIN_DEFAULT_MODELS.gemini;
     } else if (args.choice === "ollama" && args.ollamaModel) {
       next.provider = "ollama";
       next.model = args.ollamaModel;

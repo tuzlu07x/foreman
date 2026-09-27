@@ -75,7 +75,7 @@ const ANTHROPIC_VERSION = "2023-06-01";
 
 // Beta features required for OAuth traffic: `claude-code-20250219` enables the
 // Claude Code request shape; `oauth-2025-04-20` enables Bearer-token auth.
-const OAUTH_BETA = "claude-code-20250219,oauth-2025-04-20";
+export const OAUTH_BETA = "claude-code-20250219,oauth-2025-04-20";
 // First `system` block — must be exactly this string for Anthropic to route
 // OAuth traffic reliably. Real system prompts are appended as a second block.
 const CLAUDE_CODE_IDENTITY =

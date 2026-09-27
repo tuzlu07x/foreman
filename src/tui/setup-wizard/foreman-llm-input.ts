@@ -6,10 +6,13 @@ import {
 import { canRunModel } from "../../core/ollama-models.js";
 import type { WizardContext } from "./context.js";
 import {
+  BRAIN_DEFAULT_MODELS,
+  brainPickerChoices,
+  brainPickerCursor,
   persistForemanLlmChoice,
-  type ForemanLlmChoice,
+  resolveBrainModelSource,
 } from "./foreman-llm-logic.js";
-import { configuredProviderIds } from "./shared.js";
+import { configuredBrainProviderIds } from "./shared.js";
 
 // Foreman's-brain step (Step 2) key handling. Returns true when the key
 // was consumed (the original handler `return`ed), false to fall through.
@@ -37,6 +40,7 @@ export function handleForemanLlmInput(
     cloudModelDraft,
     ollamaModelDraft,
     presetDraft,
+    providersSignedIn,
   } = ctx.state;
   const {
     setForemanLlmPhase,
@@ -44,6 +48,7 @@ export function handleForemanLlmInput(
     setCloudModelProvider,
     setCloudModelOptions,
     setCloudModelError,
+    setCloudModelInfo,
     setCloudModelDraft,
     setOllamaModelDraft,
     setPresetDraft,
@@ -55,8 +60,11 @@ export function handleForemanLlmInput(
     const storedNames = new Set(
       services.secretStore.list().map((s) => s.name),
     );
-    const configured = new Set(
-      configuredProviderIds(providerCatalog, storedNames),
+    // #575 — API keys AND subscription sign-ins, exactly as rendered.
+    const configured = configuredBrainProviderIds(
+      providerCatalog,
+      storedNames,
+      providersSignedIn,
     );
 
     // ----- picker phase -----
@@ -64,13 +72,8 @@ export function handleForemanLlmInput(
       // #370 — Disabled cloud rows are rendered but skipped here so
       // ↑↓ nav cycles only the actionable rows; Enter on a disabled
       // row is a no-op (the warning hint is rendered separately).
-      const visible: ForemanLlmChoice[] = [];
-      if (configured.has("anthropic")) visible.push("anthropic");
-      if (configured.has("openai")) visible.push("openai");
-      if (configured.has("gemini")) visible.push("gemini");
-      visible.push("ollama", "preset", "skip");
-      const cursor =
-        (foremanLlmDraft as ForemanLlmChoice | null) ?? visible[0] ?? "skip";
+      const visible = brainPickerChoices(configured);
+      const cursor = brainPickerCursor(foremanLlmDraft, visible);
       const idx = Math.max(0, visible.indexOf(cursor));
       if (key.upArrow) {
         setForemanLlmDraft(
@@ -113,6 +116,7 @@ export function handleForemanLlmInput(
           setCloudModelProvider(chosen);
           setCloudModelOptions(null);
           setCloudModelError(null);
+          setCloudModelInfo(null);
           setCloudModelDraft(null);
           setForemanLlmPhase("cloud-model");
           // Kick off async fetch — wizard renders the loading state in
@@ -120,22 +124,32 @@ export function handleForemanLlmInput(
           // synchronous, and the discovery cache means re-entries are
           // cheap.
           void (async (): Promise<void> => {
-            const keySecret = `${chosen}-key`;
+            const source = resolveBrainModelSource(
+              chosen,
+              services.secretStore,
+              providersSignedIn,
+            );
+            if (source.kind === "no-listing") {
+              setCloudModelInfo(source.message);
+              setCloudModelOptions([]);
+              return;
+            }
+            if (source.kind === "missing") {
+              setCloudModelError(source.message);
+              setCloudModelOptions([]);
+              return;
+            }
             try {
-              const apiKey = services.secretStore.exists(keySecret)
-                ? services.secretStore.get(keySecret)
-                : null;
-              if (!apiKey) {
-                setCloudModelError(
-                  `No ${chosen}-key in the secret store — go back, set it in Step 1, then return here.`,
-                );
-                setCloudModelOptions([]);
-                return;
-              }
-              const models = await discoverModels(chosen, { apiKey });
+              const models =
+                source.kind === "api-key"
+                  ? await discoverModels(chosen, { apiKey: source.apiKey })
+                  : await discoverModels(chosen, {
+                      apiKey: await source.accessToken(),
+                      auth: "oauth",
+                    });
               if (models.length === 0) {
                 setCloudModelError(
-                  `${chosen} returned no chat-capable models for this key.`,
+                  `${chosen} returned no chat-capable models for this ${source.kind === "api-key" ? "key" : "sign-in"}.`,
                 );
               }
               setCloudModelOptions(models);
@@ -146,7 +160,11 @@ export function handleForemanLlmInput(
                   : err instanceof Error
                     ? err.message
                     : String(err);
-              setCloudModelError(msg);
+              setCloudModelError(
+                source.kind === "oauth"
+                  ? `Couldn't list models with your Claude sign-in (${msg}). Press [Enter] to use the default model (${BRAIN_DEFAULT_MODELS[chosen]}).`
+                  : msg,
+              );
               setCloudModelOptions([]);
             }
           })();
@@ -177,6 +195,7 @@ export function handleForemanLlmInput(
         setCloudModelProvider(null);
         setCloudModelOptions(null);
         setCloudModelError(null);
+        setCloudModelInfo(null);
         setCloudModelDraft(null);
         return true;
       }
@@ -200,6 +219,7 @@ export function handleForemanLlmInput(
           setCloudModelProvider(null);
           setCloudModelOptions(null);
           setCloudModelError(null);
+          setCloudModelInfo(null);
           setCloudModelDraft(null);
           setForemanLlmDraft(null);
           advance("foreman-llm");
@@ -239,6 +259,7 @@ export function handleForemanLlmInput(
         setCloudModelProvider(null);
         setCloudModelOptions(null);
         setCloudModelError(null);
+        setCloudModelInfo(null);
         setCloudModelDraft(null);
         setForemanLlmDraft(null);
         advance("foreman-llm");

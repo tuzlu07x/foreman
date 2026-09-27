@@ -75,6 +75,9 @@ export interface WizardState {
   cloudModelProvider: "openai" | "anthropic" | "gemini" | null;
   cloudModelOptions: DiscoveredModel[] | null;
   cloudModelError: string | null;
+  // Non-error notice for an empty model list — e.g. the provider is a
+  // subscription sign-in with nothing to list (#575 follow-up).
+  cloudModelInfo: string | null;
   cloudModelDraft: string | null;
   ollamaModelDraft: string | null;
   presetDraft: string | null;
@@ -167,6 +170,7 @@ export function createInitialWizardState(
     cloudModelProvider: null,
     cloudModelOptions: null,
     cloudModelError: null,
+    cloudModelInfo: null,
     cloudModelDraft: null,
     ollamaModelDraft: null,
     presetDraft: null,

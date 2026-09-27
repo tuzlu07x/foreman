@@ -1,5 +1,5 @@
 import React from 'react'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { render } from 'ink-testing-library'
@@ -115,6 +115,8 @@ import { RegistryService } from '../../src/core/registry.js'
 import { SecretStore } from '../../src/core/secret-store.js'
 import { createInMemoryDb } from '../../src/db/client.js'
 import type { Step } from '../../src/tui/setup-state.js'
+import { discoverModels } from '../../src/core/llm/models-discovery.js'
+import { saveOAuthTokens } from '../../src/core/llm/oauth/token-store.js'
 
 const ENTER = '\r'
 const ESC = '\u001B'
@@ -393,6 +395,47 @@ describe('install step', () => {
     await w.press(ESC, '[r] retry')
     await w.press('s', 'Setup complete')
     expect(install.resolution).toBe('skip')
+  })
+})
+
+describe('foreman-llm step with a subscription sign-in (#575 follow-up)', () => {
+  it('acts on the row it draws and explains the pending sign-in', async () => {
+    const w = await mount('providers')
+    await w.until('pick which to configure')
+    await w.press(SPACE)
+    await w.press(ENTER, 'How do you want to authenticate to')
+    await w.press('y', 'Will sign in via subscription')
+    await w.press('y', "Foreman's brain ▸ pick an LLM")
+    expect(w.frame()).toContain('❯ ✓ Anthropic')
+    await w.press(ENTER, 'Anthropic ▸ default model')
+    // Used to open the Ollama screen (the key handler ignored sign-ins) or
+    // say "No anthropic-key in the secret store".
+    expect(w.frame()).not.toContain('Ollama not detected')
+    expect(w.frame()).not.toContain('No anthropic-key')
+    expect(w.frame()).toContain('foreman llm login anthropic')
+    await w.press(ENTER, 'Agents ▸ pick which to install')
+    const llmYaml = readFileSync(w.services.llmConfigPath, 'utf-8')
+    expect(llmYaml).toContain('provider: anthropic')
+    expect(llmYaml).toMatch(/anthropic:\n\s+auth_mode: oauth/)
+  })
+
+  it('lists models with stored Claude sign-in tokens', async () => {
+    const w = await mount('foreman-llm')
+    saveOAuthTokens(w.secretStore, 'anthropic', {
+      accessToken: 'fake-oauth-access-token',
+      refreshToken: 'fake-oauth-refresh-token',
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+    })
+    // Move off and back so the picker re-renders with the new token slot.
+    await w.press(DOWN)
+    await w.press('\u001B[A')
+    await w.until('❯ ✓ Anthropic')
+    await w.press(ENTER, 'pick a Anthropic model')
+    expect(w.frame()).toContain('anthropic-fake-large')
+    expect(vi.mocked(discoverModels)).toHaveBeenLastCalledWith('anthropic', {
+      apiKey: 'fake-oauth-access-token',
+      auth: 'oauth',
+    })
   })
 })
 

@@ -9,6 +9,8 @@ import { WizardProgress } from "../components/wizard-progress.js";
 import { theme } from "../theme.js";
 import type { WizardContext } from "./context.js";
 import {
+  brainPickerChoices,
+  brainPickerCursor,
   formatOllamaRunTag,
   persistForemanLlmChoice,
   type ForemanLlmChoice,
@@ -37,6 +39,7 @@ export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
     cloudModelProvider,
     cloudModelOptions,
     cloudModelError,
+    cloudModelInfo,
     cloudModelDraft,
     ollamaModelDraft,
     presetDraft,
@@ -113,12 +116,11 @@ export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
         sub: "no LLM calls, free, slightly less smart",
       },
     ];
-    const enabledRows = allRows.filter((r) => !r.disabled);
-    const cursorFromDraft = foremanLlmDraft as ForemanLlmChoice | null;
-    const cursorRow =
-      (cursorFromDraft && allRows.find((r) => r.value === cursorFromDraft && !r.disabled)) ??
-      enabledRows[0] ?? allRows[0];
-    const currentCursor: ForemanLlmChoice = cursorRow?.value ?? "skip";
+    // Same cursor resolution as the key handler (foreman-llm-input.ts).
+    const currentCursor: ForemanLlmChoice = brainPickerCursor(
+      foremanLlmDraft,
+      brainPickerChoices(configured),
+    );
     const focusedDisabledHint = allRows.find(
       (r) => r.value === currentCursor && r.disabled,
     )?.disabledReason;
@@ -199,19 +201,29 @@ export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
       );
     }
     if (cloudModelOptions.length === 0) {
+      // No list: either an informational "nothing to list for this
+      // sign-in" (#575 follow-up) or a real failure.
       return (
         <Box flexDirection="column" gap={1} paddingY={1}>
           <WizardProgress
             current={2}
             total={5}
             label="Foreman's brain"
-            phase={`couldn't list ${providerLabel} models`}
+            phase={
+              cloudModelInfo
+                ? `${providerLabel} ▸ default model`
+                : `couldn't list ${providerLabel} models`
+            }
           />
-          <Text color={theme.accent.warning}>
-            ⚠ {cloudModelError ?? "Unknown error talking to the API."}
-          </Text>
+          {cloudModelInfo ? (
+            <Text color={theme.fg.muted}>ⓘ {cloudModelInfo}</Text>
+          ) : (
+            <Text color={theme.accent.warning}>
+              ⚠ {cloudModelError ?? "Unknown error talking to the API."}
+            </Text>
+          )}
           <Text color={theme.fg.muted}>
-            [Enter] continue with the default model · [Esc] back to providers
+            [Enter] continue with the default model · [Esc] back to the picker
           </Text>
         </Box>
       );
