@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type Database from 'better-sqlite3'
@@ -85,9 +85,13 @@ describe('MCP wiring targets', () => {
       // settings.json is not an MCP config: untouched.
       expect(readFileSync(join(home, '.claude', 'settings.json'), 'utf-8')).toBe('{"env":{}}')
 
-      // The hook's trust check reads the same entry and accepts it.
+      // The hook's trust check reads the same entry and accepts it, when
+      // `foreman` on PATH is the install the hook runs from.
       const hubConfigPath = join(home, 'mcp.yaml')
-      expect(isForemanServedTool('mcp__foreman__submit_approval', { cwd: home, hubConfigPath, home, env: {} })).toBe(true)
+      mkdirSync(join(home, 'bin'))
+      writeFileSync(join(home, 'bin', 'foreman'), '', { mode: 0o755 })
+      const self = { entries: new Set([realpathSync(join(home, 'bin', 'foreman'))]), node: null, path: join(home, 'bin') }
+      expect(isForemanServedTool('mcp__foreman__submit_approval', { cwd: home, hubConfigPath, home, env: {}, self })).toBe(true)
       // And doctor's audit looks there too.
       expect(auditAgentTokens([{ id: 'claude-code', metadata: { registryId: 'claude-code' } }], store, () => entry)).toEqual({
         missing: [],

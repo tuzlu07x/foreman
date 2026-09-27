@@ -34,6 +34,11 @@ All notable changes to Foreman are documented here. The format follows
     read. Unverified connections are audited (`agent:identity`) and raised
     in the inbox once a day; tokens never are. Tamper protection flags an
     agent reading another agent's wiring or any `/proc/*/environ`.
+  - The Claude Code hook skips `mcp__foreman__*` tools only when each
+    `foreman` server entry starts the same Foreman install the hook runs
+    from (bare `foreman` on PATH, or an absolute path with the same real
+    path) with nothing but the agent token in `env`. A look-alike with
+    another binary, `FOREMAN_HOME`, `NODE_OPTIONS` or extra keys is gated.
 - **OAuth for hosted MCP servers** (#617,
   [docs/mcp-hub.md](docs/mcp-hub.md#oauth-servers)).
   - Mark a remote server `auth: oauth` in `mcp.yaml` (or use
