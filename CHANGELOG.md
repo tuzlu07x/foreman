@@ -147,6 +147,10 @@ All notable changes to Foreman are documented here. The format follows
   Foreman now uses `rundll32 url.dll,FileProtocolHandler` with no shell.
   This covers the setup wizard, `foreman llm login` and
   `foreman mcp login`.
+- **Standalone binaries** ([docs/install.md](docs/install.md#standalone-binary-no-nodejs), [docs/releasing.md](docs/releasing.md#standalone-binaries)).
+  - The pkg build failed on all four targets, and the binary it made could not have run: the MCP SDK's subpath imports were missing, Ink's and yoga-layout's top-level `await` broke, and its small-ICU Node crashes Ink on any non-ASCII text.
+  - Each binary is now a Node.js single executable application on the official Node.js 22 build, with the whole CLI bundled in. It's about 130 MB.
+  - Every binary is smoke-tested on its own platform: `init`, `doctor`, `mcp-stdio`, the MCP hub, the TUI and `foreman demo`.
 - **Claude Code hook:** `mcp__foreman__*` tools skip the hook only when they are tools Foreman actually serves, and no project `.mcp.json` or local-scope config swaps in another `foreman` server. Anything else is gated (#619).
 - **MCP hub:** a call withheld as a possible rug pull is logged as denied (`mcp:withheld:<server>`), not as the policy's allow (#635). `foreman mcp tools <server>` shows the rug pull even without `--refresh` (#634).
 - **Webhook:**

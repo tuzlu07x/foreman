@@ -22,9 +22,9 @@ sudo apt install -y curl tmux chafa python3   # tmux + chafa = nicer demo
 
 # 2. Install Foreman
 curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash
-# The installer detects a missing Node and bootstraps Node 20 via nvm.
-# If you'd rather skip Node entirely, set FOREMAN_USE_BINARY=1 and the
-# linux-x64 standalone binary is fetched instead.
+# The installer detects a missing Node and bootstraps Node 22 via nvm.
+# If you'd rather skip Node entirely, use the standalone binary instead
+# (see "Standalone binary fallback" below).
 
 # 3. Open a new shell so PATH picks up nvm + the npm-global bin
 exec bash -l
@@ -73,14 +73,16 @@ Every item below was hit on the Windows 11 + WSL2 (Ubuntu 22.04) verification ru
 
 ## Standalone binary fallback
 
-If you'd rather not install Node at all, grab the linux-x64 binary from the release page:
+If you'd rather not install Node at all, grab the linux-x64 binary from the release page (the installer script only does the npm install):
 
 ```bash
-FOREMAN_USE_BINARY=1 \
-  curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash
+base=https://github.com/tuzlu07x/foreman/releases/latest/download
+curl -fsSLO "$base/foreman-linux-x64" && curl -fsSLO "$base/SHA256SUMS"
+grep ' foreman-linux-x64$' SHA256SUMS | sha256sum -c -
+chmod +x foreman-linux-x64 && sudo mv foreman-linux-x64 /usr/local/bin/foreman
 ```
 
-This lands `foreman` at `/usr/local/bin/foreman` (sudo if needed). Everything else in the walkthrough is identical.
+Everything else in the walkthrough is identical. Keep `FOREMAN_HOME` (and your home directory) on the Linux filesystem: the binary unpacks a few files into Foreman's cache dir and only trusts a directory that nobody else can write to. A Windows mount like `/mnt/c` (without the `metadata` mount option) shows everything as world-writable, so there it unpacks them into a temp dir on every start instead. See [install.md](install.md#standalone-binary-no-nodejs).
 
 ## Performance notes
 

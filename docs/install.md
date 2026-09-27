@@ -23,6 +23,31 @@ curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | 
 
 ---
 
+## Standalone binary (no Node.js)
+
+Every GitHub release has a single-file `foreman` for `darwin-arm64`, `darwin-x64`, `linux-x64` and `linux-arm64`, plus a `SHA256SUMS` file. Each is built and smoke-tested on a machine of its own platform and architecture.
+
+```bash
+target=linux-x64   # or linux-arm64, darwin-arm64, darwin-x64
+base=https://github.com/tuzlu07x/foreman/releases/latest/download
+curl -fsSLO "$base/foreman-$target" && curl -fsSLO "$base/SHA256SUMS"
+grep " foreman-$target\$" SHA256SUMS | shasum -a 256 -c -   # Linux without shasum: sha256sum -c -
+chmod +x "foreman-$target" && sudo mv "foreman-$target" /usr/local/bin/foreman
+foreman --version
+```
+
+How it differs from the npm package:
+
+- **It's big: about 130 MB.** It's the official Node.js 22 binary with Foreman and its dependencies built in, as a [Node.js single executable application](https://nodejs.org/api/single-executable-applications.html). Nothing else is needed on the machine.
+- **It writes a few files on first start.** The database migrations, the bundled registry, the mascot art and the SQLite native addon go to `runtime/<version>-<hash>/` in Foreman's cache dir (`~/Library/Caches/foreman/` on macOS, `~/.cache/foreman/` on Linux, `$FOREMAN_HOME/cache/` if set). That directory is owner-only, and every file is checked against its SHA-256 on each start and rewritten if it changed. Old versions' directories can be deleted.
+- **There's no `foreman-hook`.** Agent hooks call `foreman hook <agent>` instead, which does the same thing.
+- **Updates are manual.** Download the new release's binary over the old one.
+- **macOS:** a binary downloaded with a browser is quarantined by Gatekeeper; `curl` doesn't do that. If macOS refuses to open it, run `xattr -d com.apple.quarantine /usr/local/bin/foreman`. The binary is ad-hoc signed, not notarized.
+
+To uninstall, delete the binary and the `runtime/` directory in the cache dir, then remove Foreman's state as in [Uninstall](#uninstall).
+
+---
+
 ## macOS
 
 ### 1. Prereqs
