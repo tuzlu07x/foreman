@@ -54,27 +54,24 @@ export function planInjection(
     ? readFileSync(configPath, "utf-8")
     : "";
   const existing = before.length === 0 ? {} : parseDoc(before, format);
-  const existingForeman = findForemanServer(existing);
-  const canonicalForeman = findForemanServer(snippet);
-  if (existingForeman && canonicalForeman) {
-    if (deepEqual(existingForeman, canonicalForeman)) {
-      return {
-        alreadyHasForeman: true,
-        replacedStale: false,
-        before,
-        after: before,
-        format,
-      };
+  const target = FOREMAN_LOCATIONS.find((p) => getAt(snippet, p) !== undefined);
+  if (target) {
+    const canonical = getAt(snippet, target);
+    const current = getAt(existing, target);
+    // A `foreman` entry under another MCP key is one an older Foreman put
+    // where this agent doesn't read it (#591). It goes, so the file holds
+    // one wiring, and it's the live one.
+    const strays = FOREMAN_LOCATIONS.filter((p) => p !== target && getAt(existing, p) !== undefined);
+    if (current !== undefined && deepEqual(current, canonical) && strays.length === 0) {
+      return { alreadyHasForeman: true, replacedStale: false, before, after: before, format };
     }
-    // Existing entry is stale (different command/args). Replace it in place
-    // and rewrite the file so the user's MCP wiring actually works.
-    const rewritten = replaceForemanServer(existing, canonicalForeman);
-    const after = serialize(rewritten, format);
+    let next = current !== undefined ? setAt(existing, target, canonical) : mergeSnippet(existing, snippet);
+    for (const stray of strays) next = removeAt(next, stray);
     return {
       alreadyHasForeman: false,
-      replacedStale: true,
+      replacedStale: current !== undefined || strays.length > 0,
       before,
-      after,
+      after: serialize(next, format),
       format,
     };
   }
@@ -117,9 +114,13 @@ export function writeConfigAtomically(configPath: string, text: string): void {
 
 /** The agent token the file's foreman entry passes: `undefined` when the
  *  file has no foreman entry (or can't be read), `null` when the entry
- *  carries no token. Lets `doctor` spot wiring that lost its token or still
- *  carries a rotated one. */
-export function readWiredAgentToken(configPath: string): string | null | undefined {
+ *  carries no token. `snippet` (the agent's canonical wiring) says where
+ *  the entry belongs; without it, any known location counts. Lets `doctor`
+ *  spot wiring that lost its token or still carries a rotated one. */
+export function readWiredAgentToken(
+  configPath: string,
+  snippet?: Record<string, unknown>,
+): string | null | undefined {
   if (!existsSync(configPath)) return undefined;
   let doc: Record<string, unknown>;
   try {
@@ -127,11 +128,12 @@ export function readWiredAgentToken(configPath: string): string | null | undefin
   } catch {
     return undefined;
   }
-  const entry = findForemanServer(doc);
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return undefined;
-  const env = (entry as Record<string, unknown>).env;
-  if (!env || typeof env !== "object" || Array.isArray(env)) return null;
-  const token = (env as Record<string, unknown>)[AGENT_TOKEN_ENV];
+  const where = snippet ? FOREMAN_LOCATIONS.filter((p) => getAt(snippet, p) !== undefined) : FOREMAN_LOCATIONS;
+  const found = where.map((p) => getAt(doc, p)).find((e) => e !== undefined);
+  if (!isPlainObject(found)) return undefined;
+  const env = found.env;
+  if (!isPlainObject(env)) return null;
+  const token = env[AGENT_TOKEN_ENV];
   return typeof token === "string" && token.length > 0 ? token : null;
 }
 
@@ -148,79 +150,50 @@ function parseDoc(text: string, format: ConfigFormat): Record<string, unknown> {
   return raw as Record<string, unknown>;
 }
 
-// Find the `foreman` MCP-server entry in any of the three documented
-// conventions. Returns the entry value (typically { command, args }) or null
-// when no entry is present. Used both for canonical-vs-stale comparison and
-// for in-place replacement.
-function findForemanServer(doc: Record<string, unknown>): unknown | null {
-  //   mcpServers.foreman    (Claude Code / Hermes / OpenClaw style)
-  //   mcp_servers.foreman   (Codex / TOML style)
-  //   mcp.servers.foreman   (older nested pattern)
-  for (const key of ["mcpServers", "mcp_servers"]) {
-    const node = doc[key];
-    if (
-      node &&
-      typeof node === "object" &&
-      !Array.isArray(node) &&
-      "foreman" in (node as Record<string, unknown>)
-    ) {
-      return (node as Record<string, unknown>).foreman;
-    }
-  }
-  const mcp = doc.mcp;
-  if (mcp && typeof mcp === "object" && !Array.isArray(mcp)) {
-    const servers = (mcp as Record<string, unknown>).servers;
-    if (
-      servers &&
-      typeof servers === "object" &&
-      !Array.isArray(servers) &&
-      "foreman" in (servers as Record<string, unknown>)
-    ) {
-      return (servers as Record<string, unknown>).foreman;
-    }
-  }
-  return null;
+// Where agents keep a `foreman` MCP server entry:
+//   mcpServers.foreman    (Claude Code ~/.claude.json, OpenClaw flat)
+//   mcp_servers.foreman   (Codex TOML, Hermes YAML)
+//   mcp.servers.foreman   (OpenClaw nested)
+const FOREMAN_LOCATIONS: ReadonlyArray<readonly string[]> = [
+  ["mcpServers", "foreman"],
+  ["mcp_servers", "foreman"],
+  ["mcp", "servers", "foreman"],
+];
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-// Replace the existing `foreman` entry under whichever convention it lives,
-// leaving every other key untouched. Returns a shallow copy.
-function replaceForemanServer(
-  doc: Record<string, unknown>,
-  canonical: unknown,
-): Record<string, unknown> {
-  const out = { ...doc };
-  for (const key of ["mcpServers", "mcp_servers"]) {
-    const node = out[key];
-    if (
-      node &&
-      typeof node === "object" &&
-      !Array.isArray(node) &&
-      "foreman" in (node as Record<string, unknown>)
-    ) {
-      out[key] = { ...(node as Record<string, unknown>), foreman: canonical };
-      return out;
-    }
+function getAt(doc: unknown, path: readonly string[]): unknown {
+  let node: unknown = doc;
+  for (const key of path) {
+    if (!isPlainObject(node) || !Object.hasOwn(node, key)) return undefined;
+    node = node[key];
   }
-  const mcp = out.mcp;
-  if (mcp && typeof mcp === "object" && !Array.isArray(mcp)) {
-    const servers = (mcp as Record<string, unknown>).servers;
-    if (
-      servers &&
-      typeof servers === "object" &&
-      !Array.isArray(servers) &&
-      "foreman" in (servers as Record<string, unknown>)
-    ) {
-      out.mcp = {
-        ...(mcp as Record<string, unknown>),
-        servers: {
-          ...(servers as Record<string, unknown>),
-          foreman: canonical,
-        },
-      };
-      return out;
-    }
-  }
-  return out;
+  return node;
+}
+
+/** Copy of `doc` with `path` set to `value`, every other key (and its
+ *  order) kept. */
+function setAt(doc: Record<string, unknown>, path: readonly string[], value: unknown): Record<string, unknown> {
+  const [key, ...rest] = path;
+  if (key === undefined) return doc;
+  const child = doc[key];
+  return {
+    ...doc,
+    [key]: rest.length === 0 ? value : setAt(isPlainObject(child) ? child : {}, rest, value),
+  };
+}
+
+/** Copy of `doc` without `path`; maps left empty by the removal go too. */
+function removeAt(doc: Record<string, unknown>, path: readonly string[]): Record<string, unknown> {
+  const [key, ...rest] = path;
+  if (key === undefined || !Object.hasOwn(doc, key)) return doc;
+  const { [key]: child, ...others } = doc;
+  if (rest.length === 0) return others;
+  if (!isPlainObject(child)) return doc;
+  const pruned = removeAt(child, rest);
+  return Object.keys(pruned).length === 0 ? others : { ...doc, [key]: pruned };
 }
 
 function deepEqual(a: unknown, b: unknown): boolean {

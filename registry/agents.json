@@ -22,6 +22,11 @@
       },
       "config_paths": ["~/.hermes/config.yaml"],
       "config_snippet": "registry/snippets/hermes.yaml",
+      "mcp_config": {
+        "paths": ["~/.hermes/config.yaml"],
+        "layout": "map",
+        "key": "mcp_servers"
+      },
       "identity_path": "~/.hermes/SOUL.md",
       "required_secrets": ["anthropic-key"],
       "optional_secrets": ["telegram-bot-token", "discord-bot-token"],
@@ -124,15 +129,6 @@
         "command": "hermes",
         "args": ["gateway"],
         "label": "Telegram/Discord gateway"
-      },
-      "mcp_register_cli": {
-        "command_template": "hermes mcp add foreman --command {wrapper_path}",
-        "verify_template": "hermes mcp list",
-        "note": "Hermes' --args parsing strips multi-token strings, so we point it at a one-line wrapper instead. Foreman writes the wrapper for you; just run the hermes command above once.",
-        "wrapper": {
-          "path_template": "~/.foreman/wrappers/{agent_id}-mcp.sh",
-          "content_template": "#!/usr/bin/env bash\nexec foreman mcp-stdio --source {agent_id}\n"
-        }
       },
       "secret_projection": {
         "env_file": "~/.hermes/.env",

@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { parse as parseYaml } from 'yaml'
 import { pickMcpConfigPath } from '../../src/core/agent-add-flow.js'
+import { buildMcpRegisterHint } from '../../src/core/agent-mcp-register-hint.js'
 import { readWiredAgentToken } from '../../src/core/agent-config-injector.js'
 import { verifyAgentToken } from '../../src/core/agent-token.js'
 import { auditAgentTokens, rewireAgent } from '../../src/core/agent-wiring.js'
@@ -106,6 +108,56 @@ describe('MCP wiring targets', () => {
       const doc = JSON.parse(readFileSync(real, 'utf-8')) as { theme: string; mcpServers: Record<string, unknown> }
       expect(doc.theme).toBe('dark')
       expect(doc.mcpServers.foreman).toBeDefined()
+    })
+  })
+
+  describe('Hermes', () => {
+    it('declares mcp_servers in config.yaml and no `hermes mcp add` step', () => {
+      const entry = findAgent(loadBundledRegistry(), 'hermes')
+      expect(entry.mcp_config).toMatchObject({ layout: 'map', key: 'mcp_servers' })
+      expect(entry.mcp_config?.paths[0]).toBe('~/.hermes/config.yaml')
+      // One mechanism: Foreman writes the config itself, so the wizard
+      // never runs (or prompts through) `hermes mcp add`.
+      expect(buildMcpRegisterHint('hermes', entry)).toBeNull()
+    })
+
+    it('writes mcp_servers.foreman, replaces a `hermes mcp add` wrapper entry and drops the old mcpServers one', () => {
+      const entry = bundled('hermes', home)
+      const config = join(home, '.hermes', 'config.yaml')
+      mkdirSync(join(home, '.hermes'))
+      writeFileSync(
+        config,
+        [
+          'model:',
+          '  default: anthropic/claude-haiku-4-5',
+          'mcp_servers:',
+          '  github:',
+          '    command: npx',
+          '    args: [-y, gh-mcp]',
+          '  foreman:',
+          '    command: /home/me/.foreman/wrappers/hermes-mcp.sh',
+          'mcpServers:',
+          '  foreman:',
+          '    command: foreman',
+          '    args: [mcp-stdio, --source, hermes]',
+          '',
+        ].join('\n'),
+      )
+      const result = rewireAgent(store, 'hermes', entry)
+      expect(result).toMatchObject({ configPath: config, config: 'replaced', wrapperPath: null })
+      const doc = parseYaml(readFileSync(config, 'utf-8')) as {
+        model: { default: string }
+        mcp_servers: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>
+        mcpServers?: unknown
+      }
+      expect(doc.model.default).toBe('anthropic/claude-haiku-4-5')
+      expect(doc.mcp_servers.github).toEqual({ command: 'npx', args: ['-y', 'gh-mcp'] })
+      expect(doc.mcp_servers.foreman).toMatchObject({ command: 'foreman', args: ['mcp-stdio', '--source', 'hermes'] })
+      expect(verifyAgentToken(store, 'hermes', doc.mcp_servers.foreman!.env!.FOREMAN_AGENT_TOKEN!)).toBe(true)
+      expect(doc.mcpServers).toBeUndefined()
+      expect(mode(config)).toBe(0o600)
+      // Running it again changes nothing.
+      expect(rewireAgent(store, 'hermes', entry).config).toBe('current')
     })
   })
 })

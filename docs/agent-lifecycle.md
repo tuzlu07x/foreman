@@ -108,10 +108,11 @@ policy rules and org role.
   | --- | --- | --- |
   | Claude Code | `~/.claude.json` | top-level `mcpServers.foreman` (user scope; `settings.json` is not an MCP config) |
   | Codex | `~/.codex/config.toml` | `[mcp_servers.foreman]` and `[mcp_servers.foreman.env]` |
+  | Hermes | `~/.hermes/config.yaml` | top-level `mcp_servers.foreman` (Foreman writes it; no `hermes mcp add` step) |
 
-  Hermes also gets it in its MCP wrapper script
-  (`~/.foreman/wrappers/hermes-mcp.sh`, mode 0700). Config files that carry a
-  token are made owner-only (0600) and replaced in one step (temp file and
+  A `foreman` entry an older Foreman left under a key the agent doesn't
+  read (e.g. `mcpServers` in Hermes' config) is removed. Config files that
+  carry a token are made owner-only (0600) and replaced in one step (temp file and
   rename; a symlinked dotfile is written through), keeping every other key.
 - `foreman mcp-stdio` reads the variable, removes it from its own environment
   (so nothing it starts inherits it), and compares it in constant time with

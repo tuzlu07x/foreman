@@ -47,7 +47,7 @@ mcp_servers:
       FOREMAN_AGENT_TOKEN: "<contents of ~/.hermes-foreman.token>"
 ```
 
-Hermes' real config keys evolve faster than this doc — pull the current skeleton from upstream (`hermes setup` regenerates it) and just merge in the `foreman:` server entry. `hermes mcp list` should then show `foreman`. API keys belong in `~/.hermes/.env`, not in `config.yaml`. Easier still: `foreman agent rewire hermes` writes the entry with the token for you. See [agent identity tokens](../../docs/agent-lifecycle.md#agent-identity-tokens).
+Hermes' real config keys evolve faster than this doc — pull the current skeleton from upstream (`hermes setup` regenerates it) and just merge in the `foreman:` server entry under `mcp_servers:` (not `mcp:` or `mcpServers:`), then run `/reload-mcp` in Hermes. `hermes mcp list` should then show `foreman`. API keys belong in `~/.hermes/.env`, not in `config.yaml`. Easier still: `foreman agent rewire hermes` writes the entry with the token for you, with no `hermes mcp add` step. See [agent identity tokens](../../docs/agent-lifecycle.md#agent-identity-tokens).
 
 ## 3. Apply the phishing-safe policy
 

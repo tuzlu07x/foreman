@@ -176,6 +176,11 @@ All notable changes to Foreman are documented here. The format follows
     projection and the PreToolUse hook. Config writes keep every other key,
     are owner-only and replace the file in one step. Run
     `foreman agent rewire claude-code` to move an existing install.
+  - **Hermes:** the entry goes into the top-level `mcp_servers:` map of
+    `~/.hermes/config.yaml`, which is what Hermes reads. Foreman writes it
+    directly (command, args and the token env), so the wizard no longer
+    runs `hermes mcp add` with a wrapper script, and a stale
+    `mcpServers.foreman` from older Foreman versions is removed.
 - **Opening a browser on Windows** no longer goes through `cmd /c start`.
   A URL with `&` or `|` in it could be cut short there or run a command.
   Foreman now uses `rundll32 url.dll,FileProtocolHandler` with no shell.
