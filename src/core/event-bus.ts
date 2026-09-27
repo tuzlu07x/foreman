@@ -377,6 +377,8 @@ export interface ForemanEventMap {
   "inbox:added": { item: InboxItem };
   /** #613 — items were marked read (`ids` empty = several / all). */
   "inbox:read": { ids: string[] };
+  /** A message posted to a department channel (#630). */
+  "org:message": { message: import("../db/schema.js").OrgMessage };
 }
 
 export type ForemanEvent = keyof ForemanEventMap;
