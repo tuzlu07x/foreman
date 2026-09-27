@@ -67,6 +67,7 @@ describe('RiskScorer', () => {
       'first_agent_to_agent',
       'previously_denied_pattern',
       'responsibility_violation',
+      'foreman_self_protection',
     ])
   })
 
