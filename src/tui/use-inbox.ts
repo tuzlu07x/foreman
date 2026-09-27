@@ -27,7 +27,10 @@ export function useInbox(
 
   const refresh = useCallback((): void => {
     if (!inbox) return;
-    setItems(inbox.list({ limit: LIST_LIMIT }));
+    const next = inbox.list({ limit: LIST_LIMIT });
+    // Keep the same array when nothing changed, so the 3 s refresh doesn't
+    // re-render the whole screen.
+    setItems((prev) => (sameItems(prev, next) ? prev : next));
     setUnread(inbox.unreadCount());
   }, [inbox]);
 
@@ -38,11 +41,16 @@ export function useInbox(
       if (e.item.level !== "info" && e.item.readAt === null) setToast(e.item);
     });
     const offRead = bus.on("inbox:read", refresh);
+    // An answered approval's "Approval needed" toast has nothing left to say.
+    const offResolved = bus.on("approval:resolved", (e) => {
+      setToast((t) => (t?.dedupeKey === `approval:${e.requestId}:requested` ? null : t));
+    });
     // Another process (`foreman inbox read`) can change read state too.
     const timer = setInterval(refresh, REFRESH_MS);
     return () => {
       offAdded();
       offRead();
+      offResolved();
       clearInterval(timer);
     };
   }, [inbox, bus, refresh]);
@@ -69,4 +77,14 @@ export function useInbox(
   const dismissToast = useCallback(() => setToast(null), []);
 
   return { items, unread, toast, markRead, markAllRead, dismissToast };
+}
+
+function sameItems(a: InboxItem[], b: InboxItem[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (x.id !== y.id || x.readAt !== y.readAt || x.title !== y.title || x.level !== y.level) return false;
+  }
+  return true;
 }

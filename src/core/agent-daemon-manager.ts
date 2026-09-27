@@ -154,6 +154,11 @@ export class AgentDaemonManager {
     // A missing binary (`hermes` registered but not installed) surfaces as
     // an async 'error' event. Unhandled, it took down `foreman start`.
     child.on("error", (err: NodeJS.ErrnoException) => {
+      // Only a failed start is a crash. Other child errors (a failed
+      // kill() while stopping, say) leave a running process that the
+      // 'exit' handler still reports.
+      const spawnFailed = child.pid === undefined || err.syscall?.startsWith("spawn") === true;
+      if (!spawnFailed) return;
       const notFound = err.code === "ENOENT";
       const stderr = notFound
         ? `${command}: command not found. Install it, or run \`foreman agent disable ${agentId}\`.`

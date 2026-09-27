@@ -37,9 +37,12 @@ type Op =
 
 export interface ProvidersPageProps {
   onLeave: () => void;
+  /** Told when the page starts or stops taking typed text, so global keys
+   *  (Tab, `:`) stay out of a value being entered. */
+  onEditingChange?: (editing: boolean) => void;
 }
 
-export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
+export function ProvidersPage({ onLeave, onEditingChange }: ProvidersPageProps): JSX.Element {
   const { registry, secretStore, bus, runInteractiveLogin } =
     useDashboardServices();
   const catalog = useMemo(() => loadActiveProviders().doc.providers, []);
@@ -49,6 +52,10 @@ export function ProvidersPage({ onLeave }: ProvidersPageProps): JSX.Element {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [op, setOp] = useState<Op>({ kind: "list" });
+  const editing = op.kind !== "list";
+  useEffect(() => {
+    onEditingChange?.(editing);
+  }, [editing, onEditingChange]);
   // Whether the selected row is expanded to show extra detail. Matches the
   // pattern used by every other list page (#280) so Enter is consistent.
   const [expanded, setExpanded] = useState(false);

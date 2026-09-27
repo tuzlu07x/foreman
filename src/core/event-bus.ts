@@ -230,7 +230,7 @@ export interface ForemanEventMap {
     remember?: "allow" | "deny";
     /** Who resolved — `agent` added in #406 for MCP-routed approvals so
      *  the audit log distinguishes them from direct TUI / timeout paths. */
-    resolvedBy: "user" | "timeout" | "agent";
+    resolvedBy: "user" | "timeout" | "agent" | "cancelled";
     /** Channel surface that resolved this approval (#302 / #406). "tui"
      *  for the Ink modal, "telegram"/... for direct OOB callbacks (legacy
      *  before #406), "agent_mcp" for the post-#406 path where an agent

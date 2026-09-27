@@ -113,6 +113,22 @@ describe("AgentDaemonManager", () => {
       expect(existsSync(resolve(stateDir, "daemons", "hermes.pid"))).toBe(false);
     });
 
+    it("does not call a running daemon crashed when a later child error fires", () => {
+      const child = makeFakeChild(99002);
+      const spawnImpl = vi.fn(() => child) as never;
+      const mgr = new AgentDaemonManager({
+        paths,
+        registry,
+        onLifecycle: (e) => events.push(e),
+        spawnImpl,
+      });
+      mgr.startOne("hermes", fakeEntry());
+      // e.g. a kill() that failed while stopping: the process still runs.
+      child.emit("error", Object.assign(new Error("kill EPERM"), { code: "EPERM", syscall: "kill" }));
+      expect(events.some((e) => e.kind === "crashed")).toBe(false);
+      expect(existsSync(resolve(stateDir, "daemons", "hermes.pid"))).toBe(true);
+    });
+
     it("spawns the daemon command, writes a pidfile, and emits started", () => {
       const child = makeFakeChild(99001);
       const spawnImpl = vi.fn(() => child) as never;

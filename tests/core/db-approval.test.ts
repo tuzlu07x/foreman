@@ -223,6 +223,59 @@ describe("ApprovalBridge", () => {
     ]);
   });
 
+  it("announces the real outcome when a local decision lost the race", async () => {
+    db.insert(pendingApprovals)
+      .values({
+        requestId: "bridge-race",
+        sourceAgent: "codex",
+        targetTool: "shell_exec",
+        args: "{}",
+        riskScore: 70,
+        riskReasons: "[]",
+        status: "pending",
+        requestedAt: Date.now(),
+      })
+      .run();
+    const resolved: ForemanEventMap["approval:resolved"][] = [];
+    bus.on("approval:resolved", (e) => resolved.push(e));
+    const bridge = new ApprovalBridge(db, { bus, pollIntervalMs: 25 });
+    bridge.start();
+    await new Promise((r) => setTimeout(r, 40));
+    // The requester timed out a moment before the user's key reached us.
+    db.update(pendingApprovals)
+      .set({ status: "resolved", decision: "denied", resolvedBy: "timeout", resolvedAt: Date.now() })
+      .run();
+    bus.emit("approval:resolved", { requestId: "bridge-race", decision: "allowed", resolvedBy: "user", via: "tui" });
+    await new Promise((r) => setTimeout(r, 80));
+    bridge.stop();
+    const row = db.select().from(pendingApprovals).where(eq(pendingApprovals.requestId, "bridge-race")).get();
+    expect(row?.decision).toBe("denied");
+    expect(resolved.map((e) => [e.decision, e.resolvedBy])).toEqual([
+      ["allowed", "user"],
+      ["denied", "timeout"],
+    ]);
+  });
+
+  it("hands approvals announced before a listener attached to that listener", async () => {
+    db.insert(pendingApprovals)
+      .values({
+        requestId: "bridge-early",
+        sourceAgent: "codex",
+        args: "{}",
+        riskScore: 50,
+        riskReasons: "[]",
+        status: "pending",
+        requestedAt: Date.now(),
+      })
+      .run();
+    const bridge = new ApprovalBridge(db, { bus, pollIntervalMs: 25 });
+    bridge.start();
+    expect(bridge.pending().map((e) => e.requestId)).toEqual(["bridge-early"]);
+    bus.emit("approval:resolved", { requestId: "bridge-early", decision: "denied", resolvedBy: "user", via: "tui" });
+    expect(bridge.pending()).toEqual([]);
+    bridge.stop();
+  });
+
   it("does not re-emit the same pending row twice", async () => {
     db.insert(pendingApprovals)
       .values({

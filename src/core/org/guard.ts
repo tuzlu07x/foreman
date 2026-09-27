@@ -14,6 +14,12 @@ import { checkDelegation, loadOrg, type DelegationVerdict } from "./org.js";
 /** Source ids that mean "the human asked". */
 const HUMAN_SOURCES = new Set(["cli", "user", "human", "tui"]);
 
+/** The person at the keyboard (CLI or TUI), not an agent: nobody to nudge,
+ *  and no agent chain to watch for runaway loops. */
+export function isHumanSource(sourceAgent: string | null | undefined): boolean {
+  return sourceAgent !== null && sourceAgent !== undefined && HUMAN_SOURCES.has(sourceAgent.toLowerCase());
+}
+
 export function orgDelegationVerdict(
   orgConfigPath: string,
   fromAgent: string | undefined,

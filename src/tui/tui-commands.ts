@@ -38,6 +38,8 @@ export interface CommandEnv {
   approvals: {
     /** requestId currently on screen, if any. */
     current(): string | null;
+    /** "shell_exec for codex", for replies. */
+    describe(requestId: string): string | null;
     count(): number;
     resolve(requestId: string, decision: { decision: "allowed" | "denied"; remember?: "allow" | "deny" }): void;
   };
@@ -55,12 +57,18 @@ export interface CommandOutput {
   clear?: boolean;
 }
 
+/** What the screen looked like when the user started typing the line. */
+export interface LineContext {
+  /** The approval on screen when the first character was typed. */
+  approvalAtStart?: string | null;
+}
+
 interface LocalCommand {
   name: string;
   aliases?: string[];
   usage: string;
   description: string;
-  run(args: string[], env: CommandEnv): CommandOutput | Promise<CommandOutput>;
+  run(args: string[], env: CommandEnv, line: LineContext): CommandOutput | Promise<CommandOutput>;
 }
 
 export const PAGE_ALIASES: Record<string, TuiPage> = {
@@ -87,10 +95,24 @@ function decide(
   env: CommandEnv,
   decision: "allowed" | "denied",
   args: string[],
+  line: LineContext,
 ): CommandOutput {
   const id = env.approvals.current();
   if (!id) return { ok: false, lines: ["Nothing is waiting for approval."] };
+  // The queue can change while a command is being typed (a timeout, a
+  // Telegram tap). A decision only ever applies to the approval that was
+  // on screen when the user started typing it.
+  if (line.approvalAtStart !== undefined && line.approvalAtStart !== id) {
+    return {
+      ok: false,
+      lines: [
+        `The approval on screen changed while you were typing. It is now ${env.approvals.describe(id) ?? id}.`,
+        "Check it, then run the command again.",
+      ],
+    };
+  }
   const always = args[0] === "always" || args[0] === "--always";
+  const what = env.approvals.describe(id) ?? id;
   env.approvals.resolve(id, {
     decision,
     ...(always ? { remember: decision === "allowed" ? "allow" : "deny" } : {}),
@@ -99,7 +121,7 @@ function decide(
   const left = env.approvals.count() - 1;
   return {
     ok: true,
-    lines: [`${verb}${always ? " (always)" : ""}.${left > 0 ? ` ${left} more waiting.` : ""}`],
+    lines: [`${verb} ${what}${always ? " (always)" : ""}.${left > 0 ? ` ${left} more waiting.` : ""}`],
   };
 }
 
@@ -143,13 +165,13 @@ const LOCAL_COMMANDS: LocalCommand[] = [
     aliases: ["allow"],
     usage: "approve [always]",
     description: "Allow the approval on screen",
-    run: (args, env) => decide(env, "allowed", args),
+    run: (args, env, line) => decide(env, "allowed", args, line),
   },
   {
     name: "deny",
     usage: "deny [always]",
     description: "Deny the approval on screen",
-    run: (args, env) => decide(env, "denied", args),
+    run: (args, env, line) => decide(env, "denied", args, line),
   },
   {
     name: "clear",
@@ -179,11 +201,15 @@ export function tokenize(line: string): string[] {
   return line.trim().replace(/^[:/]/, "").trim().split(/\s+/).filter((t) => t.length > 0);
 }
 
-export async function executeCommand(line: string, env: CommandEnv): Promise<CommandOutput> {
+export async function executeCommand(
+  line: string,
+  env: CommandEnv,
+  context: LineContext = {},
+): Promise<CommandOutput> {
   const [head, ...args] = tokenize(line);
   if (!head) return { ok: true, lines: [] };
   const local = LOCAL_BY_NAME.get(head.toLowerCase());
-  if (local) return await local.run(args, env);
+  if (local) return await local.run(args, env, context);
   try {
     const result = await env.dispatch(head, args);
     return { ok: result.ok, lines: stripMarkdown(result.text).split("\n") };

@@ -25,11 +25,20 @@ export interface ApprovalQueueHandle {
   move: (delta: number) => void;
 }
 
-export function useApprovalQueue(bus: EventBus<ForemanEventMap>): ApprovalQueueHandle {
+export function useApprovalQueue(
+  bus: EventBus<ForemanEventMap>,
+  /** Approvals announced before this hook subscribed (the bridge's first
+   *  poll runs before the TUI mounts). */
+  alreadyPending?: () => Array<ForemanEventMap["approval:requested"]>,
+): ApprovalQueueHandle {
   const [state, setState] = useState<ApprovalQueueState>(EMPTY_QUEUE);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
+    const backlog = alreadyPending?.() ?? [];
+    if (backlog.length > 0) {
+      setState((s) => backlog.reduce((acc, req) => enqueueApproval(acc, req, Date.now()), s));
+    }
     const offRequested = bus.on("approval:requested", (req) => {
       setState((s) => enqueueApproval(s, req, Date.now()));
     });
@@ -42,6 +51,7 @@ export function useApprovalQueue(bus: EventBus<ForemanEventMap>): ApprovalQueueH
       offRequested();
       offResolved();
     };
+    // `alreadyPending` is read once, at mount.
   }, [bus]);
 
   const hasItems = state.items.length > 0;

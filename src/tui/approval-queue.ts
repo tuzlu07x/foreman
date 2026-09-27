@@ -26,6 +26,10 @@ export interface QueuedApproval {
   request: ApprovalRequest;
   /** Absolute ms. */
   deadline: number;
+  /** False when the request carried no deadline and `deadline` is only a
+   *  display fallback. Such items wait for the outcome to be announced
+   *  (the bridge's stale sweep covers requesters that died). */
+  hasDeadline: boolean;
   receivedAt: number;
 }
 
@@ -46,6 +50,7 @@ export function enqueueApproval(
   const item: QueuedApproval = {
     request,
     deadline: request.deadlineMs ?? now + FALLBACK_DEADLINE_MS,
+    hasDeadline: request.deadlineMs !== undefined,
     receivedAt: now,
   };
   const items = [...state.items, item].sort(
@@ -69,7 +74,9 @@ export function removeApproval(state: ApprovalQueueState, requestId: string): Ap
 export function expireApprovals(state: ApprovalQueueState, now: number): ApprovalQueueState {
   let next = state;
   for (const item of state.items) {
-    if (now > item.deadline + EXPIRY_GRACE_MS) next = removeApproval(next, item.request.requestId);
+    if (item.hasDeadline && now > item.deadline + EXPIRY_GRACE_MS) {
+      next = removeApproval(next, item.request.requestId);
+    }
   }
   return next;
 }

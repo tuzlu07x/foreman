@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { Command } from "commander";
-import { InboxService } from "../core/inbox.js";
+import { InboxService, stripControl } from "../core/inbox.js";
 import { closeDb, getDb } from "../db/client.js";
 import { relativeTime } from "../tui/format.js";
 import { getForemanPaths } from "../utils/config.js";
@@ -41,8 +41,9 @@ inboxCommand
         const glyph =
           item.level === "critical" ? red("✗") : item.level === "warning" ? orange("⚠") : dim("▸");
         const dot = item.readAt === null ? orange("●") : " ";
-        console.log(`${dot} ${glyph} ${item.title}  ${dim(relativeTime(item.createdAt, now))}`);
-        if (item.body) console.log(dim(`      ${item.body}`));
+        // Items can quote agent output; never pass escape sequences through.
+        console.log(`${dot} ${glyph} ${stripControl(item.title)}  ${dim(relativeTime(item.createdAt, now))}`);
+        if (item.body) console.log(dim(`      ${stripControl(item.body)}`));
       }
     });
   });

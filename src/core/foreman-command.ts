@@ -912,7 +912,8 @@ function writeHandler(
   // commands by hand is fine — they see each result) and for
   // initiators that don't have a sourceAgent (rare path, but it
   // means there's no chain context to evaluate).
-  if (ctx.sourceAgent && ctx.sourceAgent.toLowerCase() !== "cli") {
+  // The TUI owner surface counts as the terminal user too.
+  if (ctx.sourceAgent && ctx.sourceAgent.toLowerCase() !== "cli" && !ctx.trustedOwner) {
     try {
       const tracker = new DelegationTracker({ db: ctx.db });
       const check = tracker.checkRunawayLoop(ctx.sourceAgent, targetAgent);
