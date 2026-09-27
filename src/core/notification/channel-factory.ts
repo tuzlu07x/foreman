@@ -30,6 +30,9 @@ export interface ChannelFactoryDeps {
   /** Approval-token signer for Telegram buttons (see approval-token.ts). */
   signApproval?: (approvalId: string, actionId: string) => string;
   fetchImpl?: HttpFetch;
+  /** Channels that keep a connection open (the Telegram approval bot)
+   *  report trouble here: a conflicting poller, a revoked token. */
+  onChannelWarning?: (message: string) => void;
 }
 
 export type ChannelBuild = { channel: NotificationChannel } | { problem: string };
@@ -73,6 +76,10 @@ export function buildChannel(id: ChannelId, toggle: ChannelToggle, deps: Channel
             botToken: secret(toggle.bot_token_ref),
             chatId: toggle.chat_id,
             ...(deps.signApproval ? { signApproval: deps.signApproval } : {}),
+            ...(toggle.approval_bot_token_ref
+              ? { approvalBotToken: secret(toggle.approval_bot_token_ref) }
+              : {}),
+            ...(deps.onChannelWarning ? { onWarning: deps.onChannelWarning } : {}),
           }),
         };
       }

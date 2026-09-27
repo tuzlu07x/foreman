@@ -125,6 +125,33 @@ foreman notify test telegram
 # → check your Telegram chat — you should see a "Foreman test ✓" message
 ```
 
+### Approval bot (recommended)
+
+If an agent (Hermes, OpenClaw, …) also uses your Telegram bot, it reads every
+update that bot receives, including your taps on approval buttons. Give
+approvals a **second bot that only Foreman holds**:
+
+1. Create another bot with [@BotFather](https://t.me/BotFather) (for example
+   `acme_foreman_approvals_bot`).
+2. Store its token and switch approvals over:
+   ```bash
+   foreman secrets add telegram-approval-bot-token
+   foreman notify approval-bot          # checks the token with Telegram
+   ```
+3. Open a chat with the new bot and press **Start** (Telegram requires it
+   once), then restart `foreman start`.
+
+From then on, approval prompts arrive from the approval bot. `foreman start`
+polls it itself, and a tap resolves the approval directly, audited as
+`user:telegram`. Foreman accepts taps only from your chat, and only when
+they carry the HMAC tag it put on that button. The buttons are removed
+after the first tap. Alerts, digests and your agent's own questions stay on
+the chat bot.
+
+Never give the approval bot's token to an agent. If another process starts
+polling it, the TUI inbox shows a warning. `foreman notify approval-bot --off`
+goes back to relaying approvals through the chat bot.
+
 ---
 
 ## 3b. Webhook + System channels (C11b-1)
@@ -275,6 +302,7 @@ foreman notify timeout critical --seconds=120
 | **Channel hijack** — anyone with the bot token can send / receive | Token stays in Foreman's encrypted secret store. The configured `chat_id` constraint means even if the bot lands in a group, only YOUR taps are honored. |
 | **Replay attack** — replays of an old "approved" callback | Every callback's `notificationId` is checked against the outstanding-message map. Once resolved, the id is dropped — replays are silently rejected. |
 | **Compromised bot token** — attacker has the token, sends fake approvals | Every callback verifies (a) it's from the configured chat_id, (b) it targets a real outstanding notification id. A spoofed callback for a non-existent notification is dropped. |
+| **Relaying chat agent** — an agent that shares the bot reads the approval buttons after any tap | Use the approval bot (`foreman notify approval-bot`): approvals go through a bot only Foreman holds and polls, so no agent sees them. Without it, relayed allows still need the button's HMAC tag, but the relay agent itself can read the keyboard (see SECURITY.md). |
 | **Network unavailable** — Telegram is down | `NotificationService` records the failed delivery in the `notifications` table with `status='failed'` + the error message. `foreman doctor` surfaces channel health. |
 
 ---

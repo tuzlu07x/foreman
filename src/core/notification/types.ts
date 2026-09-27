@@ -132,6 +132,12 @@ export interface UserDecision {
   /** Identifier of who tapped (channel-specific — e.g. Telegram user id). */
   decidedBy: string;
   decidedAt: number;
+  /** The approval itself, when the channel knows it directly (the
+   *  Telegram approval bot's buttons carry it). Preferred over looking the
+   *  request up through `notificationId`. */
+  requestId?: string;
+  /** Channel that received the decision, for the audit trail. */
+  channel?: ChannelId;
 }
 
 export interface NotificationChannel {

@@ -522,6 +522,70 @@ notifyCommand
 
 const NTFY_TOPIC_SECRET = 'ntfy-topic'
 
+// #610 — A second Telegram bot that only Foreman holds and polls. Approval
+// prompts go through it, so the chat agent sharing the main bot never sees
+// an approval button.
+notifyCommand
+  .command('approval-bot')
+  .description('Route Telegram approvals through a bot only Foreman uses (recommended)')
+  .option('--token-ref <name>', 'secret holding the approval bot token', 'telegram-approval-bot-token')
+  .option('--no-verify', 'skip checking the token with Telegram')
+  .option('--off', 'go back to relaying approvals through the chat bot')
+  .action(async (opts: { tokenRef: string; verify: boolean; off?: boolean }) => {
+    requireInitialised()
+    const paths = getForemanPaths()
+    const config = existsSync(paths.notifyConfigPath)
+      ? safeLoadConfig(paths.notifyConfigPath, loadNotifyConfig, { label: 'notify.yaml' })
+      : defaultNotifyConfig()
+    const telegram = channelConfig(config, 'telegram')
+    if (opts.off) {
+      if (telegram) {
+        const { approval_bot_token_ref: _dropped, ...rest } = telegram
+        setChannel(config, 'telegram', rest)
+        saveNotifyConfig(paths.notifyConfigPath, config)
+      }
+      console.log(`${green('✓')} approvals are relayed through the chat bot again`)
+      return
+    }
+    if (!telegram?.bot_token_ref || !telegram.chat_id) {
+      fail('set up Telegram first: foreman notify enable telegram (bot token + chat id)')
+    }
+    const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
+    let username: string | null = null
+    try {
+      if (!store.exists(opts.tokenRef)) {
+        fail(
+          `no secret '${opts.tokenRef}'. Create a second bot with @BotFather, then: foreman secrets add ${opts.tokenRef}`,
+        )
+      }
+      const token = store.get(opts.tokenRef)
+      if (store.exists(telegram.bot_token_ref) && store.get(telegram.bot_token_ref) === token) {
+        fail('the approval bot must be a different bot from the chat bot (its token is shared with your agent)')
+      }
+      if (opts.verify) {
+        const res = await fetch(`https://api.telegram.org/bot${token}/getMe`).catch(() => null)
+        const body = (await res?.json().catch(() => null)) as { ok?: boolean; result?: { username?: string } } | null
+        if (!body?.ok) fail('Telegram rejected that token (re-run with --no-verify to skip this check)')
+        username = body.result?.username ?? null
+      }
+      setChannel(config, 'telegram', { ...telegram, approval_bot_token_ref: opts.tokenRef })
+      saveNotifyConfig(paths.notifyConfigPath, config)
+    } finally {
+      closeDb()
+    }
+    console.log(`${green('✓')} Telegram approvals now go through ${username ? orange(`@${username}`) : 'the approval bot'}`)
+    console.log('')
+    console.log(`  1. Open a chat with ${username ? `@${username}` : 'the bot'} and press Start (Telegram requires it once).`)
+    console.log('  2. Restart foreman start. It polls the approval bot itself.')
+    console.log(dim('  Never give this token to an agent. Undo: foreman notify approval-bot --off'))
+  })
+
+function fail(message: string): never {
+  console.error(`${red('error:')} ${message}`)
+  closeDb()
+  process.exit(1)
+}
+
 const ROUTE_LEVELS = [
   'critical',
   'warning',
