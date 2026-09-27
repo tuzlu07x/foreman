@@ -1,0 +1,78 @@
+name: qa
+
+# End-to-end QA journeys (#624, docs/qa.md): real `foreman` processes in
+# isolated homes, with the Markdown report uploaded as an artifact and shown
+# in the job summary.
+#
+# Security: runs on `pull_request` (never `pull_request_target`), with a
+# read-only token and no persisted credentials, so fork PRs get no secrets.
+# The suite needs none: agent CLIs are stubs, npm / npx / uvx refuse to run,
+# and every Node process refuses connections to anything but loopback
+# (qa/support/no-network.cjs). Only the actions the other workflows already
+# use (checkout, setup-node, upload-artifact).
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "qa/**"
+      - "registry/**"
+      - "tests/core/mcp-hub/fixtures/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsup.config.ts"
+      - ".github/workflows/qa.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qa:
+    name: qa (end-to-end)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Typecheck the suite
+        run: npx tsc -p qa/tsconfig.json
+
+      # Builds dist/ first; the pty journeys use util-linux `script`, which
+      # the runner image ships.
+      - name: QA journeys
+        run: npm run qa
+
+      - name: Report to the job summary
+        if: always()
+        run: |
+          if [ -f qa/out/qa-report.md ]; then
+            cat qa/out/qa-report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No QA report was written." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the QA report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qa-report
+          path: qa/out/qa-report.md
+          if-no-files-found: warn
+          retention-days: 30
