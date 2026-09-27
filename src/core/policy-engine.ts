@@ -1,9 +1,9 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { and, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, like, sql } from "drizzle-orm";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { ForemanDb } from "../db/client.js";
-import { policies, requests } from "../db/schema.js";
+import { pendingApprovals, policies, requests } from "../db/schema.js";
 import { claimedAgentOf, isUntrustedSource } from "./agent-identity.js";
 import {
   bus as defaultBus,
@@ -23,7 +23,15 @@ export interface EvaluateRequest {
 export interface Evaluation {
   decision: Effect;
   matchedRuleId?: number;
+  /** Why, when no policy row decided (e.g. `identity:untrusted-rate-limit`). */
+  label?: string;
 }
+
+/** #618 — every unverified (`untrusted:*`) connection together, so cycling
+ *  claimed ids can't multiply the budget: calls per minute, and approval
+ *  prompts waiting on you at once. */
+export const UNTRUSTED_CALLS_PER_MINUTE = 30;
+export const UNTRUSTED_OPEN_APPROVALS = 3;
 
 export interface RuleConditions {
   /** Rule applies only when `args.path` matches one of these regex patterns. */
@@ -680,30 +688,34 @@ export class PolicyEngine {
   }
 
   private checkRateLimits(req: EvaluateRequest): Evaluation | null {
+    // An unverified connection is held to the claimed agent's limits too,
+    // counting both ids: dropping the token must not reset the budget.
+    const untrusted = isUntrustedSource(req.sourceAgent);
+    const counted = untrusted ? [req.sourceAgent, claimedAgentOf(req.sourceAgent)] : [req.sourceAgent];
     const rules = this.db
       .select()
       .from(policies)
       .where(
         and(
-          inArray(policies.sourceAgent, [req.sourceAgent, "*"]),
+          inArray(policies.sourceAgent, [...counted, "*"]),
           eq(policies.enabled, 1),
         ),
       )
       .all();
 
+    const since = Date.now() - 60_000;
     for (const rule of rules) {
       if (!rule.conditions) continue;
       const cond = this.parseConditions(rule.conditions);
       const limit = cond?.rateLimits?.messagesPerMinute;
       if (!limit) continue;
 
-      const since = Date.now() - 60_000;
       const row = this.db
         .select({ count: sql<number>`count(*)` })
         .from(requests)
         .where(
           and(
-            eq(requests.sourceAgent, req.sourceAgent),
+            inArray(requests.sourceAgent, counted),
             gte(requests.createdAt, since),
           ),
         )
@@ -711,6 +723,23 @@ export class PolicyEngine {
       if ((row?.count ?? 0) >= limit) {
         return { decision: "deny", matchedRuleId: rule.id };
       }
+    }
+    return untrusted ? this.checkUntrustedFlood(since) : null;
+  }
+
+  private checkUntrustedFlood(since: number): Evaluation | null {
+    const recent = this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(requests)
+      .where(and(like(requests.sourceAgent, "untrusted:%"), gte(requests.createdAt, since)))
+      .get();
+    const waiting = this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(pendingApprovals)
+      .where(and(like(pendingApprovals.sourceAgent, "untrusted:%"), eq(pendingApprovals.status, "pending")))
+      .get();
+    if ((recent?.count ?? 0) >= UNTRUSTED_CALLS_PER_MINUTE || (waiting?.count ?? 0) >= UNTRUSTED_OPEN_APPROVALS) {
+      return { decision: "deny", label: "identity:untrusted-rate-limit" };
     }
     return null;
   }

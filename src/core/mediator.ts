@@ -181,6 +181,7 @@ export class MediatorService {
     const usesFallback =
       input.policyFallback !== undefined &&
       evaluated.matchedRuleId === undefined &&
+      evaluated.label === undefined &&
       evaluated.decision === "ask";
     const policyResult = usesFallback
       ? { decision: input.policyFallback!.effect }
@@ -189,7 +190,7 @@ export class MediatorService {
       ? input.policyFallback!.source
       : evaluated.matchedRuleId !== undefined
         ? String(evaluated.matchedRuleId)
-        : null;
+        : (evaluated.label ?? null);
 
     if (policyResult.decision === "deny") {
       return this.finalize({

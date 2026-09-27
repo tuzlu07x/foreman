@@ -125,8 +125,11 @@ policy rules and org role.
   claimed agent's allow rules (wildcard `*` rules apply, as to any unknown
   agent), no org role, no delegation, no MCP hub servers, and no "always
   allow" remembered for it. The claimed agent's deny and ask rules and its
-  `block` / `disable` still apply, so dropping the token never loosens
-  anything. Human ids (`cli`, `tui`, `telegram`, …) stay refused outright.
+  `block` / `disable` and its rate limits (counting calls under both ids)
+  still apply, so dropping the token never loosens anything. All untrusted
+  connections together get at most 30 calls a minute and 3 approval
+  prompts waiting at once, so cycling claimed ids can't flood you with
+  prompts. Human ids (`cli`, `tui`, `telegram`, …) stay refused outright.
   Foreman warns on stderr, in the inbox and in the audit log
   (`agent:identity` events); the token itself is never printed or logged.
 - `foreman agent show` says whether the agent has a token (and when it was

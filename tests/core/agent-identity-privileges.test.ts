@@ -12,11 +12,12 @@ import { OrgComms } from '../../src/core/org/comms.js'
 import { orgDelegationVerdict } from '../../src/core/org/guard.js'
 import { allowedMcpServers, checkDelegation, parseOrgText, rolesForAgent } from '../../src/core/org/org.js'
 import { findOrgTemplate } from '../../src/core/org/templates.js'
-import { PolicyEngine } from '../../src/core/policy-engine.js'
+import { PolicyEngine, UNTRUSTED_CALLS_PER_MINUTE, UNTRUSTED_OPEN_APPROVALS } from '../../src/core/policy-engine.js'
 import { RegistryService } from '../../src/core/registry.js'
 import { RiskScorer } from '../../src/core/risk-scorer.js'
 import { SecretStore } from '../../src/core/secret-store.js'
 import { createInMemoryDb, type ForemanDb } from '../../src/db/client.js'
+import { pendingApprovals, requests } from '../../src/db/schema.js'
 import { generateMasterKey } from '../../src/identity/encryption.js'
 import type { JSONRPCMessage } from '../../src/mcp/types.js'
 
@@ -115,6 +116,78 @@ rules:
     expect(policy.evaluate({ sourceAgent: spoofed(), targetTool: 'status' }).decision).toBe('ask')
     // Another agent's rules don't leak onto it either way.
     expect(policy.evaluate({ sourceAgent: 'untrusted:hermes', targetTool: 'deploy' }).decision).toBe('allow')
+  })
+
+  describe('rate limits', () => {
+    let n = 0
+    const record = (sourceAgent: string, ago = 1_000): void => {
+      db.insert(requests)
+        .values({
+          id: `r${n++}`,
+          sourceAgent,
+          args: '{}',
+          riskScore: 0,
+          decision: 'allowed',
+          decidedBy: 'auto',
+          createdAt: Date.now() - ago,
+        })
+        .run()
+    }
+
+    it("the claimed agent's limit binds untrusted:<id>, counting both ids", () => {
+      policy.loadYamlText(`
+agents:
+  codex:
+    rate_limits:
+      messages_per_minute: 2
+rules:
+  - source: "*"
+    target: "tool:status"
+    effect: allow
+`)
+      record('codex')
+      expect(policy.evaluate({ sourceAgent: spoofed(), targetTool: 'status' }).decision).not.toBe('deny')
+      record(spoofed())
+      expect(policy.evaluate({ sourceAgent: spoofed(), targetTool: 'status' })).toMatchObject({ decision: 'deny' })
+      // A spoofer's calls don't eat the real agent's budget.
+      expect(policy.evaluate({ sourceAgent: 'codex', targetTool: 'status' }).decision).toBe('allow')
+      // Another claimed id isn't held to codex's limit.
+      expect(policy.evaluate({ sourceAgent: 'untrusted:hermes', targetTool: 'status' }).decision).not.toBe('deny')
+    })
+
+    it('all untrusted connections share a default budget, whatever ids they claim', () => {
+      for (let i = 0; i < UNTRUSTED_CALLS_PER_MINUTE; i++) record(`untrusted:bot-${i}`)
+      record(`untrusted:old`, 120_000)
+      expect(policy.evaluate({ sourceAgent: 'untrusted:fresh-id', targetTool: 'status' })).toEqual({
+        decision: 'deny',
+        label: 'identity:untrusted-rate-limit',
+      })
+      // Verified agents are not affected.
+      expect(policy.evaluate({ sourceAgent: 'codex', targetTool: 'status' }).decision).not.toBe('deny')
+    })
+
+    it('caps the approval prompts untrusted connections keep waiting on you', () => {
+      for (let i = 0; i < UNTRUSTED_OPEN_APPROVALS; i++) {
+        db.insert(pendingApprovals)
+          .values({
+            requestId: `p${i}`,
+            sourceAgent: `untrusted:x${i}`,
+            args: '{}',
+            riskScore: 10,
+            riskReasons: '[]',
+            requestedAt: Date.now(),
+          } as typeof pendingApprovals.$inferInsert)
+          .run()
+      }
+      expect(policy.evaluate({ sourceAgent: spoofed(), targetTool: 'status' }).label).toBe('identity:untrusted-rate-limit')
+    })
+
+    it('the mediator reports the flood limit, not an unknown policy', async () => {
+      for (let i = 0; i < UNTRUSTED_CALLS_PER_MINUTE; i++) record(`untrusted:bot-${i}`)
+      const out = await mediator().handleRequest({ sourceAgent: spoofed(), targetTool: 'status', message: call('status') })
+      expect(out).toMatchObject({ decision: 'denied', decidedBy: 'policy:identity:untrusted-rate-limit' })
+      expect(approval.request).not.toHaveBeenCalled()
+    })
   })
 
   it("stays bound by the agent's secret denials", () => {
