@@ -1,4 +1,17 @@
-import { chmodSync, existsSync, lstatSync, realpathSync, type Stats } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fchmodSync,
+  fstatSync,
+  ftruncateSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+  type Stats,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -89,11 +102,82 @@ export function checkTokenPath(path: string, home: string = homedir()): string |
   return `${abs} is in the git work tree at your home directory: make sure git ignores it, since it now holds an agent token.`;
 }
 
-/** chmod 0600, but never through a symlink. */
-export function tightenTokenFile(path: string): void {
-  const stat = lstatOrNull(path);
-  if (!stat || stat.isSymbolicLink()) return;
-  if ((stat.mode & 0o777) !== TOKEN_FILE_MODE) chmodSync(path, TOKEN_FILE_MODE);
+// Token files are opened once, without following a symlink (O_NOFOLLOW),
+// and every check (regular file, owner, mode) and every change (chmod,
+// truncate, write) goes through that descriptor, so nothing can be swapped
+// in between a check and its use. O_NONBLOCK keeps a FIFO from hanging the
+// open; it is then refused as not a regular file.
+const NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+const NONBLOCK = fsConstants.O_NONBLOCK ?? 0;
+
+function openNoFollow(path: string, flags: number, mode?: number): number {
+  try {
+    return mode === undefined ? openSync(path, flags | NOFOLLOW | NONBLOCK) : openSync(path, flags | NOFOLLOW | NONBLOCK, mode);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ELOOP") {
+      throw new UnsafeTokenPathError(`${path} is a symlink, not a regular file; Foreman won't follow it for an agent token.`);
+    }
+    throw err;
+  }
+}
+
+/** The descriptor's file must be a regular file owned by this user. */
+function checkOwnedRegularFile(fd: number, path: string): Stats {
+  const stat = fstatSync(fd);
+  if (!stat.isFile()) throw new UnsafeTokenPathError(`${path} is not a regular file.`);
+  const uid = process.getuid?.();
+  if (uid !== undefined && stat.uid !== uid) {
+    throw new UnsafeTokenPathError(`${path} belongs to another user; Foreman won't use it for an agent token.`);
+  }
+  return stat;
+}
+
+/** Read a token-bearing file: no symlink, a regular file you own and, with
+ *  `private`, readable only by you. Throws `UnsafeTokenPathError`. */
+export function readTokenFile(path: string, opts: { private: boolean }): string {
+  const fd = openNoFollow(path, fsConstants.O_RDONLY);
+  try {
+    const stat = checkOwnedRegularFile(fd, path);
+    if (opts.private && (stat.mode & 0o077) !== 0) {
+      throw new UnsafeTokenPathError(`${path} is readable by others; chmod 600 it.`);
+    }
+    return readFileSync(fd, "utf-8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Create or replace a token-bearing file's content: no symlink, only a
+ *  regular file you own, made `mode` before the content lands. */
+export function writeTokenFile(path: string, content: string, mode: number = TOKEN_FILE_MODE): void {
+  const fd = openNoFollow(path, fsConstants.O_WRONLY | fsConstants.O_CREAT, mode);
+  try {
+    checkOwnedRegularFile(fd, path);
+    fchmodSync(fd, mode);
+    ftruncateSync(fd, 0);
+    writeFileSync(fd, content, "utf-8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** chmod to `mode` (0600 by default) through the file's own descriptor:
+ *  never through a symlink, never someone else's file. */
+export function tightenTokenFile(path: string, mode: number = TOKEN_FILE_MODE): void {
+  let fd: number;
+  try {
+    fd = openNoFollow(path, fsConstants.O_RDONLY);
+  } catch {
+    return; // missing, or a symlink: nothing of ours to tighten
+  }
+  try {
+    const stat = fstatSync(fd);
+    const uid = process.getuid?.();
+    if (!stat.isFile() || (uid !== undefined && stat.uid !== uid)) return;
+    if ((stat.mode & 0o777) !== mode) fchmodSync(fd, mode);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** True when group or others can read or write it (doctor). */

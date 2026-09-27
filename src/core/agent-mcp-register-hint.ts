@@ -1,8 +1,14 @@
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { AGENT_TOKEN_ENV } from "./agent-token.js";
-import { checkTokenPath } from "./token-file-safety.js";
+import {
+  checkTokenPath,
+  readTokenFile,
+  tightenTokenFile,
+  UnsafeTokenPathError,
+  writeTokenFile,
+} from "./token-file-safety.js";
 import type { AgentEntry } from "./registry-catalog.js";
 
 // =============================================================================
@@ -98,24 +104,21 @@ const WRAPPER_MODE = 0o700;
  */
 export function writeMcpWrapperScript(wrapper: McpRegisterHintWrapper): boolean {
   checkTokenPath(wrapper.path);
+  // Read, compare, chmod and write through descriptors that never follow a
+  // symlink and only accept your own regular file (token-file-safety.ts).
+  let existing: string | null = null;
   try {
-    const existing = readFileSync(wrapper.path, "utf-8");
-    if (existing === wrapper.content) {
-      chmodSync(wrapper.path, WRAPPER_MODE);
-      return false;
-    }
-  } catch {
-    /* file missing — fall through to write */
+    existing = readTokenFile(wrapper.path, { private: false });
+  } catch (err) {
+    if (err instanceof UnsafeTokenPathError) throw err;
+    existing = null; // not there yet
+  }
+  if (existing === wrapper.content) {
+    tightenTokenFile(wrapper.path, WRAPPER_MODE);
+    return false;
   }
   mkdirSync(dirname(wrapper.path), { recursive: true });
-  // Tighten an existing file before the token lands in it.
-  try {
-    chmodSync(wrapper.path, WRAPPER_MODE);
-  } catch {
-    /* not there yet */
-  }
-  writeFileSync(wrapper.path, wrapper.content, { encoding: "utf-8", mode: WRAPPER_MODE });
-  chmodSync(wrapper.path, WRAPPER_MODE);
+  writeTokenFile(wrapper.path, wrapper.content, WRAPPER_MODE);
   return true;
 }
 

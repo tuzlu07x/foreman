@@ -1,5 +1,4 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { lstatSync, readFileSync } from "node:fs";
 import {
   AGENT_TOKEN_ENV,
   AGENT_TOKEN_FILE_ENV,
@@ -9,6 +8,7 @@ import {
   untrustedSource,
 } from "./agent-identity.js";
 import { isHumanSource } from "./org/guard.js";
+import { readTokenFile, UnsafeTokenPathError } from "./token-file-safety.js";
 import {
   isReservedSecretName,
   RESERVED_SECRET_PREFIX,
@@ -49,15 +49,18 @@ export function takeAgentToken(env: NodeJS.ProcessEnv): TokenIntake {
   if (trimmed) return { token: trimmed };
   if (!file) return { token: undefined };
   try {
-    const stat = lstatSync(file);
-    if (!stat.isFile()) return { token: undefined, problem: `${AGENT_TOKEN_FILE_ENV} is not a regular file` };
-    if ((stat.mode & 0o077) !== 0) {
-      return { token: undefined, problem: `${AGENT_TOKEN_FILE_ENV} is readable by others; chmod 600 it` };
-    }
-    const fromFile = readFileSync(file, "utf-8").trim();
+    // One descriptor for every check and the read (no symlink, a regular
+    // file, yours, owner-only): nothing can be swapped in between.
+    const fromFile = readTokenFile(file, { private: true }).trim();
     return fromFile ? { token: fromFile } : { token: undefined, problem: `${AGENT_TOKEN_FILE_ENV} is empty` };
-  } catch {
-    return { token: undefined, problem: `${AGENT_TOKEN_FILE_ENV} can't be read` };
+  } catch (err) {
+    return {
+      token: undefined,
+      problem:
+        err instanceof UnsafeTokenPathError
+          ? `${AGENT_TOKEN_FILE_ENV}: ${err.message}`
+          : `${AGENT_TOKEN_FILE_ENV} can't be read`,
+    };
   }
 }
 

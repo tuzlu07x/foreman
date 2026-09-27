@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { pickMcpConfigPath } from "./agent-add-flow.js";
 import {
   applyInjection,
@@ -25,9 +25,8 @@ import type { AgentEntry } from "./registry-catalog.js";
 import {
   checkTokenPath,
   isExposedTokenFile,
-  tightenTokenFile,
-  TOKEN_FILE_MODE,
   UnsafeTokenPathError,
+  writeTokenFile,
 } from "./token-file-safety.js";
 import type { RegisteredAgent } from "./registry.js";
 
@@ -171,7 +170,7 @@ export function rewireAgent(
   const wiring: WiringResult = entry
     ? writeAgentWiring(agentId, entry, token, { ...options, ...(configPath ? { configPath } : {}) })
     : { configPath: null, config: "none", wrapperPath: null, wrapperWritten: false };
-  if (options.tokenOut) writeTokenFile(options.tokenOut, token);
+  if (options.tokenOut) writeTokenOutFile(options.tokenOut, token);
   return { ...wiring, minted, tokenOutPath: options.tokenOut ?? null };
 }
 
@@ -273,9 +272,7 @@ export function describeTokenAudit(audit: AgentTokenAudit): { message: string; r
   return { message: parts.join("; "), remediation: fixes.join(" ") };
 }
 
-function writeTokenFile(path: string, token: string): void {
+function writeTokenOutFile(path: string, token: string): void {
   checkTokenPath(path);
-  tightenTokenFile(path);
-  writeFileSync(path, `${token}\n`, { encoding: "utf-8", mode: TOKEN_FILE_MODE });
-  tightenTokenFile(path);
+  writeTokenFile(path, `${token}\n`);
 }

@@ -1,16 +1,35 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import {
+  chmodSync,
+  chownSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyInjection, planInjection } from '../../src/core/agent-config-injector.js'
 import { buildMcpSnippet } from '../../src/core/agent-mcp-snippet.js'
+import { writeMcpWrapperScript } from '../../src/core/agent-mcp-register-hint.js'
+import { takeAgentToken } from '../../src/core/agent-token.js'
 import { rewireAgent } from '../../src/core/agent-wiring.js'
 import type { AgentEntry } from '../../src/core/registry-catalog.js'
 import { foremanSelfProtectionRule } from '../../src/core/risk-rules/foreman-self-protection.js'
 import type { RiskContext } from '../../src/core/risk-rules/types.js'
 import { SecretStore } from '../../src/core/secret-store.js'
-import { checkTokenPath, UnsafeTokenPathError } from '../../src/core/token-file-safety.js'
+import {
+  checkTokenPath,
+  readTokenFile,
+  tightenTokenFile,
+  UnsafeTokenPathError,
+  writeTokenFile,
+} from '../../src/core/token-file-safety.js'
 import { createInMemoryDb } from '../../src/db/client.js'
 import { generateMasterKey } from '../../src/identity/encryption.js'
 
@@ -82,6 +101,55 @@ describe('token file safety', () => {
     symlinkSync(real, join(dir, 'link.token'))
     expect(() => rewireAgent(store, 'bot', null, { tokenOut: join(dir, 'link.token') })).toThrow(UnsafeTokenPathError)
     expect(readFileSync(real, 'utf-8')).toBe('')
+  })
+
+  describe('one descriptor per token file (#618 review L2)', () => {
+    const asRoot = process.getuid?.() === 0
+
+    it('reads and writes never follow a symlink, even one that appears after the path check', () => {
+      const real = join(dir, 'elsewhere')
+      writeFileSync(real, 'untouched', { mode: 0o600 })
+      symlinkSync(real, join(dir, 'link'))
+      expect(() => readTokenFile(join(dir, 'link'), { private: true })).toThrow(/symlink/)
+      expect(() => writeTokenFile(join(dir, 'link'), 'fat_x')).toThrow(UnsafeTokenPathError)
+      expect(readFileSync(real, 'utf-8')).toBe('untouched')
+      chmodSync(real, 0o644)
+      tightenTokenFile(join(dir, 'link'))
+      expect(mode(real)).toBe(0o644) // chmod didn't follow the link
+    })
+
+    it('writes owner-only from the first byte and refuses FIFOs', () => {
+      const out = join(dir, 'tok')
+      writeTokenFile(out, 'fat_one\n')
+      expect(mode(out)).toBe(0o600)
+      chmodSync(out, 0o644)
+      writeTokenFile(out, 'fat_two\n')
+      expect(readFileSync(out, 'utf-8')).toBe('fat_two\n')
+      expect(mode(out)).toBe(0o600)
+      const fifo = join(dir, 'fifo')
+      spawnSync('mkfifo', [fifo])
+      expect(() => readTokenFile(fifo, { private: false })).toThrow(/not a regular file/)
+    })
+
+    it.runIf(asRoot)("refuses another user's file for FOREMAN_AGENT_TOKEN_FILE, --token-out and the wrapper", () => {
+      const theirs = join(dir, 'theirs.token')
+      writeFileSync(theirs, 'fat_theirs\n', { mode: 0o600 })
+      chownSync(theirs, 4242, 4242)
+      expect(takeAgentToken({ FOREMAN_AGENT_TOKEN_FILE: theirs })).toMatchObject({
+        token: undefined,
+        problem: expect.stringMatching(/another user/),
+      })
+      expect(() => rewireAgent(store, 'bot', null, { tokenOut: theirs })).toThrow(/another user/)
+      expect(readFileSync(theirs, 'utf-8')).toBe('fat_theirs\n')
+      const wrapper = join(dir, 'w', 'bot-mcp.sh')
+      mkdirSync(join(dir, 'w'))
+      writeFileSync(wrapper, '#!/bin/sh\n', { mode: 0o700 })
+      chownSync(wrapper, 4242, 4242)
+      expect(() => writeMcpWrapperScript({ path: wrapper, content: '#!/bin/sh\nexport FOREMAN_AGENT_TOKEN=x\n' })).toThrow(
+        /another user/,
+      )
+      expect(readFileSync(wrapper, 'utf-8')).toBe('#!/bin/sh\n')
+    })
   })
 
   it('tightens the mode to 0600 even when the entry is already current', () => {
