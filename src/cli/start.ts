@@ -347,6 +347,9 @@ export function startForeman(
   let instance: Instance | null = null;
   let exitResolve: (() => void) | null = null;
   let keepAlive: NodeJS.Timeout | null = null;
+  // Assigned once the delegation watchdog starts (below); cleared on
+  // shutdown so it can't tick against a closed database.
+  let watchdogTimer: NodeJS.Timeout | null = null;
 
   void checkForUpdate(APP_VERSION).then((result) => {
     if (result && result.hasUpdate) {
@@ -436,6 +439,10 @@ export function startForeman(
     if (keepAlive) {
       clearInterval(keepAlive);
       keepAlive = null;
+    }
+    if (watchdogTimer) {
+      clearInterval(watchdogTimer);
+      watchdogTimer = null;
     }
     if (exitResolve) {
       const r = exitResolve;
@@ -866,7 +873,7 @@ export function startForeman(
   const nudgeChatId = secretStore.exists("telegram-chat-id")
     ? secretStore.get("telegram-chat-id")
     : undefined;
-  const watchdogTimer = setInterval(() => {
+  watchdogTimer = setInterval(() => {
     void runDelegationWatchdog({
       tracker: delegationTracker,
       telegramBotToken: nudgeBotToken,

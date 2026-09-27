@@ -80,4 +80,6 @@ process.on("uncaughtException", (err) => {
   throw err;
 });
 
-program.parse();
+// parseAsync: most command actions are async; parse() would not await
+// them, so their rejections escaped as unhandled promises.
+await program.parseAsync();

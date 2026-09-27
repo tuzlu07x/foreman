@@ -223,8 +223,12 @@ function pickOptionFor(
   // 1. Exact.
   const exact = options.find((o) => o.kind === targetKind)
   if (exact) return exact
-  // 2. Family.
-  if (decision.kind === 'allow' || decision.kind === 'allow_for_session') {
+  // 2. Family. A one-time allow must never fall back to `allow_always`:
+  // the agent would cache a permanent grant and stop asking Foreman, so
+  // every later call of that kind would bypass policy and approval.
+  // Returning null makes the caller answer `cancelled` instead.
+  if (decision.kind === 'allow') return null
+  if (decision.kind === 'allow_for_session') {
     const fallback = options.find((o) => o.kind.startsWith('allow'))
     if (fallback) return fallback
   } else {

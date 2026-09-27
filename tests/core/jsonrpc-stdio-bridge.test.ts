@@ -241,3 +241,32 @@ describe('JsonRpcStdioBridge — generic typing exercise', () => {
     bridge.stop()
   })
 })
+
+describe('JsonRpcStdioBridge — hostile frames', () => {
+  it('survives a child printing null / numbers / arrays and keeps routing', async () => {
+    const s = makeStreams()
+    const errors: Error[] = []
+    const onApprovalRequest = vi.fn(async () => ({ ok: true }))
+    const bridge = new JsonRpcStdioBridge<unknown, { ok: boolean }>({
+      input: s.input,
+      output: s.output,
+      approvalMethods: new Set(['item/commandExecution/requestApproval']),
+      onApprovalRequest,
+      failClosedReply: () => ({ ok: false }),
+      hooks: { onTransportError: (err) => errors.push(err) },
+    })
+    bridge.start()
+    s.input.push('null\n42\n[1,2]\n')
+    s.pushFrame({
+      jsonrpc: '2.0',
+      id: 7,
+      method: 'item/commandExecution/requestApproval',
+      params: {},
+    })
+    await tick()
+    await tick()
+    expect(errors).toHaveLength(3)
+    expect(onApprovalRequest).toHaveBeenCalledTimes(1)
+    bridge.stop()
+  })
+})
