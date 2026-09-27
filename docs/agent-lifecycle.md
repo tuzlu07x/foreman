@@ -122,10 +122,14 @@ policy rules and org role.
   your home directory is allowed with a warning to keep the file ignored.
   `foreman doctor` flags token files others can read, and tamper protection
   flags an agent reading another agent's wiring or any `/proc/*/environ`.
-- `foreman mcp-stdio` reads the variable, removes it from its own environment
-  (so nothing it starts inherits it), and compares it in constant time with
-  the stored token. It re-checks before every message, so a rotation takes
-  effect in running sessions too.
+- `foreman mcp-stdio` reads the variable (trimmed once), removes it from its
+  own environment (so nothing it starts inherits it), and compares it in
+  constant time with the stored token. It re-checks before every message,
+  so a rotation takes effect in running sessions too; a store error means
+  untrusted, never trusted. Instead of the variable, an agent can set
+  `FOREMAN_AGENT_TOKEN_FILE` to a 0600 file holding the token (a symlink or
+  a file others can read is ignored), which keeps the token out of
+  `/proc/<pid>/environ`.
 - **No token, a wrong token, or another agent's token** runs the connection
   as `untrusted:<claimed id>`, the lowest privilege there is: none of the
   claimed agent's allow rules (wildcard `*` rules apply, as to any unknown

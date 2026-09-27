@@ -107,6 +107,19 @@ describe('foreman mcp-stdio agent identity', () => {
     await fresh.close()
   }, 30_000)
 
+  it('a token with surrounding whitespace, or in FOREMAN_AGENT_TOKEN_FILE, stays trusted message after message', async () => {
+    const padded = await connect({ FOREMAN_AGENT_TOKEN: `${token}\n` })
+    expect(await padded.post('engineering', 'one')).toMatch(/^Posted/)
+    expect(await padded.post('engineering', 'two')).toMatch(/^Posted/)
+    await padded.close()
+    expect(padded.stderr).toBe('')
+
+    const file = join(home, 'codex.token')
+    const viaFile = await connect({ FOREMAN_AGENT_TOKEN_FILE: file })
+    expect(await viaFile.post('engineering', 'three')).toMatch(/^Posted/)
+    await viaFile.close()
+  }, 20_000)
+
   it('rotate with no wiring to write still cuts off the old token, and says so', async () => {
     const rotated = run('agent', 'token', 'rotate', 'codex', '--yes')
     expect(rotated.stdout).toContain('The OLD token for codex is now INVALID')

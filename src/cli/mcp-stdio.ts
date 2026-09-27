@@ -45,6 +45,7 @@ import { isHumanSource } from "../core/org/guard.js";
 import {
   AGENT_TOKEN_ENV,
   describeUntrustedIdentity,
+  takeAgentToken,
   recheckAgentIdentity,
   resolveAgentIdentity,
   type ResolvedIdentity,
@@ -75,8 +76,9 @@ export const mcpStdioCommand = new Command("mcp-stdio")
     // Read the token once and take it out of this process's environment, so
     // nothing we spawn (hub servers, agents started by the drain poller)
     // inherits another agent's credential.
-    const token = process.env[AGENT_TOKEN_ENV];
-    delete process.env[AGENT_TOKEN_ENV];
+    const intake = takeAgentToken(process.env);
+    if (intake.problem) warn(`${intake.problem}; running without a token`);
+    const token = intake.token;
     const paths = getForemanPaths();
     if (!existsSync(paths.root) || !existsSync(paths.identityPath)) {
       process.stderr.write(

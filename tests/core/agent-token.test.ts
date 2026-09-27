@@ -1,3 +1,6 @@
+import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
@@ -12,6 +15,7 @@ import {
   recheckAgentIdentity,
   resolveAgentIdentity,
   revokeAgentToken,
+  takeAgentToken,
   verifyAgentToken,
 } from '../../src/core/agent-token.js'
 import { claimedAgentOf, isUntrustedSource, untrustedSource } from '../../src/core/agent-identity.js'
@@ -169,6 +173,59 @@ describe('agent tokens', () => {
     const ctx = { db: null as never } as RiskContext
     const factors = secretPatternRule.evaluate({ sourceAgent: 'codex', targetTool: 'http_post', args: { body: token } }, ctx)
     expect(factors.map((f) => f.reason).join(' ')).toContain('Foreman agent token')
+  })
+
+  describe('taking the token from the environment', () => {
+    let dir: string
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'foreman-token-intake-'))
+    })
+    afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+    it('removes both variables so nothing spawned later inherits them', () => {
+      const env: NodeJS.ProcessEnv = { FOREMAN_AGENT_TOKEN: 'fat_a', FOREMAN_AGENT_TOKEN_FILE: '/nope', PATH: '/bin' }
+      expect(takeAgentToken(env)).toEqual({ token: 'fat_a' })
+      expect(env).toEqual({ PATH: '/bin' })
+    })
+
+    it('trims once, so a trailing newline stays trusted after connecting', () => {
+      const codex = issueAgentToken(store, 'codex')
+      const { token } = takeAgentToken({ FOREMAN_AGENT_TOKEN: `  ${codex}\n` })
+      const identity = resolveAgentIdentity({ claimed: 'codex', token, store })
+      expect(identity.trusted).toBe(true)
+      expect(recheckAgentIdentity(identity, token!, store)).toBe(identity)
+      expect(takeAgentToken({ FOREMAN_AGENT_TOKEN: ' \n' })).toEqual({ token: undefined })
+    })
+
+    it('reads FOREMAN_AGENT_TOKEN_FILE only from an owner-only regular file', () => {
+      const file = join(dir, 'tok')
+      writeFileSync(file, 'fat_from_file\n', { mode: 0o600 })
+      expect(takeAgentToken({ FOREMAN_AGENT_TOKEN_FILE: file })).toEqual({ token: 'fat_from_file' })
+      chmodSync(file, 0o644)
+      expect(takeAgentToken({ FOREMAN_AGENT_TOKEN_FILE: file }).token).toBeUndefined()
+      chmodSync(file, 0o600)
+      symlinkSync(file, join(dir, 'link'))
+      expect(takeAgentToken({ FOREMAN_AGENT_TOKEN_FILE: join(dir, 'link') }).problem).toMatch(/regular file/)
+      expect(takeAgentToken({ FOREMAN_AGENT_TOKEN_FILE: join(dir, 'missing') }).problem).toMatch(/can't be read/)
+      // The env var wins over the file.
+      expect(takeAgentToken({ FOREMAN_AGENT_TOKEN: 'fat_env', FOREMAN_AGENT_TOKEN_FILE: file }).token).toBe('fat_env')
+    })
+  })
+
+  it('a failing store means untrusted, never a crash or trust', () => {
+    const broken = {
+      exists: () => {
+        throw new Error('database is locked')
+      },
+      list: () => {
+        throw new Error('database is locked')
+      },
+    } as unknown as SecretStore
+    expect(verifyAgentToken(broken, 'codex', 'fat_x')).toBe(false)
+    expect(resolveAgentIdentity({ claimed: 'codex', token: 'fat_x', store: broken })).toMatchObject({
+      trusted: false,
+      source: 'untrusted:codex',
+    })
   })
 
   it('untrusted ids round-trip to the claimed agent', () => {

@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { lstatSync, readFileSync } from "node:fs";
 import { isUntrustedSource, untrustedSource } from "./agent-identity.js";
 import { isHumanSource } from "./org/guard.js";
 import {
@@ -18,6 +19,43 @@ import {
 // `untrusted:<claimed>` — less privilege, never more.
 
 export const AGENT_TOKEN_ENV = "FOREMAN_AGENT_TOKEN";
+/** Alternative to the env var for agents that allow it: a 0600 file
+ *  holding the token, so it isn't in the process environment at all. */
+export const AGENT_TOKEN_FILE_ENV = "FOREMAN_AGENT_TOKEN_FILE";
+
+export interface TokenIntake {
+  /** Trimmed, or undefined when none was passed (or it was refused). */
+  token: string | undefined;
+  /** Why a token file was ignored; never contains the token. */
+  problem?: string;
+}
+
+/**
+ * Take the agent's token out of `env` (both variables are deleted, so
+ * nothing this process starts inherits them) and trim it once here, so
+ * every later comparison sees the same value. A token file must be a
+ * regular, owner-only file (not a symlink).
+ */
+export function takeAgentToken(env: NodeJS.ProcessEnv): TokenIntake {
+  const direct = env[AGENT_TOKEN_ENV];
+  const file = env[AGENT_TOKEN_FILE_ENV];
+  delete env[AGENT_TOKEN_ENV];
+  delete env[AGENT_TOKEN_FILE_ENV];
+  const trimmed = direct?.trim();
+  if (trimmed) return { token: trimmed };
+  if (!file) return { token: undefined };
+  try {
+    const stat = lstatSync(file);
+    if (!stat.isFile()) return { token: undefined, problem: `${AGENT_TOKEN_FILE_ENV} is not a regular file` };
+    if ((stat.mode & 0o077) !== 0) {
+      return { token: undefined, problem: `${AGENT_TOKEN_FILE_ENV} is readable by others; chmod 600 it` };
+    }
+    const fromFile = readFileSync(file, "utf-8").trim();
+    return fromFile ? { token: fromFile } : { token: undefined, problem: `${AGENT_TOKEN_FILE_ENV} is empty` };
+  } catch {
+    return { token: undefined, problem: `${AGENT_TOKEN_FILE_ENV} can't be read` };
+  }
+}
 
 /** Recognisable prefix, so secret scanners and redaction can spot a leak. */
 const TOKEN_PREFIX = "fat_";
@@ -92,11 +130,11 @@ export function agentTokensEqual(a: string, b: string): boolean {
 /** Does `presented` match the token stored for `agentId`? */
 export function verifyAgentToken(store: AgentTokenStore, agentId: string, presented: string): boolean {
   const name = agentTokenSecretName(agentId);
-  if (presented.length === 0 || !store.exists(name)) return false;
+  if (presented.length === 0) return false;
   try {
-    return agentTokensEqual(store.getReserved(name), presented);
+    return store.exists(name) && agentTokensEqual(store.getReserved(name), presented);
   } catch {
-    return false; // undecryptable row: treat as no token
+    return false; // a locked DB or undecryptable row: fail to untrusted
   }
 }
 
@@ -153,7 +191,12 @@ export function resolveAgentIdentity(input: {
   });
   const token = input.token?.trim() ?? "";
   if (token.length === 0) return untrusted("no-token");
-  const owner = findAgentByToken(input.store, token);
+  let owner: string | null;
+  try {
+    owner = findAgentByToken(input.store, token);
+  } catch {
+    owner = null; // the store failed: fail to untrusted, never to trusted
+  }
   if (owner === null || isHumanSource(owner) || isUntrustedSource(owner)) return untrusted("invalid-token");
   if (input.claimed !== undefined && input.claimed.trim() !== owner) return untrusted("token-mismatch");
   return { source: owner, claimed: input.claimed?.trim() || owner, trusted: true, reason: "token" };

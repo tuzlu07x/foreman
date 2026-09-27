@@ -72,7 +72,11 @@ Known limits, which we track as roadmap items rather than hide:
   the same OS user (see above) can read another agent's MCP config file,
   and so its token; tamper protection flags such a read (and any
   `/proc/*/environ` read) as critical, but a call that skips mediation
-  isn't seen. `foreman write` from an agent's shell still trusts
+  isn't seen. `foreman mcp-stdio` deletes the token from its environment
+  at start, so nothing it spawns inherits it, but Linux keeps the initial
+  environment in `/proc/<pid>/environ`, readable by the same user. Agents
+  that can instead point `FOREMAN_AGENT_TOKEN_FILE` at a 0600 file keep
+  the token out of any process environment. `foreman write` from an agent's shell still trusts
   `FOREMAN_SPAWNED_BY`.
   Blocked and paused agents are denied on every transport.
 - **Relayed approvals.** By default, Telegram decisions reach Foreman
