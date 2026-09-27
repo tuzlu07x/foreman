@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -32,6 +32,26 @@ describe('foreman org channel / tell / messages (#630)', () => {
     expect(run('org', 'channel', 'nowhere', 'slack', '#x').status).toBe(1)
     expect(run('org', 'channel', 'marketing', 'slack', 'off').status).toBe(0)
     expect(readFileSync(join(home, 'org.yaml'), 'utf-8')).not.toContain('#marketing')
+  })
+
+  it('turns approval escalation on and off, keeping comments (#623)', () => {
+    const path = join(home, 'org.yaml')
+    writeFileSync(path, `# my company, my comments\n${readFileSync(path, 'utf-8')}`)
+    expect(run('org', 'escalate').stdout).toContain('off')
+    const on = run('org', 'escalate', 'on')
+    expect(on.status).toBe(0)
+    expect(on.stdout).toContain("requester's manager agent")
+    let yaml = readFileSync(path, 'utf-8')
+    expect(yaml).toContain('# my company, my comments')
+    expect(yaml).toMatch(/approvals:\n\s+escalate_via_manager: true/)
+    expect(run('org', 'validate').status).toBe(0)
+    expect(run('org', 'escalate').stdout).toMatch(/^on:/)
+    expect(run('org', 'escalate', 'maybe').status).toBe(1)
+    expect(run('org', 'escalate', 'off').status).toBe(0)
+    yaml = readFileSync(path, 'utf-8')
+    expect(yaml).toContain('# my company, my comments')
+    expect(yaml).not.toMatch(/^approvals:/m)
+    expect(yaml).not.toContain('escalate_via_manager')
   })
 
   it('posts as you and reads it back', () => {

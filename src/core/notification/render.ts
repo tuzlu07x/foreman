@@ -1,4 +1,5 @@
 import type { ForemanEventMap } from "../event-bus.js";
+import { recommendationParts } from "../org/review.js";
 import { predicateHintsForFactors } from "../risk-rules/predicate-hint.js";
 import { redactSecretShapes } from "../risk-rules/secret-patterns.js";
 import type { RiskBucket, RiskFactor } from "../risk-rules/types.js";
@@ -253,6 +254,31 @@ function renderArgs(args: unknown): string {
   } catch {
     return String(args).slice(0, 200);
   }
+}
+
+// =============================================================================
+// Manager recommendation follow-up (#623)
+// =============================================================================
+
+/** A manager agent's advice on an approval that is still open. No buttons
+ *  and no approval id: the decision stays on the approval message. */
+export function renderRecommendation(
+  e: ForemanEventMap["approval:recommended"],
+): Omit<Notification, "id"> {
+  // Every agent-controlled field is one capped line, so a reason can't
+  // forge lines of its own in the chat.
+  const p = recommendationParts(e);
+  const verb = p.recommendation === "allow" ? "✓ allow" : "✗ deny";
+  return {
+    level: levelForBucket(e.riskBucket),
+    requestId: null,
+    title: `${p.who} recommends ${p.recommendation}`,
+    body:
+      `🧭 ${p.who} recommends ${verb} for ${JSON.stringify(p.tool)} by ${JSON.stringify(p.requester)}: ${p.reason}\n` +
+      "Advice only: your decision on the approval is still needed.",
+    actions: [],
+    agentBlocking: false,
+  };
 }
 
 // =============================================================================

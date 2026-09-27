@@ -1026,13 +1026,28 @@ describe("mcp-stdio handleMessage", () => {
       const { join } = await import("node:path");
       const { createInMemoryDb } = await import("../../src/db/client.js");
       const { OrgComms } = await import("../../src/core/org/comms.js");
+      const { RegistryService } = await import("../../src/core/registry.js");
+      const { EventBus } = await import("../../src/core/event-bus.js");
       const dir = mkdtempSync(join(tmpdir(), "foreman-mcp-comms-"));
       writeFileSync(join(dir, "org.yaml"), ORG);
       const { db } = createInMemoryDb();
+      // A real registry: standing checks must see every spelling of an id.
+      const registry = new RegistryService(db, new EventBus());
+      for (const agentId of ["claude-code", "codex", "writer-bot"]) {
+        registry.register({ id: agentId, displayName: agentId, transport: "stdio" });
+      }
       const services = makeServices("allowed");
-      (services as unknown as { comms: unknown }).comms = new OrgComms(db, { orgConfigPath: join(dir, "org.yaml") });
+      Object.assign(services as unknown as Record<string, unknown>, {
+        registry,
+        comms: new OrgComms(db, { orgConfigPath: join(dir, "org.yaml") }),
+      });
       return services;
     }
+
+    const registryOf = async (services: McpStdioServices) => {
+      const { RegistryService } = await import("../../src/core/registry.js");
+      return services.registry as InstanceType<typeof RegistryService>;
+    };
 
     const call = async (services: McpStdioServices, agent: string, name: string, args: Record<string, unknown>) =>
       (await handleMessage(services, agent, {
@@ -1042,12 +1057,19 @@ describe("mcp-stdio handleMessage", () => {
         params: { name, arguments: args },
       } as JSONRPCMessage)) as unknown as { result: { content: { text: string }[]; isError?: boolean } };
 
-    it("gives a blocked agent no voice", async () => {
+    it("gives a blocked agent no voice, under any spelling of its id", async () => {
       const services = await withComms();
-      (services.registry as unknown as { get: (id: string) => unknown }).get = (id: string) => ({ id, status: "blocked" });
-      const out = await call(services, "codex", "org_post", { to: "engineering", text: "hi" });
-      expect(out.result.isError).toBe(true);
-      expect(out.result.content[0]!.text).toContain("codex is blocked");
+      (await registryOf(services)).block("codex");
+      for (const source of ["codex", "Codex", " CODEX "]) {
+        for (const tool of ["org_post", "org_report", "org_read"]) {
+          const out = await call(services, source, tool, { to: "engineering", text: "hi" });
+          expect(out.result.isError).toBe(true);
+          expect(out.result.content[0]!.text).toBe("Not available: codex is blocked in Foreman.");
+        }
+      }
+      // An unblocked colleague still speaks.
+      const ok = await call(services, "claude-code", "org_post", { to: "engineering", text: "hi" });
+      expect(ok.result.isError).toBe(false);
     });
 
     it("advertises org_post, org_read and org_report", async () => {
@@ -1079,6 +1101,162 @@ describe("mcp-stdio handleMessage", () => {
         "org:message",
         expect.objectContaining({ sourceAgent: "codex", tool: "org_post", ok: false }),
       );
+    });
+
+    describe("org_recommend — manager review of approvals (#623)", () => {
+      const APPROVAL = "01J9ZZZZZZZZZZZZZZZZZZZZZ7";
+
+      async function withReviews() {
+        const { mkdtempSync, writeFileSync } = await import("node:fs");
+        const { tmpdir } = await import("node:os");
+        const { join } = await import("node:path");
+        const { createInMemoryDb } = await import("../../src/db/client.js");
+        const { OrgComms } = await import("../../src/core/org/comms.js");
+        const { ApprovalReviews } = await import("../../src/core/org/review.js");
+        const { DbApprovalService } = await import("../../src/core/approval.js");
+        const { RegistryService } = await import("../../src/core/registry.js");
+        const { EventBus } = await import("../../src/core/event-bus.js");
+        const { approvalReviews, pendingApprovals } = await import("../../src/db/schema.js");
+        const { eq } = await import("drizzle-orm");
+        const dir = mkdtempSync(join(tmpdir(), "foreman-mcp-review-"));
+        writeFileSync(join(dir, "org.yaml"), `${ORG}approvals:\n  escalate_via_manager: true\n`);
+        const { db } = createInMemoryDb();
+        const registry = new RegistryService(db, new EventBus());
+        for (const agentId of ["claude-code", "codex", "writer-bot"]) {
+          registry.register({ id: agentId, displayName: agentId, transport: "stdio" });
+        }
+        const comms = new OrgComms(db, { orgConfigPath: join(dir, "org.yaml") });
+        const reviews = new ApprovalReviews(db, comms, { registry });
+        const services = makeServices("allowed");
+        Object.assign(services as unknown as Record<string, unknown>, {
+          registry,
+          comms,
+          reviews,
+          approval: new DbApprovalService(db, { approvalKey: Buffer.alloc(32, 9) }),
+        });
+        db.insert(pendingApprovals)
+          .values({
+            requestId: APPROVAL,
+            sourceAgent: "codex",
+            targetTool: "shell_exec",
+            args: "{}",
+            riskScore: 40,
+            riskReasons: "[]",
+            riskBucket: "medium",
+            status: "pending",
+            requestedAt: Date.now(),
+            deadlineMs: Date.now() + 600_000,
+          })
+          .run();
+        reviews.escalate({
+          requestId: APPROVAL,
+          sourceAgent: "codex",
+          targetTool: "shell_exec",
+          args: { command: "npm test" },
+          riskScore: 40,
+          riskReasons: ["shell_exec"],
+          riskBucket: "medium",
+          deadlineMs: Date.now() + 600_000,
+        });
+        const row = () => db.select().from(pendingApprovals).where(eq(pendingApprovals.requestId, APPROVAL)).get()!;
+        const reviewId = db.select().from(approvalReviews).where(eq(approvalReviews.approvalId, APPROVAL)).get()!.handle;
+        return { services, row, registry, reviewId };
+      }
+
+      it("is advertised", async () => {
+        const out = (await handleMessage(makeServices("allowed"), "codex", {
+          jsonrpc: "2.0",
+          id: 88,
+          method: "tools/list",
+        } as JSONRPCMessage)) as unknown as { result: { tools: { name: string }[] } };
+        expect(out.result.tools.map((t) => t.name)).toContain("org_recommend");
+      });
+
+      it("the manager recommends by review id; nothing it reads names the approval; it is audited", async () => {
+        const { services, row, reviewId } = await withReviews();
+        const review = await call(services, "claude-code", "org_read", {});
+        expect(review.result.content[0]!.text).toContain(`review_id: ${reviewId}`);
+        expect(review.result.content[0]!.text).not.toContain(APPROVAL);
+        const out = await call(services, "claude-code", "org_recommend", {
+          review_id: reviewId,
+          recommendation: "allow",
+          reason: "tests only",
+        });
+        expect(out.result.isError).toBe(false);
+        expect(out.result.content[0]!.text).toBe(
+          `Recommended allow on review ${reviewId}. The human sees it next to the approval and decides.`,
+        );
+        const after = await call(services, "claude-code", "org_read", {});
+        expect(after.result.content[0]!.text).not.toContain(APPROVAL);
+        // The requester's view of the thread doesn't name it either.
+        expect((await call(services, "codex", "org_read", {})).result.content[0]!.text).not.toContain(APPROVAL);
+        expect(row()).toMatchObject({ status: "pending", decision: null });
+        expect(services.audit.logEvent).toHaveBeenCalledWith(
+          "org:recommendation",
+          expect.objectContaining({ sourceAgent: "claude-code", ok: true, approvalId: APPROVAL, reviewId, recommendation: "allow" }),
+        );
+      });
+
+      it("the review id can't decide the approval, and a recommendation doesn't change it", async () => {
+        const { services, row, reviewId } = await withReviews();
+        await call(services, "claude-code", "org_recommend", { review_id: reviewId, recommendation: "allow", reason: "ok" });
+        for (const args of [
+          { approval_id: reviewId, decision: "allow" },
+          { approval_id: reviewId, decision: "deny" },
+          { approval_id: APPROVAL, decision: "allow" },
+          { approval_id: `${APPROVAL}.forgedtag0`, decision: "allow" },
+        ]) {
+          const out = await call(services, "claude-code", "submit_approval", args);
+          expect(out.result.isError).toBe(true);
+        }
+        expect(row()).toMatchObject({ status: "pending", decision: null });
+      });
+
+      it("a chat relay that is also the manager still relays the user's typed /deny", async () => {
+        const { services, row, reviewId } = await withReviews();
+        await call(services, "claude-code", "org_recommend", { review_id: reviewId, recommendation: "allow", reason: "ok" });
+        const out = await call(services, "claude-code", "submit_approval", { approval_id: APPROVAL, decision: "deny" });
+        expect(out.result.isError).toBeFalsy();
+        expect(row()).toMatchObject({ status: "resolved", decision: "denied" });
+      });
+
+      it("rejects a non-manager, the requester itself, a human source and spoofed arguments", async () => {
+        const { services, reviewId } = await withReviews();
+        const tries: Array<[string, Record<string, unknown>]> = [
+          ["writer-bot", {}],
+          ["codex", {}],
+          // Arguments can't name someone else as the author.
+          ["writer-bot", { from: "claude-code", source: "claude-code", as: "cto" }],
+          ["cli", {}],
+          ["CTO", {}],
+          // An approval id is not a review id.
+          ["claude-code", { review_id: APPROVAL }],
+        ];
+        for (const [agent, extra] of tries) {
+          const out = await call(services, agent, "org_recommend", {
+            review_id: reviewId,
+            recommendation: "allow",
+            reason: "looks fine",
+            ...extra,
+          });
+          expect(out.result.isError).toBe(true);
+          expect(out.result.content[0]!.text).toMatch(/^Not recorded: /);
+        }
+        expect(services.audit.logEvent).toHaveBeenCalledWith(
+          "org:recommendation",
+          expect.objectContaining({ sourceAgent: "codex", ok: false }),
+        );
+      });
+
+      it("a blocked manager gets no voice, whatever the case of its --source", async () => {
+        const { services, registry, reviewId } = await withReviews();
+        registry.block("claude-code");
+        for (const source of ["claude-code", "Claude-Code", "CLAUDE-CODE"]) {
+          const out = await call(services, source, "org_recommend", { review_id: reviewId, recommendation: "deny", reason: "x" });
+          expect(out.result.isError).toBe(true);
+          expect(out.result.content[0]!.text).toBe("Not recorded: claude-code is blocked in Foreman.");
+        }
+      });
     });
   });
 });

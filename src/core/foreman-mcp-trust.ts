@@ -30,6 +30,7 @@ export const FOREMAN_OWN_TOOLS: ReadonlySet<string> = new Set([
   "org_post",
   "org_read",
   "org_report",
+  "org_recommend",
   "ask_user_with_options",
   "submit_user_answer",
   "submit_resolution",

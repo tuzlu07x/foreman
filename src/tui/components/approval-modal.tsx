@@ -1,6 +1,10 @@
 import { Box, Text } from "ink";
 import type { JSX } from "react";
 import type { ApprovalRequest } from "../../core/approval.js";
+import {
+  recommendationParts,
+  type ApprovalRecommendation,
+} from "../../core/org/review.js";
 import type {
   RiskBucket,
   RiskCategory,
@@ -25,6 +29,8 @@ export interface ApprovalModalProps {
   remainingSeconds: number;
   /** Layer 3 (technical detail) visibility — toggled with [t]. */
   technicalExpanded?: boolean;
+  /** Manager agents' advice (#623). Shown only; the keys still decide. */
+  recommendations?: ApprovalRecommendation[];
 }
 
 const CATEGORY_ORDER: RiskCategory[] = [
@@ -100,6 +106,7 @@ export function ApprovalModal({
   request,
   remainingSeconds,
   technicalExpanded = false,
+  recommendations = [],
 }: ApprovalModalProps): JSX.Element {
   // Prefer the 3-layer security report when available; fall back to the
   // legacy factor-grouped view for cross-process / pre-#232 requests.
@@ -110,11 +117,56 @@ export function ApprovalModal({
         report={request.securityReport}
         remainingSeconds={remainingSeconds}
         technicalExpanded={technicalExpanded}
+        recommendations={recommendations}
       />
     );
   }
   return (
-    <LegacyModal request={request} remainingSeconds={remainingSeconds} />
+    <LegacyModal
+      request={request}
+      remainingSeconds={remainingSeconds}
+      recommendations={recommendations}
+    />
+  );
+}
+
+/** What the requester's manager agent recommends (#623). */
+export function RecommendationBlock({
+  recommendations,
+}: {
+  recommendations: ApprovalRecommendation[];
+}): JSX.Element | null {
+  if (recommendations.length === 0) return null;
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text color={theme.fg.muted}>Manager review:</Text>
+      {recommendations.slice(0, 3).map((r) => {
+        // Every field is one capped line: a reason can't fake key hints
+        // or push the real ones off screen.
+        const p = recommendationParts(r);
+        return (
+          <Text key={r.managerRole} wrap="truncate-end">
+            {"    "}
+            <Text color={theme.accent.primary}>{theme.symbols.reason}</Text>{" "}
+            {p.who} recommends{" "}
+            <Text
+              bold
+              color={
+                p.recommendation === "allow"
+                  ? theme.accent.success
+                  : theme.accent.danger
+              }
+            >
+              {p.recommendation}
+            </Text>
+            : {p.reason}
+          </Text>
+        );
+      })}
+      <Text color={theme.fg.muted}>
+        {"    "}Advice only. Your decision is final.
+      </Text>
+    </Box>
   );
 }
 
@@ -127,11 +179,13 @@ function ReportModal({
   report,
   remainingSeconds,
   technicalExpanded,
+  recommendations,
 }: {
   request: ApprovalRequest;
   report: SecurityReport;
   remainingSeconds: number;
   technicalExpanded: boolean;
+  recommendations: ApprovalRecommendation[];
 }): JSX.Element {
   const color = severityColor(report);
   // Border style now tracks severity (#234 UX-6): bold frame for critical
@@ -172,6 +226,8 @@ function ReportModal({
       <Box marginTop={1}>
         <Text color={theme.fg.muted}>{SOURCE_FOOTER[report.source]}</Text>
       </Box>
+
+      <RecommendationBlock recommendations={recommendations} />
 
       <Box marginTop={1}>
         <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>
@@ -321,9 +377,11 @@ function TechnicalBlock({
 function LegacyModal({
   request,
   remainingSeconds,
+  recommendations,
 }: {
   request: ApprovalRequest;
   remainingSeconds: number;
+  recommendations: ApprovalRecommendation[];
 }): JSX.Element {
   const bucket: RiskBucket = request.riskBucket ?? "medium";
   const borderColor = bucketColor(bucket);
@@ -400,6 +458,8 @@ function LegacyModal({
           </Text>
         </Box>
       ) : null}
+
+      <RecommendationBlock recommendations={recommendations} />
 
       <Box marginTop={1}>
         <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>

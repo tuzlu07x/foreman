@@ -1,4 +1,5 @@
 import type { ApprovalRequest } from "../core/approval.js";
+import type { ApprovalRecommendation } from "../core/org/review.js";
 
 // =============================================================================
 // Approval queue (#614)
@@ -31,6 +32,8 @@ export interface QueuedApproval {
    *  (the bridge's stale sweep covers requesters that died). */
   hasDeadline: boolean;
   receivedAt: number;
+  /** Manager agents' advice (#623). Shown, never acted on. */
+  recommendations: ApprovalRecommendation[];
 }
 
 export interface ApprovalQueueState {
@@ -45,6 +48,7 @@ export function enqueueApproval(
   state: ApprovalQueueState,
   request: ApprovalRequest,
   now: number,
+  recommendations: ApprovalRecommendation[] = [],
 ): ApprovalQueueState {
   if (state.items.some((i) => i.request.requestId === request.requestId)) return state;
   const item: QueuedApproval = {
@@ -52,12 +56,28 @@ export function enqueueApproval(
     deadline: request.deadlineMs ?? now + FALLBACK_DEADLINE_MS,
     hasDeadline: request.deadlineMs !== undefined,
     receivedAt: now,
+    recommendations,
   };
   const items = [...state.items, item].sort(
     (a, b) => a.deadline - b.deadline || a.receivedAt - b.receivedAt,
   );
   // Keep the user's place: a newly arrived approval never steals focus.
   return { items, selectedId: state.selectedId ?? request.requestId };
+}
+
+/** Attach a manager's recommendation to its approval (#623). It changes
+ *  what is shown, never the deadline, the order or the selection. */
+export function addRecommendation(
+  state: ApprovalQueueState,
+  rec: ApprovalRecommendation,
+): ApprovalQueueState {
+  const index = state.items.findIndex((i) => i.request.requestId === rec.approvalId);
+  if (index === -1) return state;
+  const item = state.items[index]!;
+  if (item.recommendations.some((r) => r.managerRole === rec.managerRole)) return state;
+  const items = [...state.items];
+  items[index] = { ...item, recommendations: [...item.recommendations, rec] };
+  return { ...state, items };
 }
 
 export function removeApproval(state: ApprovalQueueState, requestId: string): ApprovalQueueState {
