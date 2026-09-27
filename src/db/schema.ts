@@ -540,7 +540,7 @@ export const inboxItems = sqliteTable(
     createdAt: integer("created_at").notNull(),
     level: text("level", { enum: ["info", "warning", "critical"] }).notNull(),
     kind: text("kind", {
-      enum: ["approval", "block", "delegation", "budget", "agent", "update", "system"],
+      enum: ["approval", "block", "delegation", "budget", "agent", "update", "system", "message"],
     }).notNull(),
     title: text("title").notNull(),
     body: text("body").notNull().default(""),
@@ -590,6 +590,29 @@ export const agentUsage = sqliteTable(
 
 export type AgentUsage = typeof agentUsage.$inferSelect;
 export type NewAgentUsage = typeof agentUsage.$inferInsert;
+
+// Department channels (#630). See 0025_org_messages.sql.
+export const orgMessages = sqliteTable(
+  "org_messages",
+  {
+    id: text("id").primaryKey(),
+    ts: integer("ts").notNull(),
+    channel: text("channel").notNull(),
+    fromAgent: text("from_agent").notNull(),
+    fromRole: text("from_role"),
+    kind: text("kind", { enum: ["message", "report", "question", "handoff", "announcement"] }).notNull(),
+    text: text("text").notNull(),
+    replyTo: text("reply_to"),
+    mirroredAt: integer("mirrored_at"),
+  },
+  (t) => ({
+    channelIdx: index("org_messages_channel_idx").on(t.channel, t.ts),
+    tsIdx: index("org_messages_ts_idx").on(t.ts),
+    unmirroredIdx: index("org_messages_unmirrored_idx").on(t.mirroredAt, t.ts),
+  }),
+);
+
+export type OrgMessage = typeof orgMessages.$inferSelect;
 
 // FTS5 virtual table and triggers live in a hand-written migration
 // (drizzle-kit cannot emit virtual tables). See:

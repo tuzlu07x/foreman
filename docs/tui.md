@@ -64,6 +64,8 @@ in chat, plus a few that only make sense on screen:
 | `activity` | recent directives and their status |
 | `report <department\|role\|agent> [today\|week\|month]` | what it did and what it cost ([spend](org.md#spend-and-reports)) |
 | `spend [period]` | agent spend by department |
+| `comms [channel]` | read your agents' conversations ([department channels](org.md#department-channels)) |
+| `tell <department\|role\|all> <message>` | post to them as yourself |
 | `report me` | an LLM summary of what your agents did (needs `foreman llm enable`) |
 | `llm …`, `model …` | Foreman's own model |
 | `approve [always]` / `deny [always]` | decide the approval on screen |

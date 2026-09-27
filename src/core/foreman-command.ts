@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { isHumanSource, orgBudgetBlock, orgDelegationVerdict } from "./org/guard.js";
 import { loadOrg, renderOrgLines, resolveAssignee, type OrgDoc } from "./org/org.js";
 import { buildOrgReport, parsePeriod, renderOrgReport, resolveReportTarget } from "./usage/report.js";
+import { BOSS, OrgComms, renderMessages } from "./org/comms.js";
 import { FOREMAN_VERSION } from "../version.js";
 import type { ForemanDb } from "../db/client.js";
 import { DelegationTracker } from "./delegation-tracker.js";
@@ -318,6 +319,16 @@ export function registerBuiltinCommands(router: ForemanCommandRouter): void {
     "What a department, role or agent did and what it cost: `report marketing month`. `report me` asks Foreman's LLM.",
   );
   router.register(
+    "tell",
+    tellHandler,
+    "Post to a department, role, leadership or all-hands as you: `tell marketing ship the launch post Friday`.",
+  );
+  router.register(
+    "comms",
+    commsHandler,
+    "Read your agents' conversations: `comms`, `comms marketing`, `comms leadership 50`.",
+  );
+  router.register(
     "spend",
     spendHandler,
     "Agent spend by department: `spend`, `spend marketing week` (today · week · month · 7d).",
@@ -440,6 +451,44 @@ function orgReport(args: string[], ctx: ForemanCommandContext, fallbackToCompany
   if (!targetWord && !periodWord && !fallbackToCompany) return null;
   const period = parsePeriod(periodWord)!;
   return { ok: true, text: renderOrgReport(buildOrgReport(ctx.db, org, target, period)) };
+}
+
+// Department channels (#630). Reading every channel and posting as you are
+// owner actions, available only where Foreman knows it is you: the TUI, the
+// CLI, and `/foreman` from Slack / Discord allowed users. The relayed chat
+// path can't prove that, so it doesn't get them.
+function ownerOnly(verb: string): ForemanCommandResult {
+  return {
+    ok: false,
+    text: `\`${verb}\` is for you only: use the TUI console, \`foreman org ${verb === "comms" ? "messages" : verb}\`, or /foreman in two-way Slack or Discord.`,
+    errorCode: "NOT_AUTHORIZED",
+  };
+}
+
+function tellHandler(args: string[], ctx: ForemanCommandContext): ForemanCommandResult {
+  if (!ctx.trustedOwner) return ownerOnly("tell");
+  const [to, ...rest] = args;
+  const text = rest.join(" ").trim();
+  if (!to || !text) {
+    return { ok: false, text: "Usage: `tell <department|role|leadership|all> <message>`" };
+  }
+  const comms = new OrgComms(ctx.db, { orgConfigPath: join(ctx.configDir, "org.yaml") });
+  const result = comms.post({ from: BOSS, to, text, kind: to.toLowerCase() === "all" ? "announcement" : "message" });
+  if (!result.ok) return { ok: false, text: result.reason };
+  return { ok: true, text: `Posted to ${result.label}. Agents there read it with org_read.` };
+}
+
+function commsHandler(args: string[], ctx: ForemanCommandContext): ForemanCommandResult {
+  if (!ctx.trustedOwner) return ownerOnly("comms");
+  const limitArg = args.find((a) => /^\d+$/.test(a));
+  const channel = args.find((a) => a !== limitArg);
+  const comms = new OrgComms(ctx.db, { orgConfigPath: join(ctx.configDir, "org.yaml") });
+  const messages = comms.read({
+    viewer: BOSS,
+    ...(channel ? { channel } : {}),
+    limit: limitArg ? Number(limitArg) : 20,
+  });
+  return { ok: true, text: renderMessages(messages) };
 }
 
 function spendHandler(args: string[], ctx: ForemanCommandContext): ForemanCommandResult {

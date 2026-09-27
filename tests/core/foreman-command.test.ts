@@ -1767,4 +1767,36 @@ credentials:
       expect(fromOwner.ok).toBe(true);
     });
   });
+
+  describe("department channels from chat (#630)", () => {
+    beforeEach(() => {
+      writeFileSync(
+        join(tmp, "org.yaml"),
+        [
+          "version: 1",
+          "company: Acme",
+          "departments:",
+          "  marketing: { name: Marketing, head: cmo }",
+          "roles:",
+          "  cmo: { title: CMO, agent: writer-bot, department: marketing, reports_to: human }",
+          "",
+        ].join("\n"),
+      );
+    });
+
+    it("tell and comms are yours only: the TUI / Slack / Discord, never a relayed chat", async () => {
+      const relayed = await router.dispatch("tell", ["marketing", "hi"], { ...ctx, sourceUser: "12345" });
+      expect(relayed.errorCode).toBe("NOT_AUTHORIZED");
+      expect((await router.dispatch("comms", [], ctx)).errorCode).toBe("NOT_AUTHORIZED");
+
+      const owner = { ...ctx, sourceAgent: "tui", trustedOwner: true };
+      const told = await router.dispatch("tell", ["marketing", "ship", "the", "post", "Friday"], owner);
+      expect(told.ok).toBe(true);
+      expect(told.text).toContain("#marketing");
+      const read = await router.dispatch("comms", ["marketing"], owner);
+      expect(read.text).toContain("#marketing · you: ship the post Friday");
+      const bad = await router.dispatch("tell", ["legal", "x"], owner);
+      expect(bad.ok).toBe(false);
+    });
+  });
 });

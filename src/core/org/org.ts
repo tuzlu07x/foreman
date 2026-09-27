@@ -47,6 +47,10 @@ const RoleSchema = z
   })
   .strict();
 
+/** Where a channel is mirrored: platform → channel (`slack: "#marketing"`,
+ *  `discord: "123456789012345678"`). Any platform with a mirror adapter. */
+const ChannelMapSchema = z.record(z.string().regex(/^[a-z][a-z0-9-]{0,31}$/), z.string().min(1).max(120));
+
 const BudgetSchema = z
   .object({
     monthly_usd: z.number().positive().max(1_000_000).optional(),
@@ -66,6 +70,8 @@ const DepartmentSchema = z
     mcp_servers: z.array(z.string().min(1)).optional(),
     /** Spend limit for the department's agents (#629). */
     budget: BudgetSchema.optional(),
+    /** Chat channels the department's conversation is mirrored to (#630). */
+    channels: ChannelMapSchema.optional(),
   })
   .strict();
 
@@ -91,6 +97,17 @@ export const OrgDocSchema = z
       .default({}),
     departments: z.record(z.string(), DepartmentSchema).default({}),
     roles: z.record(z.string(), RoleSchema),
+    /** Company-wide channel mirrors (#630): all-hands, leadership,
+     *  reports to you, and role-to-role threads. */
+    channels: z
+      .object({
+        all: ChannelMapSchema.optional(),
+        leadership: ChannelMapSchema.optional(),
+        boss: ChannelMapSchema.optional(),
+        direct: ChannelMapSchema.optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -232,7 +249,7 @@ export function directReports(doc: OrgDoc, roleId: string): string[] {
     .map(([id]) => id);
 }
 
-function isHead(doc: OrgDoc, roleId: string): boolean {
+export function isHead(doc: OrgDoc, roleId: string): boolean {
   const dept = doc.roles[roleId]?.department;
   return Boolean(dept && doc.departments[dept]?.head === roleId);
 }
@@ -288,7 +305,7 @@ export function checkDelegation(
   };
 }
 
-function checkRolePair(doc: OrgDoc, from: string, to: string): DelegationVerdict {
+export function checkRolePair(doc: OrgDoc, from: string, to: string): DelegationVerdict {
   const fromRole = doc.roles[from]!;
   const toRole = doc.roles[to]!;
   if (toRole.reports_to === from) return { allowed: true, reason: `${from} manages ${to}` };
