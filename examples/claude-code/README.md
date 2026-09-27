@@ -19,7 +19,13 @@ You should see the boot banner, then the empty dashboard. Leave this running in 
 
 ## 3. Point Claude Code at Foreman
 
-Edit Claude Code's MCP config (typically `~/.claude/claude_desktop_config.json` on macOS) and add the `foreman` entry:
+Register Foreman as a user-scope MCP server so it loads in every project:
+
+```bash
+claude mcp add --scope user foreman -- foreman mcp-stdio --source claude-code
+```
+
+Claude Code stores user-scope servers under `mcpServers` in `~/.claude.json` (not in `~/.claude/settings.json`). The command above writes this entry:
 
 ```json
 {
@@ -33,11 +39,15 @@ Edit Claude Code's MCP config (typically `~/.claude/claude_desktop_config.json` 
 ```
 
 - `--source` is the agent id Foreman records on every request. `claude-code` is the convention; pick whatever matches your other policy rules.
-- If you installed without `-g`, replace `command` with the absolute path to the built `dist/cli/index.js` (and `args: ["mcp-stdio", "--source", "claude-code"]`).
+- Everything after `--` is passed to the server untouched. If you installed without `-g`, replace `foreman` after the `--` with `node /absolute/path/to/dist/cli/index.js`.
 
-## 4. Reload Claude Code
+## 4. Check the connection
 
-In Claude Code: **Settings → MCP servers → Reload**. The `foreman` server should appear connected.
+```bash
+claude mcp get foreman
+```
+
+Start a new Claude Code session so it picks up the server.
 
 Now every `tools/call` Claude makes through this MCP server flows through Foreman. You'll see them live in the TUI's Activity panel.
 
