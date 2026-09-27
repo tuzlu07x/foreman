@@ -1390,6 +1390,17 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       ((page === "providers" || page === "services") && pageEditing);
     const letter = /^[a-zA-Z]$/.test(input) && !key.ctrl && !key.meta;
     if (letter && (pendingApproval || !textEntry) && swallowUnsettledKey()) return;
+    // `q` works here too, behind the usual confirmation (#637). Quitting
+    // never decides anything: waiting calls fail closed when they time out.
+    if (pendingApproval && quitConfirm) {
+      if (input === "y" || input === "Y") exit();
+      else if (input === "n" || input === "N" || key.escape) setQuitConfirm(false);
+      return;
+    }
+    if (pendingApproval && input === "q") {
+      setQuitConfirm(true);
+      return;
+    }
     if (pendingApproval && inspectOpen) {
       if (key.escape) {
         setInspectOpen(false);

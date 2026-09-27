@@ -121,6 +121,7 @@ export function StatusBar({ page = "dashboard", quitConfirm, approval }: StatusB
         <Text color={theme.accent.warning} bold>
           Quit Foreman? Agents stop being guarded.{" "}
         </Text>
+        {approval ? <Text color={theme.fg.muted}>Waiting calls will be denied. </Text> : null}
         <Text color={theme.fg.default}>y</Text>
         <Text color={theme.fg.muted}> yes · </Text>
         <Text color={theme.fg.default}>n</Text>
