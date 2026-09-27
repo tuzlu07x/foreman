@@ -26,12 +26,13 @@ export interface ScannableTool {
   name: string;
   description?: string;
   inputSchema?: unknown;
+  annotations?: unknown;
 }
 
 // Zero-width, bidi-override and Unicode "tag" characters are invisible in
 // most UIs but perfectly readable to a model.
 const INVISIBLE_RE =
-  /[​-‏‪-‮⁠-⁤⁦-⁩﻿]|\uDB40[\uDC00-\uDC7F]/u;
+  /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\u{E0000}-\u{E007F}]/u;
 
 const HIDDEN_TAG_RE =
   /<\s*\/?\s*(important|system|secret|hidden|instructions?|admin|override)\s*>/i;
@@ -115,9 +116,12 @@ export function hasBlockingFinding(findings: readonly ToolScanFinding[]): boolea
 
 function collectDescriptions(tool: ScannableTool): Array<{ location: string; text: string }> {
   const out: Array<{ location: string; text: string }> = [];
+  // The name reaches the model too; invisible characters hide there as well.
+  out.push({ location: "name", text: tool.name });
   if (typeof tool.description === "string" && tool.description.length > 0) {
     out.push({ location: "description", text: tool.description });
   }
+  walkSchema(tool.annotations, "annotations", out, 0);
   walkSchema(tool.inputSchema, "inputSchema", out, 0);
   return out;
 }

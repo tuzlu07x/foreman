@@ -633,11 +633,6 @@ export const secretPatternRule: RiskRule = {
 // keeps the scheme / user / host and masks only the password.
 
 const REDACTION_PATTERNS: ReadonlyArray<{ pattern: RegExp; label: string }> = [
-  {
-    pattern:
-      /-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----[\s\S]{0,20000}?-----END (?:RSA |DSA |EC |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----/g,
-    label: 'private key',
-  },
   ...CONTENT_PATTERNS.filter((p) => !p.label.startsWith('PEM') && !p.label.startsWith('Database')).map(
     (p) => ({ pattern: new RegExp(p.pattern.source, p.pattern.flags.includes('g') ? p.pattern.flags : `${p.pattern.flags}g`), label: p.label }),
   ),
@@ -652,10 +647,53 @@ export interface RedactionResult {
   labels: string[]
 }
 
-export function redactSecretShapes(text: string): RedactionResult {
+const PEM_BEGIN_RE = /-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----/g
+const PEM_END_RE = /-----END (?:RSA |DSA |EC |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----/g
+const PEM_BODY_CHAR_RE = /[A-Za-z0-9+/=\s:,.-]/
+const PEM_MAX_BODY_CHARS = 20_000
+
+/** Mask private-key blocks in one linear pass. A lazy BEGIN…END regex
+ *  backtracks quadratically on text full of BEGIN headers (seconds per MB,
+ *  on the mcp-stdio event loop); pairing header positions does not. A key
+ *  whose END line is missing (cut-off output) is masked through its body. */
+function redactPemBlocks(text: string): { text: string; count: number } {
+  if (!text.includes('PRIVATE KEY-----')) return { text, count: 0 }
+  const ends: number[][] = []
+  PEM_END_RE.lastIndex = 0
+  for (let m = PEM_END_RE.exec(text); m; m = PEM_END_RE.exec(text)) {
+    ends.push([m.index, m.index + m[0].length])
+  }
+  let out = ''
+  let cursor = 0
+  let next = 0
   let count = 0
+  PEM_BEGIN_RE.lastIndex = 0
+  for (let m = PEM_BEGIN_RE.exec(text); m; m = PEM_BEGIN_RE.exec(text)) {
+    const bodyStart = m.index + m[0].length
+    while (next < ends.length && ends[next]![0]! < bodyStart) next++
+    const end = ends[next]
+    let stop: number
+    if (end && end[0]! - bodyStart <= PEM_MAX_BODY_CHARS) {
+      stop = end[1]!
+    } else {
+      stop = bodyStart
+      const limit = Math.min(text.length, bodyStart + PEM_MAX_BODY_CHARS)
+      while (stop < limit && PEM_BODY_CHAR_RE.test(text[stop]!)) stop++
+    }
+    out += `${text.slice(cursor, m.index)}[REDACTED private key]`
+    cursor = stop
+    count++
+    PEM_BEGIN_RE.lastIndex = stop
+  }
+  return { text: out + text.slice(cursor), count }
+}
+
+export function redactSecretShapes(text: string): RedactionResult {
   const labels = new Set<string>()
-  let out = text
+  const pem = redactPemBlocks(text)
+  let count = pem.count
+  if (count > 0) labels.add('private key')
+  let out = pem.text
   for (const { pattern, label } of REDACTION_PATTERNS) {
     pattern.lastIndex = 0
     out = out.replace(pattern, () => {

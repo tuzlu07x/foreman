@@ -9,6 +9,7 @@ import {
   type ServerConfig,
   type ToolRuleEffect,
 } from "./config.js";
+import { redactSecretShapes } from "../risk-rules/secret-patterns.js";
 import { serverFingerprint, ToolPinStore, type PinnedTool } from "./pins.js";
 import { guardToolResult, type ResultGuardStats } from "./result-guard.js";
 import { hasBlockingFinding, scanToolDefinition, type ToolScanFinding } from "./tool-scan.js";
@@ -106,6 +107,9 @@ interface ServerState {
   /** Live definitions were compared against the pins this session. */
   verified: boolean;
   error: string | null;
+  /** Secret values resolved into this server's launch config; scrubbed
+   *  from upstream error text before it reaches an agent or the audit log. */
+  secretValues: string[];
 }
 
 export class McpHub {
@@ -131,6 +135,7 @@ export class McpHub {
         source: "unavailable",
         verified: false,
         error: null,
+        secretValues: [],
       });
     }
   }
@@ -255,7 +260,11 @@ export class McpHub {
     const client = await this.connect(state);
     // Cached (pinned) listings are re-verified against the live server
     // before the first call, so a rug pull is caught before it runs.
-    if (!state.verified) await this.verifyLive(state, client);
+    if (!state.verified) {
+      await this.verifyLive(state, client).catch((err: unknown) => {
+        throw this.scrubbed(state, err);
+      });
+    }
     const live = (state.tools ?? []).find((t) => t.exposedName === tool.exposedName);
     if (!live || live.status !== "available") {
       throw new HubToolUnavailableError(
@@ -263,7 +272,11 @@ export class McpHub {
       );
     }
     const started = this.now();
-    const raw = await client.callTool(tool.name, args, state.config.timeout_seconds * 1000);
+    const raw = await client
+      .callTool(tool.name, args, state.config.timeout_seconds * 1000)
+      .catch((err: unknown) => {
+        throw this.scrubbed(state, err);
+      });
     const { security, limits } = this.opts.config;
     const guarded = guardToolResult(raw, {
       maxChars: limits.max_result_chars,
@@ -330,7 +343,7 @@ export class McpHub {
       const client = await this.connect(state);
       await this.verifyLive(state, client);
     } catch (err) {
-      state.error = describeError(err);
+      state.error = this.scrub(state, describeError(err));
       state.source = "unavailable";
       state.tools = state.tools ?? [];
     }
@@ -420,7 +433,7 @@ export class McpHub {
           await client.connect();
         } catch (err) {
           await client.close().catch(() => undefined);
-          throw err;
+          throw this.scrubbed(state, err);
         }
         state.client = client;
         return client;
@@ -431,8 +444,30 @@ export class McpHub {
     return state.connecting;
   }
 
+  /** Upstream error text (including the server's stderr tail) can echo a
+   *  token back; mask the values Foreman injected and anything secret-shaped. */
+  private scrub(state: ServerState, text: string): string {
+    let out = text;
+    for (const value of state.secretValues) {
+      if (value.length >= 4) out = out.split(value).join("[redacted]");
+    }
+    return redactSecretShapes(out).text;
+  }
+
+  private scrubbed(state: ServerState, err: unknown): Error {
+    if (err instanceof HubToolUnavailableError || err instanceof MissingSecretError) return err;
+    return new Error(this.scrub(state, describeError(err)));
+  }
+
   private resolveServer(state: ServerState): ResolvedServer {
-    const resolve = (v: string): string => resolveSecretRefs(state.name, v, this.opts.resolveSecret);
+    const secrets: string[] = [];
+    const lookup = (name: string): string | null => {
+      const value = this.opts.resolveSecret(name);
+      if (value) secrets.push(value);
+      return value;
+    };
+    state.secretValues = secrets;
+    const resolve = (v: string): string => resolveSecretRefs(state.name, v, lookup);
     const c = state.config;
     if (c.url) {
       return { kind: "http", name: state.name, url: resolve(c.url), headers: mapValues(c.headers, resolve) };

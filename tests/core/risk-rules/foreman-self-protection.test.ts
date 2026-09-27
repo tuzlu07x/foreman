@@ -54,6 +54,15 @@ describe('foreman self-protection rule', () => {
     expect(rules(read)).not.toContain('agent_wiring_tamper')
   })
 
+  it('flags a project .mcp.json write and hub-namespaced write tools', () => {
+    expect(
+      rules({ sourceAgent: 'a', targetTool: 'file_write', args: { path: '/repo/.mcp.json' } }),
+    ).toContain('agent_wiring_tamper')
+    expect(
+      rules({ sourceAgent: 'a', targetTool: 'fs__write_file', args: { path: '/home/u/.claude/settings.json' } }),
+    ).toContain('agent_wiring_tamper')
+  })
+
   it('flags mutating foreman CLI calls, allows delegation and log reading', () => {
     const cli = (cmd: string) => rules({ sourceAgent: 'a', targetTool: 'shell_exec', args: { cmd } })
     expect(cli('foreman policy reset')).toContain('foreman_cli_tamper')
