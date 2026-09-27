@@ -1,8 +1,14 @@
-import { and, asc, eq, gt, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import type { ForemanDb } from "../../db/client.js";
 import { orgMessages, type OrgMessage } from "../../db/schema.js";
 import type { InboxService } from "../inbox.js";
-import { clipText, defaultFetch, postWithTimeout, type HttpFetch } from "../notification/channels/http-post.js";
+import {
+  ChannelDeliveryError,
+  clipText,
+  defaultFetch,
+  postWithTimeout,
+  type HttpFetch,
+} from "../notification/channels/http-post.js";
 import { BOSS, channelLabel } from "./comms.js";
 import { loadOrg, type OrgDoc } from "./org.js";
 
@@ -41,7 +47,8 @@ export class SlackMirror implements OrgMirror {
 
   async post(channel: string, m: MirrorMessage): Promise<void> {
     const kind = m.kind === "message" ? "" : ` · ${m.kind}`;
-    const text = `*${escapeSlack(m.author)}*${kind}\n${escapeSlack(clipText(m.text, 3_500))}`;
+    // The body is quoted, so a message can't fake a header of its own.
+    const text = `*${escapeSlack(m.author)}*${kind}\n${quote(escapeSlack(clipText(m.text, 3_500)))}`;
     const res = await postWithTimeout({
       channel: "slack",
       fetchImpl: this.fetchImpl,
@@ -71,7 +78,7 @@ export class DiscordMirror implements OrgMirror {
       url: `https://discord.com/api/v10/channels/${channelId}/messages`,
       headers: { authorization: `Bot ${this.botToken}`, "content-type": "application/json" },
       body: JSON.stringify({
-        content: clipText(`**${m.author}**${kind}\n${m.text}`, 1_900),
+        content: clipText(`**${m.author}**${kind}\n${quote(m.text)}`, 1_900),
         // Agent text must never ping anyone.
         allowed_mentions: { parse: [] },
       }),
@@ -90,10 +97,13 @@ export interface CommsMirrorOptions {
 
 /** Messages older than this when Foreman starts are not mirrored late. */
 const MAX_AGE_MS = 24 * 3_600_000;
+/** Back off this long after a platform says 429. */
+const RATE_LIMIT_PAUSE_MS = 10_000;
 
 export class CommsMirrorWorker {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private pausedUntil = 0;
   private readonly warned = new Set<string>();
 
   constructor(
@@ -119,18 +129,22 @@ export class CommsMirrorWorker {
     this.running = true;
     try {
       const now = (this.opts.now ?? Date.now)();
+      if (now < this.pausedUntil) return;
       const pending = this.db
         .select()
         .from(orgMessages)
-        .where(and(isNull(orgMessages.mirroredAt), gt(orgMessages.ts, now - MAX_AGE_MS)))
+        .where(isNull(orgMessages.mirroredAt))
         .orderBy(asc(orgMessages.ts), asc(orgMessages.id))
         .limit(50)
         .all();
       if (pending.length === 0) return;
       const org = this.org();
       for (const m of pending) {
+        // Reports to you always reach the inbox, however late.
         if (m.channel === BOSS) this.toInbox(m);
-        for (const [platform, target] of targetsFor(org, m.channel)) {
+        // Chat channels only get what is still news.
+        const fresh = m.ts > now - MAX_AGE_MS;
+        for (const [platform, target] of fresh ? targetsFor(org, m.channel) : []) {
           const mirror = this.opts.mirrors.get(platform);
           if (!mirror) {
             this.warn(`org.yaml maps ${channelLabel(m.channel)} to ${platform}, but ${platform} has no bot token in notify.yaml`);
@@ -144,7 +158,16 @@ export class CommsMirrorWorker {
               text: m.text,
             });
           } catch (err) {
-            this.warn(`Couldn't mirror to ${platform} ${target}: ${err instanceof Error ? err.message : String(err)}`);
+            const status = err instanceof ChannelDeliveryError ? err.status : 0;
+            if (status === 429) {
+              // Rate limited: leave this and the rest for a later pass.
+              this.pausedUntil = now + RATE_LIMIT_PAUSE_MS;
+              return;
+            }
+            this.warn(
+              `Couldn't mirror to ${platform} ${target}${status ? ` (HTTP ${status})` : ""}`,
+              err instanceof Error ? err.message : String(err),
+            );
           }
         }
         // Delivered or given up: each message is attempted once.
@@ -166,10 +189,11 @@ export class CommsMirrorWorker {
     });
   }
 
-  private warn(message: string): void {
-    if (this.warned.has(message)) return;
-    this.warned.add(message);
-    this.opts.inbox?.add({ level: "warning", kind: "system", title: message, dedupeKey: `comms:${message}` });
+  /** One inbox warning per distinct problem (the detail can vary). */
+  private warn(title: string, detail = ""): void {
+    if (this.warned.has(title)) return;
+    this.warned.add(title);
+    this.opts.inbox?.add({ level: "warning", kind: "system", title, body: detail, dedupeKey: `comms:${title}` });
   }
 
   private org(): OrgDoc | null {
@@ -210,6 +234,14 @@ function authorOf(m: OrgMessage): string {
   const who = m.fromRole ? `${m.fromRole} (${m.fromAgent})` : m.fromAgent;
   if (m.channel === BOSS) return `${who} → you`;
   return m.channel.startsWith("dm:") ? `${who} → ${channelLabel(m.channel)}` : who;
+}
+
+/** Quote every line (`> `), so the body reads as one block under its author. */
+function quote(text: string): string {
+  return text
+    .split("\n")
+    .map((l) => `> ${l}`)
+    .join("\n");
 }
 
 function escapeSlack(text: string): string {

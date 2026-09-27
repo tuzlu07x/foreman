@@ -70,7 +70,7 @@ export class UsageLedger {
       cacheReadTokens: counts.cacheRead,
       cacheWriteTokens: counts.cacheWrite,
       totalTokens: counts.total > 0 ? counts.total : tokens,
-      costUsd: reported ? entry.costUsd! : (estimated ?? 0),
+      costUsd: Math.min(reported ? entry.costUsd! : (estimated ?? 0), MAX_COST_PER_RECORD),
       costEstimated: reported ? 0 : 1,
       taskRef: entry.taskRef?.slice(0, 64) ?? null,
       sessionRef: entry.sessionRef?.slice(0, 128) ?? null,
@@ -101,6 +101,11 @@ export class UsageLedger {
   }
 }
 
+/** Upper bounds for one record: far above any real request, low enough
+ *  that a bogus report can't produce absurd totals. */
+const MAX_TOKENS_PER_RECORD = 50_000_000;
+const MAX_COST_PER_RECORD = 100;
+
 function nonNegative(n: number | undefined): number {
-  return typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.min(Math.round(n), MAX_TOKENS_PER_RECORD) : 0;
 }

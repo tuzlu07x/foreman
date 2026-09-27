@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { ControlChannel } from "../core/control-channel.js";
-import { cliDelegationSource, orgDelegationVerdict } from "../core/org/guard.js";
+import { cliDelegationSource, isHumanSource, orgBudgetBlock, orgDelegationVerdict } from "../core/org/guard.js";
 import { EventBus, type ForemanEventMap } from "../core/event-bus.js";
 import { readForemanPid } from "../core/foreman-pidfile.js";
 import { RegistryService } from "../core/registry.js";
@@ -77,6 +77,14 @@ export async function runWrite(
           `blocked by the org chart: ${verdict.reason}. Hand the task to your manager or a department head.`,
       );
       return 2;
+    }
+    // Department budgets: an agent can't hand work into a paused department.
+    if (!isHumanSource(source)) {
+      const overBudget = orgBudgetBlock(db, paths.orgConfigPath, targetAgent);
+      if (overBudget) {
+        console.error(red("error: ") + `paused by budget: ${overBudget}. Ask the user to raise it (foreman org budget).`);
+        return 2;
+      }
     }
     const channel = new ControlChannel(db);
     const enq = channel.enqueue({

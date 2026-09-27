@@ -435,9 +435,15 @@ function orgReport(args: string[], ctx: ForemanCommandContext, fallbackToCompany
   } catch {
     org = null;
   }
-  const words = args.map((a) => a.toLowerCase()).filter((a) => a !== "me" && a !== "ben");
+  const all = args.map((a) => a.toLowerCase());
+  // `report me …` and anything longer than "<target> <period>" is a
+  // question for Foreman's LLM, when it's on.
+  const asksLlm = all.some((a) => a === "me" || a === "ben");
+  const words = all.filter((a) => a !== "me" && a !== "ben");
   const periodWord = words.find((w) => parsePeriod(w) !== null);
   const targetWord = words.find((w) => w !== periodWord);
+  const extra = words.filter((w) => w !== periodWord && w !== targetWord);
+  if (!fallbackToCompany && ctx.orchestratorChat?.isEnabled() && (asksLlm || extra.length > 0)) return null;
   const knownAgents = ctx.registry.list().map((a) => a.id.toLowerCase());
   const target = resolveReportTarget(org, targetWord, knownAgents);
   if (!target) {
@@ -450,7 +456,9 @@ function orgReport(args: string[], ctx: ForemanCommandContext, fallbackToCompany
   }
   if (!targetWord && !periodWord && !fallbackToCompany) return null;
   const period = parsePeriod(periodWord)!;
-  return { ok: true, text: renderOrgReport(buildOrgReport(ctx.db, org, target, period)) };
+  // Task output excerpts are for you, not for an agent asking through chat.
+  const report = buildOrgReport(ctx.db, org, target, period, Date.now(), ctx.trustedOwner === true);
+  return { ok: true, text: renderOrgReport(report) };
 }
 
 // Department channels (#630). Reading every channel and posting as you are
@@ -473,7 +481,13 @@ function tellHandler(args: string[], ctx: ForemanCommandContext): ForemanCommand
     return { ok: false, text: "Usage: `tell <department|role|leadership|all> <message>`" };
   }
   const comms = new OrgComms(ctx.db, { orgConfigPath: join(ctx.configDir, "org.yaml") });
-  const result = comms.post({ from: BOSS, to, text, kind: to.toLowerCase() === "all" ? "announcement" : "message" });
+  const result = comms.post({
+    from: BOSS,
+    asOwner: true,
+    to,
+    text,
+    kind: to.toLowerCase() === "all" ? "announcement" : "message",
+  });
   if (!result.ok) return { ok: false, text: result.reason };
   return { ok: true, text: `Posted to ${result.label}. Agents there read it with org_read.` };
 }
@@ -485,6 +499,7 @@ function commsHandler(args: string[], ctx: ForemanCommandContext): ForemanComman
   const comms = new OrgComms(ctx.db, { orgConfigPath: join(ctx.configDir, "org.yaml") });
   const messages = comms.read({
     viewer: BOSS,
+    asOwner: true,
     ...(channel ? { channel } : {}),
     limit: limitArg ? Number(limitArg) : 20,
   });

@@ -36,8 +36,11 @@ export type MessageKind = OrgMessage["kind"];
 export const MESSAGE_KINDS: readonly MessageKind[] = ["message", "report", "question", "handoff", "announcement"];
 
 export interface PostInput {
-  /** Agent id, or `boss` for you. */
+  /** The posting agent's id. Ignored when `asOwner` is set. */
   from: string;
+  /** Posted by you. Only owner surfaces (the TUI, the CLI, Slack / Discord
+   *  allowed users) set this; an agent id can never mean the owner. */
+  asOwner?: boolean;
   /** all · leadership · boss · a department · a role · an agent. */
   to: string;
   text: string;
@@ -63,7 +66,7 @@ export class OrgComms {
     const text = clean(input.text);
     if (!text) return { ok: false, reason: "the message is empty" };
     const org = this.orgDoc();
-    const sender = senderOf(org, input.from);
+    const sender = senderOf(org, input.from, input.asOwner === true);
     const target = resolveTarget(org, sender, input.to);
     if ("error" in target) return { ok: false, reason: target.error };
     const verdict = canPost(org, sender, target.channel);
@@ -89,7 +92,7 @@ export class OrgComms {
    *  sender reports to you (or isn't in the org). */
   report(from: string, text: string): PostResult {
     const org = this.orgDoc();
-    const sender = senderOf(org, from);
+    const sender = senderOf(org, from, false);
     const role = sender.roles[0];
     const manager = role && org ? org.roles[role]?.reports_to : undefined;
     const to = !manager || manager === HUMAN ? BOSS : manager;
@@ -98,9 +101,9 @@ export class OrgComms {
 
   /** Messages `viewer` may see, newest last. `channel` narrows to one
    *  channel (same words as `to`). */
-  read(opts: { viewer: string; channel?: string; since?: number; limit?: number }): OrgMessage[] {
+  read(opts: { viewer: string; asOwner?: boolean; channel?: string; since?: number; limit?: number }): OrgMessage[] {
     const org = this.orgDoc();
-    const viewer = senderOf(org, opts.viewer);
+    const viewer = senderOf(org, opts.viewer, opts.asOwner === true);
     const limit = Math.min(Math.max(opts.limit ?? 30, 1), 200);
     let scope;
     if (opts.channel) {
@@ -111,7 +114,11 @@ export class OrgComms {
     } else if (!viewer.isBoss) {
       const own = eq(orgMessages.fromAgent, viewer.agent);
       const visible = visibleChannels(org, viewer);
-      const dms = viewer.roles.map((r) => sql`${orgMessages.channel} LIKE ${`dm:%${r}%`}`);
+      // Exact thread membership: role ids can't contain LIKE wildcards or `|`.
+      const dms = viewer.roles.flatMap((r) => [
+        sql`${orgMessages.channel} LIKE ${`dm:${r}|%`}`,
+        sql`${orgMessages.channel} LIKE ${`dm:%|${r}`}`,
+      ]);
       scope = or(own, visible.length > 0 ? inArray(orgMessages.channel, visible) : undefined, ...dms);
     }
     const rows = this.db
@@ -121,9 +128,7 @@ export class OrgComms {
       .orderBy(desc(orgMessages.ts), desc(orgMessages.id))
       .limit(limit)
       .all();
-    // The LIKE above is coarse (role ids can be substrings of others).
-    const exact = viewer.isBoss ? rows : rows.filter((m) => m.fromAgent === viewer.agent || canRead(org, viewer, m.channel));
-    return exact.reverse();
+    return rows.reverse();
   }
 
   orgDoc(): OrgDoc | null {
@@ -149,11 +154,13 @@ export interface Sender {
   isBoss: boolean;
 }
 
-export function senderOf(org: OrgDoc | null, from: string): Sender {
+export function senderOf(org: OrgDoc | null, from: string, asOwner = false): Sender {
+  if (asOwner) return { agent: BOSS, roles: [], isBoss: true };
   const id = from.trim().toLowerCase();
-  if (id === BOSS || id === HUMAN) return { agent: BOSS, roles: [], isBoss: true };
   return { agent: id, roles: org ? rolesForAgent(org, id) : [], isBoss: false };
 }
+
+
 
 const ALIASES: Record<string, string> = {
   all: "all",
@@ -259,12 +266,15 @@ export function canRead(org: OrgDoc | null, viewer: Sender, channel: string): bo
   return members.length === 2 && viewer.roles.some((r) => members.includes(r));
 }
 
-export function channelLabel(channel: string): string {
+/** How a channel reads to whoever is looking: "you" for the owner, "boss"
+ *  when an agent is reading. */
+export function channelLabel(channel: string, forOwner = true): string {
+  const owner = forOwner ? "you" : "boss";
   if (channel === "all") return "#all-hands";
   if (channel === "leadership") return "#leadership";
-  if (channel === BOSS) return "→ you";
+  if (channel === BOSS) return `→ ${owner}`;
   if (channel.startsWith("dept:")) return `#${channel.slice(5)}`;
-  const members = dmMembers(channel).map((m) => (m === BOSS ? "you" : m));
+  const members = dmMembers(channel).map((m) => (m === BOSS ? owner : m));
   return members.length === 2 ? `${members[0]} ↔ ${members[1]}` : channel;
 }
 
@@ -273,14 +283,18 @@ function clean(text: string): string {
   return redacted.length > MAX_MESSAGE ? `${redacted.slice(0, MAX_MESSAGE - 1)}…` : redacted;
 }
 
-/** One line per message, for the console, chat replies and `org_read`. */
-export function renderMessages(messages: OrgMessage[], now: number = Date.now()): string {
+/** One header line per message, then its text indented, so a message can
+ *  never pass off a line of its own as another message. `forOwner` false
+ *  renders for an agent (the owner is "boss"). */
+export function renderMessages(messages: OrgMessage[], now: number = Date.now(), forOwner = true): string {
   if (messages.length === 0) return "No messages yet.";
+  const owner = forOwner ? "you" : "boss";
   return messages
     .map((m) => {
-      const who = m.fromAgent === BOSS ? "you" : m.fromRole ? `${m.fromRole} (${m.fromAgent})` : m.fromAgent;
+      const who = m.fromAgent === BOSS ? owner : m.fromRole ? `${m.fromRole} (${m.fromAgent})` : m.fromAgent;
       const kind = m.kind === "message" ? "" : ` [${m.kind}]`;
-      return `${ago(now - m.ts)} · ${channelLabel(m.channel)} · ${who}${kind}: ${m.text}`;
+      const body = m.text.split("\n").join("\n    ");
+      return `${ago(now - m.ts)} · ${channelLabel(m.channel, forOwner)} · ${who}${kind}: ${body}`;
     })
     .join("\n");
 }

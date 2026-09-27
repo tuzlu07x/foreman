@@ -31,8 +31,12 @@ export function parsePeriod(word: string | undefined, now: number = Date.now()):
       return { label: "today", since: midnight.getTime(), until: now };
     case "yesterday":
     case "dün":
-    case "dun":
-      return { label: "yesterday", since: midnight.getTime() - DAY_MS, until: midnight.getTime() };
+    case "dun": {
+      // Calendar arithmetic, not -24h: a daylight-saving day is 23 or 25 h.
+      const start = new Date(midnight);
+      start.setDate(start.getDate() - 1);
+      return { label: "yesterday", since: start.getTime(), until: midnight.getTime() };
+    }
     case "week":
     case "hafta":
       return { label: "last 7 days", since: now - 7 * DAY_MS, until: now };
@@ -73,6 +77,8 @@ export function spendBy(
   groupBy: "department" | "agent" | "model",
   period: Period,
   agents?: readonly string[],
+  /** Spend booked to this department or role when it happened. */
+  booked?: { department?: string; role?: string },
 ): SpendRow[] {
   const column =
     groupBy === "department"
@@ -80,8 +86,14 @@ export function spendBy(
       : groupBy === "agent"
         ? sql`agent_id`
         : sql`coalesce(model, '(unknown model)')`;
-  const scope = agents ? sql`AND agent_id IN (${sql.join(agents.map((a) => sql`${a}`), sql`, `)})` : sql``;
-  if (agents && agents.length === 0) return [];
+  const scope = booked?.department
+    ? sql`AND department = ${booked.department}`
+    : booked?.role
+      ? sql`AND role = ${booked.role}`
+      : agents
+        ? sql`AND agent_id IN (${sql.join(agents.map((a) => sql`${a}`), sql`, `)})`
+        : sql``;
+  if (!booked && agents && agents.length === 0) return [];
   const rows = db.all<{ key: string; cost: number; est: number; tokens: number; unpriced: number }>(sql`
     SELECT ${column} AS key, sum(cost_usd) AS cost,
       max(CASE WHEN cost_estimated = 1 AND cost_usd > 0 THEN 1 ELSE 0 END) AS est, sum(total_tokens) AS tokens,
@@ -178,6 +190,9 @@ export function buildOrgReport(
   target: ReportTarget,
   period: Period,
   now: number = Date.now(),
+  /** Include task output excerpts ("Latest results"). Only for you:
+   *  agents asking through chat must not read other departments' work. */
+  withResults = true,
 ): OrgReport {
   const agents = agentsInScope(org, target);
   const name =
@@ -188,7 +203,12 @@ export function buildOrgReport(
         : target.kind === "role"
           ? (org?.roles[target.id]?.title ?? target.id)
           : target.id;
-  const byAgent = spendBy(db, "agent", period, agents ?? undefined);
+  // Spend is what was booked to the department / role when it happened,
+  // the same numbers its budget sees; tasks and tool calls follow today's
+  // chart.
+  const booked =
+    target.kind === "department" ? { department: target.id } : target.kind === "role" ? { role: target.id } : undefined;
+  const byAgent = spendBy(db, "agent", period, agents ?? undefined, booked);
   const byDepartment = target.kind === "company" ? spendBy(db, "department", period) : [];
   const foreman = target.kind === "company" ? foremanSpend(db, period) : null;
   const rows = [...byAgent, ...(foreman ? [foreman] : [])];
@@ -220,7 +240,7 @@ export function buildOrgReport(
     toolCalls: toolCallCounts(db, period, agents),
     costPerFinishedTask: tasks.finished > 0 ? spend.costUsd / tasks.finished : null,
     budgets,
-    recent: recentResults(db, period, agents),
+    recent: withResults ? recentResults(db, period, agents) : [],
   };
 }
 

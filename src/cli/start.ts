@@ -65,7 +65,7 @@ import { SecretStore } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { approvalButtonSigner, approvalSigner } from "../core/approval-token.js";
 import { buildEnabledChannels } from "../core/notification/channel-factory.js";
-import { isHumanSource } from "../core/org/guard.js";
+import { isHumanSource, orgBudgetBlock } from "../core/org/guard.js";
 import { CommsMirrorWorker, mirrorsFromNotifyConfig } from "../core/org/comms-mirror.js";
 import { BudgetWatcher } from "../core/usage/budget-watcher.js";
 import { UsageLedger } from "../core/usage/ledger.js";
@@ -858,6 +858,13 @@ export function startForeman(
                     },
                   }
                 : undefined;
+            // Department budgets, enforced here too: whichever path queued
+            // it (chat, CLI, flow routing), an agent can't hand work into
+            // a department that has spent its budget.
+            if (!isHumanSource(row.sourceAgent ?? "cli")) {
+              const overBudget = orgBudgetBlock(db, paths.orgConfigPath, agentId);
+              if (overBudget) return { status: "failed", error: `paused by budget: ${overBudget}` };
+            }
             // Mark the step running before the spawn so `foreman flow
             // show` reflects in-progress state in real time.
             if (flowId && stepId) {
@@ -886,6 +893,7 @@ export function startForeman(
                 );
               }
             }
+            const taskUsageKey = otlpBoundPort ? otlp.issueTaskKey(agentId, String(row.id)) : null;
             const exec = await executeWriteDirective(
               {
                 agentId,
@@ -895,12 +903,13 @@ export function startForeman(
                 modelVersion: registryRow?.modelVersion ?? null,
                 taskSkipPermissions: registryRow?.taskSkipPermissions === true,
                 ...(derivedCwd ? { cwd: derivedCwd } : {}),
-                // Report the task's token usage to the spend ledger.
-                ...(otlpBoundPort
+                // Report the task's token usage to the spend ledger, with
+                // a key that can only book usage to this agent and task.
+                ...(otlpBoundPort && taskUsageKey
                   ? {
                       extraEnv: telemetryEnv({
                         port: otlpBoundPort,
-                        key: usageKey,
+                        key: taskUsageKey,
                         agentId,
                         taskRef: String(row.id),
                       }),
@@ -967,6 +976,7 @@ export function startForeman(
                 exec.spawn.kind === "unsupported" ? exec.spawn.reason : null,
               outputRelay: exec.outputRelay,
             });
+            if (taskUsageKey) otlp.revokeTaskKey(taskUsageKey);
             // Usage the agent printed (Codex `tokens used`, Claude JSON
             // results); telemetry for the same task takes precedence.
             if ("stdout" in exec.spawn) {
