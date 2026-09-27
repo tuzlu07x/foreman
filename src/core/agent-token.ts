@@ -1,6 +1,13 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
-import { displayAgentId, isUntrustedSource, isValidAgentId, untrustedSource } from "./agent-identity.js";
+import {
+  AGENT_TOKEN_ENV,
+  AGENT_TOKEN_FILE_ENV,
+  displayAgentId,
+  isUntrustedSource,
+  isValidAgentId,
+  untrustedSource,
+} from "./agent-identity.js";
 import { isHumanSource } from "./org/guard.js";
 import {
   isReservedSecretName,
@@ -18,10 +25,7 @@ import {
 // or a token for a different agent than `--source` claims all resolve to
 // `untrusted:<claimed>` — less privilege, never more.
 
-export const AGENT_TOKEN_ENV = "FOREMAN_AGENT_TOKEN";
-/** Alternative to the env var for agents that allow it: a 0600 file
- *  holding the token, so it isn't in the process environment at all. */
-export const AGENT_TOKEN_FILE_ENV = "FOREMAN_AGENT_TOKEN_FILE";
+export { AGENT_TOKEN_ENV, AGENT_TOKEN_FILE_ENV } from "./agent-identity.js";
 
 export interface TokenIntake {
   /** Trimmed, or undefined when none was passed (or it was refused). */

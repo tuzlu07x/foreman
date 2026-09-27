@@ -8,6 +8,19 @@
 
 export const UNTRUSTED_PREFIX = "untrusted:";
 
+/** Where `foreman mcp-stdio` finds the agent's token. */
+export const AGENT_TOKEN_ENV = "FOREMAN_AGENT_TOKEN";
+/** Alternative to the env var for agents that allow it: a 0600 file
+ *  holding the token, so it isn't in the process environment at all. */
+export const AGENT_TOKEN_FILE_ENV = "FOREMAN_AGENT_TOKEN_FILE";
+
+/** Copy of `env` without an agent token, for anything Foreman starts: an
+ *  agent must never inherit another agent's identity. */
+export function withoutAgentToken(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { [AGENT_TOKEN_ENV]: _token, [AGENT_TOKEN_FILE_ENV]: _file, ...rest } = env;
+  return rest;
+}
+
 /** What an agent id may look like: it lands in audit rows, the inbox,
  *  stderr and policy lookups. */
 export const AGENT_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;

@@ -37,6 +37,7 @@ import {
   JsonRpcStdioBridge,
   type JsonRpcStdioBridgeHooks,
 } from './jsonrpc-stdio-bridge.js'
+import { withoutAgentToken } from './agent-identity.js'
 
 /** Spawn shim — pipe stdio because the bridge needs to read frames
  *  from the child and write JSON-RPC requests to it. */
@@ -150,7 +151,7 @@ export function spawnAcpMediated(
   const spawnFn = options.spawnImpl ?? (nodeSpawn as unknown as AcpSpawnLike)
   const child = spawnFn(options.argv.command, options.argv.args, {
     cwd: options.cwd,
-    env: { ...process.env, ...(options.env ?? {}) },
+    env: withoutAgentToken({ ...process.env, ...(options.env ?? {}) }),
     shell: false,
     detached: false,
     stdio: ['pipe', 'pipe', 'pipe'],

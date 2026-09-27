@@ -2,6 +2,7 @@ import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import type { Readable } from "node:stream";
 import { parse as parseShell } from "shell-quote";
 import type { AgentEntry } from "./registry-catalog.js";
+import { AGENT_TOKEN_ENV, AGENT_TOKEN_FILE_ENV } from "./agent-identity.js";
 
 // =============================================================================
 // Generic agent spawn engine (multi-agent orchestration PR C of 5)
@@ -212,6 +213,9 @@ export async function spawnAgentTask(
   for (const key of options.entry.task_env_strip ?? []) {
     delete childEnv[key];
   }
+  // #618 — an agent never inherits another agent's identity token.
+  delete childEnv[AGENT_TOKEN_ENV];
+  delete childEnv[AGENT_TOKEN_FILE_ENV];
   let child: ChildProcess;
   try {
     child = spawnFn(command, args, {
