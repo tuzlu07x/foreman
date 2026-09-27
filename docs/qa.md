@@ -26,6 +26,7 @@ with its result, duration, steps and the evidence each step checked.
 | 5 | Org: template, `add-department` / `add-role`, delegation and `org_post` along the chart, per-department MCP servers | |
 | 6 | Signed webhook for a critical approval; outcome in the inbox | yes |
 | 7 | Spend: OTLP telemetry, `usage`, `org report`, a `--pause` budget that blocks delegation and raises an inbox alert | yes |
+| 8 | Claude Code PreToolUse hook: `agent hook install claude-code`, an allowed call, ask then approve (`a`) and deny (`d`) in the TUI, fail-closed exits, a `policy.yaml` deny | partly |
 
 ## Isolation
 
@@ -46,19 +47,14 @@ Every scenario gets its own temporary directory with its own
 
 Scenarios 3, 4, 6 and 7 drive `foreman start` through util-linux `script`
 (Linux only). Where it is missing they are reported as skipped with the
-reason. `QA_NO_PTY=1` skips them on purpose.
+reason. `QA_NO_PTY=1` skips them on purpose. Scenario 8 still runs without
+a pty; only its TUI approve and deny steps are skipped, with a note saying so.
 
 ## In CI
 
 `.github/workflows/qa.yml` runs the suite on Linux for every pull request
 that touches code, and on `main`. The report appears in the job summary and
 is kept as the `qa-report` artifact for 30 days. The job needs no secrets.
-
-## Known gaps
-
-The Claude Code PreToolUse hook journey (allow, ask then approve, deny,
-fail-closed) is not covered yet. The hook's own unit and CLI tests cover it
-in the meantime.
 
 ## Working on the suite
 

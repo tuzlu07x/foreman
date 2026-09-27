@@ -8,7 +8,8 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Added
 - **End-to-end QA suite** (#624, [docs/qa.md](docs/qa.md)).
-  - `npm run qa` walks seven user journeys with real processes in
+  - `npm run qa` walks eight user journeys, the Claude Code
+    PreToolUse hook among them, with real processes in
     isolated homes, and checks the audit trail each time.
   - CI runs it on Linux and keeps the Markdown report as an artifact.
 - **`foreman demo`** (#632). A company of agents works through a day in a
