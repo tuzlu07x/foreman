@@ -7,6 +7,13 @@ All notable changes to Foreman are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`foreman demo`** (#632). A company of agents works through a day in a
+  sandbox while you watch the real TUI: approvals, a blocked poisoned
+  instruction, department messages, a budget alert and a report to you.
+  - The agents are stand-ins, and they are the only agent CLIs on the
+    demo's `PATH`.
+  - The demo runs in its own throwaway `FOREMAN_HOME`. No keys are needed,
+    and nothing outside a temp folder is touched.
 - **TUI as a control surface** ([docs/tui.md](docs/tui.md))
   - A new look: a status header (agents online, approvals waiting,
     unread notifications, today's counts), a tab row for every page, and
