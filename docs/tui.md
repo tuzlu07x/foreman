@@ -47,6 +47,10 @@ decided somewhere else (a Telegram tap, or the requester's own timeout),
 it leaves the queue right away. The TUI never times approvals out itself;
 the agent's request keeps its own deadline.
 
+With [approval escalation](org.md#approval-escalation) on, a manager
+agent's recommendation shows under "Manager review" on the approval. It is
+advice only; the keys above still decide.
+
 ## Command console
 
 Press `:` on any page. The console runs the same commands as `/foreman`

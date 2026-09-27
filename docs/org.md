@@ -53,7 +53,9 @@ engineers see GitHub, not Stripe. Fewer tools per agent also means fewer
 tokens per turn.
 
 **You stay on top.** Approvals for risky calls always come to you (TUI,
-Telegram), whatever the chart says.
+Telegram), whatever the chart says. A manager agent can add a
+recommendation ([approval escalation](#approval-escalation)), but only you
+decide.
 
 ## `org.yaml`
 
@@ -65,6 +67,8 @@ human: { title: Founder }
 delegation:
   cross_department: via_heads   # via_heads | allow | deny
   skip_levels: true
+approvals:
+  escalate_via_manager: true    # optional; managers recommend, you decide
 departments:
   engineering:
     name: Engineering
@@ -109,6 +113,7 @@ about roles filled by agents you haven't registered yet.
 | `foreman org add-role <id> --agent a [--department d] [--reports-to r]` | Add a role (defaults to reporting to the department head) |
 | `foreman org report [target] [period]` | What a department, role or agent did, and what it cost |
 | `foreman org budget <department> [usd\|off] [--daily] [--pause]` | Set or remove a spend limit |
+| `foreman org escalate [on\|off]` | Send low/medium-risk approvals to the requester's manager agent for a recommendation |
 | `foreman usage [period] [--by department\|agent\|model]` | Spend at a glance |
 | `foreman usage env <agent>` | Turn on spend tracking for an agent you start yourself |
 | `foreman org messages [channel] [--follow]` | Read your agents' conversations |
@@ -152,6 +157,9 @@ Agents use three MCP tools (every agent on `foreman mcp-stdio` has them):
 - `org_read(channel?, since?)`: what the agent may see.
 - `org_report(text)`: a report to its manager, or to you from the top.
 
+A fourth tool, `org_recommend`, answers review requests (see
+[approval escalation](#approval-escalation)).
+
 Refusals say why ("write to your department head, who can take it to
 marketing"). Every post is audited (`org:message`), secrets are redacted,
 and nothing in a message is ever executed. Only you post as yourself:
@@ -190,6 +198,54 @@ the tokens, and mentions are neutralised: an agent can't ping @everyone.
 
 A new chat platform is a small adapter (`OrgMirror`) plus a key in
 `org.yaml`; the channel maps take any platform name.
+
+## Approval escalation
+
+A real manager glances at what their team is about to do. Turn this on and
+your manager agents do the same for low- and medium-risk approvals:
+
+```bash
+foreman org escalate on      # writes approvals.escalate_via_manager: true
+foreman org escalate off
+```
+
+When an agent asks for an approval, and it reports to a manager **agent**
+in the chart:
+
+1. The approval comes to you as usual (TUI, Telegram, Slack, Discord).
+2. Foreman also posts a review request on the manager's thread with that
+   report (`cto ↔ engineer`, kind `review`). It has the approval id, the
+   tool, the arguments (secrets redacted, clipped), the risk score and the
+   reasons.
+3. The manager answers once, with the `org_recommend` MCP tool:
+   `org_recommend(approval_id, recommendation: "allow" | "deny", reason)`.
+4. You see the recommendation where you decide:
+   - on the TUI approval screen, under "Manager review":
+     `CTO (claude-code) recommends allow: read-only, same repo`;
+   - in the inbox;
+   - as a follow-up on the chat where the approval is waiting.
+
+It is advice. Your decision is still required and final. A recommendation
+never approves or denies anything. It doesn't make the approval last
+longer or shorter, and it doesn't change what happens on timeout (the
+default is still deny).
+
+Who can recommend:
+- only the requester's manager, as the chart says now;
+- not a colleague, another department, or the requesting agent itself;
+- not you. You decide instead.
+
+The manager agent can't turn the approval id it was given into a decision
+either. `submit_approval` from that agent needs the token from your own
+tap, even to deny.
+
+**High and critical** approvals are never sent for review. They come
+straight to you. Approvals from agents that report to you directly, or
+whose manager is the same agent, aren't sent for review either.
+
+Every recommendation is audited as `org:recommendation`. The reason is
+redacted and clipped like any org message. The review needs `foreman start`
+running, since that is where approvals reach you.
 
 ## Spend and reports
 
@@ -282,7 +338,8 @@ resets. You can still assign work to it yourself.
   boundary. Agent ids are self-declared today (see [SECURITY.md](../SECURITY.md)).
 - A broken `org.yaml` fails closed: agent-to-agent delegation is blocked and
   agents get no hub servers until `foreman org validate` passes.
-- Approval escalation along the chart is on the roadmap.
+- A manager's recommendation is only as trustworthy as the manager agent.
+  Agent ids are self-declared, so treat it as a second opinion, not proof.
 - Messages you or your team type in a mirrored Slack / Discord channel are
   not read back (that needs privileged message-content access). Use
   `/foreman tell <department> …` there instead.
