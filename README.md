@@ -24,6 +24,10 @@ and least-privilege access.
 
 </div>
 
+<p align="center">
+  <img src="docs/images/tui-approval.png" alt="Three agents waiting on approval in the Foreman TUI" width="860" />
+</p>
+
 <!-- asciinema cast placeholder — drop in once recorded via `examples/phishing-scenario/` -->
 
 ---
@@ -52,6 +56,7 @@ Foreman sits in the path of every call and handles all four locally, before anyt
 | 🧰 **[MCP Hub](docs/mcp-hub.md)** | `foreman mcp add github` once, and every agent gets it, mediated. There is a curated catalog of 19 servers (GitHub, filesystem, Playwright, Notion, Stripe, Sentry, Brave, Exa, Discord, X, YouTube, App Store / Google Play, …). Secrets stay in Foreman's encrypted store, never in agent configs. |
 | 🧪 **Tool-poisoning & rug-pull defence** | Tool descriptions are scanned for hidden instructions. Definitions are pinned on first use, and a tool that changes later is withheld until you trust it again. Results are redacted for secrets and flagged for injected instructions. |
 | 🏢 **[Foreman Org](docs/org.md)** | `foreman org init --template startup` sets up a CEO, CTO, CMO, CFO and teams, each role filled by the agent you choose. Delegation follows reporting lines, and each department sees only the tools it needs. |
+| 🖥️ **[A terminal you can run your crew from](docs/tui.md)** | A live dashboard, a queue for every agent waiting on you, an inbox of everything you missed, and a `:` console: `write codex …`, `assign marketing …`, `approve`. No chat app required. |
 | 📱 **Approve from anywhere** | You can decide in the TUI or with one tap in Telegram. Buttons carry HMAC-tagged tokens, so no other agent can approve a call and the chat agent can't approve before you tap. Alerts and digests also go to Slack, Discord, email and ntfy phone push. |
 | 💸 **Fewer tokens** | Lazy tool discovery cut the listing for the official filesystem server from ~2,000 tokens to ~190. Descriptions are clipped, oversized results truncated, and routine roles can run on cheaper models. |
 | 🔒 **Tamper protection** | An agent that tries to edit Foreman's database, policy, keys or its own hook/MCP wiring is caught as a critical risk. |
@@ -122,6 +127,18 @@ foreman org assign marketing "draft the launch post for Friday"
 foreman notify ntfy-setup         # or configure Telegram for tap-to-approve
 ```
 
+**Run it from the terminal.** In `foreman start`, press `:` and type what you'd type in chat:
+
+```
+› status
+› assign engineering add rate limiting to the public API
+› codex write tests for src/rate-limit.ts
+› approve
+```
+
+`n` opens your inbox, and `Tab` moves between pages. From any shell, `foreman inbox`
+shows the same notifications. See [`docs/tui.md`](docs/tui.md).
+
 Then watch it work: `foreman log tail --follow`, `foreman doctor`, `foreman policy show`.
 
 ## How it works
@@ -168,6 +185,7 @@ effects afterwards. See [`docs/architecture.md`](docs/architecture.md).
 
 | Doc | What's inside |
 | --- | --- |
+| [`docs/tui.md`](docs/tui.md) | The TUI: approvals queue, command console, inbox, keys |
 | [`docs/mcp-hub.md`](docs/mcp-hub.md) | MCP Hub: catalog, `mcp.yaml`, security, token budget |
 | [`docs/org.md`](docs/org.md) | Foreman Org: departments, roles, delegation, upgrades |
 | [`docs/notifications.md`](docs/notifications.md) | Telegram, Slack, Discord, email, ntfy, webhook |

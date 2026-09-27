@@ -1,0 +1,110 @@
+# The Foreman TUI
+
+`foreman start` opens the terminal UI. It is where you watch your agents,
+answer approvals, read what you missed and give commands. Telegram, Slack,
+Discord, email and ntfy are optional extras: everything works from the
+terminal alone.
+
+![Dashboard](images/tui-dashboard.png)
+
+## At a glance
+
+The header answers "is anything waiting on me?" from every page:
+
+```
+🦫 FOREMAN │ ● guarding │ 4/4 agents │ ⚠ 2 waiting │ ✉ 3 new │ ✓ 120 ✗ 3 today
+```
+
+- **agents**: how many registered agents are online.
+- **waiting**: approvals you haven't answered yet.
+- **new**: unread items in your inbox.
+- **today**: calls allowed and denied since midnight.
+
+The tab row under it lists every page. `Tab` / `Shift+Tab` move between
+them, and each page also keeps its one-letter shortcut (`n` inbox, `a`
+agents, `l` logs, …). The bottom line shows the keys that work on the
+page you're on.
+
+## Approvals
+
+When an agent asks for something risky, the approval takes over the
+screen. Several agents can wait on you at once; they queue up, oldest
+deadline first:
+
+![Approval queue](images/tui-approval.png)
+
+| Key | |
+| --- | --- |
+| `a` / `d` | allow once / deny |
+| `A` / `D` | always allow / always deny (writes a policy rule) |
+| `←` `→` or `[` `]` | next / previous approval in the queue |
+| `i` | inspect the full request |
+| `t` | technical details |
+| `:` | open the console (`approve` / `deny` work there too) |
+
+Each key applies to the approval that's on screen. When an approval is
+decided somewhere else (a Telegram tap, or the requester's own timeout),
+it leaves the queue right away. The TUI never times approvals out itself;
+the agent's request keeps its own deadline.
+
+## Command console
+
+Press `:` on any page. The console runs the same commands as `/foreman`
+in chat, plus a few that only make sense on screen:
+
+![Command console](images/tui-console.png)
+
+| Command | |
+| --- | --- |
+| `status` | who is registered and running |
+| `write <agent> <task>` | hand a task to an agent |
+| `<agent> <task>` | the same, shorter (`codex fix the flaky test`) |
+| `assign <role\|department> <task>` | route a task through your [org chart](org.md) |
+| `org` | show the org chart |
+| `activity` | recent directives and their status |
+| `report` | an LLM summary of what your agents did (needs `foreman llm enable`) |
+| `llm …`, `model …` | Foreman's own model |
+| `approve [always]` / `deny [always]` | decide the approval on screen |
+| `open <page>` | switch page (`open inbox`, `open logs`, …) |
+| `inbox read` | mark every notification read |
+| `clear`, `help`, `quit` | |
+
+`Tab` completes commands, agent ids and org targets. `↑` / `↓` recall
+earlier commands, and `PgUp` / `PgDn` scroll the output. Commands you type
+here are audited like everything else (`foreman:command`, source `tui`),
+and delegation still follows `org.yaml`. Only what you type is executed;
+text from agents is never run as a command.
+
+## Inbox
+
+Everything Foreman wanted you to know, kept with read state across
+restarts:
+
+- approvals that were requested, and how each ended;
+- calls Foreman blocked on its own;
+- agent daemons that crashed, or aren't installed;
+- budget alerts, session halts, failed directives;
+- Foreman and agent updates.
+
+![Inbox](images/tui-inbox.png)
+
+`n` opens it from anywhere. New warnings pop up as a one-line toast on
+whatever page you're on. On the inbox page: `↑↓` select, `Enter` details,
+`r` mark read, `R` mark all read, `f` filter (all, unread, warnings).
+
+The same inbox works outside the TUI too, which is handy over SSH:
+
+```bash
+foreman inbox              # newest first, unread marked ●
+foreman inbox --unread
+foreman inbox --json       # for scripts
+foreman inbox read         # mark everything read
+```
+
+## Accessibility
+
+- `NO_COLOR=1` turns colour off.
+- `FOREMAN_ASCII=1` uses ASCII glyphs and frames instead of Unicode.
+- `FOREMAN_HIGH_CONTRAST=1` switches to a brighter palette.
+- The layout adapts to the terminal width. At 80×24 the side panels fold
+  into a compact agent row.

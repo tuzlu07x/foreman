@@ -7,6 +7,24 @@ All notable changes to Foreman are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **TUI as a control surface** ([docs/tui.md](docs/tui.md))
+  - A new look: a status header (agents online, approvals waiting,
+    unread notifications, today's counts), a tab row for every page, and
+    key hints for the page you're on. Panels use rounded frames, and the
+    boot banner is a splash that any key dismisses.
+  - Approval queue (#614). Every pending approval is kept, oldest deadline
+    first; `←`/`→` move between them, and each key decides the one on
+    screen.
+  - Command console (#612). Press `:` for the same verbs as `/foreman` in
+    chat (`status`, `write`, `assign`, `org`, `report`, `llm`, …) plus
+    `approve`/`deny`, `open <page>` and `inbox read`. It has history and tab
+    completion, and every command is audited.
+  - Inbox (#613). Approvals, blocked calls, crashed or missing agents, task
+    results, budget alerts and updates are kept with read state. The TUI
+    shows an unread badge and toasts; `foreman inbox` works from any shell.
+- `assign` and `org` chat verbs: route a task through `org.yaml` from
+  Telegram or the TUI.
+- `NO_COLOR` is honoured by the TUI.
 - **MCP Hub** (`foreman mcp …`): connect upstream MCP servers once and every
   agent gets them, with each call mediated (policy, risk, approval, audit).
   - Includes a curated catalog of 19 verified servers.
@@ -92,6 +110,14 @@ All notable changes to Foreman are documented here. The format follows
   - Pending approvals are cancelled and audited when the client disconnects.
 - **Notifications**: Slack and Discord were enabled by the wizard but never
   built at runtime.
+- **TUI**
+  - The TUI no longer denies every approval after 60 seconds on its own
+    clock. Previously this also cut 10-minute Telegram approvals short.
+  - A second approval no longer replaces the first on screen.
+  - Approvals decided elsewhere (a Telegram tap, a timeout in the requesting
+    process) now leave the screen.
+- `foreman start` no longer crashes when a registered agent's daemon
+  binary isn't installed; the inbox says which one and how to fix it.
 - **Approvals**
   - Timeouts are audited as `approval-timeout`, and approvals cancelled by a
     disconnect as `approval-cancelled`.
