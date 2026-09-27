@@ -21,6 +21,11 @@ npm run build       # tsup — build BEFORE testing: CLI suites spawn dist/cli/i
 npm test            # vitest run
 ```
 
+The repo's `.npmrc` sets `ignore-scripts=true`, so `npm ci` never runs a
+dependency's install script. Nothing needs one: `better-sqlite3` and
+`esbuild` ship prebuilt binaries. If you add a dependency that truly needs
+an install step, say so in the PR.
+
 Run the TUI locally against an isolated home dir:
 
 ```bash

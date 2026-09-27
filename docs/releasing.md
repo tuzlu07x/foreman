@@ -37,6 +37,8 @@ All three run only on a published release or a manual dispatch, never on pull re
 - **npm:** Actions → `release-npm` → Run workflow. `dry_run` defaults to on: it runs every check and `npm publish --dry-run --provenance`, and publishes nothing.
 - **Binaries:** Actions → `release-binaries` → Run workflow. It builds and smoke-tests all four binaries and writes `SHA256SUMS` as workflow artifacts; nothing is attached to a release.
 
+Publish only through `release-npm`. The repo's `.npmrc` sets `ignore-scripts=true`, so a hand-run `npm publish` from a checkout would skip `prepublishOnly` (build and tests); the workflow runs lint, build and tests itself.
+
 ## Standalone binaries
 
 `scripts/build-binaries.mjs` builds one binary for the machine it runs on (after `npm ci && npm run build`):
