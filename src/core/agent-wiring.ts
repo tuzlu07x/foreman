@@ -3,6 +3,7 @@ import { pickMcpConfigPath } from "./agent-add-flow.js";
 import {
   applyInjection,
   planInjection,
+  planZeroclawInjection,
   readWiredAgentToken,
   UnsupportedConfigFormatError,
 } from "./agent-config-injector.js";
@@ -10,7 +11,7 @@ import {
   buildMcpRegisterHint,
   writeMcpWrapperScript,
 } from "./agent-mcp-register-hint.js";
-import { buildMcpSnippet } from "./agent-mcp-snippet.js";
+import { buildMcpSnippet, ZEROCLAW_BUNDLE } from "./agent-mcp-snippet.js";
 import {
   ensureAgentToken,
   hasAgentToken,
@@ -39,6 +40,9 @@ export interface WiringResult {
   config: ConfigOutcome;
   wrapperPath: string | null;
   wrapperWritten: boolean;
+  /** Something the user still has to do, e.g. no ZeroClaw agent alias to
+   *  grant the foreman bundle to. */
+  note?: string;
 }
 
 export interface WireOptions {
@@ -56,13 +60,21 @@ export function writeAgentWiring(
 ): WiringResult {
   const configPath = options.configPath ?? pickMcpConfigPath(entry);
   let config: ConfigOutcome = "none";
+  let note: string | undefined;
   if (configPath) {
     if (!existsSync(configPath) && entry.install.requires_existing_config === true) {
       config = "missing";
     } else {
       try {
-        const plan = planInjection(configPath, buildMcpSnippet(agentId, entry, token).json);
+        const snippet = buildMcpSnippet(agentId, entry, token).json;
+        const zeroclaw = entry.mcp_config?.layout === "zeroclaw" ? planZeroclawInjection(configPath, snippet) : null;
+        const plan = zeroclaw ?? planInjection(configPath, snippet);
         applyInjection(configPath, plan);
+        if (zeroclaw && zeroclaw.grantedAgents.length === 0) {
+          note =
+            `${configPath} defines no [agents.<alias>], so no ZeroClaw agent uses Foreman yet: ` +
+            `add mcp_bundles = ["${ZEROCLAW_BUNDLE}"] to your agent, then run 'foreman agent rewire ${agentId}'`;
+        }
         config = plan.alreadyHasForeman ? "current" : plan.replacedStale ? "replaced" : "written";
       } catch (err) {
         if (err instanceof UnsupportedConfigFormatError) {
@@ -82,7 +94,7 @@ export function writeAgentWiring(
   });
   let wrapperWritten = false;
   if (hint?.wrapper) wrapperWritten = writeMcpWrapperScript(hint.wrapper);
-  return { configPath, config, wrapperPath: hint?.wrapper?.path ?? null, wrapperWritten };
+  return { configPath, config, wrapperPath: hint?.wrapper?.path ?? null, wrapperWritten, ...(note ? { note } : {}) };
 }
 
 /** Did the token reach a place the agent reads it from? */
@@ -158,10 +170,10 @@ export function auditAgentTokens(
     const registryId = typeof agent.metadata?.registryId === "string" ? agent.metadata.registryId : null;
     const entry = registryId ? entryFor(registryId) : null;
     const configPath = entry ? pickMcpConfigPath(entry) : null;
-    if (!configPath) continue;
+    if (!entry || !configPath) continue;
     // A file with no foreman entry may mean the agent was wired elsewhere
     // (--config-path); only a foreman entry with the wrong token is stale.
-    const wired = readWiredAgentToken(configPath);
+    const wired = readWiredAgentToken(configPath, buildMcpSnippet(agent.id, entry).json);
     if (wired === undefined) continue;
     if (wired === null || !verifyAgentToken(store, agent.id, wired)) audit.stale.push(agent.id);
   }

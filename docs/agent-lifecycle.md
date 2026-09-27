@@ -109,6 +109,8 @@ policy rules and org role.
   | Claude Code | `~/.claude.json` | top-level `mcpServers.foreman` (user scope; `settings.json` is not an MCP config) |
   | Codex | `~/.codex/config.toml` | `[mcp_servers.foreman]` and `[mcp_servers.foreman.env]` |
   | Hermes | `~/.hermes/config.yaml` | top-level `mcp_servers.foreman` (Foreman writes it; no `hermes mcp add` step) |
+  | ZeroClaw | `~/.zeroclaw/config.toml` | a `[[mcp.servers]]` entry named `foreman`, a `[mcp_bundles.foreman]` bundle, and `"foreman"` added to `mcp_bundles` of every `[agents.<alias>]` (an agent without the bundle connects to no MCP server) |
+  | OpenClaw | `~/.openclaw/openclaw.json` | `mcp.servers.foreman` |
 
   A `foreman` entry an older Foreman left under a key the agent doesn't
   read (e.g. `mcpServers` in Hermes' config) is removed. Config files that

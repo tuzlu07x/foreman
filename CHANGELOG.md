@@ -181,6 +181,12 @@ All notable changes to Foreman are documented here. The format follows
     directly (command, args and the token env), so the wizard no longer
     runs `hermes mcp add` with a wrapper script, and a stale
     `mcpServers.foreman` from older Foreman versions is removed.
+  - **ZeroClaw:** `config.toml` gets a `[[mcp.servers]]` entry named
+    `foreman` and a `[mcp_bundles.foreman]` bundle granted to every
+    `[agents.<alias>]` (ZeroClaw connects an agent only to its bundles'
+    servers). The ignored `[mcpServers.foreman]` table is removed. When the
+    file declares no agent alias, `foreman agent add` / `rewire` say how to
+    grant the bundle.
 - **Opening a browser on Windows** no longer goes through `cmd /c start`.
   A URL with `&` or `|` in it could be cut short there or run a command.
   Foreman now uses `rundll32 url.dll,FileProtocolHandler` with no shell.

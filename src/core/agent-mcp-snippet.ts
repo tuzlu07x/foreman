@@ -18,6 +18,9 @@ export interface McpSnippet {
  *  written (`foreman agent show`, manual-paste hints). */
 export const AGENT_TOKEN_PLACEHOLDER = "<agent token: written by foreman agent rewire>";
 
+/** The `mcp_bundles` entry that grants ZeroClaw agents the foreman server. */
+export const ZEROCLAW_BUNDLE = "foreman";
+
 // The JSON skeleton every Foreman-bridged agent needs in its config. The agent
 // id from the *foreman* side is the one we record in `--source`; the token
 // that proves it (#618) travels in the server's environment, never in argv.
@@ -34,6 +37,15 @@ export function buildMcpSnippet(
     env: { [AGENT_TOKEN_ENV]: token ?? AGENT_TOKEN_PLACEHOLDER },
   };
   // Where the agent actually reads MCP servers, when the registry says so.
+  if (entry.mcp_config?.layout === "zeroclaw") {
+    // ZeroClaw: a named entry in the `[[mcp.servers]]` array, and a bundle
+    // an agent must list in its `mcp_bundles` before it connects.
+    const json = {
+      mcp: { servers: [{ name: "foreman", ...block }] },
+      mcp_bundles: { [ZEROCLAW_BUNDLE]: { servers: ["foreman"] } },
+    };
+    return { yaml: stringifyYaml(json), json };
+  }
   if (entry.mcp_config) {
     const json = nestUnder(entry.mcp_config.key ?? "mcpServers", { foreman: block });
     return { yaml: stringifyYaml(json), json };

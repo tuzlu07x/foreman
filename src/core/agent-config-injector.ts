@@ -80,6 +80,75 @@ export function planInjection(
   return { alreadyHasForeman: false, replacedStale: false, before, after, format };
 }
 
+export interface ZeroclawInjectionPlan extends InjectionPlan {
+  /** `[agents.<alias>]` entries whose `mcp_bundles` list the foreman
+   *  bundle. Empty means no agent connects to Foreman yet. */
+  grantedAgents: string[];
+}
+
+/**
+ * ZeroClaw keeps MCP servers in a `[[mcp.servers]]` array (by `name`) and
+ * only connects an agent to the servers of the bundles in its
+ * `agents.<alias>.mcp_bundles`. So: upsert the `foreman` server, define the
+ * bundle, and grant it to every agent alias the file declares. A
+ * `mcpServers` table an older Foreman wrote is removed: ZeroClaw reads that
+ * key as an alias of `mcp` and ignores (or rejects) the entry.
+ */
+export function planZeroclawInjection(
+  configPath: string,
+  snippet: Record<string, unknown>,
+): ZeroclawInjectionPlan {
+  const format = detectConfigFormat(configPath);
+  const before = existsSync(configPath) ? readFileSync(configPath, "utf-8") : "";
+  const existing = before.length === 0 ? {} : parseDoc(before, format);
+  const server = getAt(snippet, ["mcp", "servers"]);
+  const bundles = getAt(snippet, ["mcp_bundles"]);
+  if (!Array.isArray(server) || !isPlainObject(server[0]) || !isPlainObject(bundles)) {
+    throw new Error("not a ZeroClaw MCP snippet");
+  }
+  const foreman = server[0];
+  const [bundleName, bundle] = Object.entries(bundles)[0] ?? [];
+  if (!bundleName || !isPlainObject(bundle)) throw new Error("not a ZeroClaw MCP snippet");
+
+  let next = removeAt(existing, ["mcpServers", "foreman"]);
+  const servers = getAt(next, ["mcp", "servers"]);
+  const list = Array.isArray(servers) ? servers : [];
+  const at = list.findIndex((s) => isPlainObject(s) && s.name === foreman.name);
+  const nextServers = at === -1 ? [...list, foreman] : list.map((s, i) => (i === at ? foreman : s));
+  next = setAt(next, ["mcp", "servers"], nextServers);
+
+  const currentBundle = getAt(next, ["mcp_bundles", bundleName]);
+  const bundleServers = isPlainObject(currentBundle) && Array.isArray(currentBundle.servers) ? currentBundle.servers : [];
+  next = setAt(next, ["mcp_bundles", bundleName], {
+    ...(isPlainObject(currentBundle) ? currentBundle : {}),
+    servers: bundleServers.includes(foreman.name) ? bundleServers : [...bundleServers, foreman.name],
+  });
+
+  const grantedAgents: string[] = [];
+  const agents = getAt(next, ["agents"]);
+  if (isPlainObject(agents)) {
+    for (const [alias, agent] of Object.entries(agents)) {
+      if (!isPlainObject(agent)) continue;
+      const granted = Array.isArray(agent.mcp_bundles) ? agent.mcp_bundles : [];
+      if (!granted.includes(bundleName)) next = setAt(next, ["agents", alias, "mcp_bundles"], [...granted, bundleName]);
+      grantedAgents.push(alias);
+    }
+  }
+
+  const unchanged = deepEqual(existing, next);
+  const hadForeman =
+    getAt(existing, ["mcpServers", "foreman"]) !== undefined ||
+    (Array.isArray(servers) && servers.some((s) => isPlainObject(s) && s.name === foreman.name));
+  return {
+    alreadyHasForeman: unchanged,
+    replacedStale: !unchanged && hadForeman,
+    before,
+    after: unchanged ? before : serialize(next, format),
+    format,
+    grantedAgents,
+  };
+}
+
 function serialize(doc: Record<string, unknown>, format: ConfigFormat): string {
   if (format === "yaml") return stringifyYaml(doc);
   if (format === "toml") return stringifyToml(doc) + "\n";
@@ -129,7 +198,11 @@ export function readWiredAgentToken(
     return undefined;
   }
   const where = snippet ? FOREMAN_LOCATIONS.filter((p) => getAt(snippet, p) !== undefined) : FOREMAN_LOCATIONS;
-  const found = where.map((p) => getAt(doc, p)).find((e) => e !== undefined);
+  const inArray = getAt(doc, ["mcp", "servers"]);
+  const found =
+    where.map((p) => getAt(doc, p)).find((e) => e !== undefined) ??
+    // ZeroClaw: `[[mcp.servers]]` entries are named.
+    (Array.isArray(inArray) ? inArray.find((s) => isPlainObject(s) && s.name === "foreman") : undefined);
   if (!isPlainObject(found)) return undefined;
   const env = found.env;
   if (!isPlainObject(env)) return null;

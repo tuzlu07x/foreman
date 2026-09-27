@@ -485,6 +485,7 @@ export function logWiring(
       log(buildMcpSnippet(agentId, entry).yaml);
       break;
   }
+  if (wiring.note) log(orange("note: ") + wiring.note);
   if (wiring.wrapperPath) {
     log(
       (wiring.wrapperWritten ? green("✓") + " wrote" : dim("✓ wrapper current:")) +

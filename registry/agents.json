@@ -534,6 +534,7 @@
       },
       "config_paths": ["~/.zeroclaw/config.toml"],
       "config_snippet": "registry/snippets/zeroclaw.yaml",
+      "mcp_config": { "paths": ["~/.zeroclaw/config.toml"], "layout": "zeroclaw" },
       "required_secrets": [],
       "optional_secrets": ["anthropic-key", "openai-key"],
       "llm_compat": ["anthropic", "openai", "gemini"],

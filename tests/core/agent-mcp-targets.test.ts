@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { parse as parseToml } from 'smol-toml'
 import { parse as parseYaml } from 'yaml'
 import { pickMcpConfigPath } from '../../src/core/agent-add-flow.js'
 import { buildMcpRegisterHint } from '../../src/core/agent-mcp-register-hint.js'
@@ -158,6 +159,94 @@ describe('MCP wiring targets', () => {
       expect(mode(config)).toBe(0o600)
       // Running it again changes nothing.
       expect(rewireAgent(store, 'hermes', entry).config).toBe('current')
+    })
+  })
+
+  describe('ZeroClaw', () => {
+    interface ZcDoc {
+      default_provider?: string
+      mcpServers?: unknown
+      mcp: { servers: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string> }> }
+      mcp_bundles: Record<string, { servers: string[]; exclude?: string[] }>
+      agents?: Record<string, { mcp_bundles?: string[]; model?: string }>
+    }
+    const read = (path: string): ZcDoc => parseToml(readFileSync(path, 'utf-8')) as unknown as ZcDoc
+
+    it('declares the zeroclaw layout for config.toml', () => {
+      expect(findAgent(loadBundledRegistry(), 'zeroclaw').mcp_config).toEqual({
+        paths: ['~/.zeroclaw/config.toml'],
+        layout: 'zeroclaw',
+      })
+    })
+
+    it('upserts a [[mcp.servers]] foreman entry, defines the bundle and grants it to every agent alias', () => {
+      const entry = bundled('zeroclaw', home)
+      const config = join(home, '.zeroclaw', 'config.toml')
+      mkdirSync(join(home, '.zeroclaw'))
+      writeFileSync(
+        config,
+        [
+          'default_provider = "anthropic"',
+          '',
+          '[[mcp.servers]]',
+          'name = "filesystem"',
+          'command = "npx"',
+          '',
+          '[mcp_bundles.files]',
+          'servers = ["filesystem"]',
+          '',
+          '[agents.assistant]',
+          'model = "claude-haiku"',
+          'mcp_bundles = ["files"]',
+          '',
+          '[agents.researcher]',
+          'model = "claude-sonnet"',
+          '',
+          // What an older Foreman wrote: ZeroClaw reads `mcpServers` as an
+          // alias of `mcp`, so this table only gets in the way.
+          '[mcpServers.foreman]',
+          'command = "foreman"',
+          'args = ["mcp-stdio", "--source", "zeroclaw"]',
+          '',
+        ].join('\n'),
+      )
+      const result = rewireAgent(store, 'zeroclaw', entry)
+      expect(result).toMatchObject({ configPath: config, config: 'replaced' })
+      expect(result.note).toBeUndefined()
+
+      const doc = read(config)
+      expect(doc.default_provider).toBe('anthropic')
+      expect(doc.mcpServers).toBeUndefined()
+      expect(doc.mcp.servers.map((s) => s.name)).toEqual(['filesystem', 'foreman'])
+      const foreman = doc.mcp.servers[1]!
+      expect(foreman).toMatchObject({ command: 'foreman', args: ['mcp-stdio', '--source', 'zeroclaw'] })
+      expect(verifyAgentToken(store, 'zeroclaw', foreman.env!.FOREMAN_AGENT_TOKEN!)).toBe(true)
+      expect(doc.mcp_bundles).toEqual({ files: { servers: ['filesystem'] }, foreman: { servers: ['foreman'] } })
+      expect(doc.agents?.assistant).toEqual({ model: 'claude-haiku', mcp_bundles: ['files', 'foreman'] })
+      expect(doc.agents?.researcher).toEqual({ model: 'claude-sonnet', mcp_bundles: ['foreman'] })
+      expect(mode(config)).toBe(0o600)
+
+      // Idempotent, and doctor reads the token from the array entry.
+      expect(rewireAgent(store, 'zeroclaw', entry).config).toBe('current')
+      expect(read(config).mcp.servers).toHaveLength(2)
+      expect(auditAgentTokens([{ id: 'zeroclaw', metadata: { registryId: 'zeroclaw' } }], store, () => entry)).toEqual({
+        missing: [],
+        stale: [],
+      })
+
+      // A rotation replaces the entry in place.
+      rewireAgent(store, 'zeroclaw', entry, { rotate: true })
+      const rotated = read(config)
+      expect(rotated.mcp.servers.map((s) => s.name)).toEqual(['filesystem', 'foreman'])
+      expect(verifyAgentToken(store, 'zeroclaw', rotated.mcp.servers[1]!.env!.FOREMAN_AGENT_TOKEN!)).toBe(true)
+    })
+
+    it('says so when no agent alias exists to grant the bundle to', () => {
+      const entry = bundled('zeroclaw', home)
+      const result = rewireAgent(store, 'zeroclaw', entry)
+      expect(result.config).toBe('written')
+      expect(result.note).toContain('mcp_bundles = ["foreman"]')
+      expect(read(join(home, '.zeroclaw', 'config.toml')).mcp_bundles.foreman).toEqual({ servers: ['foreman'] })
     })
   })
 })
