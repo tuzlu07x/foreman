@@ -190,6 +190,7 @@ async function mount(
     registered?: string[]
     /** Resume from this state instead of "every step before `step`". */
     initialState?: SetupState
+    afterExit?: 'exit' | 'launch-tui'
   } = {},
 ): Promise<Mounted> {
   const handle = createInMemoryDb()
@@ -227,6 +228,7 @@ async function mount(
         lastUpdatedAt: 1,
       },
       services,
+      ...(opts.afterExit ? { afterExit: opts.afterExit } : {}),
     }),
   )
   unmount = () => inst.unmount()
@@ -575,6 +577,21 @@ describe('foreman-llm step with a subscription sign-in (#575 follow-up)', () => 
       apiKey: 'fake-oauth-access-token',
       auth: 'oauth',
     })
+  })
+})
+
+describe('done step [Enter] label', () => {
+  it('does not promise a TUI under `foreman setup`', async () => {
+    const w = await mount('done')
+    await w.until('What next?')
+    expect(w.frame()).toContain('[Enter] Finish setup — start Foreman later with `foreman start`')
+    expect(w.frame()).not.toContain('Launch Foreman TUI')
+  })
+
+  it('offers the TUI when the host launches it (`foreman start`)', async () => {
+    const w = await mount('done', { afterExit: 'launch-tui' })
+    await w.until('What next?')
+    expect(w.frame()).toContain('[Enter] Launch Foreman TUI')
   })
 })
 

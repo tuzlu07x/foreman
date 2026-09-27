@@ -26,6 +26,7 @@ import type { FailureResolution, WizardServices } from "./types.js";
 export interface WizardContext {
   services: WizardServices;
   exit: () => void;
+  afterExit: "exit" | "launch-tui";
   state: WizardState;
   set: WizardSetters;
   currentStep: Step;

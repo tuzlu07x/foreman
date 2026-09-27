@@ -40,6 +40,11 @@ export interface WizardOauthRunStep {
 export interface SetupWizardProps {
   initialState: SetupState;
   services: WizardServices;
+  /** What the host does once the wizard exits: `foreman start` goes on to
+   *  launch the TUI, `foreman setup` just exits. Drives the Done screen's
+   *  [Enter] label so it doesn't promise a TUI that never opens. Default
+   *  `"exit"`. */
+  afterExit?: "exit" | "launch-tui";
 }
 
 export interface AgentConfig {

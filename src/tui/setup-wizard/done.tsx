@@ -131,6 +131,7 @@ export function handleDoneInput(
 export function renderDoneStep(ctx: WizardContext): JSX.Element {
   const {
     services,
+    afterExit,
     providerCatalog,
     serviceCatalog,
     requiredSetupResolution,
@@ -393,9 +394,13 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
               </Text>
             );
           }
+          // Only `foreman start` opens the TUI after the wizard exits;
+          // under `foreman setup` Enter just finishes (#621 follow-up).
           return (
             <Text color={theme.fg.muted}>
-              {"  "}[Enter] Launch Foreman TUI
+              {afterExit === "launch-tui"
+                ? "  [Enter] Launch Foreman TUI"
+                : "  [Enter] Finish setup — start Foreman later with `foreman start`"}
             </Text>
           );
         })()}

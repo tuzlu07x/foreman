@@ -1479,6 +1479,8 @@ async function runOnboardingWizard(): Promise<void> {
           oauthQueue.push(...steps);
         },
       },
+      // `foreman start` continues into the TUI once the wizard exits.
+      afterExit: "launch-tui",
     }),
     { exitOnCtrlC: false },
   );

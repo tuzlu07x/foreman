@@ -91,6 +91,7 @@ import {
 export function SetupWizard({
   initialState,
   services,
+  afterExit = "exit",
 }: SetupWizardProps): JSX.Element {
   const { exit } = useApp();
   // Agents already registered in this Foreman home — drive the wizard's
@@ -181,6 +182,7 @@ export function SetupWizard({
   const ctx: WizardContext = {
     services,
     exit,
+    afterExit,
     state,
     set,
     currentStep,
