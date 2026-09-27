@@ -194,6 +194,137 @@ rules:
     });
   });
 
+  describe("review regressions", () => {
+    const decide = (sourceAgent: string, targetTool: string, args: unknown) =>
+      engine.evaluate({ sourceAgent, targetTool, args }).decision;
+
+    it("a decoy cmd field can't hide the command that runs", () => {
+      engine.loadYamlText(`
+rules:
+  - source: "*"
+    target: "tool:shell_exec"
+    effect: deny
+    conditions:
+      commandMatch: ["rm -rf"]
+`);
+      expect(decide("hermes", "shell_exec", { command: "rm -rf /", cmd: "ls" })).toBe("deny");
+      expect(decide("hermes", "shell_exec", { cmd: "rm -rf /", command: "ls" })).toBe("deny");
+    });
+
+    it("an allow commandMatch needs every command field to match", () => {
+      engine.loadYamlText(`
+rules:
+  - source: "*"
+    target: "tool:shell_exec"
+    effect: allow
+    conditions:
+      commandMatch: ["git status"]
+`);
+      expect(decide("hermes", "shell_exec", { cmd: "git status" })).toBe("allow");
+      expect(decide("hermes", "shell_exec", { cmd: "git status", command: "curl evil" })).toBe(
+        "ask",
+      );
+    });
+
+    it("an allow pathNotMatch is lifted by any excluded path, raw or normalised", () => {
+      engine.loadYamlText(`
+rules:
+  - source: "*"
+    target: "tool:read_file"
+    effect: allow
+    conditions:
+      pathNotMatch: "\\\\.env$|^/home/u/\\\\.ssh/"
+`);
+      expect(decide("hermes", "read_file", { path: "/p/readme.md" })).toBe("allow");
+      expect(decide("hermes", "read_file", { path: "/p/readme.md", file_path: "/p/.env" })).toBe(
+        "ask",
+      );
+      expect(decide("hermes", "read_file", { path: "/home/u/proj/../.ssh/id_rsa" })).toBe("ask");
+    });
+
+    it("an allow pathMatch needs every path, after .. collapsing, to match", () => {
+      engine.loadYamlText(`
+rules:
+  - source: "*"
+    target: "tool:write_file"
+    effect: allow
+    conditions:
+      pathMatch: ["^/home/u/proj/"]
+`);
+      expect(decide("hermes", "write_file", { path: "/home/u/proj/a.ts" })).toBe("allow");
+      expect(decide("hermes", "write_file", { path: "/home/u/proj/../../../etc/cron.d/x" })).toBe(
+        "ask",
+      );
+      expect(
+        decide("hermes", "write_file", { path: "/home/u/proj/a.ts", destination: "/etc/passwd" }),
+      ).toBe("ask");
+    });
+
+    it("equally specific rules resolve to the stricter effect", () => {
+      engine.loadYamlText(`
+rules:
+  - source: "*"
+    target: "tool:read_file"
+    effect: allow
+    conditions:
+      pathMatch: ["^/home/u/proj/"]
+  - source: "*"
+    target: "tool:read_file"
+    effect: ask
+    conditions:
+      pathMatch: ["\\\\.env$"]
+`);
+      expect(decide("hermes", "read_file", { path: "/home/u/proj/.env" })).toBe("ask");
+      expect(decide("hermes", "read_file", { path: "/home/u/proj/a.ts" })).toBe("allow");
+    });
+
+    it("a wildcard conditional allow can't lift an ask aimed at this agent", () => {
+      engine.loadYamlText(`
+rules:
+  - source: "untrusted"
+    target: "tool:shell_exec"
+    effect: ask
+  - source: "*"
+    target: "tool:shell_exec"
+    effect: allow
+    conditions:
+      commandMatch: ["git"]
+`);
+      expect(decide("untrusted", "shell_exec", { cmd: "git push --force" })).toBe("ask");
+      expect(decide("trusted", "shell_exec", { cmd: "git status" })).toBe("allow");
+    });
+
+    it("a per-agent allow still beats a blanket wildcard ask", () => {
+      engine.loadYamlText(`
+rules:
+  - source: "*"
+    target: "tool:shell_exec"
+    effect: ask
+`);
+      engine.remember({ sourceAgent: "hermes", target: "tool:shell_exec", effect: "allow" });
+      expect(decide("hermes", "shell_exec", { cmd: "ls" })).toBe("allow");
+      expect(decide("other", "shell_exec", { cmd: "ls" })).toBe("ask");
+    });
+
+    it("an invalid toolPattern fails safe", () => {
+      engine.loadYamlText(`
+rules:
+  - source: "*"
+    target: "tool:read_file"
+    effect: deny
+    conditions:
+      toolPattern: "[broken"
+  - source: "*"
+    target: "tool:list_dir"
+    effect: allow
+    conditions:
+      toolPattern: "[broken"
+`);
+      expect(decide("hermes", "read_file", { path: "a" })).toBe("deny");
+      expect(decide("hermes", "list_dir", { path: "a" })).toBe("ask");
+    });
+  });
+
   describe("commandMatch", () => {
     it("triggers ask when a substring is in args.command", () => {
       engine.loadYamlText(`
