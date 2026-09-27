@@ -1,0 +1,86 @@
+name: verify
+
+# One always-present, required-ready status for every pull request (#589).
+# Code changes run lint, build, tests and registry validation here; docs-only
+# changes finish green in seconds. The wider OS / Node matrix stays in
+# test-linux.yml and test-windows-wsl2.yml, which remain path-filtered.
+#
+# Security: runs on `pull_request` (never `pull_request_target`), with a
+# read-only token and no persisted credentials, so fork PRs get no secrets.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Classify changes
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$BASE_SHA" HEAD)
+          printf '%s\n' "$changed"
+          # Anything outside docs / images / markdown / issue templates is code.
+          if printf '%s\n' "$changed" \
+            | grep -Ev '^(docs/|assets/|\.github/ISSUE_TEMPLATE/)|\.md$|^LICENSE$' \
+            | grep -q .; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Docs-only change
+        if: steps.changes.outputs.code == 'false'
+        run: echo "Documentation-only change — lint/build/test not required."
+
+      - uses: actions/setup-node@v7
+        if: steps.changes.outputs.code == 'true'
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: npm ci
+        if: steps.changes.outputs.code == 'true'
+        run: npm ci
+
+      - name: Typecheck
+        if: steps.changes.outputs.code == 'true'
+        run: npm run lint
+
+      # CLI suites spawn dist/cli/index.js, so build before testing.
+      - name: Build
+        if: steps.changes.outputs.code == 'true'
+        run: npm run build
+
+      - name: Test
+        if: steps.changes.outputs.code == 'true'
+        run: npm test
+
+      - name: Validate bundled registry + MCP catalog
+        if: steps.changes.outputs.code == 'true'
+        run: node dist/cli/index.js registry validate

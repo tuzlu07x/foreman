@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { ControlChannel } from "../core/control-channel.js";
+import { cliDelegationSource, orgDelegationVerdict } from "../core/org/guard.js";
 import { EventBus, type ForemanEventMap } from "../core/event-bus.js";
 import { readForemanPid } from "../core/foreman-pidfile.js";
 import { RegistryService } from "../core/registry.js";
@@ -66,14 +67,24 @@ export async function runWrite(
       );
       return 2;
     }
+    // An agent Foreman spawned runs with FOREMAN_SPAWNED_BY set; when it
+    // shells out to `foreman write` it is delegating, not the human.
+    const source = cliDelegationSource();
+    const verdict = orgDelegationVerdict(paths.orgConfigPath, source, targetAgent);
+    if (verdict && !verdict.allowed) {
+      console.error(
+        red("error: ") +
+          `blocked by the org chart: ${verdict.reason}. Hand the task to your manager or a department head.`,
+      );
+      return 2;
+    }
     const channel = new ControlChannel(db);
     const enq = channel.enqueue({
       command: "write",
       args: [targetAgent, message],
-      // sourceAgent="cli" marks the row as host-shell originated. The
-      // drain handler treats it the same as a chat-routed write; only
-      // the audit log uses this for "where did this come from".
-      sourceAgent: "cli",
+      // sourceAgent="cli" marks the row as host-shell originated (the
+      // human); a spawned agent's id marks an agent-to-agent delegation.
+      sourceAgent: source,
     });
     // Only `foreman start` drains the control_commands queue. When it
     // isn't running the row sits there forever and the directive

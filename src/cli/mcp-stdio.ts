@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { Command } from "commander";
+import { ulid } from "ulid";
 import { DbApprovalService, type ApprovalService } from "../core/approval.js";
 import { AuditLogger } from "../core/audit.js";
 import { ControlChannel } from "../core/control-channel.js";
@@ -19,16 +20,26 @@ import {
   approvalIdMissHint,
   classifyApprovalIdInput,
 } from "../core/approval-id.js";
-import { MediatorService } from "../core/mediator.js";
+import { deriveApprovalKey } from "../core/approval-token.js";
+import { createMediatorStack } from "../core/mediator-stack.js";
+import { loadHub, scopeForAgent } from "../core/mcp-hub/boot.js";
+import type {
+  AgentScope,
+  AgentTool,
+  HubCallResolution,
+  McpHub,
+} from "../core/mcp-hub/hub.js";
+import type { MediatorService } from "../core/mediator.js";
 import { OrchestratorChat } from "../core/orchestrator-chat.js";
 import { PendingQuestionsService } from "../core/pending-questions.js";
-import { PolicyEngine } from "../core/policy-engine.js";
-import { RegistryService } from "../core/registry.js";
-import { RiskScorer } from "../core/risk-scorer.js";
+import type { PolicyEngine } from "../core/policy-engine.js";
+import type { RegistryService } from "../core/registry.js";
+import type { RiskScorer } from "../core/risk-scorer.js";
 import { SecretStore } from "../core/secret-store.js";
-import { SessionManager } from "../core/session.js";
+import type { SessionManager } from "../core/session.js";
 import { closeDb, getDb } from "../db/client.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
+import { redactSecretShapes } from "../core/risk-rules/secret-patterns.js";
 import { createDecoder, encodeMessage } from "../mcp/framing.js";
 import type { JSONRPCMessage } from "../mcp/types.js";
 import { getForemanPaths } from "../utils/config.js";
@@ -58,6 +69,7 @@ export const mcpStdioCommand = new Command("mcp-stdio")
       process.exit(1);
     }
     const services = bootServices();
+    services.hubScope = scopeForAgent(paths.orgConfigPath, options.source, warn);
     autoRegisterSource(services.registry, options.source);
     runMcpLoop(services, options.source);
   });
@@ -77,34 +89,44 @@ interface Services {
   orchestratorChat: OrchestratorChat | null;
   controlChannel: ControlChannel;
   pendingQuestions: PendingQuestionsService;
+  /** Request ids of mediated calls still in flight in this process — their
+   *  pending approvals are cancelled if the client disconnects. */
+  pendingRequestIds?: Set<string>;
+  /** MCP hub — upstream servers from mcp.yaml, mediated per call. */
+  hub?: McpHub | null;
+  /** The connected agent's org.yaml server allow-list. */
+  hubScope?: AgentScope;
 }
 
 function bootServices(): Services {
   const db = getDb();
-  const registry = new RegistryService(db, bus);
   const audit = new AuditLogger(db, bus);
-  const approval = new DbApprovalService(db, { bus, timeoutMs: 60_000 });
-  const policy = new PolicyEngine(db, bus);
+  const masterKey = loadOrCreateSecretsMasterKey();
+  // FOREMAN_APPROVAL_TIMEOUT wins over the 60 s interactive default (the
+  // approval service reads it when no explicit timeout is passed).
   const paths = getForemanPaths();
-  if (existsSync(paths.policyPath)) policy.loadFromYaml(paths.policyPath);
-  const risk = new RiskScorer(db, undefined, {
-    bucketOverrides: () => policy.getBucketOverrides(),
-    getAgentResponsibility: (agentId) =>
-      registry.get(agentId)?.responsibilityNote ?? null,
-    responsibilityPolicies: () => policy.getResponsibilityPolicies(),
-  });
-  const sessionManager = new SessionManager(db, { bus });
-  const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
-  const mediator = new MediatorService({
-    registry,
-    policy,
-    risk,
-    approval,
-    sessionManager,
-    db,
+  // Built below; the approval service needs it only when a relayed
+  // `block_*` tap arrives, long after boot.
+  let policyEngine: PolicyEngine | null = null;
+  const approval = new DbApprovalService(db, {
     bus,
-    secretStore,
+    ...(process.env.FOREMAN_APPROVAL_TIMEOUT ? {} : { timeoutMs: 60_000 }),
+    approvalKey: deriveApprovalKey(masterKey),
+    injectPredicateRule: (input) => {
+      if (!policyEngine) throw new Error("policy engine not ready");
+      return policyEngine.addPredicateRule({ ...input, policyYamlPath: paths.policyPath });
+    },
   });
+  const secretStore = new SecretStore(db, masterKey);
+  const { registry, policy, risk, sessionManager, mediator } =
+    createMediatorStack({
+      db,
+      bus,
+      approval,
+      policyPath: paths.policyPath,
+      secretStore,
+    });
+  policyEngine = policy;
   const commandRouter = new ForemanCommandRouter();
   registerBuiltinCommands(commandRouter);
   let orchestratorChat: OrchestratorChat | null = null;
@@ -139,7 +161,14 @@ function bootServices(): Services {
     configDir: paths.configDir,
     orchestratorChat,
     controlChannel,
+    pendingRequestIds: new Set<string>(),
+    hub: loadHub(paths, secretStore, warn),
   };
+}
+
+/** Diagnostics go to stderr: stdout is the agent's JSON-RPC channel. */
+function warn(message: string): void {
+  process.stderr.write(`foreman mcp-stdio: ${message}\n`);
 }
 
 function autoRegisterSource(
@@ -154,26 +183,89 @@ function autoRegisterSource(
   });
 }
 
+/** How long a closing client may keep in-flight calls alive before we
+ *  cancel their pending approvals and exit. */
+const SHUTDOWN_GRACE_MS = 5_000;
+
 function runMcpLoop(services: Services, sourceAgent: string): void {
   const decoder = createDecoder();
+  const inFlight = new Set<Promise<void>>();
+  let shuttingDown = false;
   process.stdin.setEncoding("utf-8");
-  process.stdin.on("data", async (chunk) => {
+  process.stdin.on("data", (chunk) => {
     const { messages } = decoder.push(chunk);
+    // Each message is handled independently: a `tools/call` waiting on a
+    // human approval must not hold up a `ping` or a second call behind it.
     for (const message of messages) {
-      const response = await handleMessage(services, sourceAgent, message);
-      if (response) process.stdout.write(encodeMessage(response));
+      const task = respond(services, sourceAgent, message).finally(() => {
+        inFlight.delete(task);
+      });
+      inFlight.add(task);
     }
   });
-  process.stdin.on("end", () => {
-    cleanup(services);
-    process.exit(0);
-  });
   const shutdown = (): void => {
-    cleanup(services);
-    process.exit(0);
+    if (shuttingDown) return;
+    shuttingDown = true;
+    void drainAndExit(services, inFlight);
   };
+  process.stdin.on("end", shutdown);
+  // A client that closes its end first makes our next write fail (EPIPE);
+  // unhandled, that crashes the process before the audit queue flushes.
+  process.stdout.on("error", shutdown);
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
+}
+
+/** Handle one message and write its reply. Never throws: any failure turns
+ *  into a JSON-RPC error so the transport survives (an unhandled rejection
+ *  here used to kill the agent's whole MCP server). */
+async function respond(
+  services: Services,
+  sourceAgent: string,
+  message: JSONRPCMessage,
+): Promise<void> {
+  let response: JSONRPCMessage | null;
+  try {
+    response = await handleMessage(services, sourceAgent, message);
+  } catch (err) {
+    const id = "id" in message ? message.id : undefined;
+    response = replyError(
+      id,
+      -32603,
+      `Foreman internal error: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (!response) return;
+  try {
+    process.stdout.write(encodeMessage(response));
+  } catch {
+    // The client is gone; the stdout "error" handler drives the shutdown.
+  }
+}
+
+/** The client went away. Calls still waiting on a human can never be
+ *  answered, so their approvals are cancelled (denied) — which lets the
+ *  mediator finish and write the audit row — before the process exits. */
+async function drainAndExit(
+  services: Services,
+  inFlight: Set<Promise<void>>,
+): Promise<void> {
+  try {
+    // Calls still in policy / LLM evaluation would otherwise open fresh
+    // approvals for a requester that is already gone.
+    services.approval.close?.();
+    if (services.pendingRequestIds && services.pendingRequestIds.size > 0) {
+      services.approval.cancelPending?.([...services.pendingRequestIds]);
+    }
+    await Promise.race([
+      Promise.allSettled([...inFlight]),
+      new Promise((resolve) => setTimeout(resolve, SHUTDOWN_GRACE_MS).unref()),
+    ]);
+  } finally {
+    await services.hub?.close().catch(() => undefined);
+    cleanup(services);
+    process.exit(0);
+  }
 }
 
 function cleanup(services: Services): void {
@@ -241,7 +333,7 @@ export async function handleMessage(
               approval_id: {
                 type: "string",
                 description:
-                  "Approval id Foreman included in its notification (e.g. 'abc123').",
+                  "Approval id exactly as it appears in the user's tapped callback_data or typed command, including the part after the dot (e.g. '01J9…XK.Ab3dE5fG7h'). The suffix is a token Foreman issued for that specific button; without it an allow is rejected.",
               },
               decision: {
                 type: "string",
@@ -429,6 +521,7 @@ export async function handleMessage(
             },
           },
         },
+        ...(await hubToolsFor(services)),
       ],
     });
   }
@@ -847,7 +940,9 @@ export async function handleMessage(
         });
       }
 
-      const mediatorResult = await services.mediator.handleRequest({
+      const mediatorResult = await trackRequest(services, (requestId) =>
+        services.mediator.handleRequest({
+        requestId,
         sourceAgent: normalised.sourceAgent,
         targetTool: normalised.targetTool,
         sessionId: normalised.sessionId,
@@ -859,7 +954,8 @@ export async function handleMessage(
             arguments: normalised.args,
           },
         } as JSONRPCMessage,
-      });
+        }),
+      );
 
       const decision: NormalisedDecision =
         mediatorResult.decision === "allowed"
@@ -895,11 +991,20 @@ export async function handleMessage(
       });
     }
 
-    const result = await services.mediator.handleRequest({
-      sourceAgent,
-      targetTool: toolName,
-      message: msg,
-    });
+    const hubCall =
+      toolName && services.hub
+        ? await services.hub.resolveCall(toolName, params?.arguments, services.hubScope)
+        : null;
+    if (hubCall) return handleHubCall(services, sourceAgent, id, hubCall);
+
+    const result = await trackRequest(services, (requestId) =>
+      services.mediator.handleRequest({
+        requestId,
+        sourceAgent,
+        targetTool: toolName,
+        message: msg,
+      }),
+    );
     if (result.decision === "allowed") {
       return reply(id, {
         content: [
@@ -916,6 +1021,101 @@ export async function handleMessage(
     return replyError(id, -32601, `Method not found: ${method ?? "(unknown)"}`);
   }
   return null;
+}
+
+/** Hub tools for `tools/list`. A failing upstream must never break the
+ *  listing of Foreman's own tools. */
+async function hubToolsFor(services: Services): Promise<AgentTool[]> {
+  if (!services.hub) return [];
+  try {
+    return await services.hub.listForAgent(services.hubScope);
+  } catch (err) {
+    warn(`MCP hub listing failed: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
+  }
+}
+
+/** A call to an upstream MCP server: mediate (policy / risk / approval /
+ *  audit) exactly like any other tool call, then execute through the hub. */
+async function handleHubCall(
+  services: Services,
+  sourceAgent: string,
+  id: string | number | undefined,
+  hubCall: HubCallResolution,
+): Promise<JSONRPCMessage | null> {
+  const hub = services.hub!;
+  if (hubCall.kind === "search") {
+    const matches = await hub.search(hubCall.query, hubCall.limit, services.hubScope);
+    return reply(id, {
+      content: [{ type: "text", text: JSON.stringify({ tools: matches }) }],
+    });
+  }
+  if (hubCall.kind === "unavailable") {
+    return reply(id, { content: [{ type: "text", text: hubCall.message }], isError: true });
+  }
+  const { tool, args } = hubCall;
+  const decision = await trackRequest(services, (requestId) =>
+    services.mediator.handleRequest({
+      requestId,
+      sourceAgent,
+      targetTool: tool.exposedName,
+      message: {
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { name: tool.exposedName, arguments: args },
+      } as JSONRPCMessage,
+      ...(tool.rule && tool.rule !== "deny"
+        ? { policyFallback: { effect: tool.rule, source: `mcp.yaml:${tool.server}` } }
+        : {}),
+    }),
+  );
+  if (decision.decision !== "allowed") {
+    return replyError(id, -32603, `Denied by ${decision.decidedBy}`);
+  }
+  try {
+    const { result, stats, durationMs } = await hub.call(tool, args);
+    services.audit.logEvent("mcp:call", {
+      requestId: decision.requestId,
+      sourceAgent,
+      server: tool.server,
+      tool: tool.name,
+      isError: result.isError === true,
+      durationMs,
+      ...stats,
+    });
+    return reply(id, result);
+  } catch (err) {
+    // The hub already masks the secrets it injected; this catches anything
+    // else secret-shaped an upstream error might echo.
+    const message = redactSecretShapes(err instanceof Error ? err.message : String(err)).text;
+    services.audit.logEvent("mcp:call", {
+      requestId: decision.requestId,
+      sourceAgent,
+      server: tool.server,
+      tool: tool.name,
+      isError: true,
+      error: message,
+    });
+    return reply(id, {
+      content: [{ type: "text", text: `Upstream MCP server '${tool.server}' failed: ${message}` }],
+      isError: true,
+    });
+  }
+}
+
+/** Run a mediated call under an explicit request id and remember it while
+ *  it is in flight (see Services.pendingRequestIds). */
+async function trackRequest<T>(
+  services: Services,
+  run: (requestId: string) => Promise<T>,
+): Promise<T> {
+  const requestId = ulid();
+  services.pendingRequestIds?.add(requestId);
+  try {
+    return await run(requestId);
+  } finally {
+    services.pendingRequestIds?.delete(requestId);
+  }
 }
 
 function reply(

@@ -21,6 +21,7 @@ import {
   rollbackRegistry,
 } from "../core/registry-fetch.js";
 import { bold, dim, green, orange, red } from "./colors.js";
+import { loadBundledMcpCatalog, McpCatalogError } from "../core/mcp-hub/catalog.js";
 
 interface ListOptions {
   json?: boolean;
@@ -244,7 +245,21 @@ registryCommand
         green("✓") +
           ` registry valid — ${doc.agents.length} agents, version ${doc.version}`,
       );
+      if (!path) {
+        // The bundled MCP server catalog ships alongside agents.json.
+        const catalog = loadBundledMcpCatalog();
+        console.log(
+          green("✓") + ` MCP catalog valid — ${catalog.servers.length} servers`,
+        );
+      }
     } catch (err) {
+      if (err instanceof McpCatalogError) {
+        console.error(red("error: ") + err.message);
+        for (const issue of err.issues) {
+          console.error(`  ${issue.path || "(root)"}: ${issue.message}`);
+        }
+        process.exit(1);
+      }
       handleValidationError(err);
       console.error(
         red("error: ") + (err instanceof Error ? err.message : String(err)),

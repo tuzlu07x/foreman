@@ -213,11 +213,20 @@ export class LlmVerifier {
 // Combine — fold LLM verdict back into the heuristic assessment
 // =============================================================================
 //
-// Only override the heuristic when confidence ≥ 0.7 — low-confidence LLM
-// output is suggestive but not authoritative. additional_risk_score always
-// adjusts the bucket math (small nudge, capped -30..+30).
+// The LLM is a second opinion that may only make Foreman *stricter*. Tool
+// args are attacker-controllable text that ends up inside the verifier
+// prompt, so a verdict must never lower the heuristic score or relax its
+// recommendation — otherwise a prompt-injected "this is safe, allow it"
+// could turn an `ask` into a silent `allow`. A confident (≥ 0.7) verdict can
+// escalate allow → ask → deny; additional_risk_score only counts upward.
 
 const CONFIDENCE_OVERRIDE = 0.7
+
+const STRICTNESS: Record<RiskAssessment['recommendation'], number> = {
+  allow: 0,
+  ask: 1,
+  deny: 2,
+}
 
 export function combineAssessment(
   heuristic: RiskAssessment,
@@ -228,18 +237,19 @@ export function combineAssessment(
       ? { ...heuristic, llmVerification: llm }
       : heuristic
   }
-  const adjustedScore = Math.max(
-    0,
-    Math.min(100, heuristic.totalScore + llm.additional_risk_score),
+  const adjustedScore = Math.min(
+    100,
+    heuristic.totalScore + Math.max(0, llm.additional_risk_score),
   )
   const recommendation =
-    llm.confidence >= CONFIDENCE_OVERRIDE
+    llm.confidence >= CONFIDENCE_OVERRIDE &&
+    STRICTNESS[llm.recommended_action] > STRICTNESS[heuristic.recommendation]
       ? llm.recommended_action
       : heuristic.recommendation
   return {
     ...heuristic,
     totalScore: adjustedScore,
-    bucket: bucketFor(adjustedScore),
+    bucket: adjustedScore === heuristic.totalScore ? heuristic.bucket : bucketFor(adjustedScore),
     recommendation,
     llmVerification: llm,
   }

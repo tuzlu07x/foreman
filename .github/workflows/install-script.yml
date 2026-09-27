@@ -11,6 +11,9 @@ on:
       - "install.sh"
       - ".github/workflows/install-script.yml"
 
+permissions:
+  contents: read
+
 jobs:
   shellcheck:
     name: shellcheck install.sh

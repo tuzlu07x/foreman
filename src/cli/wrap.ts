@@ -3,12 +3,9 @@ import { Command } from "commander";
 import { DbApprovalService } from "../core/approval.js";
 import { AuditLogger } from "../core/audit.js";
 import { bus } from "../core/event-bus.js";
-import { MediatorService } from "../core/mediator.js";
-import { PolicyEngine } from "../core/policy-engine.js";
-import { RegistryService } from "../core/registry.js";
-import { RiskScorer } from "../core/risk-scorer.js";
+import { deriveApprovalKey } from "../core/approval-token.js";
+import { createMediatorStack } from "../core/mediator-stack.js";
 import { SecretStore } from "../core/secret-store.js";
-import { SessionManager } from "../core/session.js";
 import { runWrap } from "../core/wrap-runner.js";
 import { closeDb, getDb } from "../db/client.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
@@ -70,31 +67,21 @@ export const wrapCommand = new Command("wrap")
     }
 
     const db = getDb();
-    const registry = new RegistryService(db, bus);
     const audit = new AuditLogger(db, bus);
+    const masterKey = loadOrCreateSecretsMasterKey();
     // Cross-process IPC via SQLite — TUI in `foreman start` bridges this.
-    const approval = new DbApprovalService(db, { bus, timeoutMs: 60_000 });
-    const policy = new PolicyEngine(db, bus);
-    const policyPath = options.policy ?? paths.policyPath;
-    if (existsSync(policyPath)) policy.loadFromYaml(policyPath);
-    const risk = new RiskScorer(db, undefined, {
-      bucketOverrides: () => policy.getBucketOverrides(),
-      // Wire the responsibility-violation rule (#300) — same as start.ts.
-      getAgentResponsibility: (agentId) =>
-        registry.get(agentId)?.responsibilityNote ?? null,
-      responsibilityPolicies: () => policy.getResponsibilityPolicies(),
+    // FOREMAN_APPROVAL_TIMEOUT wins over the 60 s interactive default.
+    const approval = new DbApprovalService(db, {
+      bus,
+      ...(process.env.FOREMAN_APPROVAL_TIMEOUT ? {} : { timeoutMs: 60_000 }),
+      approvalKey: deriveApprovalKey(masterKey),
     });
-    const sessionManager = new SessionManager(db, { bus });
-    const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
-    const mediator = new MediatorService({
-      registry,
-      policy,
-      risk,
-      approval,
-      sessionManager,
+    const { registry, mediator } = createMediatorStack({
       db,
       bus,
-      secretStore,
+      approval,
+      policyPath: options.policy ?? paths.policyPath,
+      secretStore: new SecretStore(db, masterKey),
     });
 
     const session = runWrap({

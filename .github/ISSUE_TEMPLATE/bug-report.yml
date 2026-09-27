@@ -44,6 +44,6 @@ body:
     id: platform
     attributes:
       label: Platform and Node version
-      placeholder: "macOS 15 / Node 20.x"
+      placeholder: "macOS 15 / Node 22.x"
     validations:
       required: true

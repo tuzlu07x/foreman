@@ -22,7 +22,7 @@ foreman/
 │   ├── tui/              Ink-based dashboard (App, pages, components)
 │   └── utils/            paths, migrations helpers
 ├── registry/agents.json  the curated AgentEntry catalogue
-├── tests/                vitest suites (561 at v0.1.0)
+├── tests/                vitest suites (~3,700 tests)
 ├── install.sh            curl-pipe install script (npm-based)
 └── docs/                 this report + install + completion + WSL2 notes
 ```
@@ -65,7 +65,7 @@ Each command:
 Owns the `agents` table. `register` issues a fresh Ed25519 keypair per agent; the private key is returned **once** to the caller and never persisted. `list()` filters out blocked rows; `listAll()` exposes them for the Agents page. `block / unblock / remove / regenerateKey` give the TUI agents page everything it needs.
 
 ### PolicyEngine — `policy-engine.ts`
-Loads `policy.yaml` into the `policies` table inside one transaction (PR #128 closed a race where readers saw the empty-policy window). `evaluate(req)` walks rules by specificity: conditional `tool:read_file` ASK rules win over blanket `*` ALLOW rules. `evaluateSecretAccess` is deny-by-default — only an explicit allow rule grants access.
+Loads `policy.yaml` into the `policies` table inside one transaction (PR #128 closed a race where readers saw the empty-policy window). `evaluate(req)` picks among the matching rules by specificity. An explicit per-agent deny always wins. Otherwise a rule overrides another only when it is more specific on one axis (exact source, conditions) and no less specific on the other, and among the rules nothing overrides, the strictest wins. So conditional `tool:read_file` ASK rules win over blanket `*` ALLOW rules, and over a remembered per-agent allow. `evaluateSecretAccess` is deny-by-default — only an explicit allow rule grants access.
 
 ### MediatorService — `mediator.ts`
 The chokepoint. Every tool call (`foreman mcp-stdio`, `foreman wrap`, in-TUI Chat console) calls `handleRequest`:
@@ -231,7 +231,7 @@ Default poll interval 200 ms, configurable per service. Stale rows older than 5 
 
 ---
 
-## 10. Test layout (561 tests at v0.1.0)
+## 10. Test layout
 
 - `tests/core/` — pure-logic helpers, services with `createInMemoryDb()`.
 - `tests/cli/` — command-output snapshots, error paths, exit codes.
@@ -255,7 +255,6 @@ Build pipeline (`tsup`): one ESM bundle at `dist/cli/index.js`; migrations copie
 | The registry catalogue | `registry/agents.json` + `src/core/registry-catalog.ts` (Zod schema) |
 | The cross-process approval bridge | `src/core/approval.ts` (DbApprovalService + ApprovalBridge) |
 
-See also: `feedback_manual_qa_catalog.md` in the user's auto-memory for the full ~75-scenario manual QA matrix.
 
 ---
 
@@ -263,7 +262,7 @@ See also: `feedback_manual_qa_catalog.md` in the user's auto-memory for the full
 
 Foreman is a **pre-execution gate**, not a post-execution monitor. The
 distinction is load-bearing for the threat model + how the user-facing
-narrative is written ([scenario doc](./scenario-pazartesi-sabahi.md),
+narrative is written ([scenario doc](../examples/phishing-scenario/STORYBOARD.md),
 README, demo asciinema all lean into "stopped before disaster" rather
 than "cleaned up after").
 

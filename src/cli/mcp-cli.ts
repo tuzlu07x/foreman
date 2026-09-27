@@ -1,0 +1,350 @@
+import { existsSync } from "node:fs";
+import { Command } from "commander";
+import { loadBundledMcpCatalog, type McpCatalogEntry } from "../core/mcp-hub/catalog.js";
+import {
+  defaultHubConfig,
+  loadHubConfig,
+  saveHubConfig,
+  type HubConfig,
+  type HubMode,
+} from "../core/mcp-hub/config.js";
+import { compactForAgent, estimateTokens, McpHub, type HubTool } from "../core/mcp-hub/hub.js";
+import {
+  addServer,
+  HubConfigEditError,
+  missingSecrets,
+  removeServer,
+  setMode,
+  setServerEnabled,
+} from "../core/mcp-hub/manage.js";
+import { ToolPinStore } from "../core/mcp-hub/pins.js";
+import { SecretStore } from "../core/secret-store.js";
+import { closeDb, getDb } from "../db/client.js";
+import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
+import { getForemanPaths } from "../utils/config.js";
+import { bold, dim, green, orange, red } from "./colors.js";
+
+// =============================================================================
+// `foreman mcp` — the MCP hub: one place to connect every agent to GitHub,
+// Notion, Stripe, a browser… with each call mediated by Foreman.
+// =============================================================================
+
+export const mcpCommand = new Command("mcp").description(
+  "MCP hub — connect upstream MCP servers once, mediate every agent's calls to them",
+);
+
+mcpCommand
+  .command("catalog")
+  .description("List the curated MCP servers `foreman mcp add` knows")
+  .option("--category <category>", "only show one category (developer, productivity, …)")
+  .option("--json", "output JSON")
+  .action((opts: { category?: string; json?: boolean }) => {
+    const catalog = loadBundledMcpCatalog();
+    const entries = catalog.servers.filter((s) => !opts.category || s.category === opts.category);
+    if (opts.json) {
+      process.stdout.write(`${JSON.stringify(entries, null, 2)}\n`);
+      return;
+    }
+    const byCategory = new Map<string, McpCatalogEntry[]>();
+    for (const e of entries) byCategory.set(e.category, [...(byCategory.get(e.category) ?? []), e]);
+    for (const [category, list] of byCategory) {
+      console.log(orange(category));
+      for (const e of list) {
+        const badge = e.official ? green("official") : dim("community");
+        console.log(`  ${bold(e.id.padEnd(18))} ${e.description} ${dim("·")} ${badge}`);
+      }
+      console.log("");
+    }
+    console.log(dim("Add one: foreman mcp add <id>   ·   details: foreman mcp catalog --json"));
+  });
+
+mcpCommand
+  .command("add <id> [args...]")
+  .description(
+    "Add a server from the catalog (e.g. `foreman mcp add github`) or a custom one (--command / --url)",
+  )
+  .option("--name <name>", "name in mcp.yaml (default: the id)")
+  .option("--command <command>", "custom stdio server command (args follow the id)")
+  .option("--url <url>", "custom streamable-HTTP server URL (https://)")
+  .option(
+    "--env <KEY=VALUE>",
+    "environment variable for the server; use ${secret:name} for secrets (repeatable)",
+    collectPairs,
+    {},
+  )
+  .option("--header <KEY=VALUE>", "HTTP header for a remote server (repeatable)", collectPairs, {})
+  .option("--force", "replace an existing server with the same name")
+  .action(
+    (
+      id: string,
+      args: string[],
+      opts: {
+        name?: string;
+        command?: string;
+        url?: string;
+        env: Record<string, string>;
+        header: Record<string, string>;
+        force?: boolean;
+      },
+    ) => {
+      requireInitialised();
+      const paths = getForemanPaths();
+      const current = readConfig(paths.mcpConfigPath);
+      let next: HubConfig;
+      try {
+        next = addServer(current, loadBundledMcpCatalog(), {
+          id,
+          ...(opts.name ? { name: opts.name } : {}),
+          extraArgs: args,
+          ...(opts.command ? { command: opts.command } : {}),
+          ...(opts.url ? { url: opts.url } : {}),
+          ...(Object.keys(opts.env).length > 0 ? { env: opts.env } : {}),
+          ...(Object.keys(opts.header).length > 0 ? { headers: opts.header } : {}),
+          ...(opts.force ? { force: true } : {}),
+        });
+      } catch (err) {
+        fail(err);
+      }
+      saveHubConfig(paths.mcpConfigPath, next);
+      const name = opts.name ?? id;
+      console.log(`${green("✓")} added ${bold(name)} to ${dim(paths.mcpConfigPath)}`);
+      reportSecrets(next, name);
+      console.log(
+        dim(
+          "Every agent connected through `foreman mcp-stdio` now sees this server's tools. " +
+            "Review them with `foreman mcp tools " +
+            name +
+            "`.",
+        ),
+      );
+    },
+  );
+
+mcpCommand
+  .command("list")
+  .description("Show configured MCP servers")
+  .option("--json", "output JSON")
+  .action((opts: { json?: boolean }) => {
+    requireInitialised();
+    const paths = getForemanPaths();
+    const config = readConfig(paths.mcpConfigPath);
+    if (opts.json) {
+      process.stdout.write(`${JSON.stringify(config, null, 2)}\n`);
+      return;
+    }
+    const names = Object.keys(config.servers);
+    if (names.length === 0) {
+      console.log(dim("No MCP servers yet — try `foreman mcp catalog` then `foreman mcp add <id>`."));
+      return;
+    }
+    const store = openSecretStore();
+    for (const name of names) {
+      const s = config.servers[name]!;
+      const flag = s.enabled ? green("●") : dim("○");
+      const where = s.url ? s.url : [s.command, ...s.args].join(" ");
+      const missing = missingSecrets(config, name, (n) => store.exists(n));
+      const secretNote =
+        missing.length > 0 ? red(` missing secrets: ${missing.join(", ")}`) : "";
+      console.log(`  ${flag} ${bold(name.padEnd(18))} ${dim(where)}${secretNote}`);
+    }
+    console.log("");
+    console.log(dim(`mode: ${config.mode} · result cap ${config.limits.max_result_chars} chars`));
+    closeDb();
+  });
+
+mcpCommand
+  .command("remove <name>")
+  .description("Remove a server (and its pinned tool definitions)")
+  .action((name: string) => {
+    requireInitialised();
+    const paths = getForemanPaths();
+    try {
+      saveHubConfig(paths.mcpConfigPath, removeServer(readConfig(paths.mcpConfigPath), name));
+    } catch (err) {
+      fail(err);
+    }
+    new ToolPinStore(paths.mcpPinsPath).forget(name);
+    console.log(`${green("✓")} removed ${bold(name)}`);
+  });
+
+for (const [verb, enabled] of [
+  ["enable", true],
+  ["disable", false],
+] as const) {
+  mcpCommand
+    .command(`${verb} <name>`)
+    .description(`${enabled ? "Enable" : "Disable"} a configured server`)
+    .action((name: string) => {
+      requireInitialised();
+      const paths = getForemanPaths();
+      try {
+        saveHubConfig(
+          paths.mcpConfigPath,
+          setServerEnabled(readConfig(paths.mcpConfigPath), name, enabled),
+        );
+      } catch (err) {
+        fail(err);
+      }
+      console.log(`${green("✓")} ${name} ${enabled ? "enabled" : "disabled"}`);
+    });
+}
+
+mcpCommand
+  .command("mode <mode>")
+  .description(
+    "How agents discover hub tools: eager (list all), lazy (search + call, fewest tokens), auto (lazy above the threshold)",
+  )
+  .action((mode: string) => {
+    requireInitialised();
+    if (mode !== "auto" && mode !== "eager" && mode !== "lazy") {
+      fail(new Error("mode must be auto, eager or lazy"));
+    }
+    const paths = getForemanPaths();
+    saveHubConfig(paths.mcpConfigPath, setMode(readConfig(paths.mcpConfigPath), mode as HubMode));
+    console.log(`${green("✓")} MCP hub mode = ${mode}`);
+  });
+
+mcpCommand
+  .command("tools [name]")
+  .description("Connect to servers, list their tools, scan findings and token cost")
+  .option("--refresh", "ignore the pinned cache and ask the live servers")
+  .option("--json", "output JSON")
+  .action(async (name: string | undefined, opts: { refresh?: boolean; json?: boolean }) => {
+    requireInitialised();
+    const { hub, config } = openHub();
+    try {
+      const tools = await hub.inventory({
+        refresh: opts.refresh === true,
+        ...(name ? { servers: [name] } : {}),
+      });
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify({ servers: hub.status(), tools }, null, 2)}\n`);
+        return;
+      }
+      for (const status of hub.status().filter((s) => !name || s.name === name)) {
+        const state =
+          status.source === "unavailable" ? red(`unavailable — ${status.error ?? "unknown error"}`) : dim(status.source);
+        console.log(`${orange(status.name)} ${state}`);
+        for (const t of tools.filter((x) => x.server === status.name)) printTool(t);
+        console.log("");
+      }
+      printTokenReport(tools, config);
+    } finally {
+      await hub.close();
+      closeDb();
+    }
+  });
+
+mcpCommand
+  .command("trust <name>")
+  .description("Accept a server's current tool definitions (re-pin after an update)")
+  .option("--include-flagged", "also accept tools the scanner flagged as suspicious")
+  .action(async (name: string, opts: { includeFlagged?: boolean }) => {
+    requireInitialised();
+    const { hub } = openHub();
+    try {
+      const tools = await hub.trust(name, { includeFlagged: opts.includeFlagged === true });
+      const quarantined = tools.filter((t) => t.status === "quarantined");
+      console.log(`${green("✓")} pinned ${tools.length} tool definitions for ${bold(name)}`);
+      if (quarantined.length > 0) {
+        console.log(
+          red(`  ${quarantined.length} tool(s) stay quarantined by the scanner: `) +
+            quarantined.map((t) => t.name).join(", "),
+        );
+        console.log(dim("  Review them with `foreman mcp tools " + name + "`; accept with --include-flagged."));
+      }
+    } catch (err) {
+      fail(err);
+    } finally {
+      await hub.close();
+      closeDb();
+    }
+  });
+
+// -----------------------------------------------------------------------------
+// helpers
+// -----------------------------------------------------------------------------
+
+function printTool(t: HubTool): void {
+  const icon = t.status === "available" ? green("✓") : t.status === "denied" ? dim("⊘") : red("⚠");
+  const rule = t.rule ? dim(` [${t.rule}]`) : "";
+  console.log(`  ${icon} ${t.name}${rule}`);
+  for (const reason of t.reasons) console.log(`      ${red(reason)}`);
+  for (const f of t.findings.filter((x) => x.severity === "medium")) {
+    console.log(`      ${dim(`note: ${f.reason} (${f.location})`)}`);
+  }
+}
+
+function printTokenReport(tools: HubTool[], config: HubConfig): void {
+  const visible = tools.filter((t) => t.status === "available");
+  if (visible.length === 0) return;
+  const raw = estimateTokens(
+    visible.map((t) => ({
+      name: t.exposedName,
+      description: t.description ?? "",
+      inputSchema: t.inputSchema,
+      ...(t.annotations !== undefined ? { annotations: t.annotations } : {}),
+    })),
+  );
+  const compact = estimateTokens(visible.map((t) => compactForAgent(t, config.limits.max_description_chars)));
+  const lazy = estimateTokens([{ search: 1 }, { call: 1 }]) + 180;
+  console.log(
+    dim(
+      `listing cost ≈ ${raw} tokens raw → ${compact} compacted → ~${lazy} in lazy mode ` +
+        `(mode: ${config.mode}, ${visible.length} tools)`,
+    ),
+  );
+}
+
+function reportSecrets(config: HubConfig, name: string): void {
+  const store = openSecretStore();
+  const missing = missingSecrets(config, name, (n) => store.exists(n));
+  closeDb();
+  if (missing.length === 0) return;
+  console.log(orange("  secrets needed (stored encrypted, never shown to agents):"));
+  for (const s of missing) console.log(`    foreman secrets add ${s}`);
+}
+
+function openHub(): { hub: McpHub; config: HubConfig } {
+  const paths = getForemanPaths();
+  const config = readConfig(paths.mcpConfigPath);
+  const store = openSecretStore();
+  const hub = new McpHub({
+    config,
+    resolveSecret: (n) => (store.exists(n) ? store.get(n) : null),
+    pins: new ToolPinStore(config.security.pin_tool_definitions ? paths.mcpPinsPath : null),
+  });
+  return { hub, config };
+}
+
+function openSecretStore(): SecretStore {
+  return new SecretStore(getDb(), loadOrCreateSecretsMasterKey());
+}
+
+function readConfig(path: string): HubConfig {
+  try {
+    return existsSync(path) ? loadHubConfig(path) : defaultHubConfig();
+  } catch (err) {
+    fail(err);
+  }
+}
+
+function collectPairs(value: string, previous: Record<string, string>): Record<string, string> {
+  const at = value.indexOf("=");
+  if (at <= 0) throw new Error(`expected KEY=VALUE, got '${value}'`);
+  return { ...previous, [value.slice(0, at)]: value.slice(at + 1) };
+}
+
+function requireInitialised(): void {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.root)) {
+    console.error(red("error: ") + `Foreman is not initialised at ${paths.root}. Run 'foreman init' first.`);
+    process.exit(1);
+  }
+}
+
+function fail(err: unknown): never {
+  const message = err instanceof HubConfigEditError || err instanceof Error ? err.message : String(err);
+  console.error(red("error: ") + message);
+  process.exit(1);
+}

@@ -20,9 +20,21 @@ rules:
         - "/\\\\.ssh/"
         - "/\\\\.aws/credentials$"
 
-  # Same guard rail on writes.
+  # Same guard rail on writes: MCP servers call it write_file, the Claude
+  # Code hook and Codex report file_write.
   - source: "*"
     target: "tool:write_file"
+    effect: ask
+    conditions:
+      pathMatch:
+        - "(^|/)\\\\.env(\\\\..*)?$"
+        - "\\\\.key$"
+        - "(^|/)id_rsa(\\\\.pub)?$"
+        - "(^|/)id_ed25519(\\\\.pub)?$"
+        - "/\\\\.ssh/"
+        - "/\\\\.aws/credentials$"
+  - source: "*"
+    target: "tool:file_write"
     effect: ask
     conditions:
       pathMatch:
@@ -48,7 +60,7 @@ rules:
         - "wget"
 
   # Permissive defaults for harmless read-only ops. Secret-shaped reads above
-  # win over these because conditional rules sort ahead of blanket allows.
+  # still ask: a targeted (conditional) rule outranks a blanket one.
   - source: "*"
     target: "tool:list_files"
     effect: allow

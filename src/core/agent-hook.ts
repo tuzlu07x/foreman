@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 
 // =============================================================================
 // PreToolUse hook installer (#517 Faz 4)
@@ -23,11 +23,33 @@ import { dirname } from "node:path";
 
 export const FOREMAN_HOOK_MARKER = "foreman.pre-tool-use" as const;
 
-/** Default tool matcher — every tool Claude Code surfaces that could
- *  actually do harm. Reads (e.g. `Read`) intentionally not matched;
- *  Foreman's MCP layer already scores those + the chain analysis (#526)
- *  catches read-then-leak patterns better than a per-Read prompt would. */
-export const DEFAULT_PRETOOLUSE_MATCHER = "Bash|Write|Edit|WebFetch" as const;
+/** Default tool matcher — every Claude Code tool that can do harm or read
+ *  secrets. `Read` is included because Claude Code's built-in Read never
+ *  passes through Foreman's MCP layer: without it, "read ~/.ssh/id_rsa"
+ *  would bypass every secret-path rule. Third-party MCP tools (`mcp__…`)
+ *  are matched too; Foreman's own `mcp__foreman__…` tools are skipped by
+ *  the hook because `foreman mcp-stdio` already mediates them. Everyday
+ *  reads still pass without a prompt — the policy only asks for
+ *  secret-shaped paths. */
+export const DEFAULT_PRETOOLUSE_MATCHER =
+  "Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob|WebFetch|WebSearch|mcp__.*" as const;
+
+/** Seconds Claude Code waits for the hook. Must exceed Foreman's own
+ *  approval window (600s) so a pending approval is resolved by the human —
+ *  or denied by Foreman — rather than abandoned by a runner timeout. */
+export const FOREMAN_HOOK_TIMEOUT_SECONDS = 660;
+
+/** The command written into the agent's settings. Prefers the lightweight
+ *  `foreman-hook` binary (faster cold start on every tool call) when it is on
+ *  PATH; standalone binaries only ship `foreman`, so fall back to it. */
+export function defaultHookCommand(
+  agentId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const dirs = (env.PATH ?? "").split(delimiter).filter((d) => d.length > 0);
+  const hasFastHook = dirs.some((d) => existsSync(join(d, "foreman-hook")));
+  return hasFastHook ? `foreman-hook ${agentId}` : `foreman hook ${agentId}`;
+}
 
 export interface InstallHookInput {
   /** Path to the agent's settings.json (e.g. ~/.claude/settings.json).
@@ -71,6 +93,7 @@ interface HookGroup {
 interface HookEntry {
   type?: string;
   command?: string;
+  timeout?: number;
   /** Foreman-only metadata so we can find our entry on uninstall without
    *  guessing by command string (paths drift across npm prefixes). */
   managed_by?: typeof FOREMAN_HOOK_MARKER;
@@ -178,6 +201,7 @@ export function mergeHook(
       {
         type: "command",
         command: input.hookCommand,
+        timeout: FOREMAN_HOOK_TIMEOUT_SECONDS,
         managed_by: FOREMAN_HOOK_MARKER,
       },
     ],

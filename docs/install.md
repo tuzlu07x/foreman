@@ -249,8 +249,16 @@ rm -rf ~/.config/foreman ~/.local/state/foreman ~/.cache/foreman
 # Windows native
 # Remove %APPDATA%\foreman and %LOCALAPPDATA%\foreman\Cache
 
-# 3. (optional) Remove the Foreman SOUL injection from each agent's identity hook
-rm -f ~/.hermes/SOUL.md ~/.claude/CLAUDE.md ~/.codex/AGENTS.md
+# 3. (optional) Undo the Foreman SOUL injection in each agent's identity hook.
+#    Foreman kept a copy of any file it replaced as <file>.pre-foreman.bak —
+#    restore it instead of deleting the file (Codex's AGENTS.md holds your
+#    own global instructions). Only delete files Foreman created itself.
+for f in ~/.hermes/SOUL.md ~/.codex/AGENTS.md; do
+  [ -f "$f.pre-foreman.bak" ] && mv "$f.pre-foreman.bak" "$f"
+done
+
+# 4. (optional) Remove the PreToolUse hook Foreman added to Claude Code
+foreman agent hook uninstall claude-code   # run before step 1
 ```
 
 ---

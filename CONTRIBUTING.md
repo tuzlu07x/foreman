@@ -10,13 +10,15 @@ Thanks for taking a look. Foreman is a small, opinionated project — short PRs 
 
 ## Dev setup
 
+Node **22.12+** is required.
+
 ```bash
 git clone git@github.com:tuzlu07x/foreman.git
 cd foreman
-npm install
+npm ci
 npm run lint        # tsc --noEmit
+npm run build       # tsup — build BEFORE testing: CLI suites spawn dist/cli/index.js
 npm test            # vitest run
-npm run build       # tsup
 ```
 
 Run the TUI locally against an isolated home dir:
@@ -33,6 +35,7 @@ FOREMAN_HOME=./.foreman-dev node dist/cli/index.js start
 - Use the PR template. State what you changed, checks you ran, and the security impact. `none` is a valid security impact when appropriate.
 - Keep commits tidy. Conventional commit subjects (`feat(scope): …`, `fix(scope): …`).
 - Tests, lint, and build must be green before review. The TUI has a manual smoke step — call it out in the PR body if you touched `src/tui/`.
+- Every PR gets one status check named **`verify`** (`.github/workflows/verify.yml`). It runs lint, build, tests and registry validation for code changes and passes quickly for docs-only changes. Maintainers: require the `verify` check in the branch ruleset.
 - Match the existing patterns rather than introducing new ones. The shape of services, pages, and CLI commands is intentional — copy a neighbour.
 
 ## Issues

@@ -1,3 +1,4 @@
+import { foremanSelfProtectionRule } from './risk-rules/foreman-self-protection.js'
 import type { ForemanDb } from '../db/client.js'
 import {
   firstAgentToAgent,
@@ -51,6 +52,7 @@ export const DEFAULT_RISK_RULES: readonly RiskRule[] = [
   firstAgentToAgent,
   previouslyDeniedPattern,
   responsibilityViolationRule,
+  foremanSelfProtectionRule,
 ]
 
 export interface RiskScorerOptions {

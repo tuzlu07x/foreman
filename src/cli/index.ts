@@ -9,11 +9,13 @@ import { hookCommand } from "./hook-cli.js";
 import { identityCommand } from "./identity-cli.js";
 import { initCommand } from "./init.js";
 import { logCommand } from "./log.js";
+import { mcpCommand } from "./mcp-cli.js";
 import { mcpStdioCommand } from "./mcp-stdio.js";
 import { migrateCommand } from "./migrate.js";
 import { llmCommand } from "./llm-cli.js";
 import { migrateConfigCommand } from "./migrate-config.js";
 import { notifyCommand } from "./notify-cli.js";
+import { orgCommand } from "./org-cli.js";
 import { claudeLoginCommand, codexLoginCommand } from "./oauth-wrapper.js";
 import { policyCommand } from "./policy-cli.js";
 import { providerCommand } from "./provider-cli.js";
@@ -39,6 +41,8 @@ program.addCommand(initCommand);
 program.addCommand(setupCommand);
 program.addCommand(startCommand);
 program.addCommand(mcpStdioCommand);
+program.addCommand(mcpCommand);
+program.addCommand(orgCommand);
 program.addCommand(logCommand);
 program.addCommand(policyCommand);
 program.addCommand(notifyCommand);
@@ -80,4 +84,6 @@ process.on("uncaughtException", (err) => {
   throw err;
 });
 
-program.parse();
+// parseAsync: most command actions are async; parse() would not await
+// them, so their rejections escaped as unhandled promises.
+await program.parseAsync();

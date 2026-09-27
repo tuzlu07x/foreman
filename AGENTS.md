@@ -33,7 +33,7 @@ issue`, or `help wanted`. If the change is not a tiny bug fix, discuss its
 
 ## Required checks
 
-Use Node 20 or later and run the checks relevant to the change:
+Use Node 22.12 or later and run the checks relevant to the change:
 
 ```bash
 npm ci
