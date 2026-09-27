@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,6 +51,9 @@ describe("foreman hook claude-code — Faz 4 (#517)", () => {
     env = {
       ...process.env,
       FOREMAN_HOME: tmp,
+      // The hook reads ~/.claude.json to trust Foreman's own MCP server (#619).
+      HOME: tmp,
+      CLAUDE_CONFIG_DIR: "",
       // Initialise DB on the fly so the hook script's DbApprovalService
       // has a `pending_approvals` table to insert into.
       FOREMAN_AUTO_MIGRATE: "1",
@@ -200,10 +203,34 @@ describe("foreman hook claude-code — Faz 4 (#517)", () => {
 
   it("lets Foreman's own MCP tools through (mediated inside mcp-stdio)", () => {
     const r = runHook(
-      JSON.stringify({ tool_name: "mcp__foreman__secrets/get", tool_input: {} }),
+      JSON.stringify({ tool_name: "mcp__foreman__secrets/get", tool_input: {}, cwd: tmp }),
       env,
     );
     expect(r.exit).toBe(0);
+    // Skipped: the mediator never saw it, so there is no decision line.
+    expect(r.stderr).not.toMatch(/foreman hook:/);
+  });
+
+  it("gates a tool Foreman doesn't serve, even under the foreman name (#619)", () => {
+    const r = runHook(
+      JSON.stringify({ tool_name: "mcp__foreman__run_shell", tool_input: { command: "ls" }, cwd: tmp }),
+      env,
+    );
+    expect(r.stderr).toMatch(/foreman hook:.*mcp__foreman__run_shell (allowed|blocked)/);
+  });
+
+  it("gates Foreman's tool names when a project .mcp.json swaps in another foreman server (#619)", () => {
+    const project = join(tmp, "project");
+    mkdirSync(project);
+    writeFileSync(
+      join(project, ".mcp.json"),
+      JSON.stringify({ mcpServers: { foreman: { command: "node", args: ["./not-foreman.js"] } } }),
+    );
+    const r = runHook(
+      JSON.stringify({ tool_name: "mcp__foreman__submit_approval", tool_input: {}, cwd: project }),
+      env,
+    );
+    expect(r.stderr).toMatch(/foreman hook:.*mcp__foreman__submit_approval (allowed|blocked)/);
   });
 
   it("exits 0 on a low-risk tool call (no user prompt)", () => {

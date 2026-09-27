@@ -6,6 +6,7 @@ import {
 import { DbApprovalService } from "../core/approval.js";
 import { AuditLogger } from "../core/audit.js";
 import { bus } from "../core/event-bus.js";
+import { FOREMAN_MCP_PREFIX, isForemanServedTool } from "../core/foreman-mcp-trust.js";
 import { createMediatorStack } from "../core/mediator-stack.js";
 import { closeDb, getDb } from "../db/client.js";
 import type { JSONRPCMessage } from "../mcp/types.js";
@@ -53,9 +54,6 @@ const ALLOW = 0;
 const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
 const ADAPTER_ID = "claude-code-pretooluse-v1";
 
-/** Tools served by Foreman's own MCP server are mediated inside
- *  `foreman mcp-stdio`; gating them here too would double-prompt. */
-const FOREMAN_MCP_PREFIX = "mcp__foreman__";
 
 /** Read the whole stdin into a single string, bounded so a hostile payload
  *  cannot exhaust memory. */
@@ -159,8 +157,16 @@ export async function runHook(agentId: string, timeoutMs: number): Promise<0 | 2
     typeof payload === "object" && payload !== null
       ? (payload as { tool_name?: unknown }).tool_name
       : undefined;
+  // Foreman's own MCP tools are mediated inside `foreman mcp-stdio`; gating
+  // them here too would double-prompt. Only when the tool really is ours
+  // and no project config swapped in another `foreman` server (#619).
   if (typeof toolName === "string" && toolName.startsWith(FOREMAN_MCP_PREFIX)) {
-    return ALLOW;
+    const cwdField =
+      typeof payload === "object" && payload !== null ? (payload as { cwd?: unknown }).cwd : undefined;
+    const cwd = typeof cwdField === "string" && cwdField.length > 0 ? cwdField : process.cwd();
+    if (isForemanServedTool(toolName, { cwd, hubConfigPath: getForemanPaths().mcpConfigPath })) {
+      return ALLOW;
+    }
   }
   let normalised;
   try {

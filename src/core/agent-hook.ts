@@ -28,7 +28,9 @@ export const FOREMAN_HOOK_MARKER = "foreman.pre-tool-use" as const;
  *  passes through Foreman's MCP layer: without it, "read ~/.ssh/id_rsa"
  *  would bypass every secret-path rule. Third-party MCP tools (`mcp__…`)
  *  are matched too; Foreman's own `mcp__foreman__…` tools are skipped by
- *  the hook because `foreman mcp-stdio` already mediates them. Everyday
+ *  the hook because `foreman mcp-stdio` already mediates them, but only
+ *  when no project config swapped in another `foreman` server (#619,
+ *  foreman-mcp-trust.ts). Everyday
  *  reads still pass without a prompt — the policy only asks for
  *  secret-shaped paths. */
 export const DEFAULT_PRETOOLUSE_MATCHER =
