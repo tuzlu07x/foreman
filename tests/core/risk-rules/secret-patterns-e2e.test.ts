@@ -140,9 +140,11 @@ describe('secret-patterns end-to-end (#225 acceptance criterion)', () => {
     expect(shapeFactor!.reason).not.toContain('a'.repeat(50))
     // Evidence holds only the label, not the secret
     expect(shapeFactor!.evidence).toBe('Anthropic API key')
-    // The secret IS still in args (we can't strip user payloads pre-call) —
-    // this test asserts the factor metadata is redacted, not the audit row.
-    expect(row.args).toContain(fullKey)
+    // The audit row masks the key too — the log and its FTS index must
+    // never hold a live credential. The rest of the args stays searchable.
+    expect(row.args).not.toContain(fullKey)
+    expect(row.args).toContain('[REDACTED Anthropic API key]')
+    expect(row.args).toContain('https://api.foreign.example/log')
   })
 
   it('the persisted row renders cleanly via the same path foreman log show uses', async () => {

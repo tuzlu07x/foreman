@@ -1,4 +1,3 @@
-import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import {
@@ -7,6 +6,7 @@ import {
 } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { getForemanPaths } from "../utils/config.js";
+import { ensurePrivateDir, restrictToOwner } from "../utils/secure-fs.js";
 import * as schema from "./schema.js";
 
 export type ForemanDb = BetterSQLite3Database<typeof schema>;
@@ -21,11 +21,15 @@ let cached: { sqlite: Database.Database; db: ForemanDb } | null = null;
 export function getDb(): ForemanDb {
   if (cached) return cached.db;
   const { dbPath, migrationsPath } = getForemanPaths();
-  mkdirSync(dirname(dbPath), { recursive: true });
+  ensurePrivateDir(dirname(dbPath));
   let sqlite: Database.Database;
   try {
     sqlite = new Database(dbPath);
+    // Before the first write creates the WAL / SHM side files, so SQLite
+    // gives them the same owner-only mode.
+    restrictToOwner(dbPath);
     configureSqlite(sqlite);
+    restrictToOwner(`${dbPath}-wal`, `${dbPath}-shm`);
   } catch (err) {
     throw wrapDbOpenError(err, dbPath);
   }

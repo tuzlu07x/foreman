@@ -1,5 +1,6 @@
 import type { ForemanDb } from '../db/client.js'
 import { auditEvents, requests } from '../db/schema.js'
+import { redactSecretsDeep } from './risk-rules/secret-patterns.js'
 import {
   bus as defaultBus,
   type EventBus,
@@ -126,7 +127,9 @@ export class AuditLogger {
           sourceAgent: e.sourceAgent,
           targetAgent: e.targetAgent ?? null,
           targetTool: e.targetTool ?? null,
-          args: JSON.stringify(e.args),
+          // Credential-shaped values are masked before they reach the
+          // audit log / FTS index; paths and commands stay searchable.
+          args: JSON.stringify(redactSecretsDeep(e.args)),
           riskScore: e.riskScore,
           riskReasons: JSON.stringify(e.riskReasons),
           riskFactors:

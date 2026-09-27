@@ -167,7 +167,7 @@ describe('Verifier end-to-end via MediatorService (#231 acceptance)', () => {
     expect(out.riskBucket).toBe('critical')
   })
 
-  it('LLM "false_positive" verdict with high confidence → recommendation drops to allow', async () => {
+  it('LLM "false_positive" verdict cannot lower the score or relax the gate', async () => {
     client.nextText = JSON.stringify({
       is_real_threat: false,
       threat_type: 'user_initiated_legitimate',
@@ -200,8 +200,10 @@ describe('Verifier end-to-end via MediatorService (#231 acceptance)', () => {
     expect(out.decision).toBe('denied')
     expect(out.llmVerification!.recommended_action).toBe('allow')
     expect(out.llmVerification!.confidence).toBe(0.9)
-    // Score adjusted down by 20 → 60 (still high bucket)
-    expect(out.riskScore).toBe(60)
+    // The LLM may only make Foreman stricter: tool args are attacker text
+    // inside its prompt, so a "this is fine" verdict must not move the
+    // heuristic score (80) or bucket down.
+    expect(out.riskScore).toBe(80)
     expect(out.riskBucket).toBe('high')
   })
 
