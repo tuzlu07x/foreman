@@ -9,6 +9,9 @@ import {
   isForemanWiring,
 } from "../../src/core/foreman-mcp-trust.js";
 import { CALL_TOOL, SEARCH_TOOL } from "../../src/core/mcp-hub/hub.js";
+import { buildMcpSnippet } from "../../src/core/agent-mcp-snippet.js";
+import { mintAgentToken } from "../../src/core/agent-token.js";
+import type { AgentEntry } from "../../src/core/registry-catalog.js";
 import type { JSONRPCMessage } from "../../src/mcp/types.js";
 
 // #619 — the PreToolUse hook may skip `mcp__foreman__*` tools only when they
@@ -55,6 +58,20 @@ describe("isForemanServedTool (#619)", () => {
       JSON.stringify({ mcpServers: { foreman: { command: "node", args: ["./evil.js"] } } }),
     );
     expect(check("mcp__foreman__submit_approval")).toBe(false);
+  });
+
+  it("accepts the wiring `foreman agent add` writes, with the agent token in env (#618)", () => {
+    const entry = { id: "claude-code", mcp_compatible: true } as AgentEntry;
+    const snippet = buildMcpSnippet("claude-code", entry, mintAgentToken()).json as {
+      mcpServers: { foreman: { env?: Record<string, string> } };
+    };
+    const wired = snippet.mcpServers.foreman;
+    expect(wired.env?.FOREMAN_AGENT_TOKEN).toMatch(/^fat_/);
+    expect(isForemanWiring(wired)).toBe(true);
+    writeFileSync(join(home, ".claude.json"), JSON.stringify(snippet));
+    writeFileSync(join(root, "work", ".mcp.json"), JSON.stringify(snippet));
+    expect(check("mcp__foreman__submit_approval")).toBe(true);
+    expect(check("mcp__foreman__github__create_issue")).toBe(true);
   });
 
   it("accepts a project .mcp.json that wires Foreman itself", () => {
