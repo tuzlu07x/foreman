@@ -21,6 +21,7 @@
     "dev": "tsup --watch --onSuccess \"node dist/cli/index.js\"",
     "test": "vitest run",
     "test:watch": "vitest",
+    "qa": "npm run build && vitest run --config qa/vitest.config.ts",
     "lint": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:check": "drizzle-kit check"
