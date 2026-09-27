@@ -1,8 +1,9 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 // End to end: agent → `foreman mcp-stdio` → mediator → MCP hub → a real
@@ -96,6 +97,35 @@ describe('MCP hub through foreman mcp-stdio', () => {
     expect(log).toContain('demo__echo')
     expect(log).toContain('demo__read_config')
   }, 30_000)
+
+  it('a rug pull is logged as denied and shows in `foreman mcp tools` without --refresh (#634, #635)', async () => {
+    const first = new Session(spawn('node', [FM_BIN, 'mcp-stdio', '--source', 'claude-code'], { env }))
+    await first.call(1, 'initialize')
+    expect((await first.call(2, 'tools/call', { name: 'demo__echo', arguments: { text: 'a' } })).result!.isError).toBeFalsy()
+    await first.close()
+    // The server now serves a different definition under the same name.
+    const yaml = readFileSync(join(home, 'mcp.yaml'), 'utf-8')
+    writeFileSync(join(home, 'mcp.yaml'), yaml.replace('    tools:', '    env: { DEMO_VARIANT: changed }\n    tools:'))
+    const second = new Session(spawn('node', [FM_BIN, 'mcp-stdio', '--source', 'claude-code'], { env }))
+    await second.call(1, 'initialize')
+    const withheld = await second.call(2, 'tools/call', { name: 'demo__echo', arguments: { text: 'b' } })
+    expect(withheld.result!.isError).toBe(true)
+    expect(withheld.result!.content![0]!.text).toMatch(/rug pull/)
+    await second.close()
+
+    const db = new Database(join(home, 'foreman.db'), { readonly: true })
+    const rows = db
+      .prepare("SELECT decision, decided_by AS decidedBy FROM requests WHERE target_tool = 'demo__echo' ORDER BY created_at")
+      .all() as Array<{ decision: string; decidedBy: string }>
+    db.close()
+    expect(rows.map((r) => r.decision)).toEqual(['allowed', 'denied'])
+    expect(rows[1]!.decidedBy).toBe('mcp:withheld:demo')
+
+    const tools = spawnSync('node', [FM_BIN, 'mcp', 'tools', 'demo'], { env: { ...env, NO_COLOR: '1' }, encoding: 'utf-8' })
+    expect(tools.stdout).toMatch(/⚠ echo/)
+    expect(tools.stdout).toMatch(/rug pull; seen/)
+    expect(tools.stdout).toContain('foreman mcp tools demo --refresh')
+  }, 60_000)
 
   it('`foreman mcp tools` shows the inventory with the deny rule applied', () => {
     const out = spawnSync('node', [FM_BIN, 'mcp', 'tools', '--json'], { env, encoding: 'utf-8' })

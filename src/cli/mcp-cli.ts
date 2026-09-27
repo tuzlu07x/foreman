@@ -226,6 +226,12 @@ mcpCommand
           status.source === "unavailable" ? red(`unavailable — ${status.error ?? "unknown error"}`) : dim(status.source);
         console.log(`${orange(status.name)} ${state}`);
         for (const t of tools.filter((x) => x.server === status.name)) printTool(t);
+        if (status.newSincePinning.length > 0) {
+          console.log(`  ${red("⚠")} new since pinning, withheld: ${status.newSincePinning.join(", ")}`);
+        }
+        if (status.source === "pinned-cache" && tools.some((x) => x.server === status.name && x.status === "quarantined")) {
+          console.log(dim(`  Compare with the live server: foreman mcp tools ${status.name} --refresh`));
+        }
         console.log("");
       }
       printTokenReport(tools, config);

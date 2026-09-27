@@ -44,6 +44,25 @@ export interface WebhookChannelOptions {
   timeoutMs?: number;
 }
 
+/** Why a webhook URL is refused, or null when it's fine (#636). Payloads
+ *  describe tool calls, so they only travel over https, except to this
+ *  machine. */
+export function webhookUrlProblem(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return "the webhook URL is not a valid URL";
+  }
+  if (url.protocol === "https:") return null;
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  const loopback = host === "localhost" || host === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+  if (url.protocol === "http:" && loopback) return null;
+  return url.protocol === "http:"
+    ? "the webhook URL uses plain http:// — use https:// (http is only allowed to localhost)"
+    : `the webhook URL must be https:// (got ${url.protocol})`;
+}
+
 export class WebhookChannel implements NotificationChannel {
   readonly id = "webhook" as const;
 
@@ -54,6 +73,8 @@ export class WebhookChannel implements NotificationChannel {
   private messageCounter = 0;
 
   constructor(opts: WebhookChannelOptions) {
+    const problem = webhookUrlProblem(opts.url);
+    if (problem) throw new WebhookDeliveryError(problem);
     this.url = opts.url;
     this.signingSecret = opts.signingSecret ?? null;
     this.fetchImpl = opts.fetchImpl ?? ((u, init) => fetch(u, init) as never);
@@ -65,8 +86,41 @@ export class WebhookChannel implements NotificationChannel {
   }
 
   async send(n: Notification): Promise<ChannelMessageRef> {
+    const messageId = this.nextMessageId(n);
+    await this.post({ ...this.buildPayload(n), kind: "notification", messageId });
+    return { channelMessageId: messageId };
+  }
+
+  async updateMessage(ref: ChannelMessageRef, body: string, opts?: { final?: boolean }): Promise<void> {
+    // A webhook can't edit an earlier delivery, and a follow-up POST per
+    // countdown tick would flood the receiver: only the outcome is sent,
+    // carrying the original notification's ids so it can be matched (#636).
+    if (!opts?.final) return;
+    const original = parseMessageId(ref.channelMessageId);
+    await this.post({
+      schema: "foreman.notification.v1",
+      kind: "outcome",
+      inReplyTo: ref.channelMessageId,
+      id: original?.notificationId ?? ref.channelMessageId,
+      requestId: original?.requestId ?? null,
+      level: "info",
+      title: "Foreman update",
+      body,
+      actions: [],
+      agentBlocking: false,
+      sentAt: Date.now(),
+    });
+  }
+
+  private nextMessageId(n: Notification): string {
     this.messageCounter += 1;
-    const body = JSON.stringify(this.buildPayload(n));
+    // The ids travel in the message id, so an outcome sent after a restart
+    // still names the approval it belongs to.
+    return `webhook:${this.messageCounter}:${encodeURIComponent(n.id)}:${encodeURIComponent(n.requestId ?? "")}`;
+  }
+
+  private async post(payload: unknown): Promise<void> {
+    const body = JSON.stringify(payload);
     const headers: Record<string, string> = {
       "content-type": "application/json",
       "user-agent": `foreman/${FOREMAN_VERSION}`,
@@ -92,22 +146,6 @@ export class WebhookChannel implements NotificationChannel {
       const text = await res.text().catch(() => "<no body>");
       throw new WebhookDeliveryError(`HTTP ${res.status}: ${text}`);
     }
-    return { channelMessageId: `webhook-${this.messageCounter}` };
-  }
-
-  async updateMessage(ref: ChannelMessageRef, body: string): Promise<void> {
-    // Webhooks have no concept of "edit an earlier delivery" — send a fresh
-    // follow-up POST instead. Receivers can correlate via the notificationId.
-    void ref;
-    await this.send({
-      id: ref.channelMessageId,
-      level: "info",
-      requestId: null,
-      title: "Foreman update",
-      body,
-      actions: [],
-      agentBlocking: false,
-    });
   }
 
   // No inbound endpoint in v0.1 — see file header.
@@ -133,7 +171,7 @@ export class WebhookChannel implements NotificationChannel {
     return createHmac("sha256", this.signingSecret).update(body).digest("hex");
   }
 
-  private buildPayload(n: Notification): unknown {
+  private buildPayload(n: Notification): Record<string, unknown> {
     return {
       schema: "foreman.notification.v1",
       id: n.id,
@@ -145,6 +183,17 @@ export class WebhookChannel implements NotificationChannel {
       agentBlocking: n.agentBlocking,
       sentAt: Date.now(),
     };
+  }
+}
+
+function parseMessageId(id: string): { notificationId: string; requestId: string | null } | null {
+  const parts = id.split(":");
+  if (parts.length !== 4 || parts[0] !== "webhook") return null;
+  try {
+    const requestId = decodeURIComponent(parts[3]!);
+    return { notificationId: decodeURIComponent(parts[2]!), requestId: requestId || null };
+  } catch {
+    return null;
   }
 }
 

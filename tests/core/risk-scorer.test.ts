@@ -28,6 +28,7 @@ function seedRequest(
       args: overrides.args ?? '{}',
       riskScore: overrides.riskScore ?? 0,
       decision: overrides.decision ?? 'allowed',
+      decidedBy: overrides.decidedBy ?? null,
       createdAt: overrides.createdAt ?? Date.now(),
     })
     .run()
@@ -312,6 +313,21 @@ describe('RiskScorer', () => {
       expect(factor).toBeDefined()
       expect(factor!.category).toBe('structural')
       expect(assessment.totalScore).toBeGreaterThanOrEqual(30)
+    })
+
+    it('ignores calls the MCP hub withheld (a changed tool, not the agent) (#635)', () => {
+      seedRequest(db, {
+        sourceAgent: 'claude-code',
+        targetTool: 'demo__echo',
+        decision: 'denied',
+        decidedBy: 'mcp:withheld:demo',
+      })
+      const { factors } = scorer.assess({ sourceAgent: 'claude-code', targetTool: 'demo__echo' })
+      expect(ruleNames(factors)).not.toContain('previously_denied_pattern')
+      seedRequest(db, { sourceAgent: 'claude-code', targetTool: 'demo__echo', decision: 'denied', decidedBy: 'user:tui' })
+      expect(ruleNames(scorer.assess({ sourceAgent: 'claude-code', targetTool: 'demo__echo' }).factors)).toContain(
+        'previously_denied_pattern',
+      )
     })
 
     it('does not fire when prior calls were allowed', () => {

@@ -99,11 +99,9 @@ it('Notifications: signed webhook for a critical approval, outcome in the inbox'
     expect(update.payload.body).toContain('Denied (timeout default)')
     ev(`follow-up POST "${update.payload.title}" (signed) ends: "${update.payload.body.trim().split('\n').at(-1) ?? ''}"`)
     ev(`ids: approval payload id=${d.payload.id} requestId=${d.payload.requestId}; follow-up id=${update.payload.id} requestId=${update.payload.requestId}`)
-    if (update.payload.requestId !== d.payload.requestId && update.payload.id !== d.payload.id) {
-      j.note(
-        `The webhook follow-up that reports the outcome (title "Foreman update", level ${update.payload.level}) carries id "${update.payload.id}" and requestId ${String(update.payload.requestId)}, so a receiver cannot match it to the approval notification (id ${d.payload.id}, requestId ${d.payload.requestId}) except by parsing the body text.`,
-      )
-    }
+    // #636: the outcome carries the approval's ids, so a receiver can match it.
+    expect(update.payload.requestId).toBe(d.payload.requestId)
+    expect(update.payload.id).toBe(d.payload.id)
 
     const rows = sb.query<NotificationRow>(
       'SELECT id, request_id, level, channel, status FROM notifications WHERE request_id = ?',
