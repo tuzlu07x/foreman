@@ -230,8 +230,20 @@ export interface DelegationVerdict {
   reason: string;
 }
 
-/** Source ids that are the human (or Foreman acting for them). */
-const HUMAN_SOURCES = new Set(["cli", "user", HUMAN, "foreman", "telegram", "tui"]);
+/** Source ids that are the human (or Foreman acting for them): the CLI,
+ *  the TUI, and `/foreman` typed in Slack or Discord by an allowed user.
+ *  The one list every check uses; `foreman mcp-stdio --source` refuses all
+ *  of them, so an agent can't pass itself off as the human. */
+export const HUMAN_SOURCES: ReadonlySet<string> = new Set([
+  "cli",
+  "user",
+  HUMAN,
+  "foreman",
+  "telegram",
+  "tui",
+  "slack",
+  "discord",
+]);
 
 /**
  * May `fromAgent` hand work to `toAgent`? Returns `null` when the org has no
@@ -243,7 +255,7 @@ export function checkDelegation(
   fromAgent: string,
   toAgent: string,
 ): DelegationVerdict | null {
-  if (HUMAN_SOURCES.has(fromAgent)) return { allowed: true, reason: "assigned by the human" };
+  if (HUMAN_SOURCES.has(fromAgent.toLowerCase())) return { allowed: true, reason: "assigned by the human" };
   const fromRoles = rolesForAgent(doc, fromAgent);
   const toRoles = rolesForAgent(doc, toAgent);
   if (fromRoles.length === 0 || toRoles.length === 0) return null;

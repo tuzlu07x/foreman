@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { checkDelegation, loadOrg, type DelegationVerdict } from "./org.js";
+import { checkDelegation, HUMAN_SOURCES, loadOrg, type DelegationVerdict } from "./org.js";
 
 // Enforcement point for org.yaml reporting lines. Called when a directive
 // (`foreman write <agent> …`) is queued — from an agent's MCP
@@ -10,11 +10,6 @@ import { checkDelegation, loadOrg, type DelegationVerdict } from "./org.js";
 // This keeps a crew of agents organised — work flows along the chart and
 // a runaway agent cannot fan tasks out across the company — but it is not
 // an identity boundary: an agent id is still self-declared (see SECURITY.md).
-
-/** Source ids that mean "the human asked": the CLI, the TUI, and
- *  `/foreman` typed in Slack or Discord by an allowed user. Agents can't
- *  claim them (`foreman mcp-stdio --source` refuses these ids). */
-const HUMAN_SOURCES = new Set(["cli", "user", "human", "tui", "slack", "discord"]);
 
 /** The person at the keyboard (CLI or TUI), not an agent: nobody to nudge,
  *  and no agent chain to watch for runaway loops. */
@@ -27,7 +22,7 @@ export function orgDelegationVerdict(
   fromAgent: string | undefined,
   toAgent: string,
 ): DelegationVerdict | null {
-  if (!fromAgent || HUMAN_SOURCES.has(fromAgent)) return null;
+  if (!fromAgent || isHumanSource(fromAgent)) return null;
   if (!existsSync(orgConfigPath)) return null;
   try {
     const org = loadOrg(orgConfigPath);
