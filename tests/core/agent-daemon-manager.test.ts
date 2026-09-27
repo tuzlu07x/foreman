@@ -39,7 +39,7 @@ function makePaths(stateDir: string): ForemanPaths {
 
 interface FakeChild extends EventEmitter {
   pid: number;
-  stderr: EventEmitter;
+  stderr: EventEmitter & { destroy: ReturnType<typeof vi.fn> };
   exitCode: number | null;
   kill: ReturnType<typeof vi.fn>;
   unref: ReturnType<typeof vi.fn>;
@@ -48,7 +48,7 @@ interface FakeChild extends EventEmitter {
 function makeFakeChild(pid = 12345): FakeChild {
   const child = new EventEmitter() as FakeChild;
   child.pid = pid;
-  child.stderr = new EventEmitter();
+  child.stderr = Object.assign(new EventEmitter(), { destroy: vi.fn() });
   child.exitCode = null;
   child.kill = vi.fn();
   child.unref = vi.fn();
@@ -288,6 +288,26 @@ describe("AgentDaemonManager", () => {
         expect(child.kill).toHaveBeenCalledWith("SIGKILL");
       } finally {
         vi.useRealTimers();
+      }
+    });
+
+    it("releases the daemon's pipes, even when a process it left behind still holds them", async () => {
+      const mgr = new AgentDaemonManager({ paths, registry, onLifecycle: (e) => events.push(e) });
+      // sh dies on SIGTERM; the backgrounded sleep lives on with the pipes.
+      mgr.startOne("hermes", fakeEntry({ command: "/bin/sh", args: ["-c", "sleep 30 & echo $!; wait"] }));
+      const tracked = (mgr as unknown as { tracked: Map<string, { process: import("node:child_process").ChildProcess }> }).tracked.get("hermes")!;
+      const child = tracked.process;
+      const leftover = await new Promise<number>((r) => child.stdout!.once("data", (d: Buffer) => r(Number(d.toString().trim()))));
+      try {
+        await mgr.stopOne("hermes");
+        expect(child.stdout!.destroyed).toBe(true);
+        expect(child.stderr!.destroyed).toBe(true);
+      } finally {
+        try {
+          process.kill(leftover, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
       }
     });
 
