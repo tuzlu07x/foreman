@@ -163,16 +163,13 @@ it('Claude Code PreToolUse hook: install, allow, approve and deny in the TUI, fa
       ev(`hook exit ${res.status}; stderr: "${res.stderr.trim()}"`)
       const row = await sb.row<RequestRow>('the requests row', `SELECT ${REQUEST_COLUMNS} FROM requests WHERE id = ?`, requestId)
       expect(row).toMatchObject({ target_tool: 'read_file', decision: 'allowed', risk_bucket: 'high' })
-      expect(row.decided_by).toMatch(/^user(:tui)?$/)
+      expect(row.decided_by).toBe('user:tui')
       const pending = await sb.row<PendingRow>('the resolved approval', 'SELECT status, decision, resolved_by FROM pending_approvals WHERE request_id = ?', requestId)
       expect(pending).toEqual({ status: 'resolved', decision: 'allowed', resolved_by: 'user' })
       ev(`requests ${requestId}: allowed, decided_by=${row.decided_by}; pending_approvals: resolved_by=user`)
       const item = await sb.inboxItem('the allowed approval', (i) => i.requestId === requestId && i.title.startsWith('Allowed'))
       expect(item.title).toBe('Allowed read_file for claude-code')
       ev(`foreman inbox --json: "${item.title}" / "${item.body}"`)
-      if (row.decided_by === 'user') {
-        j.note('The hook records decided_by "user", not "user:tui", for a TUI approval: the deciding surface does not cross processes yet (#640).')
-      }
     })
 
     await j.step('a second risky call (Read ~/.ssh/id_rsa); `d` in the TUI blocks it: exit 2', async (ev) => {
@@ -185,7 +182,7 @@ it('Claude Code PreToolUse hook: install, allow, approve and deny in the TUI, fa
       ev(`hook exit ${res.status}; stderr: "${res.stderr.trim()}"`)
       const row = await sb.row<RequestRow>('the requests row', `SELECT ${REQUEST_COLUMNS} FROM requests WHERE id = ?`, requestId)
       expect(row).toMatchObject({ target_tool: 'read_file', decision: 'denied' })
-      expect(row.decided_by).toMatch(/^user(:tui)?$/)
+      expect(row.decided_by).toBe('user:tui')
       const pending = await sb.row<PendingRow>('the resolved approval', 'SELECT status, decision, resolved_by FROM pending_approvals WHERE request_id = ?', requestId)
       expect(pending).toEqual({ status: 'resolved', decision: 'denied', resolved_by: 'user' })
       ev(`requests ${requestId}: denied, decided_by=${row.decided_by} (risk ${row.risk_score}, ${row.risk_bucket}); pending_approvals: resolved_by=user`)
@@ -264,24 +261,15 @@ it('Claude Code PreToolUse hook: install, allow, approve and deny in the TUI, fa
     const asked = sb.query<{ n: number }>('SELECT count(*) AS n FROM pending_approvals WHERE request_id = ?', row.id)[0]
     expect(asked?.n).toBe(0)
     ev(`requests ${row.id}: denied, decided_by=${row.decided_by}; no pending approval was created`)
-    // A Bash call the rule does not match should still pass untouched.
+    // A Bash call the rule does not match still passes untouched: one
+    // denied command doesn't make every later command suspect.
     const other = await hook(payload('qa-hook-policy-other', 'Bash', { command: 'ls -la' }), { args: '--timeout-ms 1500' })
-    if (other.status === 0) {
-      ev('`ls -la` (not matched by the rule) still exits 0')
-    } else {
-      const again = await sb.row<RequestRow & { risk_reasons: string }>(
-        'the requests row',
-        `SELECT ${REQUEST_COLUMNS}, risk_reasons FROM requests WHERE session_id = ?`,
-        'qa-hook-policy-other',
-      )
-      expect(other.status).toBe(2)
-      expect(again.decided_by).toBe('approval-timeout')
-      expect(JSON.parse(again.risk_reasons)).toEqual(['previously_denied_pattern'])
-      ev(`\`ls -la\` afterwards → exit ${other.status}: asked for approval (previously_denied_pattern, risk ${again.risk_score}) and timed out`)
-      j.note(
-        'Bug: once any Bash call from claude-code has been denied (here by an explicit policy rule), every later Bash call, even `ls -la` in a new session, scores previously_denied_pattern (+30, all-time) and waits for approval; with nobody at the TUI it is blocked. The hook\'s risk-based default no longer lets everyday commands through.',
-      )
-    }
+    expect(other.status, other.stderr).toBe(0)
+    ev('`ls -la` (not matched by the rule) still exits 0')
+    // The rule still blocks the command itself, every time.
+    const repeat = await hook(payload('qa-hook-policy-repeat', 'Bash', { command: 'terraform destroy -auto-approve' }))
+    expect(repeat.status).toBe(2)
+    ev(`repeating \`terraform destroy\` → exit ${repeat.status} again`)
   })
 
   await j.step('nothing tried to reach the network', (ev) => {
