@@ -22,7 +22,12 @@ function env(over: Partial<CommandEnv> = {}): CommandEnv & { dispatched: Array<[
       { verb: 'agents', description: 'Alias of `status`.' },
     ],
     navigate: vi.fn(),
-    approvals: { current: () => 'req-1', count: () => 2, resolve: vi.fn() },
+    approvals: {
+      current: () => 'req-1',
+      describe: (id: string) => (id === 'req-1' ? 'shell_exec for codex' : 'read_file for hermes'),
+      count: () => 2,
+      resolve: vi.fn(),
+    },
     inbox: { markAllRead: () => 3 },
     agentIds: () => ['claude-code', 'codex', 'hermes'],
     orgTargets: () => ['engineering', 'marketing', 'cto'],
@@ -56,13 +61,25 @@ describe('executeCommand (#612)', () => {
     const e = env()
     const allowed = await executeCommand('approve', e)
     expect(e.approvals.resolve).toHaveBeenCalledWith('req-1', { decision: 'allowed' })
-    expect(allowed.lines[0]).toBe('Allowed. 1 more waiting.')
+    expect(allowed.lines[0]).toBe('Allowed shell_exec for codex. 1 more waiting.')
     await executeCommand('deny always', e)
     expect(e.approvals.resolve).toHaveBeenLastCalledWith('req-1', { decision: 'denied', remember: 'deny' })
   })
 
+  it('refuses when the approval on screen changed while the line was typed', async () => {
+    const e = env()
+    const out = await executeCommand('approve always', e, { approvalAtStart: 'req-0' })
+    expect(e.approvals.resolve).not.toHaveBeenCalled()
+    expect(out.ok).toBe(false)
+    expect(out.lines[0]).toContain('changed while you were typing')
+    expect(out.lines[0]).toContain('shell_exec for codex')
+    // Started with nothing on screen: an approval that arrived since is not the target either.
+    expect((await executeCommand('approve', e, { approvalAtStart: null })).ok).toBe(false)
+    expect((await executeCommand('approve', e, { approvalAtStart: 'req-1' })).ok).toBe(true)
+  })
+
   it('says so when nothing is waiting', async () => {
-    const out = await executeCommand('approve', env({ approvals: { current: () => null, count: () => 0, resolve: vi.fn() } }))
+    const out = await executeCommand('approve', env({ approvals: { current: () => null, describe: () => null, count: () => 0, resolve: vi.fn() } }))
     expect(out).toEqual({ ok: false, lines: ['Nothing is waiting for approval.'] })
   })
 

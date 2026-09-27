@@ -699,6 +699,29 @@ describe("ForemanCommandRouter (#431)", () => {
       expect(JSON.parse(channel.pending()[0]!.args)).toEqual(["claude-code", "ship it"]);
     });
 
+    it("the TUI is the human at the keyboard: no runaway-loop guard", async () => {
+      const { DelegationTracker } = await import("../../src/core/delegation-tracker.js");
+      const tracker = new DelegationTracker({ db });
+      for (let i = 0; i < 6; i++) tracker.recordDelegation({ initiatorAgent: "tui", targetAgent: "codex", prompt: `t${i}` });
+      const channel = new ControlChannel(db);
+      const result = await router.dispatch("write", ["codex", "one", "more"], {
+        ...ctx,
+        sourceAgent: "tui",
+        controlChannel: channel,
+        trustedOwner: true,
+      });
+      expect(result.errorCode).toBeUndefined();
+      expect(result.ok).toBe(true);
+    });
+
+    it("assign never resolves object prototype names", async () => {
+      const { findOrgTemplate } = await import("../../src/core/org/templates.js");
+      writeFileSync(join(tmp, "org.yaml"), findOrgTemplate("startup")!.render("Acme"));
+      const result = await router.dispatch("assign", ["constructor", "x"], { ...ctx, trustedOwner: true });
+      expect(result.ok).toBe(false);
+      expect(result.text).toContain("'constructor'");
+    });
+
     it("assign explains a missing org chart and an unknown target", async () => {
       const noOrg = await router.dispatch("assign", ["marketing", "x"], ctx);
       expect(noOrg.text).toContain("foreman org init");

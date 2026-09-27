@@ -317,8 +317,8 @@ export function allowedMcpServers(doc: OrgDoc, agentId: string): Set<string> | n
 
 /** Resolve an assignment target (role id, department id or agent id) to a role. */
 export function resolveAssignee(doc: OrgDoc, target: string): string | null {
-  if (doc.roles[target]) return target;
-  const dept = doc.departments[target];
+  if (Object.hasOwn(doc.roles, target)) return target;
+  const dept = Object.hasOwn(doc.departments, target) ? doc.departments[target] : undefined;
   if (dept) return dept.head;
   const byAgent = rolesForAgent(doc, target);
   return byAgent[0] ?? null;

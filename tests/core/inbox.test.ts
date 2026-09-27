@@ -71,6 +71,30 @@ describe('InboxService', () => {
     inbox.prune(4)
     expect(inbox.list().map((i) => i.title)).toEqual(['n9', 'n8', 'n7', 'n6'])
   })
+
+  it('prunes exactly, even when items share a millisecond', () => {
+    for (let i = 0; i < 5; i++) inbox.add({ level: 'info', kind: 'system', title: `s${i}`, createdAt: 42 })
+    inbox.prune(3)
+    expect(inbox.list().map((i) => i.title)).toEqual(['s4', 's3', 's2'])
+  })
+
+  it('strips terminal escape sequences from agent-quoted text', () => {
+    const item = inbox.add({
+      level: 'warning',
+      kind: 'agent',
+      title: 'codex said \x1b]52;c;ZXZpbA==\x07hi\x1b[2J there',
+      body: 'red \x1b[31mtext\x1b[0m\u0007 done',
+    })!
+    expect(item.title).toBe('codex said hi there')
+    expect(item.body).toBe('red text done')
+  })
+
+  it('upserts by dedupe key so a later, truer record replaces an earlier one', () => {
+    inbox.add({ level: 'info', kind: 'approval', title: 'Allowed x', dedupeKey: 'k', read: true })
+    const saved = inbox.upsert({ level: 'warning', kind: 'approval', title: 'Denied x', dedupeKey: 'k' })
+    expect(saved.title).toBe('Denied x')
+    expect(inbox.list().map((i) => [i.title, i.readAt])).toEqual([['Denied x', null]])
+  })
 })
 
 describe('InboxRecorder', () => {
@@ -84,7 +108,7 @@ describe('InboxRecorder', () => {
     ;({ db, sqlite } = createInMemoryDb())
     bus = new EventBus<ForemanEventMap>()
     inbox = new InboxService(db, bus)
-    recorder = new InboxRecorder(db, inbox, { bus, pollIntervalMs: 60_000, now: () => 1_000 })
+    recorder = new InboxRecorder(db, inbox, { bus, pollIntervalMs: 60_000 })
     recorder.start()
   })
   afterEach(() => {
@@ -142,6 +166,7 @@ describe('InboxRecorder', () => {
   })
 
   it('picks up blocks decided in other processes from the audit table, once', () => {
+    recorder.stop()
     const row = {
       id: 'r5',
       sourceAgent: 'codex',
@@ -155,12 +180,73 @@ describe('InboxRecorder', () => {
       createdAt: 5_000,
       decidedAt: 5_000,
     }
+    // Decided before the recorder started: history, not news.
+    db.insert(requests).values({ ...row, id: 'r7', targetTool: 'old_tool' }).run()
+    recorder = new InboxRecorder(db, inbox, { bus, pollIntervalMs: 60_000 })
+    recorder.start()
     db.insert(requests).values(row).run()
     db.insert(requests).values({ ...row, id: 'r6', decidedBy: 'user' }).run()
-    db.insert(requests).values({ ...row, id: 'r7', createdAt: 500 }).run() // before the recorder started
+    recorder.poll()
+    // A slow request (LLM verification) that started earlier but was
+    // written after the last poll is still news.
+    db.insert(requests).values({ ...row, id: 'r8', targetTool: 'slow_tool', createdAt: 100 }).run()
     recorder.poll()
     recorder.poll()
-    expect(inbox.list().map((i) => i.title)).toEqual(['Blocked network_fetch from codex'])
+    expect(inbox.list().map((i) => i.title).sort()).toEqual([
+      'Blocked network_fetch from codex',
+      'Blocked slow_tool from codex',
+    ])
+  })
+
+  it('keeps a timeout notice unread when the audit poll saw it first', () => {
+    bus.emit('approval:requested', approvalRequested('r9'))
+    db.insert(requests)
+      .values({
+        id: 'r9',
+        sourceAgent: 'claude-code',
+        targetTool: 'read_file',
+        args: '{}',
+        riskScore: 80,
+        riskReasons: '[]',
+        riskBucket: 'high',
+        decision: 'denied',
+        decidedBy: 'approval-timeout',
+        createdAt: 1,
+        decidedAt: 2,
+      })
+      .run()
+    recorder.poll()
+    bus.emit('approval:resolved', { requestId: 'r9', decision: 'denied', resolvedBy: 'timeout' })
+    const unread = inbox.list({ unreadOnly: true })
+    expect(unread).toHaveLength(1)
+    expect(unread[0]!.title).toContain('Denied read_file for claude-code')
+  })
+
+  it('lets the decision that actually counted replace one that lost a race', () => {
+    bus.emit('approval:requested', approvalRequested('r10'))
+    // The TUI decided, but another process had already denied it; the
+    // bridge then announces the real outcome.
+    bus.emit('approval:resolved', { requestId: 'r10', decision: 'allowed', resolvedBy: 'user', via: 'tui' })
+    bus.emit('approval:resolved', { requestId: 'r10', decision: 'denied', resolvedBy: 'timeout' })
+    const items = inbox.list().filter((i) => i.dedupeKey === 'approval:r10:resolved')
+    expect(items.map((i) => [i.title, i.readAt])).toEqual([['Denied read_file for claude-code', null]])
+  })
+
+  it('files a withdrawn request quietly', () => {
+    bus.emit('approval:requested', approvalRequested('r11'))
+    bus.emit('approval:resolved', { requestId: 'r11', decision: 'denied', resolvedBy: 'cancelled' })
+    expect(inbox.unreadCount()).toBe(0)
+    expect(inbox.list()[0]!.body).toContain('stopped waiting')
+  })
+
+  it('never breaks the listeners after it when a write fails', () => {
+    const seen: string[] = []
+    bus.on('approval:requested', (e) => seen.push(e.requestId))
+    inbox.add = () => {
+      throw new Error('SQLITE_BUSY')
+    }
+    expect(() => bus.emit('approval:requested', approvalRequested('r12'))).not.toThrow()
+    expect(seen).toEqual(['r12'])
   })
 })
 

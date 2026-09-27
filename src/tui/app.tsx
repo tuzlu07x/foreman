@@ -56,6 +56,8 @@ import { resolveAgentLoginSteps } from "../core/agent-login.js";
 
 /** The boot banner shows this long (or until the first key). */
 const BOOT_BANNER_MS = 3_500;
+/** How long letter keys are ignored after the approval on screen changes. */
+const KEY_SETTLE_MS = 600;
 
 export type Page = TuiPage;
 
@@ -87,6 +89,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     registry,
     runInteractiveLogin,
     inbox: inboxService,
+    pendingApprovals,
+    keySettleMs = KEY_SETTLE_MS,
     commandRouter,
     commandContext,
     audit,
@@ -226,13 +230,16 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const [agentsLlmDraft, setAgentsLlmDraft] = useState<string | null>(null);
 
   // Every pending approval, oldest deadline first (#614).
-  const queue = useApprovalQueue(bus);
+  const queue = useApprovalQueue(bus, pendingApprovals);
   const pendingApproval: ApprovalRequest | null = queue.current?.request ?? null;
   const [inspectOpen, setInspectOpen] = useState(false);
   const [inspectOffset, setInspectOffset] = useState(0);
   const [technicalExpanded, setTechnicalExpanded] = useState(false);
   const inbox = useInbox(inboxService, bus);
   const [commandOpen, setCommandOpen] = useState(false);
+  /** Providers / Services pages are taking typed text (they own their keys). */
+  const [pageEditing, setPageEditing] = useState(false);
+  useEffect(() => setPageEditing(false), [page]);
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
   const [consoleEntries, setConsoleEntries] = useState<ConsoleEntry[]>([]);
   const [booting, setBooting] = useState(true);
@@ -257,6 +264,25 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
 
   // A different approval on screen starts with its details collapsed.
   const currentApprovalId = pendingApproval?.requestId ?? null;
+
+  // A letter key that lands right after the approval on screen changed was
+  // meant for what was there before: a double tap, key repeat, or an
+  // approval decided elsewhere a moment ago. Without this, `A A` would
+  // always-allow two different requests, and a `d` meant for a vanished
+  // approval would reach the page underneath (delete a key, disable a rule).
+  const shownApprovalRef = useRef<string | null>(null);
+  const approvalChangedAtRef = useRef(0);
+  if (shownApprovalRef.current !== currentApprovalId) {
+    shownApprovalRef.current = currentApprovalId;
+    approvalChangedAtRef.current = Date.now();
+  }
+  const swallowUnsettledKey = useCallback((): boolean => {
+    const now = Date.now();
+    if (now - approvalChangedAtRef.current >= keySettleMs) return false;
+    // Keep swallowing while keys keep coming (a held key).
+    approvalChangedAtRef.current = now;
+    return true;
+  }, [keySettleMs]);
   useEffect(() => {
     setInspectOpen(false);
     setInspectOffset(0);
@@ -820,6 +846,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const queueCount = queue.state.items.length;
   const queueCountRef = useRef(queueCount);
   queueCountRef.current = queueCount;
+  const queueItemsRef = useRef(queue.state.items);
+  queueItemsRef.current = queue.state.items;
   const commandEnv = useMemo<CommandEnv>(
     () => ({
       dispatch: async (verb, args) => {
@@ -850,6 +878,10 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
       },
       approvals: {
         current: () => pendingRef.current?.requestId ?? null,
+        describe: (id) => {
+          const req = queueItemsRef.current.find((q) => q.request.requestId === id)?.request;
+          return req ? `${req.targetTool ?? req.targetAgent ?? "a tool"} for ${req.sourceAgent}` : null;
+        },
         count: () => queueCountRef.current,
         resolve: (id, decision) => queue.resolve(id, decision),
       },
@@ -963,6 +995,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           onAgentEnable={onAgentEnable}
           onAgentLogin={onAgentLogin}
           agentsEditMode={agentsEditMode}
+          pageEditing={pageEditing}
           onAgentStartNoteEdit={onAgentStartNoteEdit}
           onAgentStartLlmEdit={onAgentStartLlmEdit}
           onAgentSaveLlm={onAgentSaveLlm}
@@ -974,6 +1007,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           }}
           onMoveApproval={queue.move}
           onAnyKey={() => setBooting(false)}
+          swallowUnsettledKey={swallowUnsettledKey}
         />
       )}
       {booting && !pendingApproval ? (
@@ -1137,9 +1171,9 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           daemonCrashes={daemonCrashes}
         />
       ) : page === "providers" ? (
-        <ProvidersPage onLeave={() => setPage("dashboard")} />
+        <ProvidersPage onLeave={() => setPage("dashboard")} onEditingChange={setPageEditing} />
       ) : page === "services" ? (
-        <ServicesPage onLeave={() => setPage("dashboard")} />
+        <ServicesPage onLeave={() => setPage("dashboard")} onEditingChange={setPageEditing} />
       ) : (
         <Box height={pageHeight}>{renderPanels(layout)}</Box>
       )}
@@ -1232,6 +1266,7 @@ interface KeyboardHandlerProps {
   onAgentEnable: () => void;
   onAgentLogin: () => void;
   agentsEditMode: "none" | "note" | "llm";
+  pageEditing: boolean;
   onAgentStartNoteEdit: () => void;
   onAgentStartLlmEdit: () => void;
   onAgentSaveLlm: () => void;
@@ -1240,6 +1275,9 @@ interface KeyboardHandlerProps {
   openCommand: () => void;
   onMoveApproval: (delta: number) => void;
   onAnyKey: () => void;
+  /** True when a letter key should be ignored because the approval on
+   *  screen just changed. */
+  swallowUnsettledKey: () => boolean;
 }
 
 function KeyboardHandler(props: KeyboardHandlerProps): null {
@@ -1322,6 +1360,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     onAgentEnable,
     onAgentLogin,
     agentsEditMode,
+    pageEditing,
     onAgentStartNoteEdit,
     onAgentStartLlmEdit,
     onAgentSaveLlm,
@@ -1330,6 +1369,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     openCommand,
     onMoveApproval,
     onAnyKey,
+    swallowUnsettledKey,
   } = props;
 
   useInput((input, key) => {
@@ -1341,6 +1381,15 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       if (key.escape || input === "?" || input === "h") setHelpOpen(false);
       return;
     }
+    // Keys that work on every page, unless the page is taking typed text.
+    const textEntry =
+      (page === "logs" && logSearchMode) ||
+      (page === "chat" && chatInputMode) ||
+      (page === "secrets" && (addSecretMode !== null || rotateMode !== null)) ||
+      (page === "agents" && agentsEditMode !== "none") ||
+      ((page === "providers" || page === "services") && pageEditing);
+    const letter = /^[a-zA-Z]$/.test(input) && !key.ctrl && !key.meta;
+    if (letter && (pendingApproval || !textEntry) && swallowUnsettledKey()) return;
     if (pendingApproval && inspectOpen) {
       if (key.escape) {
         setInspectOpen(false);
@@ -1390,14 +1439,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "k") onHaltSessionFromApproval();
       return;
     }
-    // Keys that work on every page, unless the page is taking typed text.
-    const textEntry =
-      (page === "logs" && logSearchMode) ||
-      (page === "chat" && chatInputMode) ||
-      (page === "secrets" && (addSecretMode !== null || rotateMode !== null)) ||
-      (page === "agents" && agentsEditMode !== "none") ||
-      page === "providers" ||
-      page === "services";
     if (!textEntry && !quitConfirm) {
       if (input === ":") {
         openCommand();
@@ -1407,7 +1448,8 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         setPage(nextTab(page, key.shift ? -1 : 1));
         return;
       }
-      if (input === "n" && page !== "secrets") {
+      // Secrets, Providers and Services use `n` for "new".
+      if (input === "n" && page !== "secrets" && page !== "providers" && page !== "services") {
         setPage("inbox");
         return;
       }

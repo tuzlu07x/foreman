@@ -30,6 +30,11 @@ export interface DashboardServices {
   runInteractiveLogin?: (steps: WizardOauthRunStep[]) => OauthFlowResult[];
   /** Notification centre store (#613). */
   inbox?: InboxService;
+  /** Approvals announced before the TUI mounted (see ApprovalBridge.pending). */
+  pendingApprovals?: () => Array<ForemanEventMap["approval:requested"]>;
+  /** Milliseconds letter keys are ignored after the approval on screen
+   *  changes (tests set 0). */
+  keySettleMs?: number;
   /** Chat verbs for the TUI command bar (#612). The TUI adds the source
    *  and owner fields itself. */
   commandRouter?: ForemanCommandRouter;

@@ -1,5 +1,5 @@
 import { Box, Text, useInput } from "ink";
-import { type JSX, useState } from "react";
+import { type JSX, useRef, useState } from "react";
 import { roundBorder, theme } from "../theme.js";
 import { completeCommand, executeCommand, type CommandEnv } from "../tui-commands.js";
 
@@ -56,6 +56,12 @@ export function CommandBar({
   const [running, setRunning] = useState(false);
   /** Lines scrolled up from the bottom. */
   const [scroll, setScroll] = useState(0);
+  // The approval on screen when the current line was started: `approve`
+  // must not land on a different one that replaced it while typing.
+  const approvalAtStart = useRef<string | null>(null);
+  const noteLineStart = (): void => {
+    if (input === "") approvalAtStart.current = env.approvals.current();
+  };
 
   const submit = async (raw: string = input): Promise<void> => {
     const line = raw.trim();
@@ -67,7 +73,7 @@ export function CommandBar({
     setScroll(0);
     setRunning(true);
     try {
-      const result = await executeCommand(line, env);
+      const result = await executeCommand(line, env, { approvalAtStart: approvalAtStart.current });
       if (result.clear) onScrollback([]);
       else onScrollback([...scrollback, { line, ok: result.ok, output: result.lines }].slice(-MAX_SCROLLBACK));
     } finally {
@@ -102,7 +108,10 @@ export function CommandBar({
     }
     if (key.tab) {
       const completion = completeCommand(input, env);
-      if (completion.line !== null) setInput(completion.line);
+      if (completion.line !== null) {
+        noteLineStart();
+        setInput(completion.line);
+      }
       setCandidates(completion.candidates.length > 1 ? completion.candidates : []);
       return;
     }
@@ -110,6 +119,7 @@ export function CommandBar({
       if (history.length === 0) return;
       const next = historyIndex === null ? 0 : Math.min(history.length - 1, historyIndex + 1);
       setHistoryIndex(next);
+      noteLineStart();
       setInput(history[next]!);
       return;
     }
@@ -140,11 +150,13 @@ export function CommandBar({
     // Pasted (or fast-typed) text can arrive as one chunk, Enter included.
     const newline = ch.search(/[\r\n]/);
     if (newline !== -1) {
+      noteLineStart();
       void submit(input + ch.slice(0, newline).replace(/[\u0000-\u001f\u007f]/g, ""));
       return;
     }
     const printable = ch.replace(/[\u0000-\u001f\u007f]/g, "");
     if (printable) {
+      noteLineStart();
       setInput((v) => v + printable);
       setCandidates([]);
     }

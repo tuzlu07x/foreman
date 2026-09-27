@@ -221,7 +221,7 @@ export const pendingApprovals = sqliteTable(
       .default("pending"),
     decision: text("decision", { enum: ["allowed", "denied"] }),
     remember: text("remember", { enum: ["allow", "deny"] }),
-    resolvedBy: text("resolved_by", { enum: ["user", "timeout", "agent"] }),
+    resolvedBy: text("resolved_by", { enum: ["user", "timeout", "agent", "cancelled"] }),
     requestedAt: integer("requested_at").notNull(),
     resolvedAt: integer("resolved_at"),
     // #525 — Absolute Unix ms timestamp when the approval auto-resolves to

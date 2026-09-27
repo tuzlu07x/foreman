@@ -44,19 +44,13 @@ describe('TUI control surface', () => {
   let app: ReturnType<typeof render>
   let channel: ControlChannel
 
-  beforeEach(async () => {
-    ;({ db, sqlite } = createInMemoryDb())
-    bus = new EventBus<ForemanEventMap>()
-    const registry = new RegistryService(db, bus)
-    registry.register({ id: 'codex', displayName: 'Codex', transport: 'stdio' })
-    const inbox = new InboxService(db, bus)
-    recorder = new InboxRecorder(db, inbox, { bus, pollIntervalMs: 60_000 })
-    recorder.start()
-    const router = new ForemanCommandRouter()
-    registerBuiltinCommands(router)
-    channel = new ControlChannel(db, bus)
-    resolved = []
-    bus.on('approval:resolved', (e) => resolved.push(e))
+  let registry: RegistryService
+  let inbox: InboxService
+  let router: ForemanCommandRouter
+
+  const mount = async (
+    extra: { keySettleMs?: number; pendingApprovals?: () => ApprovalRequest[] } = { keySettleMs: 0 },
+  ): Promise<void> => {
     app = render(
       React.createElement(App, {
         bootInfo: {
@@ -72,6 +66,7 @@ describe('TUI control surface', () => {
           bus,
           registry,
           inbox,
+          ...extra,
           commandRouter: router,
           commandContext: {
             db,
@@ -87,6 +82,22 @@ describe('TUI control surface', () => {
     await tick()
     app.stdin.write(' ')
     await tick()
+  }
+
+  beforeEach(async () => {
+    ;({ db, sqlite } = createInMemoryDb())
+    bus = new EventBus<ForemanEventMap>()
+    registry = new RegistryService(db, bus)
+    registry.register({ id: 'codex', displayName: 'Codex', transport: 'stdio' })
+    inbox = new InboxService(db, bus)
+    recorder = new InboxRecorder(db, inbox, { bus, pollIntervalMs: 60_000 })
+    recorder.start()
+    router = new ForemanCommandRouter()
+    registerBuiltinCommands(router)
+    channel = new ControlChannel(db, bus)
+    resolved = []
+    bus.on('approval:resolved', (e) => resolved.push(e))
+    await mount()
   })
 
   afterEach(() => {
@@ -172,6 +183,87 @@ describe('TUI control surface', () => {
   it('cycles pages with Tab', async () => {
     app.stdin.write('\t')
     await tick()
+    expect(strip(app.lastFrame())).toContain('all caught up')
+  })
+
+  it('shows approvals that were already waiting when it started', async () => {
+    app.unmount()
+    await mount({ keySettleMs: 0, pendingApprovals: () => [approval('r0', 'hermes', 'shell_exec', Date.now() + 60_000)] })
+    expect(strip(app.lastFrame())).toContain('[a]llow once')
+    expect(strip(app.lastFrame())).toContain('hermes')
+  })
+})
+
+describe('TUI key settle guard', () => {
+  let db: ForemanDb
+  let sqlite: Database.Database
+  let bus: EventBus<ForemanEventMap>
+  let app: ReturnType<typeof render>
+  let resolved: ForemanEventMap['approval:resolved'][]
+
+  beforeEach(async () => {
+    ;({ db, sqlite } = createInMemoryDb())
+    bus = new EventBus<ForemanEventMap>()
+    const registry = new RegistryService(db, bus)
+    resolved = []
+    bus.on('approval:resolved', (e) => resolved.push(e))
+    app = render(
+      React.createElement(App, {
+        bootInfo: {
+          publicKey: Buffer.alloc(32, 1),
+          policyRules: 3,
+          dbPath: ':memory:',
+          gateway: { stdio: true },
+          version: '0.0.0-test',
+        },
+        services: { db, sqlite, bus, registry, inbox: new InboxService(db, bus), keySettleMs: 300 },
+      }),
+    )
+    await tick()
+    app.stdin.write(' ')
+    await tick(350)
+  })
+
+  afterEach(() => {
+    app.unmount()
+    sqlite.close()
+  })
+
+  it('a repeated key never decides the next approval in the queue', async () => {
+    const now = Date.now()
+    bus.emit('approval:requested', approval('q1', 'codex', 'shell_exec', now + 60_000))
+    bus.emit('approval:requested', approval('q2', 'hermes', 'write_file', now + 70_000))
+    bus.emit('approval:requested', approval('q3', 'claude-code', 'read_file', now + 80_000))
+    await tick(350)
+    // A triple tap of "always allow".
+    app.stdin.write('A')
+    await tick(5)
+    app.stdin.write('A')
+    await tick(5)
+    app.stdin.write('A')
+    await tick(60)
+    expect(resolved.map((r) => [r.requestId, r.remember])).toEqual([['q1', 'allow']])
+    expect(strip(app.lastFrame())).toContain('Approval 1 of 2')
+    // Once the screen has been still for a moment, keys work again.
+    await tick(350)
+    app.stdin.write('d')
+    await tick(60)
+    expect(resolved.map((r) => r.requestId)).toEqual(['q1', 'q2'])
+  })
+
+  it('a key meant for an approval that just vanished does not reach the page', async () => {
+    bus.emit('approval:requested', approval('q4', 'codex', 'shell_exec', Date.now() + 60_000))
+    await tick(350)
+    // Decided on Telegram a moment before the user pressed a key.
+    bus.emit('approval:resolved', { requestId: 'q4', decision: 'allowed', resolvedBy: 'agent', via: 'agent_mcp' })
+    await tick(20)
+    app.stdin.write('n')
+    await tick(60)
+    expect(strip(app.lastFrame())).not.toContain('Inbox ·')
+    expect(strip(app.lastFrame())).toContain('Activity')
+    await tick(350)
+    app.stdin.write('n')
+    await tick(60)
     expect(strip(app.lastFrame())).toContain('all caught up')
   })
 })

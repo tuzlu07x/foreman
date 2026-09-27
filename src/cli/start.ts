@@ -65,6 +65,7 @@ import { SecretStore } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { approvalSigner } from "../core/approval-token.js";
 import { buildEnabledChannels } from "../core/notification/channel-factory.js";
+import { isHumanSource } from "../core/org/guard.js";
 import {
   costBySession,
   recordUsageAndCheckBudget,
@@ -244,8 +245,9 @@ export function startForeman(
   // Surface pending approvals from spawned `foreman mcp-stdio` / `foreman
   // wrap` processes into this process's bus, so the TUI's approval modal
   // fires for cross-process requests too (#117).
+  // Started below, once the inbox and notification listeners are attached,
+  // so approvals already pending at launch reach them too.
   const approvalBridge = new ApprovalBridge(db, { bus });
-  approvalBridge.start();
 
   // In-app inbox (#613): every approval, block, crash and update, kept
   // with read state so the TUI shows what happened while you were away —
@@ -290,6 +292,7 @@ export function startForeman(
   });
   const notificationBridge = notificationSetup?.bridge ?? null;
   const dailyScheduler = notificationSetup?.scheduler ?? null;
+  approvalBridge.start();
 
   // #303 / #304 / #305 — ForemanVoice + pattern detection. Only started
   // when notify is configured (no proactive messages to send otherwise).
@@ -437,6 +440,7 @@ export function startForeman(
           secretStore,
           runInteractiveLogin,
           inbox,
+          pendingApprovals: () => approvalBridge.pending(),
           commandRouter,
           commandContext: {
             db,
@@ -766,7 +770,7 @@ export function startForeman(
             // `sourceAgent === 'cli'` (terminal user; no chat to
             // nudge).
             const initiator = row.sourceAgent ?? "cli";
-            if (initiator && initiator !== "cli") {
+            if (!isHumanSource(initiator)) {
               try {
                 delegationTracker.closeOpenInitiatorRows(initiator);
               } catch (err) {
@@ -1362,7 +1366,7 @@ export async function runDelegationWatchdog(
   for (const row of pending) {
     // Initiators that aren't LLM agents (e.g. `cli` for terminal users)
     // have nothing to nudge — they SEE the output in their own context.
-    if (row.initiatorAgent === "cli") continue;
+    if (isHumanSource(row.initiatorAgent)) continue;
 
     const isLastNudge = row.nudgeCount + 1 >= deps.tracker.maxNudges;
     const text = isLastNudge

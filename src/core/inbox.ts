@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { monotonicFactory } from "ulid";
 import type { ForemanDb } from "../db/client.js";
 import { inboxItems, pendingApprovals, requests, type InboxItem } from "../db/schema.js";
@@ -49,8 +49,15 @@ export class InboxService {
 
   /** Insert an item; returns null when the dedupe key already exists. */
   add(entry: NewInboxEntry): InboxItem | null {
-    const now = entry.createdAt ?? Date.now();
-    const row = {
+    const row = this.row(entry, entry.createdAt ?? Date.now());
+    const result = this.db.insert(inboxItems).values(row).onConflictDoNothing().run();
+    if (result.changes === 0) return null;
+    this.bus?.emit("inbox:added", { item: row });
+    return row;
+  }
+
+  private row(entry: NewInboxEntry, now: number): InboxItem {
+    return {
       id: nextId(now),
       createdAt: now,
       level: entry.level,
@@ -62,10 +69,23 @@ export class InboxService {
       dedupeKey: entry.dedupeKey ?? null,
       readAt: entry.read ? now : null,
     };
-    const result = this.db.insert(inboxItems).values(row).onConflictDoNothing().run();
-    if (result.changes === 0) return null;
-    this.bus?.emit("inbox:added", { item: row });
-    return row;
+  }
+
+  /** Insert, or replace the item with the same dedupe key. */
+  upsert(entry: NewInboxEntry & { dedupeKey: string }): InboxItem {
+    const now = entry.createdAt ?? Date.now();
+    const row = this.row(entry, now);
+    const saved = this.db
+      .insert(inboxItems)
+      .values(row)
+      .onConflictDoUpdate({
+        target: inboxItems.dedupeKey,
+        set: { level: row.level, title: row.title, body: row.body, readAt: row.readAt },
+      })
+      .returning()
+      .get();
+    this.bus?.emit("inbox:added", { item: saved });
+    return saved;
   }
 
   list(opts: { limit?: number; unreadOnly?: boolean; minLevel?: InboxLevel } = {}): InboxItem[] {
@@ -113,27 +133,24 @@ export class InboxService {
     return result.changes;
   }
 
-  /** Mark the items about one request read (it has been dealt with). */
-  markRequestRead(requestId: string): void {
+  /** Mark one item read by its dedupe key (e.g. an approval prompt that
+   *  has been answered). Other items about the same request, such as a
+   *  timeout notice, stay unread. */
+  markKeyRead(dedupeKey: string): void {
     this.db
       .update(inboxItems)
       .set({ readAt: Date.now() })
-      .where(and(eq(inboxItems.requestId, requestId), isNull(inboxItems.readAt)))
+      .where(and(eq(inboxItems.dedupeKey, dedupeKey), isNull(inboxItems.readAt)))
       .run();
     this.bus?.emit("inbox:read", { ids: [] });
   }
 
   /** Keep the newest `keep` items. */
   prune(keep = KEEP_ITEMS): void {
-    const cutoff = this.db
-      .select({ createdAt: inboxItems.createdAt })
-      .from(inboxItems)
-      .orderBy(desc(inboxItems.createdAt))
-      .limit(1)
-      .offset(keep)
-      .get();
-    if (!cutoff) return;
-    this.db.delete(inboxItems).where(lte(inboxItems.createdAt, cutoff.createdAt)).run();
+    this.db.run(sql`
+      DELETE FROM inbox_items WHERE id NOT IN (
+        SELECT id FROM inbox_items ORDER BY created_at DESC, id DESC LIMIT ${keep}
+      )`);
   }
 }
 
@@ -146,14 +163,18 @@ export interface InboxRecorderOptions {
   /** How often to scan the audit table for blocks decided in other
    *  processes. */
   pollIntervalMs?: number;
-  now?: () => number;
 }
 
 const DEFAULT_POLL_MS = 2_000;
+/** Approvals whose agent and tool are remembered for their outcome. */
+const MAX_APPROVAL_META = 500;
 
 export class InboxRecorder {
   private readonly offs: Array<() => void> = [];
   private timer: NodeJS.Timeout | null = null;
+  /** Last `requests` rowid scanned. Rows are inserted when the decision
+   *  is made, so rowid order is decision order even when a slow request
+   *  started earlier. */
   private watermark: number;
   private readonly approvalMeta = new Map<string, { agent: string; tool: string }>();
   private readonly pollIntervalMs: number;
@@ -164,16 +185,32 @@ export class InboxRecorder {
     private readonly opts: InboxRecorderOptions,
   ) {
     this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_MS;
-    this.watermark = (opts.now ?? Date.now)();
+    const top = this.db.get<{ n: number | null }>(sql`SELECT max(rowid) AS n FROM requests`);
+    this.watermark = top?.n ?? 0;
   }
 
   start(): void {
     if (this.timer) return;
-    const { bus } = this.opts;
+    // The inbox is best-effort: a failed write (a busy or full database)
+    // must never break the approval listeners registered after this one.
+    const bus = {
+      on: <K extends keyof ForemanEventMap>(event: K, fn: (e: ForemanEventMap[K]) => void) =>
+        this.opts.bus.on(event, (e) => {
+          try {
+            fn(e);
+          } catch {
+            /* best-effort */
+          }
+        }),
+    };
     this.offs.push(
       bus.on("approval:requested", (e) => {
         const tool = e.targetTool ?? e.targetAgent ?? "a tool";
         this.approvalMeta.set(e.requestId, { agent: e.sourceAgent, tool });
+        if (this.approvalMeta.size > MAX_APPROVAL_META) {
+          const oldest = this.approvalMeta.keys().next().value;
+          if (oldest !== undefined) this.approvalMeta.delete(oldest);
+        }
         this.inbox.add({
           level: e.riskBucket === "critical" ? "critical" : "warning",
           kind: "approval",
@@ -185,23 +222,27 @@ export class InboxRecorder {
         });
       }),
       bus.on("approval:resolved", (e) => {
+        // Kept after the first outcome: a race can announce a second one.
         const meta = this.approvalMeta.get(e.requestId) ?? this.lookupApproval(e.requestId);
-        this.approvalMeta.delete(e.requestId);
-        // The request itself is handled either way.
-        this.inbox.markRequestRead(e.requestId);
+        // The prompt itself is handled either way.
+        this.inbox.markKeyRead(`approval:${e.requestId}:requested`);
         const what = meta ? `${meta.tool} for ${meta.agent}` : e.requestId;
         const verb = e.decision === "allowed" ? "Allowed" : "Denied";
         const who =
           e.resolvedBy === "timeout"
             ? "nobody answered in time"
-            : e.via === "tui"
-              ? "by you in the TUI"
-              : e.via === "agent_mcp"
-                ? `by you, relayed by ${e.routedBy ?? "your chat agent"}`
-                : e.via
-                  ? `by you via ${e.via[0]!.toUpperCase()}${e.via.slice(1)}`
-                  : "by you";
-        this.inbox.add({
+            : e.resolvedBy === "cancelled"
+              ? "the agent stopped waiting"
+              : e.via === "tui"
+                ? "by you in the TUI"
+                : e.via === "agent_mcp"
+                  ? `by you, relayed by ${e.routedBy ?? "your chat agent"}`
+                  : e.via
+                    ? `by you via ${e.via[0]!.toUpperCase()}${e.via.slice(1)}`
+                    : "by you";
+        // Upsert: when two decisions race, the bridge announces the one
+        // that actually counted after the losing one, and it must win.
+        this.inbox.upsert({
           level: e.resolvedBy === "timeout" ? "warning" : "info",
           kind: "approval",
           title: `${verb} ${what}`,
@@ -209,8 +250,12 @@ export class InboxRecorder {
           requestId: e.requestId,
           agentId: meta?.agent ?? null,
           dedupeKey: `approval:${e.requestId}:resolved`,
-          // A decision the user just made in the TUI needs no reminder.
-          read: e.via === "tui" || (e.resolvedBy === "user" && e.via === undefined),
+          // A decision the user just made needs no reminder, and neither
+          // does a request its agent withdrew.
+          read:
+            e.via === "tui" ||
+            e.resolvedBy === "cancelled" ||
+            (e.resolvedBy === "user" && e.via === undefined),
         });
       }),
       bus.on("request:decided", (e) => {
@@ -295,7 +340,13 @@ export class InboxRecorder {
         }
       }),
     );
-    this.timer = setInterval(() => this.poll(), this.pollIntervalMs);
+    this.timer = setInterval(() => {
+      try {
+        this.poll();
+      } catch {
+        /* best-effort; retried on the next tick */
+      }
+    }, this.pollIntervalMs);
     this.timer.unref?.();
   }
 
@@ -312,6 +363,7 @@ export class InboxRecorder {
   poll(): void {
     const rows = this.db
       .select({
+        rowid: sql<number>`${requests}.rowid`,
         id: requests.id,
         sourceAgent: requests.sourceAgent,
         targetAgent: requests.targetAgent,
@@ -323,12 +375,12 @@ export class InboxRecorder {
         decidedAt: requests.decidedAt,
       })
       .from(requests)
-      .where(and(eq(requests.decision, "denied"), gt(requests.createdAt, this.watermark)))
-      .orderBy(requests.createdAt)
+      .where(and(eq(requests.decision, "denied"), sql`${requests}.rowid > ${this.watermark}`))
+      .orderBy(sql`${requests}.rowid`)
       .limit(200)
       .all();
     for (const r of rows) {
-      this.watermark = Math.max(this.watermark, r.createdAt);
+      this.watermark = Math.max(this.watermark, r.rowid);
       if (!r.decidedBy || r.decidedBy.startsWith("user")) continue;
       this.recordBlock({
         id: r.id,
@@ -403,8 +455,17 @@ function parseReasons(raw: string | null): string[] {
   }
 }
 
+/** Terminal escape sequences and other control characters. Item text can
+ *  quote agent output, and `foreman inbox` prints it to a terminal. */
+const ESCAPE_SEQUENCES = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b[@-Z\\-_]/g;
+const CONTROL_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+
+export function stripControl(text: string): string {
+  return text.replace(ESCAPE_SEQUENCES, "").replace(CONTROL_CHARS, "");
+}
+
 function clip(text: string, max: number): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
+  const oneLine = stripControl(text).replace(/\s+/g, " ").trim();
   return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
 }
 

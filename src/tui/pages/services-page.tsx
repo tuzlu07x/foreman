@@ -30,9 +30,12 @@ type Op =
 
 export interface ServicesPageProps {
   onLeave: () => void;
+  /** Told when the page starts or stops taking typed text, so global keys
+   *  (Tab, `:`) stay out of a value being entered. */
+  onEditingChange?: (editing: boolean) => void;
 }
 
-export function ServicesPage({ onLeave }: ServicesPageProps): JSX.Element {
+export function ServicesPage({ onLeave, onEditingChange }: ServicesPageProps): JSX.Element {
   const { registry, secretStore, bus } = useDashboardServices();
   const catalog = useMemo(() => loadActiveServices().doc.services, []);
   const [rows, setRows] = useState<Row[]>(() =>
@@ -41,6 +44,10 @@ export function ServicesPage({ onLeave }: ServicesPageProps): JSX.Element {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [op, setOp] = useState<Op>({ kind: "list" });
+  const editing = op.kind !== "list";
+  useEffect(() => {
+    onEditingChange?.(editing);
+  }, [editing, onEditingChange]);
   // Whether the selected row is expanded to show extra detail (#280).
   const [expanded, setExpanded] = useState(false);
 
