@@ -49,6 +49,32 @@ process.on('SIGINT', stop)
 setInterval(() => {}, 1 << 30)
 `;
 
+/** Agent CLIs and installers the demo has no stand-in for. They refuse to
+ *  run, so one installed next to system tools (/usr/bin) is still out of
+ *  reach. */
+const REFUSED = [
+  "gemini",
+  "aider",
+  "goose",
+  "opencode",
+  "cursor-agent",
+  "amp",
+  "qwen",
+  "crush",
+  "copilot",
+  "cline",
+  "droid",
+  "npm",
+  "npx",
+  "uvx",
+  "pipx",
+];
+
+const refused = (name: string): string => `# foreman demo: ${name} is not available here.
+echo "${name} isn't available in foreman demo" >&2
+exit 127
+`;
+
 const NODE = "node";
 const SH = "sh";
 
@@ -59,6 +85,7 @@ export const DEMO_STUBS: Record<string, { interpreter: typeof NODE | typeof SH; 
   openclaw: { interpreter: NODE, body: DAEMON },
   zeroclaw: { interpreter: NODE, body: DAEMON },
   "generic-mcp": { interpreter: NODE, body: DAEMON },
+  ...Object.fromEntries(REFUSED.map((name) => [name, { interpreter: SH, body: refused(name) }])),
 };
 
 /** Write the stand-ins. Their interpreters are absolute paths (this very

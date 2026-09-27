@@ -86,7 +86,12 @@ describe('foreman demo sandbox (#632)', () => {
       spawnSync('/bin/sh', ['-c', `command -v ${name} || echo none`], { env, encoding: 'utf-8' }).stdout.trim()
     expect(which('claude')).toBe(join(layout.bin, 'claude'))
     expect(which('codex')).toBe(join(layout.bin, 'codex'))
-    expect(which('gemini')).toBe('none')
+    // No stand-in: it refuses, even if one is installed in /usr/bin.
+    expect(which('gemini')).toBe(join(layout.bin, 'gemini'))
+    const gemini = spawnSync(join(layout.bin, 'gemini'), [], { env, encoding: 'utf-8' })
+    expect(gemini.status).toBe(127)
+    expect(gemini.stderr).toContain("isn't available in foreman demo")
+    expect(which('npx')).toBe(join(layout.bin, 'npx'))
   })
 
   it("falls back to `env node` only when node's path can't sit in a shebang", () => {
@@ -96,7 +101,7 @@ describe('foreman demo sandbox (#632)', () => {
     mkdirSync(bin)
     writeDemoStubs(bin, odd)
     expect(readFileSync(join(bin, 'claude'), 'utf-8').split('\n')[0]).toBe('#!/usr/bin/env node')
-    expect(demoPath(layout, process.execPath)).not.toContain(dirname(process.execPath) + delimiter)
+    expect(demoPath(layout, '/opt/node22/bin/node').split(delimiter)).toEqual([layout.bin, '/usr/bin', '/bin'])
   })
 
   it('stand-in Claude reports usage only to the local endpoint, and stand-in Codex prints its tokens', async () => {
