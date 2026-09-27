@@ -1,6 +1,6 @@
-import { chmodSync, existsSync, lstatSync, type Stats } from "node:fs";
+import { chmodSync, existsSync, lstatSync, realpathSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 // Where an agent identity token (#618) may be written: agent configs, the
 // MCP wrapper script, a `--token-out` file. Never through a symlink (it
@@ -35,6 +35,27 @@ export function gitWorkTreeOf(dir: string): string | null {
   }
 }
 
+/** `dir` with every symlink resolved, even when its last parts don't exist
+ *  yet (they are created on write): the nearest existing ancestor is
+ *  resolved and the rest appended. */
+export function realDir(dir: string): string {
+  const missing: string[] = [];
+  let current = resolve(dir);
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) break;
+    missing.unshift(basename(current));
+    current = parent;
+  }
+  let real = current;
+  try {
+    real = realpathSync(current);
+  } catch {
+    // unreadable: keep the logical path
+  }
+  return missing.length > 0 ? join(real, ...missing) : real;
+}
+
 /**
  * Throws `UnsafeTokenPathError` when a token must not be written to `path`.
  * Returns a warning when it may, but you should check something: a git work
@@ -49,14 +70,22 @@ export function checkTokenPath(path: string, home: string = homedir()): string |
         "Replace it with a regular file (or pass --config-path with the real file) and rewire.",
     );
   }
-  const repo = gitWorkTreeOf(dirname(abs));
-  if (repo === null) return null;
-  if (resolve(repo) !== resolve(home)) {
-    throw new UnsafeTokenPathError(
-      `${abs} is inside the git work tree ${repo}, where an agent token could be committed. ` +
-        "Use the agent's user-level config or a path outside the repository.",
-    );
+  // Where the file really lands, through symlinked parents (a GNU stow
+  // layout: ~/.hermes -> ~/dotfiles/hermes), and where it appears to.
+  const homes = new Set([resolve(home), realDir(home)]);
+  let atHome = false;
+  for (const dir of new Set([realDir(dirname(abs)), resolve(dirname(abs))])) {
+    const repo = gitWorkTreeOf(dir);
+    if (repo === null) continue;
+    if (!homes.has(resolve(repo))) {
+      throw new UnsafeTokenPathError(
+        `${abs} is inside the git work tree ${repo}, where an agent token could be committed. ` +
+          "Use the agent's user-level config or a path outside the repository.",
+      );
+    }
+    atHome = true;
   }
+  if (!atHome) return null;
   return `${abs} is in the git work tree at your home directory: make sure git ignores it, since it now holds an agent token.`;
 }
 

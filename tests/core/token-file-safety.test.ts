@@ -51,6 +51,31 @@ describe('token file safety', () => {
     expect(checkTokenPath(join(tmpdir(), 'not-in-a-repo', 'x.json'), dir)).toBeNull()
   })
 
+  it('sees through a symlinked parent into a git repo (GNU stow: ~/.hermes -> ~/dotfiles/hermes)', () => {
+    const home = join(dir, 'home')
+    mkdirSync(join(home, 'dotfiles', '.git'), { recursive: true })
+    mkdirSync(join(home, 'dotfiles', 'hermes'))
+    symlinkSync(join(home, 'dotfiles', 'hermes'), join(home, '.hermes'))
+    const config = join(home, '.hermes', 'config.yaml')
+    expect(() => checkTokenPath(config, home)).toThrow(/git work tree .*dotfiles/)
+    // Also when the file (or its directory) doesn't exist yet.
+    expect(() => checkTokenPath(join(home, '.hermes', 'sub', 'new.yaml'), home)).toThrow(UnsafeTokenPathError)
+    // And when $HOME itself is reached through a symlink.
+    symlinkSync(home, join(dir, 'home-link'))
+    expect(() => checkTokenPath(join(dir, 'home-link', '.hermes', 'config.yaml'), join(dir, 'home-link'))).toThrow(
+      UnsafeTokenPathError,
+    )
+    const hermes = { ...entry, id: 'hermes' } as AgentEntry
+    expect(() => rewireAgent(store, 'hermes', hermes, { configPath: config })).toThrow(/git work tree/)
+  })
+
+  it('a dotfiles repo at a symlinked $HOME is still the home repo', () => {
+    const real = join(dir, 'real-home')
+    mkdirSync(join(real, '.git'), { recursive: true })
+    symlinkSync(real, join(dir, 'home'))
+    expect(checkTokenPath(join(dir, 'home', '.claude.json'), join(dir, 'home'))).toMatch(/make sure git ignores it/)
+  })
+
   it('refuses symlinks for the token-out file', () => {
     const real = join(dir, 'real.token')
     writeFileSync(real, '')
