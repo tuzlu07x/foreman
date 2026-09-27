@@ -61,7 +61,7 @@ import {
   handleServicesEscape,
   renderServicesStep,
 } from "./setup-wizard/services.js";
-import { useWizardState } from "./setup-wizard/state.js";
+import { snapshotSession, useWizardState } from "./setup-wizard/state.js";
 import type {
   FailureResolution,
   SetupWizardProps,
@@ -110,8 +110,11 @@ export function SetupWizard({
   }, [state.setup]);
 
   const advance = (step: Step): void => {
+    // Save the session-only choices with every completed step so a resumed
+    // run doesn't lose them (setup-state.ts WizardSessionSnapshot).
+    const session = snapshotSession(state);
     set.setSetup((prev) => {
-      const next = markCompleted(prev, step);
+      const next = { ...markCompleted(prev, step), session };
       saveSetupState(next);
       return next;
     });

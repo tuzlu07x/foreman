@@ -24,6 +24,30 @@ export const STEPS = [
 ] as const;
 export type Step = (typeof STEPS)[number];
 
+/** Per-agent choices made in the wizard's agents step. */
+export interface SessionAgentConfig {
+  llmProvider?: string;
+  providerVariant?: string;
+  modelVersion?: string;
+  responsibilityNote?: string;
+}
+
+/**
+ * Wizard choices that only lived in React state, saved with each completed
+ * step so `foreman setup --resume` (and `foreman start`'s resume) picks them
+ * up again. Without it a resumed run registered multi-provider agents with
+ * no LLM provider, dropped the selected services from secret projection and
+ * forgot queued subscription sign-ins. Ids and notes only — never a secret
+ * value; those stay in the encrypted secret store.
+ */
+export interface WizardSessionSnapshot {
+  providersSelected: string[];
+  providersSignedIn: ("anthropic" | "openai")[];
+  agentsSelected: string[];
+  agentConfigs: Record<string, SessionAgentConfig>;
+  servicesSelected: string[];
+}
+
 export interface SetupState {
   version: 1;
   completed: Step[];
@@ -32,6 +56,8 @@ export interface SetupState {
   /** Set when the user explicitly chose to skip setup from `foreman start`.
    * Prevents the prompt from re-firing on every subsequent run (#160). */
   skippedAt?: number;
+  /** Optional so setup-state files written before it existed still load. */
+  session?: WizardSessionSnapshot;
 }
 
 export function getSetupStatePath(): string {
@@ -53,7 +79,12 @@ export function loadSetupState(path: string = getSetupStatePath()): SetupState {
   try {
     const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
     if (!isValidState(raw)) return freshState();
-    return raw;
+    // A damaged session snapshot must not cost the user their completed
+    // steps: keep the progress, drop only the snapshot.
+    const state: SetupState = { ...raw };
+    delete state.session;
+    const session = sanitizeSession(raw.session);
+    return session ? { ...state, session } : state;
   } catch {
     return freshState();
   }
@@ -125,6 +156,56 @@ export function markUncompleted(state: SetupState, step: Step): SetupState {
     ...state,
     completed: filtered,
     lastUpdatedAt: Date.now(),
+  };
+}
+
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === "string");
+}
+
+function optionalString(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
+}
+
+/** Validated copy of a stored session snapshot, or undefined when absent or
+ *  malformed. Unknown per-agent fields are dropped. */
+export function sanitizeSession(raw: unknown): WizardSessionSnapshot | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const r = raw as Record<string, unknown>;
+  if (
+    !isStringArray(r.providersSelected) ||
+    !isStringArray(r.providersSignedIn) ||
+    !isStringArray(r.agentsSelected) ||
+    !isStringArray(r.servicesSelected) ||
+    typeof r.agentConfigs !== "object" ||
+    r.agentConfigs === null
+  ) {
+    return undefined;
+  }
+  const signedIn = r.providersSignedIn.filter(
+    (p): p is "anthropic" | "openai" => p === "anthropic" || p === "openai",
+  );
+  const agentConfigs: Record<string, SessionAgentConfig> = {};
+  for (const [id, cfgRaw] of Object.entries(r.agentConfigs)) {
+    if (typeof cfgRaw !== "object" || cfgRaw === null) continue;
+    const c = cfgRaw as Record<string, unknown>;
+    const cfg: SessionAgentConfig = {};
+    const llmProvider = optionalString(c.llmProvider);
+    const providerVariant = optionalString(c.providerVariant);
+    const modelVersion = optionalString(c.modelVersion);
+    const responsibilityNote = optionalString(c.responsibilityNote);
+    if (llmProvider !== undefined) cfg.llmProvider = llmProvider;
+    if (providerVariant !== undefined) cfg.providerVariant = providerVariant;
+    if (modelVersion !== undefined) cfg.modelVersion = modelVersion;
+    if (responsibilityNote !== undefined) cfg.responsibilityNote = responsibilityNote;
+    agentConfigs[id] = cfg;
+  }
+  return {
+    providersSelected: [...r.providersSelected],
+    providersSignedIn: signedIn,
+    agentsSelected: [...r.agentsSelected],
+    agentConfigs,
+    servicesSelected: [...r.servicesSelected],
   };
 }
 

@@ -6,7 +6,7 @@ import {
 } from "react";
 import type { DoctorReport } from "../../core/doctor.js";
 import type { DiscoveredModel } from "../../core/llm/models-discovery.js";
-import type { SetupState } from "../setup-state.js";
+import type { SetupState, WizardSessionSnapshot } from "../setup-state.js";
 import type {
   AgentConfigPrompt,
   AgentsPhase,
@@ -144,25 +144,29 @@ export function createInitialWizardState(
   // previously-checked-now-unchecked = uninstall + remove.
   initialRegistered: string[],
 ): WizardState {
+  // Choices saved by a previous run of this setup (resume); see
+  // snapshotSession.
+  const session = initialState.session;
   return {
     setup: initialState,
 
-    providersSelected: [],
+    providersSelected: session?.providersSelected ?? [],
     providerPrompts: [],
     providerIdx: 0,
     providersPhase: "picker",
     providersSaved: [],
     providersSkipped: [],
-    providersSignedIn: [],
+    providersSignedIn: session?.providersSignedIn ?? [],
     authModeAsked: [],
     providersWarning: null,
 
     agentsSelected:
-      initialRegistered.length > 0 ? initialRegistered : DEFAULT_AGENTS,
+      session?.agentsSelected ??
+      (initialRegistered.length > 0 ? initialRegistered : DEFAULT_AGENTS),
     agentsPhase: "picker",
     agentConfigPrompts: [],
     agentConfigIdx: 0,
-    agentConfigs: {},
+    agentConfigs: session?.agentConfigs ?? {},
     llmDraft: null,
 
     foremanLlmPhase: "picker",
@@ -187,7 +191,7 @@ export function createInitialWizardState(
     requiredSetupPasteValue: "",
     requiredSetupOverrides: {},
 
-    servicesSelected: [],
+    servicesSelected: session?.servicesSelected ?? [],
     serviceIdx: 0,
     servicesPhase: "picker",
     servicesSaved: [],
@@ -208,6 +212,21 @@ export function createInitialWizardState(
 
     donePhase: "main",
     doctorReport: null,
+  };
+}
+
+/** The session-only choices worth keeping across a resume. */
+export function snapshotSession(state: WizardState): WizardSessionSnapshot {
+  const agentConfigs: WizardSessionSnapshot["agentConfigs"] = {};
+  for (const [id, cfg] of Object.entries(state.agentConfigs)) {
+    if (cfg) agentConfigs[id] = { ...cfg };
+  }
+  return {
+    providersSelected: [...state.providersSelected],
+    providersSignedIn: [...state.providersSignedIn],
+    agentsSelected: [...state.agentsSelected],
+    agentConfigs,
+    servicesSelected: [...state.servicesSelected],
   };
 }
 

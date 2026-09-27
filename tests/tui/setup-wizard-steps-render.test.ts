@@ -114,7 +114,13 @@ import { EventBus, type ForemanEventMap } from '../../src/core/event-bus.js'
 import { RegistryService } from '../../src/core/registry.js'
 import { SecretStore } from '../../src/core/secret-store.js'
 import { createInMemoryDb } from '../../src/db/client.js'
-import type { Step } from '../../src/tui/setup-state.js'
+import {
+  getSetupStatePath,
+  loadSetupState,
+  type SetupState,
+  type Step,
+} from '../../src/tui/setup-state.js'
+import { runInstallStep } from '../../src/tui/setup-wizard/install-runner.js'
 import { discoverModels } from '../../src/core/llm/models-discovery.js'
 import { saveOAuthTokens } from '../../src/core/llm/oauth/token-store.js'
 
@@ -179,7 +185,12 @@ interface Mounted {
 
 async function mount(
   step: Step,
-  opts: { secrets?: Record<string, string>; registered?: string[] } = {},
+  opts: {
+    secrets?: Record<string, string>
+    registered?: string[]
+    /** Resume from this state instead of "every step before `step`". */
+    initialState?: SetupState
+  } = {},
 ): Promise<Mounted> {
   const handle = createInMemoryDb()
   sqlite = handle.sqlite
@@ -209,7 +220,12 @@ async function mount(
   }
   const inst = render(
     React.createElement(SetupWizard, {
-      initialState: { version: 1, completed: ALL_BEFORE[step], startedAt: 1, lastUpdatedAt: 1 },
+      initialState: opts.initialState ?? {
+        version: 1,
+        completed: ALL_BEFORE[step],
+        startedAt: 1,
+        lastUpdatedAt: 1,
+      },
       services,
     }),
   )
@@ -452,6 +468,58 @@ describe('required-setup step [s] skip', () => {
     await w.press(DOWN)
     await w.press('s', 'openrouter-key  for: hermes · status: skipped')
   }, 20_000)
+})
+
+describe('resume keeps session-only choices', () => {
+  it('restores per-agent picks, services and notes from setup-state', async () => {
+    const first = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
+    await first.until('Agents ▸ pick which to install')
+    await first.press(ENTER, 'Hermes (1/4)')
+    await first.press(ENTER, 'how to reach OpenAI')
+    await first.press(ENTER, 'pick a OpenAI model')
+    await first.press(ENTER, 'Hermes — responsibility note')
+    await first.type('Code review')
+    await first.press(ENTER, 'Agents ▸ confirm')
+    await first.press('y', 'Services ▸ pick which to configure')
+    await first.press(SPACE)
+    await first.press(ENTER, 'prompt 1 of 2')
+    await first.press(ENTER, 'prompt 2 of 2')
+    await first.press(ENTER, 'Services ▸ summary')
+    await first.press('y', 'Required setup ▸ missing keys')
+    unmount?.()
+    unmount = null
+    sqlite?.close()
+    sqlite = null
+
+    // Like `foreman setup --resume`: a fresh wizard from the file on disk.
+    const saved = loadSetupState()
+    expect(saved.session?.agentConfigs.hermes).toMatchObject({
+      llmProvider: 'openai',
+      providerVariant: 'via-openrouter',
+      responsibilityNote: 'Code review',
+    })
+    expect(saved.session?.servicesSelected).toEqual(['telegram'])
+    // Ids and notes only — no secret value reaches setup-state.json.
+    expect(readFileSync(getSetupStatePath(), 'utf-8')).not.toContain('sk-fake-openai-000')
+
+    const resumed = await mount('required-setup', {
+      secrets: { 'openai-key': 'sk-fake-openai-000' },
+      initialState: saved,
+    })
+    // Before the fix the resumed run had no per-agent provider, so it
+    // showed "No secrets needed" and registered Hermes without an LLM.
+    await resumed.until('openrouter-key  for: hermes · status: missing')
+    await resumed.press(DOWN)
+    await resumed.press('s')
+    await resumed.press('c', 'Install + configure')
+    await resumed.until('✗ Hermes — install failed')
+    const call = vi.mocked(runInstallStep).mock.calls.at(-1)
+    expect(call?.[4]).toMatchObject({
+      hermes: { llmProvider: 'openai', providerVariant: 'via-openrouter' },
+    })
+    expect(call?.[6]).toEqual({ providersSelected: [], servicesSelected: ['telegram'] })
+    await resumed.press('s', 'Setup complete')
+  }, 30_000)
 })
 
 describe('install step', () => {
