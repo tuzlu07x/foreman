@@ -79,12 +79,36 @@ describe('claude-code-pretooluse-v1 adapter — decodeRequest', () => {
 
   it('falls back to a lowercased tool_name for unknown tools', () => {
     const out = claudeCodePreToolUseV1Adapter.decodeRequest(
-      payload({ tool_name: 'Glob', tool_input: { pattern: '**/*.ts' } }),
+      payload({ tool_name: 'TodoWrite', tool_input: { todos: ['x'] } }),
       'claude-code',
     )
-    expect(out.targetTool).toBe('glob')
+    expect(out.targetTool).toBe('todowrite')
     // Unknown tools pass tool_input through unchanged.
-    expect(out.args.pattern).toBe('**/*.ts')
+    expect(out.args.todos).toEqual(['x'])
+  })
+
+  it('maps Read onto read_file with a path arg so secret-path policy applies', () => {
+    const out = claudeCodePreToolUseV1Adapter.decodeRequest(
+      payload({ tool_name: 'Read', tool_input: { file_path: '/home/u/.ssh/id_rsa' } }),
+      'claude-code',
+    )
+    expect(out.targetTool).toBe('read_file')
+    expect(out.args.path).toBe('/home/u/.ssh/id_rsa')
+  })
+
+  it('maps NotebookEdit onto file_write and Grep/Glob onto search_files', () => {
+    const nb = claudeCodePreToolUseV1Adapter.decodeRequest(
+      payload({ tool_name: 'NotebookEdit', tool_input: { notebook_path: '/p/a.ipynb' } }),
+      'claude-code',
+    )
+    expect(nb.targetTool).toBe('file_write')
+    expect(nb.args.path).toBe('/p/a.ipynb')
+    const glob = claudeCodePreToolUseV1Adapter.decodeRequest(
+      payload({ tool_name: 'Glob', tool_input: { pattern: '**/*.ts', path: '/p' } }),
+      'claude-code',
+    )
+    expect(glob.targetTool).toBe('search_files')
+    expect(glob.args).toMatchObject({ pattern: '**/*.ts', path: '/p' })
   })
 
   it('throws AdapterDecodeError on missing tool_name', () => {

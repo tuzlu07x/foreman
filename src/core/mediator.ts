@@ -41,6 +41,11 @@ export interface MediatorInput {
    *  the audit log can render the chain as a tree. Null/absent for
    *  first-in-chain calls. */
   parentRequestId?: string;
+  /** Policy-layer default used only when policy.yaml has no rule for this
+   *  call (the engine's implicit `ask`). The MCP hub passes the per-server
+   *  tool rules from mcp.yaml here, so policy.yaml always wins and the risk
+   *  engine still escalates risky calls even when the fallback allows. */
+  policyFallback?: { effect: "allow" | "ask" | "deny"; source: string };
 }
 
 export interface MediatorOutput {
@@ -134,6 +139,21 @@ export class MediatorService {
       });
     }
 
+    // A blocked or paused agent is quarantined from real traffic. Checked on
+    // every call so `foreman agent block <id>` takes effect immediately on
+    // every transport (mcp-stdio, wrap, hook, ACP / codex bridges).
+    const sourceStatus = this.deps.registry.get(input.sourceAgent)?.status;
+    if (sourceStatus === "blocked" || sourceStatus === "disabled") {
+      return this.finalize({
+        requestId,
+        input,
+        decision: "denied",
+        decidedBy: `agent:${sourceStatus}`,
+        assessment: emptyAssessment,
+        createdAt,
+      });
+    }
+
     if (
       input.sessionId &&
       this.deps.sessionManager?.isHalted(input.sessionId)
@@ -148,19 +168,31 @@ export class MediatorService {
       });
     }
 
-    const policyResult = this.deps.policy.evaluate({
+    const evaluated = this.deps.policy.evaluate({
       sourceAgent: input.sourceAgent,
       targetAgent: input.targetAgent,
       targetTool: input.targetTool,
       args: this.argsFromMessage(input.message),
     });
+    const usesFallback =
+      input.policyFallback !== undefined &&
+      evaluated.matchedRuleId === undefined &&
+      evaluated.decision === "ask";
+    const policyResult = usesFallback
+      ? { decision: input.policyFallback!.effect }
+      : evaluated;
+    const policyLabel = usesFallback
+      ? input.policyFallback!.source
+      : evaluated.matchedRuleId !== undefined
+        ? String(evaluated.matchedRuleId)
+        : null;
 
     if (policyResult.decision === "deny") {
       return this.finalize({
         requestId,
         input,
         decision: "denied",
-        decidedBy: `policy:${policyResult.matchedRuleId ?? "unknown"}`,
+        decidedBy: `policy:${policyLabel ?? "unknown"}`,
         assessment: emptyAssessment,
         createdAt,
       });
@@ -285,12 +317,18 @@ export class MediatorService {
       }
     } else {
       decision = "allowed";
-      decidedBy = policyResult.matchedRuleId
-        ? `policy:${policyResult.matchedRuleId}`
-        : "auto";
+      decidedBy = policyLabel ? `policy:${policyLabel}` : "auto";
     }
 
-    if (decision === "allowed" && input.sessionId && this.deps.sessionManager) {
+    // Only Foreman-managed sessions have turn / token budgets. Agents also
+    // pass their own session ids (Claude Code, codex, ACP threads) for loop
+    // detection; those are not rows in `sessions` and must not abort an
+    // already-approved call.
+    if (
+      decision === "allowed" &&
+      input.sessionId &&
+      this.deps.sessionManager?.get(input.sessionId)
+    ) {
       const turn = this.deps.sessionManager.recordTurn(
         input.sessionId,
         input.tokenCount ?? 0,
@@ -561,9 +599,6 @@ export class MediatorService {
       result: args.result,
       durationMs,
     };
-  }
-  private argsFromMessageForReport(input: MediatorInput): unknown {
-    return this.argsFromMessage(input.message);
   }
 }
 
