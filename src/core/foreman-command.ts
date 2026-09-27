@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { orgDelegationVerdict } from "./org/guard.js";
+import { loadOrg, renderOrgLines, resolveAssignee, type OrgDoc } from "./org/org.js";
+import { FOREMAN_VERSION } from "../version.js";
 import type { ForemanDb } from "../db/client.js";
 import { DelegationTracker } from "./delegation-tracker.js";
 import {
@@ -89,6 +91,11 @@ export interface ForemanCommandContext {
   /** Optional user identifier from the messaging platform (Telegram
    *  numeric user id, Discord snowflake, …) for audit traceability. */
   sourceUser?: string;
+  /** The command comes from the person at the Foreman host itself (the
+   *  TUI command bar), so the Telegram-id owner check does not apply.
+   *  Only in-process owner surfaces set this; the MCP path never does,
+   *  and nothing an agent sends can turn it on. */
+  trustedOwner?: boolean;
   /** #432 — Foreman's own LLM, gated on `features.orchestrator_chat`.
    *  When provided + enabled, `/foreman report me`, `/foreman <agent>
    *  ne yapıyor`, and unknown free-form verbs go through the LLM.
@@ -330,6 +337,70 @@ export function registerBuiltinCommands(router: ForemanCommandRouter): void {
     "Show / change model for Foreman or an agent. `/foreman model [<agent>] <model>`.",
   );
   router.register("models", modelHandler, "Alias of `model`.");
+  router.register(
+    "assign",
+    assignHandler,
+    "Give a task to a role, a department (its head) or an agent from org.yaml. `/foreman assign marketing <task>`.",
+  );
+  router.register("org", orgHandler, "Show the org chart (departments, roles, reporting lines).");
+}
+
+function orgHandler(_args: string[], ctx: ForemanCommandContext): ForemanCommandResult {
+  const org = loadOrgForCommand(ctx);
+  if (!org.ok) return org.result;
+  const registered = new Set(ctx.registry.list().map((a) => a.id.toLowerCase()));
+  return { ok: true, text: renderOrgLines(org.doc, registered).join("\n") };
+}
+
+function assignHandler(args: string[], ctx: ForemanCommandContext): ForemanCommandResult {
+  const target = args[0]?.trim();
+  const task = args.slice(1).join(" ").trim();
+  if (!target || !task) {
+    return {
+      ok: false,
+      text: "Usage: `foreman assign <role|department|agent> <task>`. Example: `foreman assign marketing draft the launch post`.",
+      errorCode: "UNKNOWN_SUBCOMMAND",
+    };
+  }
+  const org = loadOrgForCommand(ctx);
+  if (!org.ok) return org.result;
+  const roleId = resolveAssignee(org.doc, target);
+  if (!roleId) {
+    return {
+      ok: false,
+      text: `'${target}' is not a role, department or agent in org.yaml. Try \`foreman org\`.`,
+      errorCode: "UNKNOWN_SUBCOMMAND",
+    };
+  }
+  const role = org.doc.roles[roleId]!;
+  const result = writeHandler([role.agent, task], ctx);
+  return { ...result, text: `→ ${roleId} (${role.title}) · ${role.agent}\n${result.text}` };
+}
+
+function loadOrgForCommand(
+  ctx: ForemanCommandContext,
+): { ok: true; doc: OrgDoc } | { ok: false; result: ForemanCommandResult } {
+  try {
+    const doc = loadOrg(join(ctx.configDir, "org.yaml"));
+    if (doc) return { ok: true, doc };
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        text: "No org chart yet. Create one with `foreman org init --template startup`.",
+        errorCode: "NOT_AVAILABLE",
+      },
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        text: `org.yaml is invalid: ${err instanceof Error ? err.message : String(err)}`,
+        errorCode: "NOT_AVAILABLE",
+      },
+    };
+  }
 }
 
 const REPORT_DEFAULT_QUESTION_EN =
@@ -732,7 +803,7 @@ function statusHandler(
   const blocked = agents.filter((a) => a.status === "blocked").length;
   const disabled = agents.filter((a) => a.status === "disabled").length;
   const lines: string[] = [
-    `Foreman v0.1.x — ${agents.length} agent${agents.length === 1 ? "" : "s"} registered`,
+    `Foreman v${FOREMAN_VERSION} — ${agents.length} agent${agents.length === 1 ? "" : "s"} registered`,
     `  ${active} active · ${blocked} blocked · ${disabled} disabled`,
   ];
   if (agents.length > 0) {
@@ -888,8 +959,10 @@ function writeHandler(
   } catch {
     isCallable = false;
   }
+  // The TUI has no chat thread; results land in its Activity feed + inbox.
+  const where = ctx.trustedOwner ? "in the Activity feed and your inbox" : "in this chat";
   const successText = isCallable
-    ? `Spawning ${targetAgent} with your task — output will arrive in this chat when the agent finishes.`
+    ? `Spawning ${targetAgent} with your task — output will arrive ${where} when the agent finishes.`
     : `Directive queued for ${targetAgent}. ` +
       `${targetAgent} doesn't declare a non-interactive command, so the ` +
       `directive is posted in chat for you to forward (and dropped in ` +
@@ -940,10 +1013,12 @@ function enqueueMutating(
   // ids are always numeric, so a non-numeric source_user is by
   // definition wrong. Treat it the same as missing — fall back to
   // telegram-chat-id rather than rejecting with NOT_AUTHORIZED.
-  let effectiveSourceUser = ctx.sourceUser;
+  // The TUI command bar is the owner at the host: no Telegram id to check.
+  let effectiveSourceUser = ctx.trustedOwner ? (ctx.sourceUser ?? "owner") : ctx.sourceUser;
   const isNumericUserId = (s: string | undefined): s is string =>
     typeof s === "string" && s.trim().length > 0 && /^\d+$/.test(s.trim());
   if (
+    !ctx.trustedOwner &&
     !isNumericUserId(effectiveSourceUser) &&
     ctx.ownerStore?.exists("telegram-chat-id")
   ) {
@@ -954,8 +1029,8 @@ function enqueueMutating(
     }
   }
   if (
-    !ctx.ownerStore ||
-    !isOwner(ctx.ownerStore, { sourceUser: effectiveSourceUser })
+    !ctx.trustedOwner &&
+    (!ctx.ownerStore || !isOwner(ctx.ownerStore, { sourceUser: effectiveSourceUser }))
   ) {
     // QA round 10: distinguish "no source_user was sent" (agent's LLM
     // forgot to include it AND no telegram-chat-id fallback worked)
