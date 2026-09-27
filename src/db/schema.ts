@@ -3,6 +3,7 @@ import {
   blob,
   index,
   integer,
+  primaryKey,
   real,
   sqliteTable,
   text,
@@ -604,7 +605,11 @@ export const orgMessages = sqliteTable(
     channel: text("channel").notNull(),
     fromAgent: text("from_agent").notNull(),
     fromRole: text("from_role"),
-    kind: text("kind", { enum: ["message", "report", "question", "handoff", "announcement"] }).notNull(),
+    // `review` (Foreman asking a manager to review an approval) and
+    // `recommendation` (the manager's answer) are written by Foreman only.
+    kind: text("kind", {
+      enum: ["message", "report", "question", "handoff", "announcement", "review", "recommendation"],
+    }).notNull(),
     text: text("text").notNull(),
     replyTo: text("reply_to"),
     mirroredAt: integer("mirrored_at"),
@@ -617,6 +622,46 @@ export const orgMessages = sqliteTable(
 );
 
 export type OrgMessage = typeof orgMessages.$inferSelect;
+
+// Approval escalation along reporting lines (#623). See
+// 0027_approval_reviews.sql. One row per approval and reviewing manager.
+export const approvalReviews = sqliteTable(
+  "approval_reviews",
+  {
+    approvalId: text("approval_id").notNull(),
+    /** Opaque handle the manager sees instead of the approval id. */
+    handle: text("handle").notNull(),
+    managerRole: text("manager_role").notNull(),
+    managerAgent: text("manager_agent").notNull(),
+    requesterRole: text("requester_role").notNull(),
+    requesterAgent: text("requester_agent").notNull(),
+    targetTool: text("target_tool"),
+    riskScore: integer("risk_score").notNull(),
+    riskBucket: text("risk_bucket", { enum: ["low", "medium", "high", "critical"] }).notNull(),
+    channel: text("channel").notNull(),
+    messageId: text("message_id"),
+    status: text("status", { enum: ["open", "closed"] }).notNull().default("open"),
+    requestedAt: integer("requested_at").notNull(),
+    deadlineMs: integer("deadline_ms"),
+    closedAt: integer("closed_at"),
+    recommendation: text("recommendation", { enum: ["allow", "deny"] }),
+    reason: text("reason"),
+    recommendedAt: integer("recommended_at"),
+    announcedAt: integer("announced_at"),
+    /** Later approvals from the same report to the same manager that were
+     *  not sent for review because this one was sent moments before. */
+    coalesced: integer("coalesced").notNull().default(0),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.approvalId, t.managerRole] }),
+    handleIdx: uniqueIndex("approval_reviews_handle_idx").on(t.handle),
+    pairIdx: index("approval_reviews_pair_idx").on(t.requesterAgent, t.managerRole, t.requestedAt),
+    unannouncedIdx: index("approval_reviews_unannounced_idx").on(t.announcedAt, t.recommendedAt),
+    statusIdx: index("approval_reviews_status_idx").on(t.status),
+  }),
+);
+
+export type ApprovalReview = typeof approvalReviews.$inferSelect;
 
 // FTS5 virtual table and triggers live in a hand-written migration
 // (drizzle-kit cannot emit virtual tables). See:

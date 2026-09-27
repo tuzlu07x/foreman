@@ -379,6 +379,24 @@ export interface ForemanEventMap {
   "inbox:read": { ids: string[] };
   /** A message posted to a department channel (#630). */
   "org:message": { message: import("../db/schema.js").OrgMessage };
+  /** #623 — A manager agent recommended allow or deny on a pending
+   *  approval. Advice for the owner only: nothing listening to this may
+   *  resolve, extend or shorten the approval. */
+  "approval:recommended": {
+    approvalId: string;
+    managerRole: string;
+    /** The manager role's title in org.yaml (e.g. "CTO"). */
+    managerTitle: string;
+    managerAgent: string;
+    requesterRole: string;
+    requesterAgent: string;
+    targetTool: string | null;
+    riskBucket: RiskBucket;
+    recommendation: "allow" | "deny";
+    /** Redacted and clipped. */
+    reason: string;
+    recommendedAt: number;
+  };
 }
 
 export type ForemanEvent = keyof ForemanEventMap;

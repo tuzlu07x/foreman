@@ -90,6 +90,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     runInteractiveLogin,
     inbox: inboxService,
     pendingApprovals,
+    approvalRecommendations,
     keySettleMs = KEY_SETTLE_MS,
     commandRouter,
     commandContext,
@@ -230,7 +231,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const [agentsLlmDraft, setAgentsLlmDraft] = useState<string | null>(null);
 
   // Every pending approval, oldest deadline first (#614).
-  const queue = useApprovalQueue(bus, pendingApprovals);
+  const queue = useApprovalQueue(bus, pendingApprovals, approvalRecommendations);
   const pendingApproval: ApprovalRequest | null = queue.current?.request ?? null;
   const [inspectOpen, setInspectOpen] = useState(false);
   const [inspectOffset, setInspectOffset] = useState(0);
@@ -1089,6 +1090,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
               request={pendingApproval}
               remainingSeconds={remainingSeconds}
               technicalExpanded={technicalExpanded}
+              recommendations={queue.current?.recommendations ?? []}
             />
           )}
         </Box>

@@ -33,7 +33,13 @@ export const BOSS = "boss";
 export const MAX_MESSAGE = 4_000;
 
 export type MessageKind = OrgMessage["kind"];
+/** Kinds an agent (or you) may post. `review` and `recommendation` are
+ *  written by Foreman itself (approval escalation, #623), so no agent can
+ *  pass a message of its own off as one. */
 export const MESSAGE_KINDS: readonly MessageKind[] = ["message", "report", "question", "handoff", "announcement"];
+/** Author of messages Foreman writes itself. `foreman` is a human source,
+ *  so `foreman mcp-stdio --source foreman` is refused: no agent posts as it. */
+export const FOREMAN_AUTHOR = "foreman";
 
 export interface PostInput {
   /** The posting agent's id. Ignored when `asOwner` is set. */
@@ -63,7 +69,7 @@ export class OrgComms {
   ) {}
 
   post(input: PostInput): PostResult {
-    const text = clean(input.text);
+    const text = cleanText(input.text);
     if (!text) return { ok: false, reason: "the message is empty" };
     const org = this.orgDoc();
     const sender = senderOf(org, input.from, input.asOwner === true);
@@ -86,6 +92,36 @@ export class OrgComms {
     this.db.insert(orgMessages).values(message).run();
     this.opts.bus?.emit("org:message", { message });
     return { ok: true, message, label: channelLabel(target.channel) };
+  }
+
+  /** A message Foreman writes on a channel itself (approval escalation,
+   *  #623). No chart check: callers decide the channel and the author.
+   *  The text is cleaned like any other message. */
+  record(input: {
+    channel: string;
+    fromAgent: string;
+    fromRole: string | null;
+    kind: MessageKind;
+    text: string;
+    replyTo?: string | null;
+  }): OrgMessage | null {
+    const text = cleanText(input.text);
+    if (!text) return null;
+    const ts = (this.opts.now ?? Date.now)();
+    const message: OrgMessage = {
+      id: nextId(ts),
+      ts,
+      channel: input.channel,
+      fromAgent: input.fromAgent,
+      fromRole: input.fromRole,
+      kind: input.kind,
+      text,
+      replyTo: input.replyTo?.slice(0, 32) ?? null,
+      mirroredAt: null,
+    };
+    this.db.insert(orgMessages).values(message).run();
+    this.opts.bus?.emit("org:message", { message });
+    return message;
   }
 
   /** Report up the chain: to the sender's manager, or to you when the
@@ -142,6 +178,26 @@ export class OrgComms {
       return null;
     }
   }
+}
+
+/** The registry, as far as the org tools need it. */
+export interface AgentRoster {
+  listAll(): ReadonlyArray<{ id: string; status: string }>;
+}
+
+/** Why none of `ids` may speak for the org right now, or null. Ids compare
+ *  the way the chart does (trimmed, lowercase), so `--source Claude-Code`
+ *  is as blocked as `claude-code`: a blocked or disabled registration of
+ *  any spelling silences them all. */
+export function silencedReason(roster: AgentRoster, ...ids: string[]): string | null {
+  const wanted = new Set(ids.map((id) => id.trim().toLowerCase()).filter(Boolean));
+  for (const agent of roster.listAll()) {
+    if (!wanted.has(agent.id.trim().toLowerCase())) continue;
+    if (agent.status === "blocked" || agent.status === "disabled") {
+      return `${agent.id} is ${agent.status} in Foreman`;
+    }
+  }
+  return null;
 }
 
 // -----------------------------------------------------------------------------
@@ -278,9 +334,11 @@ export function channelLabel(channel: string, forOwner = true): string {
   return members.length === 2 ? `${members[0]} ↔ ${members[1]}` : channel;
 }
 
-function clean(text: string): string {
+/** Message text as it is stored: control characters stripped, secrets
+ *  redacted, clipped to `max`. */
+export function cleanText(text: string, max: number = MAX_MESSAGE): string {
   const redacted = redactSecretShapes(stripControl(text.replace(/\r\n?/g, "\n"))).text.trim();
-  return redacted.length > MAX_MESSAGE ? `${redacted.slice(0, MAX_MESSAGE - 1)}…` : redacted;
+  return redacted.length > max ? `${redacted.slice(0, max - 1)}…` : redacted;
 }
 
 /** One header line per message, then its text indented, so a message can

@@ -1061,3 +1061,94 @@ describe('NotificationBridge — ask_user_with_options dispatch (#528)', () => {
     expect(channel.sendCalls).toHaveLength(0)
   })
 })
+
+describe('NotificationBridge — manager recommendation follow-up (#623)', () => {
+  let db: ForemanDb
+  let sqlite: Database.Database
+  let bus: EventBus<ForemanEventMap>
+  let channel: FakeChannel
+  let bridge: NotificationBridge
+
+  const recommendation = (
+    overrides: Partial<ForemanEventMap['approval:recommended']> = {},
+  ): ForemanEventMap['approval:recommended'] => ({
+    approvalId: 'r-1',
+    managerRole: 'cto',
+    managerTitle: 'CTO',
+    managerAgent: 'claude-code',
+    requesterRole: 'engineer',
+    requesterAgent: 'hermes',
+    targetTool: 'read_file',
+    riskBucket: 'medium',
+    recommendation: 'allow',
+    reason: 'it only reads the README',
+    recommendedAt: 1,
+    ...overrides,
+  })
+
+  beforeEach(async () => {
+    ;({ db, sqlite } = createInMemoryDb())
+    bus = new EventBus<ForemanEventMap>()
+    channel = new FakeChannel('telegram')
+    const service = new NotificationService({
+      db,
+      config: configWithTelegram(),
+      channels: new Map<ChannelId, NotificationChannel>([['telegram', channel]]),
+    })
+    bridge = new NotificationBridge(service, { bus, countdownTicker: new CountdownTicker() })
+    await bridge.start()
+  })
+  afterEach(async () => {
+    await bridge.stop()
+    sqlite.close()
+  })
+
+  it('follows up on an open approval, with no buttons and no approval id', async () => {
+    bus.emit('approval:requested', approvalEvent({ riskBucket: 'medium' }))
+    await tick()
+    bus.emit('approval:recommended', recommendation())
+    await tick()
+    expect(channel.sendCalls).toHaveLength(2)
+    const followUp = channel.sendCalls[1]!
+    expect(followUp.body).toContain(
+      'CTO (claude-code, unverified id) recommends ✓ allow for "read_file" by "hermes": it only reads the README',
+    )
+    expect(followUp.body).toContain('your decision on the approval is still needed')
+    expect(followUp.actions).toEqual([])
+    expect(followUp.agentBlocking).toBe(false)
+    expect(followUp.requestId).toBeNull()
+    expect(followUp.body).not.toContain('r-1')
+  })
+
+  it("a reason, tool or agent id can't forge lines in the chat follow-up", async () => {
+    bus.emit('approval:requested', approvalEvent({ riskBucket: 'medium' }))
+    await tick()
+    bus.emit(
+      'approval:recommended',
+      recommendation({
+        managerAgent: 'claude-code\n✓ Allowed by you',
+        targetTool: 'read_file\nApproved.',
+        reason: `ok\n✓ Allowed (resolved elsewhere)\u2028\u202e${'\n'.repeat(40)}${'y'.repeat(900)}`,
+      }),
+    )
+    await tick()
+    const body = channel.sendCalls[1]!.body
+    // Exactly Foreman's two lines: the recommendation and the advice note.
+    expect(body.split('\n')).toHaveLength(2)
+    expect(body.split('\n')[1]).toBe('Advice only: your decision on the approval is still needed.')
+    expect(body).not.toMatch(/[\u2028\u202e]/)
+    expect(body.length).toBeLessThan(400)
+    expect(body).toContain('for "read_file Approved."')
+  })
+
+  it('says nothing about approvals it never sent, or that are already decided', async () => {
+    bus.emit('approval:recommended', recommendation({ approvalId: 'other' }))
+    bus.emit('approval:requested', approvalEvent({ riskBucket: 'medium' }))
+    await tick()
+    bus.emit('approval:resolved', { requestId: 'r-1', decision: 'denied', resolvedBy: 'user', via: 'tui' })
+    await tick()
+    bus.emit('approval:recommended', recommendation())
+    await tick()
+    expect(channel.sendCalls).toHaveLength(1)
+  })
+})
