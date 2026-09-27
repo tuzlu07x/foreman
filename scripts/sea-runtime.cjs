@@ -50,8 +50,8 @@ function sameFile(a, b) {
 function readShebang(file) {
   let fd;
   try {
-    if (!fs.statSync(file).isFile()) return null;
     fd = fs.openSync(file, "r");
+    if (!fs.fstatSync(fd).isFile()) return null;
     const buf = Buffer.alloc(4096);
     const n = fs.readSync(fd, buf, 0, buf.length, 0);
     const line = buf.subarray(0, n).toString("utf8").split("\n", 1)[0] ?? "";
@@ -108,12 +108,23 @@ function verifyDir(dir, files) {
     for (const f of files) {
       const p = path.join(real, f.path);
       if (fs.realpathSync(p) !== p) return false;
-      if (!fs.lstatSync(p).isFile()) return false;
-      if (sha256(fs.readFileSync(p)) !== f.sha256) return false;
+      if (readRegularFile(p) !== f.sha256) return false;
     }
     return true;
   } catch {
     return false;
+  }
+}
+
+/** SHA-256 of a regular file, read through one descriptor that never
+ *  follows a symlink, so the type check and the bytes are the same file. */
+function readRegularFile(p) {
+  const fd = fs.openSync(p, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  try {
+    if (!fs.fstatSync(fd).isFile()) return null;
+    return sha256(fs.readFileSync(fd));
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
