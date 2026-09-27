@@ -330,6 +330,20 @@ describe('RiskScorer', () => {
       )
     })
 
+    it('counts the same call only, not every call to the tool', () => {
+      seedRequest(db, {
+        sourceAgent: 'claude-code',
+        targetTool: 'shell_exec',
+        args: JSON.stringify({ cmd: 'terraform destroy' }),
+        decision: 'denied',
+        decidedBy: 'policy:p1',
+      })
+      const other = scorer.assess({ sourceAgent: 'claude-code', targetTool: 'shell_exec', args: { cmd: 'ls -la' } })
+      expect(ruleNames(other.factors)).not.toContain('previously_denied_pattern')
+      const same = scorer.assess({ sourceAgent: 'claude-code', targetTool: 'shell_exec', args: { cmd: 'terraform destroy' } })
+      expect(ruleNames(same.factors)).toContain('previously_denied_pattern')
+    })
+
     it('does not fire when prior calls were allowed', () => {
       seedRequest(db, {
         sourceAgent: 'hermes',
