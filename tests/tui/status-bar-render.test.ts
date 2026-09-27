@@ -4,13 +4,9 @@ import { describe, expect, it } from 'vitest'
 import { StatusBar } from '../../src/tui/components/status-bar.js'
 
 // =============================================================================
-// Status bar render checks (#234 UX-4)
+// Key-hint bar (#611): shows what the keys do on the current page. Page
+// switching lives in the tab row, so the bar no longer lists every page.
 // =============================================================================
-//
-// Just the surface-level assertions — the responsive layout split is unit-
-// tested directly in `tests/tui/status-bar-layout.test.ts`. This file
-// exercises the actual ink render to catch regressions like the active-page
-// label disappearing or hotkey letters showing without brackets.
 
 function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, '')
@@ -22,28 +18,25 @@ function frame(node: React.ReactElement): string {
 }
 
 describe('StatusBar', () => {
-  it('renders the active page name when page="agents"', () => {
-    const out = frame(React.createElement(StatusBar, { page: 'agents' }))
-    expect(out).toContain('Agents')
-  })
-
-  it('renders the active page name when page="logs"', () => {
-    const out = frame(React.createElement(StatusBar, { page: 'logs' }))
-    expect(out).toContain('Logs')
-  })
-
-  it('every page hotkey letter [a][v][V][k][l][p][s] appears in the bar', () => {
+  it('points at the command bar and inbox from the dashboard', () => {
     const out = frame(React.createElement(StatusBar, { page: 'dashboard' }))
-    for (const letter of ['a', 'v', 'V', 'k', 'l', 'p', 's', 'h', 'q']) {
-      expect(out).toContain(`[${letter}]`)
-    }
+    expect(out).toContain(': command')
+    expect(out).toContain('n inbox')
+    expect(out).toContain('? help')
+    expect(out).toContain('q quit')
   })
 
-  it('shows "Quit? [y/n]" when quitConfirm is true', () => {
-    const out = frame(
-      React.createElement(StatusBar, { page: 'dashboard', quitConfirm: true }),
-    )
-    expect(out).toContain('Quit?')
-    expect(out).toContain('[y/n]')
+  it('shows page-specific keys on the logs page', () => {
+    const out = frame(React.createElement(StatusBar, { page: 'logs' }))
+    expect(out).toContain('/ search')
+    expect(out).toContain('r replay')
+    expect(out).toContain('Esc home')
+  })
+
+  it('asks before quitting, and says what quitting means', () => {
+    const out = frame(React.createElement(StatusBar, { page: 'dashboard', quitConfirm: true }))
+    expect(out).toContain('Quit Foreman?')
+    expect(out).toContain('y yes')
+    expect(out).toContain('n no')
   })
 })

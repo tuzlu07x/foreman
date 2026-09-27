@@ -1,7 +1,7 @@
 import { Box, Text } from "ink";
 import { type JSX, useEffect, useState } from "react";
 import type { RegisteredAgent } from "../../core/registry.js";
-import { singleBorder, theme } from "../theme.js";
+import { roundBorder, theme } from "../theme.js";
 import { useDashboardState } from "../use-dashboard-state.js";
 
 export interface AgentListProps {
@@ -15,7 +15,7 @@ export function AgentList({ width, compact }: AgentListProps): JSX.Element {
 
   if (compact) {
     return (
-      <Box borderStyle={singleBorder()} borderDimColor paddingX={1}>
+      <Box borderStyle={roundBorder()} borderDimColor paddingX={1}>
         <Text color={theme.accent.primary}>Agents </Text>
         {agents.length === 0 ? (
           <Text color={theme.fg.muted}>(none registered)</Text>
@@ -39,13 +39,19 @@ export function AgentList({ width, compact }: AgentListProps): JSX.Element {
     <Box
       width={width}
       flexDirection="column"
-      borderStyle={singleBorder()}
+      borderStyle={roundBorder()}
       borderDimColor
       paddingX={1}
     >
       <Text color={theme.accent.primary}>Agents</Text>
       {agents.length === 0 ? (
-        <Text color={theme.fg.muted}>(none registered)</Text>
+        <Box flexDirection="column">
+          <Text color={theme.fg.muted}>No agents yet.</Text>
+          <Text color={theme.fg.muted}>Connect one from a shell:</Text>
+          <Text color={theme.fg.default} wrap="truncate-end">
+            foreman agent add claude-code
+          </Text>
+        </Box>
       ) : (
         agents.map((agent) => (
           <AgentRow
