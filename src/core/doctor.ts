@@ -241,7 +241,7 @@ export function checkFts5(): CheckResult {
         status: "fail",
         message: "requests_fts virtual table not present after migration",
         remediation:
-          "The linked sqlite was built without FTS5. Reinstall better-sqlite3 against a sqlite that includes FTS5: 'npm rebuild better-sqlite3'.",
+          "The loaded better-sqlite3 has no FTS5. Its bundled prebuilds include FTS5, so reinstall Foreman ('npm install -g foreman-agent') on a supported platform (docs/install.md#supported-platforms).",
       };
     }
     return {
