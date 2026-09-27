@@ -182,6 +182,44 @@ describe('agent MCP wiring with identity tokens', () => {
     expect(describeWiringError(yamlErr)).not.toContain(secret)
   })
 
+  it('refuses, and leaves alone, a config whose top level is not a map (#618 review L5)', () => {
+    for (const [name, text] of [
+      ['list.json', '[{"mcpServers": {}}]\n'],
+      ['scalar.yaml', 'just a string\n'],
+      ['list.yaml', '- a\n- b\n'],
+    ] as const) {
+      const path = join(dir, name)
+      writeFileSync(path, text)
+      expect(() => writeAgentWiring('claude-code', entry({}), 'fat_x', { configPath: path })).toThrow(
+        /isn't a map at the top level/,
+      )
+      expect(readFileSync(path, 'utf-8')).toBe(text)
+    }
+  })
+
+  it("warns in one line when rewriting a YAML or TOML config drops its comments", () => {
+    const yamlPath = join(dir, 'config.yaml')
+    writeFileSync(yamlPath, '# my Hermes settings\nmodel: x # the default\n')
+    const yamlResult = writeAgentWiring('hermes', entry({ id: 'hermes', mcp_servers_key: 'mcp_servers' }), 'fat_x', {
+      configPath: yamlPath,
+    })
+    expect(yamlResult.config).toBe('written')
+    expect(yamlResult.note).toMatch(/comments were not kept/)
+    expect(yamlResult.note!.split('\n')).toHaveLength(1)
+    // Nothing is rewritten the second time, so nothing to warn about.
+    expect(writeAgentWiring('hermes', entry({ id: 'hermes', mcp_servers_key: 'mcp_servers' }), 'fat_x', { configPath: yamlPath }).note).toBeUndefined()
+
+    const tomlPath = join(dir, 'config.toml')
+    writeFileSync(tomlPath, '# codex\nmodel = "gpt-5"\n')
+    expect(writeAgentWiring('codex', entry({ id: 'codex', mcp_servers_key: 'mcp_servers' }), 'fat_x', { configPath: tomlPath }).note).toMatch(
+      /comments were not kept/,
+    )
+    // JSON (and a comment-free file) says nothing.
+    const jsonPath = join(dir, 'settings.json')
+    writeFileSync(jsonPath, '{"theme": "dark"}')
+    expect(writeAgentWiring('claude-code', entry({}), 'fat_x', { configPath: jsonPath }).note).toBeUndefined()
+  })
+
   it('rotating revokes the old token even when writing the wiring fails', () => {
     const path = join(dir, 'settings.json')
     rewireAgent(store, 'claude-code', entry({}), { configPath: path })

@@ -3,6 +3,8 @@ import { pickMcpConfigPath } from "./agent-add-flow.js";
 import {
   applyInjection,
   planInjection,
+  ConfigShapeError,
+  hasConfigComments,
   isFilesystemError,
   planZeroclawInjection,
   readWiredAgentToken,
@@ -96,6 +98,10 @@ export function writeAgentWiring(
         const plan = zeroclaw ?? planInjection(configPath, snippet);
         const warning = applyInjection(configPath, plan);
         if (warning) note = warning;
+        if (!plan.alreadyHasForeman && hasConfigComments(plan.before, plan.format)) {
+          const lost = `${configPath}: its comments were not kept (Foreman rewrote the ${plan.format.toUpperCase()} to add its entry).`;
+          note = note ? `${note} ${lost}` : lost;
+        }
         if (zeroclaw && zeroclaw.grantedAgents.length === 0) {
           const grant =
             `${configPath} defines no [agents.<alias>], so no ZeroClaw agent uses Foreman yet: ` +
@@ -106,6 +112,8 @@ export function writeAgentWiring(
       } catch (err) {
         if (err instanceof UnsupportedConfigFormatError) {
           config = "unsupported";
+        } else if (err instanceof ConfigShapeError) {
+          throw new WiringParseError(`${err.message}; fix it, then run 'foreman agent rewire ${agentId}'`);
         } else if (err instanceof UnsafeTokenPathError || isFilesystemError(err)) {
           throw err; // a filesystem error names the path, never the content
         } else {

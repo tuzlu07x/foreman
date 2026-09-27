@@ -80,6 +80,7 @@ export function wireAgentConfig(
       } else if (wiring.config === "missing") {
         log(`  ⚠ ${mcpPath} not found — run the agent once, then \`foreman agent rewire ${id}\``);
       }
+      if (wiring.note) log(`  ⚠ ${wiring.note}`);
     }
   } catch (err) {
     if (err instanceof UnsupportedConfigFormatError) {

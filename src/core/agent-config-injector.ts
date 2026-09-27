@@ -48,6 +48,22 @@ export class ConfigParseError extends Error {
   }
 }
 
+/** A config whose top level isn't a map (a list, a string): there is no
+ *  place for a `foreman` entry, and rewriting it would destroy it. */
+export class ConfigShapeError extends Error {
+  constructor(public readonly path: string) {
+    super(`${path} isn't a map at the top level; Foreman won't overwrite it`);
+    this.name = "ConfigShapeError";
+  }
+}
+
+/** Whether rewriting `text` would lose comments: the YAML and TOML
+ *  writers don't keep them (JSON has none). A `#` inside a string can make
+ *  this say yes when nothing is lost, which only costs a warning. */
+export function hasConfigComments(text: string, format: ConfigFormat): boolean {
+  return format !== "json" && /(^|\s)#/m.test(text);
+}
+
 /** A Node filesystem error (it names a path, never file content). Parser
  *  errors can carry a string `code` too (YAML's BAD_INDENT), so `code`
  *  alone doesn't qualify: only errors from a system call do. */
@@ -246,9 +262,9 @@ function parseDoc(text: string, format: ConfigFormat, path: string): Record<stri
   } catch {
     throw new ConfigParseError(path, format);
   }
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    return {};
-  }
+  // An empty document (or one with only comments) is an empty map.
+  if (raw === null || raw === undefined) return {};
+  if (typeof raw !== "object" || Array.isArray(raw)) throw new ConfigShapeError(path);
   return raw as Record<string, unknown>;
 }
 
