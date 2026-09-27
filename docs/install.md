@@ -23,6 +23,21 @@ curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | 
 
 ---
 
+## Supported platforms
+
+Foreman's SQLite driver, better-sqlite3, ships prebuilt native binaries inside its npm package. Nothing is compiled or downloaded at install time, so no C/C++ toolchain or Python is needed. It also means Foreman runs only where a prebuilt binary exists:
+
+| OS | Architectures | npm package | Standalone binary |
+| --- | --- | --- | --- |
+| macOS | arm64 (Apple silicon), x64 | yes | yes |
+| Linux, glibc (Ubuntu, Debian, Fedora, …) | x64, arm64 | yes | yes |
+| Linux, musl (Alpine) | x64, arm64 | yes | no: it is built on the glibc Node.js |
+| Windows | x64, arm64 | inside WSL2 | inside WSL2 (Linux binary) |
+
+On any other platform or architecture (FreeBSD, 32-bit ARM, …) `npm install` still succeeds, but Foreman can't open its database and exits with an error.
+
+---
+
 ## Standalone binary (no Node.js)
 
 Every GitHub release has a single-file `foreman` for `darwin-arm64`, `darwin-x64`, `linux-x64` and `linux-arm64`, plus a `SHA256SUMS` file. Each is built and smoke-tested on a machine of its own platform and architecture.

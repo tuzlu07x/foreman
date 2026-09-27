@@ -77,7 +77,7 @@ Back up `identity.key`, delete it, run `foreman init`. The key is rotated — ag
 fts5                 fail   requests_fts virtual table not present after migration
 (exit 2 — action required)
 ```
-`better-sqlite3` was linked against a sqlite build without FTS5. `npm rebuild better-sqlite3` typically fixes it; if not, see the FTS5 troubleshooting note in `FOREMAN.md`.
+The loaded `better-sqlite3` has no FTS5. Since better-sqlite3 13 the npm package ships prebuilt binaries that include FTS5 (there is no install-time build any more), so this usually means an unsupported platform or a hand-built copy. Reinstall Foreman with `npm install -g foreman-agent` on a [supported platform](install.md#supported-platforms).
 
 ## Using doctor from scripts
 

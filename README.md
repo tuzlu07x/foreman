@@ -64,7 +64,8 @@ Foreman sits in the path of every call and handles all four locally, before anyt
 
 ## Install
 
-Needs Node **22.12+**. The installer sets up Node 22 LTS through `nvm` if you don't have it:
+Needs Node **22.12+** on macOS or Linux (x64 or arm64, glibc or musl); on Windows, use WSL2. See
+[supported platforms](docs/install.md#supported-platforms). The installer sets up Node 22 LTS through `nvm` if you don't have it:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash

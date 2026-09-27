@@ -202,7 +202,8 @@ function isSea() {
  * Prepare the process for the bundled CLI. Returns `{ mode: "script" }`
  * when this invocation ran a script instead (see classifyInvocation), else
  * the values the bundle is built against: `metaUrl` for `import.meta.url`,
- * `resolve` for `import.meta.resolve` and `loadAddon` for `bindings()`.
+ * `resolve` for `import.meta.resolve` and `loadAddon` for better-sqlite3's
+ * addon lookup (its lib/binding.js, redirected by the build).
  */
 function boot(payload) {
   if (isSea()) {

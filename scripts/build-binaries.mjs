@@ -9,8 +9,10 @@
 //
 //   1. Bundle dist/cli/index.js and every dependency into one ESM file
 //      (tsup/esbuild). Node built-ins become `require()` calls, better-sqlite3's
-//      `bindings()` lookup loads the addon from the runtime dir, and
-//      `import.meta.url` points at that dir (see scripts/sea-runtime.cjs).
+//      addon lookup (lib/binding.js, a computed `require()` of
+//      prebuilds/<platform>.node) loads the addon from the runtime dir
+//      instead, and `import.meta.url` points at that dir (see
+//      scripts/sea-runtime.cjs).
 //   2. Wrap it in a CommonJS main script: the runtime prologue, the files
 //      it writes out (migrations, registry, mascot art, the native addon),
 //      then the bundle inside an async function, which keeps the top-level
@@ -21,8 +23,13 @@
 //      against nodejs.org's SHASUMS256.txt), injects the script with
 //      postject and ad-hoc signs it on macOS.
 //
-// The native addon comes from this machine's node_modules, so a binary can
-// only be built for the platform and architecture it is built on.
+// The native addon is better-sqlite3's prebuilt N-API binary for the target
+// (node_modules/better-sqlite3/prebuilds/<label>.node, covered by the
+// lockfile's integrity hash). A binary is still only built for the platform
+// and architecture it is built on, so the preflight below and the release
+// smoke test run the same addon the binary ships. On Linux the official
+// Node.js build is glibc, so the glibc prebuild is embedded and a musl host
+// (Alpine) is refused.
 
 import { exec as pkgExec } from "@yao-pkg/pkg";
 import { build } from "tsup";
@@ -49,7 +56,7 @@ const ENTRY = join(DIST, "cli", "index.js");
 const STAGE = join(REPO_ROOT, "build", "sea");
 const OUT_DIR = join(REPO_ROOT, "dist-binaries");
 const RUNTIME_SRC = join(REPO_ROOT, "scripts", "sea-runtime.cjs");
-const ADDON_SRC = join(REPO_ROOT, "node_modules", "better-sqlite3", "build", "Release", "better_sqlite3.node");
+const BETTER_SQLITE3 = join(REPO_ROOT, "node_modules", "better-sqlite3");
 
 // The official Node.js 22 binary is ~119 MB on linux-x64 and Foreman adds
 // ~8 MB. The budget catches an accidental second copy of Node or a runaway
@@ -65,6 +72,17 @@ function hostLabel() {
   return `${process.platform}-${process.arch}`;
 }
 
+/** True on a musl libc Linux (Alpine). Same test as better-sqlite3's own. */
+function isMusl() {
+  return process.platform === "linux" && !process.report.getReport().header.glibcVersionRuntime;
+}
+
+/** better-sqlite3's prebuilt addon for a target label. The labels are
+ *  better-sqlite3's own prebuild names for glibc Linux and macOS. */
+function addonSource(label) {
+  return join(BETTER_SQLITE3, "prebuilds", `${label}.node`);
+}
+
 function parseArgs(argv) {
   const host = hostLabel();
   if (argv.length > 1) throw new Error("usage: build-binaries.mjs [<label>]  (one target per run)");
@@ -72,8 +90,14 @@ function parseArgs(argv) {
   if (!LABELS.includes(label)) throw new Error(`unknown target '${label}' (expected one of ${LABELS.join(", ")})`);
   if (label !== host) {
     throw new Error(
-      `cannot build ${label} on ${host}: the binary embeds this machine's better-sqlite3 addon, ` +
-        `so each target has to be built on its own platform and architecture`,
+      `cannot build ${label} on ${host}: the binary is preflighted and smoke-tested with the ` +
+        `better-sqlite3 addon it embeds, so each target has to be built on its own platform and architecture`,
+    );
+  }
+  if (isMusl()) {
+    throw new Error(
+      `cannot build ${label} on a musl libc host: the binary is the official (glibc) Node.js build, ` +
+        `so it embeds better-sqlite3's glibc addon, which this host can't load to preflight it`,
     );
   }
   return label;
@@ -94,7 +118,7 @@ function sha256(buf) {
 }
 
 /** The files the runtime prologue writes out, with their hashes. */
-function collectPayload(version) {
+function collectPayload(version, label) {
   const files = [];
   const add = (relPath, abs, mode) => {
     const data = readFileSync(abs);
@@ -105,8 +129,9 @@ function collectPayload(version) {
     if (!existsSync(abs)) throw new Error(`missing ${relative(REPO_ROOT, abs)}; run \`npm run build\` first`);
     for (const f of listFiles(abs)) add(relative(DIST, f).split(sep).join("/"), f, 0o644);
   }
-  if (!existsSync(ADDON_SRC)) throw new Error(`missing ${relative(REPO_ROOT, ADDON_SRC)}; run \`npm ci\` first`);
-  add("lib/better_sqlite3.node", ADDON_SRC, 0o755);
+  const addonSrc = addonSource(label);
+  if (!existsSync(addonSrc)) throw new Error(`missing ${relative(REPO_ROOT, addonSrc)}; run \`npm ci\` first`);
+  add("lib/better_sqlite3.node", addonSrc, 0o755);
   const digest = sha256(files.map((f) => `${f.path}\0${f.sha256}\n`).join(""));
   return { version, digest, files };
 }
@@ -131,11 +156,23 @@ function seaPlugin() {
         contents: `module.exports = require(${JSON.stringify(args.path)});`,
         loader: "js",
       }));
-      // better-sqlite3 finds its addon through `bindings`, which searches
-      // node_modules on disk. Load it from the runtime dir instead.
-      b.onResolve({ filter: /^bindings$/ }, () => ({ path: "bindings", namespace: "sea-addon" }));
+      // better-sqlite3's lib/binding.js finds its addon with a computed
+      // `require()` of node_modules/better-sqlite3/prebuilds/<platform>.node,
+      // which a SEA can't do. Load the embedded, hash-checked copy from the
+      // runtime dir instead. Its `nativeBinding` option (a path or an addon
+      // object) is refused: the binary loads no other native code.
+      b.onResolve({ filter: /^\.\/binding(?:\.js)?$/ }, (args) =>
+        dirname(args.importer) === join(BETTER_SQLITE3, "lib")
+          ? { path: "better-sqlite3-binding", namespace: "sea-addon" }
+          : undefined,
+      );
       b.onLoad({ filter: /.*/, namespace: "sea-addon" }, () => ({
-        contents: "module.exports = function bindings(name) { return __foremanSea.loadAddon(name); };",
+        contents: [
+          "exports.getBinding = function getBinding(nativeBinding) {",
+          "  if (nativeBinding != null) throw new TypeError('the standalone foreman binary only loads its embedded better-sqlite3 addon');",
+          `  return __foremanSea.loadAddon(${JSON.stringify("better_sqlite3.node")});`,
+          "};",
+        ].join("\n"),
         loader: "js",
       }));
       // Optional packages that aren't installed, so npm installs lack them
@@ -197,6 +234,18 @@ async function bundle() {
     }
   }
   if (problems.length > 0) throw new Error(`bundle is not self-contained:\n  ${problems.join("\n  ")}`);
+
+  // better-sqlite3 has to reach its addon through the redirect above and
+  // nothing else: if a new version moves the lookup, fail here rather than
+  // ship a binary that can't open a database.
+  const inputs = Object.keys(meta.inputs);
+  const bsq = inputs.filter((p) => p.split(/[\\/]/).includes("better-sqlite3"));
+  if (bsq.length === 0) throw new Error("bundle does not include better-sqlite3");
+  if (!inputs.includes("sea-addon:better-sqlite3-binding")) {
+    throw new Error("better-sqlite3's addon lookup (lib/binding.js) was not redirected; check the foreman-sea plugin");
+  }
+  const leaked = bsq.filter((p) => /[\\/](?:binding\.js|prebuilds[\\/].*|(?:linux|linuxmusl|darwin|win32)-[^\\/]+\.js)$/.test(p));
+  if (leaked.length > 0) throw new Error(`better-sqlite3 addon loaders left in the bundle:\n  ${leaked.join("\n  ")}`);
   return code;
 }
 
@@ -252,7 +301,7 @@ async function main() {
 
   console.log(`Building foreman ${version} for ${label} (Node.js ${process.versions.node} SEA)…`);
   const bundleCode = await bundle();
-  const payload = collectPayload(version);
+  const payload = collectPayload(version, label);
   const mainPath = join(STAGE, "foreman.cjs");
   writeFileSync(mainPath, wrap(bundleCode, payload));
   console.log(`  main script  ${relative(REPO_ROOT, mainPath)}  (${(statSync(mainPath).size / 1024 / 1024).toFixed(1)} MB)`);
