@@ -81,6 +81,7 @@ export function useAgentConfigEffects(ctx: WizardContext): void {
     agentConfigIdx,
     agentConfigs,
     agentVariantDraft,
+    autoPickedVariants,
   } = ctx.state;
   const {
     setAgentsPhase,
@@ -171,7 +172,15 @@ export function useAgentConfigEffects(ctx: WizardContext): void {
     // (e.g. Codex/oauth). Skip the picker so the user doesn't have to
     // confirm the obvious; the required-setup screen flashes a
     // "Foreman picked: <label>" notice so they know what happened.
-    if (providerMapping && !cfg?.providerVariant) {
+    // A route Foreman auto-picked earlier is re-applied on a revisit, so
+    // the prompt stays hidden in both directions (Esc steps over it too).
+    const autoPicked = autoPickedVariants[prompt.agentId];
+    if (
+      providerMapping &&
+      (!cfg?.providerVariant ||
+        (autoPicked !== undefined &&
+          autoPicked.variantId === cfg.providerVariant))
+    ) {
       const preferredId = providerMapping.preferred;
       const preferredVariant = providerMapping.variants[preferredId];
       if (preferredVariant && !preferredVariant.required_secret) {
@@ -210,6 +219,7 @@ export function useAgentConfigEffects(ctx: WizardContext): void {
     agentConfigs,
     agentCatalog,
     agentVariantDraft,
+    autoPickedVariants,
   ]);
 
   // #434 — Whenever we land on a model-pick prompt, kick off model
@@ -245,12 +255,16 @@ export function useAgentConfigEffects(ctx: WizardContext): void {
     setAgentModelOptions(null);
     setAgentModelError(null);
     setAgentModelDraft(null);
+    // A fetch for a prompt the user has since left (e.g. Esc back to the
+    // provider choice) must not overwrite the next prompt's list.
+    let cancelled = false;
     void (async (): Promise<void> => {
       const keySecret = `${provider}-key`;
       try {
         const apiKey = services.secretStore.exists(keySecret)
           ? services.secretStore.get(keySecret)
           : null;
+        if (cancelled) return;
         if (!apiKey) {
           setAgentModelError(
             `No ${provider}-key in the secret store — skip to use the registry default.`,
@@ -259,6 +273,7 @@ export function useAgentConfigEffects(ctx: WizardContext): void {
           return;
         }
         const models = await discoverModels(provider, { apiKey });
+        if (cancelled) return;
         if (models.length === 0) {
           setAgentModelError(
             `${provider} returned no chat-capable models — skip to use the registry default.`,
@@ -266,6 +281,7 @@ export function useAgentConfigEffects(ctx: WizardContext): void {
         }
         setAgentModelOptions(models);
       } catch (err) {
+        if (cancelled) return;
         const rawMsg =
           err instanceof ModelDiscoveryError
             ? err.message
@@ -279,6 +295,9 @@ export function useAgentConfigEffects(ctx: WizardContext): void {
         setAgentModelOptions([]);
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [
     currentStep,
     agentsPhase,

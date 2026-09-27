@@ -249,7 +249,7 @@ export function renderAgentConfigStep(ctx: WizardContext): JSX.Element {
           />
           <Text color={theme.fg.muted}>Talking to {providerLabel}…</Text>
           <Text color={theme.fg.muted}>
-            [s] skip (use the registry default) · [Esc] cancel
+            [s] skip (use the registry default) · [Esc] back
           </Text>
         </Box>
       );

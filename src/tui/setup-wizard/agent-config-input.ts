@@ -1,6 +1,51 @@
 import type { Key } from "ink";
-import { applyAgentConfigSubmit } from "./agents-logic.js";
+import {
+  applyAgentConfigSubmit,
+  applyLlmChoice,
+  previousShownAgentPromptIdx,
+  variantPickIsShown,
+} from "./agents-logic.js";
 import type { WizardContext } from "./context.js";
+
+// Esc from variant-pick / model-pick: back to the nearest earlier prompt of
+// the same agent that is really shown. Auto-skipped variant prompts are
+// stepped over (landing on one bounced straight back, so Esc looped), and
+// an agent with no earlier prompt goes back to the agents picker rather
+// than the previous agent's responsibility note.
+function stepBackFromAgentPrompt(ctx: WizardContext): void {
+  const { agentCatalog } = ctx;
+  const {
+    agentConfigPrompts,
+    agentConfigIdx,
+    agentConfigs,
+    autoPickedVariants,
+  } = ctx.state;
+  const {
+    setAgentsPhase,
+    setAgentConfigIdx,
+    setAgentVariantDraft,
+    setLlmDraft,
+  } = ctx.set;
+  const target = previousShownAgentPromptIdx(
+    agentConfigPrompts,
+    agentConfigIdx,
+    (p) =>
+      p.kind !== "variant-pick" ||
+      variantPickIsShown(
+        agentCatalog.find((a) => a.id === p.agentId),
+        agentConfigs[p.agentId],
+        autoPickedVariants[p.agentId],
+      ),
+  );
+  setAgentVariantDraft(null);
+  if (target === null) {
+    setAgentsPhase("picker");
+    setAgentConfigIdx(0);
+    setLlmDraft(null);
+    return;
+  }
+  setAgentConfigIdx(target);
+}
 
 // #450 — Variant picker handler. Lists variants of the picked
 // provider's mapping (e.g. Hermes/openai: via-openrouter vs
@@ -58,9 +103,9 @@ export function handleAgentVariantPickInput(
         return true;
       }
       if (key.escape) {
-        // Step back to llm-choice for this agent.
-        setAgentConfigIdx(Math.max(0, agentConfigIdx - 1));
-        setAgentVariantDraft(null);
+        // Step back to llm-choice for this agent, or to the agents
+        // picker when it has none (single-provider agents).
+        stepBackFromAgentPrompt(ctx);
         return true;
       }
       if (key.return || input === " ") {
@@ -117,7 +162,11 @@ export function handleAgentModelPickInput(
     if (prompt && prompt.kind === "model-pick") {
       // Loading: only Esc/s actionable.
       if (agentModelOptions === null) {
-        if (key.escape || input === "s" || input === "S") {
+        if (key.escape) {
+          stepBackFromAgentPrompt(ctx);
+          return true;
+        }
+        if (input === "s" || input === "S") {
           // Skip → advance without storing modelVersion (= variant default).
           const result = applyAgentConfigSubmit({
             currentIdx: agentConfigIdx,
@@ -130,12 +179,12 @@ export function handleAgentModelPickInput(
         return true;
       }
       // Error / empty list: only [s]kip or [Enter] (accepted as skip)
-      // advances. Esc goes back to the llm-choice for the same agent.
+      // advances. Esc goes back to the provider choice for the same agent:
+      // its variant prompt when that is really shown, else its llm-choice,
+      // else the agents picker (see stepBackFromAgentPrompt).
       if (agentModelOptions.length === 0) {
         if (key.escape) {
-          // Step back to llm-choice for THIS agent (it's the prompt
-          // immediately before model-pick in the list).
-          setAgentConfigIdx(Math.max(0, agentConfigIdx - 1));
+          stepBackFromAgentPrompt(ctx);
           return true;
         }
         if (key.return || input === "s" || input === "S") {
@@ -166,7 +215,7 @@ export function handleAgentModelPickInput(
         return true;
       }
       if (key.escape) {
-        setAgentConfigIdx(Math.max(0, agentConfigIdx - 1));
+        stepBackFromAgentPrompt(ctx);
         return true;
       }
       if (input === "s" || input === "S") {
@@ -216,12 +265,14 @@ export function handleAgentLlmChoiceInput(
     agentsPhase,
     agentConfigPrompts,
     agentConfigIdx,
+    agentConfigs,
     llmDraft,
   } = ctx.state;
   const {
     setAgentsPhase,
     setAgentConfigIdx,
     setAgentConfigs,
+    setAutoPickedVariants,
     setLlmDraft,
   } = ctx.set;
   if (
@@ -251,13 +302,19 @@ export function handleAgentLlmChoiceInput(
       if (key.return || input === " ") {
         const chosen = llmDraft ?? llmPickerOptions[0];
         if (chosen) {
-          setAgentConfigs((prev) => {
-            const existing = prev[prompt.agentId] ?? {};
-            return {
-              ...prev,
-              [prompt.agentId]: { ...existing, llmProvider: chosen },
-            };
-          });
+          setAgentConfigs((prev) => ({
+            ...prev,
+            [prompt.agentId]: applyLlmChoice(prev[prompt.agentId] ?? {}, chosen),
+          }));
+          if (agentConfigs[prompt.agentId]?.llmProvider !== chosen) {
+            // The auto-picked route belonged to the old provider.
+            setAutoPickedVariants((prev) => {
+              if (!(prompt.agentId in prev)) return prev;
+              const next = { ...prev };
+              delete next[prompt.agentId];
+              return next;
+            });
+          }
         }
         const result = applyAgentConfigSubmit({
           currentIdx: agentConfigIdx,

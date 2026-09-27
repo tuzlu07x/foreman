@@ -1,4 +1,5 @@
 import type { AgentEntry } from "../../core/registry-catalog.js";
+import type { AgentConfig } from "./types.js";
 
 // Same phase-machine pattern as Secrets — the old `agentsDone` boolean made
 // the picker drop straight into install with no confirmation step, so a
@@ -239,4 +240,65 @@ export function computeAgentDiff(
   const toAdd = selected.filter((id) => !initialRegistered.includes(id));
   const toRemove = initialRegistered.filter((id) => !selected.includes(id));
   return { toAdd, toRemove };
+}
+
+/**
+ * Whether the variant-pick prompt is actually shown for this agent, or
+ * auto-skipped by the wizard (#450 single variant, #457 no-credential
+ * preferred route that was picked on the user's behalf).
+ */
+export function variantPickIsShown(
+  agent: AgentEntry | undefined,
+  cfg: AgentConfig | undefined,
+  autoPicked: { variantId: string } | undefined,
+): boolean {
+  const compat = agent?.llm_compat ?? [];
+  const provider =
+    cfg?.llmProvider ?? (compat.length === 1 ? compat[0] : undefined);
+  if (!provider || !agent?.provider_mapping) return false;
+  const mapping = agent.provider_mapping[provider];
+  const variantCount = mapping ? Object.keys(mapping.variants).length : 0;
+  if (variantCount <= 1) return false;
+  if (autoPicked && autoPicked.variantId === cfg?.providerVariant) return false;
+  return true;
+}
+
+/**
+ * Esc target inside the per-agent config queue: the nearest earlier prompt
+ * for the SAME agent that is actually shown. Auto-skipped prompts are
+ * stepped over — landing on one would bounce straight back (Esc used to
+ * loop on model-pick for single-variant agents). Returns null when the
+ * agent has no earlier shown prompt; the caller then returns to the agents
+ * picker instead of the previous agent's responsibility note.
+ */
+export function previousShownAgentPromptIdx(
+  prompts: readonly AgentConfigPrompt[],
+  idx: number,
+  isShown: (prompt: AgentConfigPrompt) => boolean,
+): number | null {
+  const current = prompts[idx];
+  if (!current) return null;
+  for (let i = idx - 1; i >= 0; i--) {
+    const prompt = prompts[i];
+    if (!prompt || prompt.agentId !== current.agentId) return null;
+    if (isShown(prompt)) return i;
+  }
+  return null;
+}
+
+/**
+ * Commit an llm-choice pick. Switching to a different provider drops the
+ * variant + model chosen for the old one — they belong to that provider's
+ * mapping and would otherwise be registered against the new one.
+ */
+export function applyLlmChoice(
+  existing: AgentConfig,
+  llmProvider: string,
+): AgentConfig {
+  const next: AgentConfig = { ...existing, llmProvider };
+  if (existing.llmProvider !== llmProvider) {
+    delete next.providerVariant;
+    delete next.modelVersion;
+  }
+  return next;
 }
