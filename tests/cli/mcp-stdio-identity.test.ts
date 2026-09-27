@@ -178,6 +178,30 @@ describe('foreman mcp-stdio agent identity', () => {
     )
   }, 30_000)
 
+  it("a rotation that couldn't issue a new token doesn't claim the old one is invalid", async () => {
+    // Hold the database's write lock so storing the new token fails.
+    const db = new Database(join(home, 'foreman.db'))
+    db.exec('BEGIN EXCLUSIVE')
+    let rotated
+    try {
+      rotated = spawnSync('node', [FM_BIN, 'agent', 'token', 'rotate', 'codex', '--yes', '--token-out', join(home, 'new.token')], {
+        env,
+        encoding: 'utf-8',
+      })
+    } finally {
+      db.exec('ROLLBACK')
+      db.close()
+    }
+    expect(rotated.status).toBe(1)
+    expect(rotated.stdout).toContain("database: database is locked")
+    expect(rotated.stdout).toContain('No new token was issued')
+    expect(rotated.stdout).not.toContain('INVALID')
+    // And indeed the old token still proves codex.
+    const s = await connect({ FOREMAN_AGENT_TOKEN: token })
+    expect(await s.post('engineering', 'still here')).toMatch(/^Posted/)
+    await s.close()
+  }, 30_000)
+
   it('rotate with no wiring to write still cuts off the old token, and says so', async () => {
     const rotated = run('agent', 'token', 'rotate', 'codex', '--yes')
     expect(rotated.stdout).toContain('The OLD token for codex is now INVALID')

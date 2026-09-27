@@ -71,6 +71,8 @@ export class WiringParseError extends Error {
 export function describeWiringError(err: unknown): string {
   if (err instanceof WiringParseError || err instanceof UnsafeTokenPathError) return err.message;
   if (isFilesystemError(err)) return err.message;
+  // SQLite's messages ("database is locked") never carry stored values.
+  if (err instanceof Error && err.name === "SqliteError") return `Foreman's database: ${err.message}`;
   return "the agent's MCP config could not be updated";
 }
 
@@ -137,6 +139,9 @@ export interface RewireOptions extends WireOptions {
   rotate?: boolean;
   /** Also write the token to this file (0600), for wiring by hand. */
   tokenOut?: string;
+  /** Called once a new token is stored (the old one is then invalid), so
+   *  a caller can tell a failure before that point from one after it. */
+  onTokenIssued?: () => void;
 }
 
 export interface RewireResult extends WiringResult {
@@ -162,8 +167,9 @@ export function rewireAgent(
   // A rotation revokes the old token first, whatever happens next: a
   // rotation that can't deliver the new token must still cut the old one
   // off (the caller says so and how to fetch the new one).
-  const token = options.rotate || !hadToken ? issueAgentToken(store, agentId) : ensureAgentToken(store, agentId);
   const minted = options.rotate === true || !hadToken;
+  const token = minted ? issueAgentToken(store, agentId) : ensureAgentToken(store, agentId);
+  if (minted) options.onTokenIssued?.();
   if (!configPath && !hasWrapper && !options.tokenOut) {
     return { configPath: null, config: "none", wrapperPath: null, wrapperWritten: false, minted, tokenOutPath: null };
   }

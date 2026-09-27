@@ -490,16 +490,24 @@ function rewireOne(
   const entry = registryId ? safeFindAgent(loadActiveRegistry().doc, registryId) : null;
   console.log(bold(agent.id));
   let result;
+  let issued = false;
   try {
     result = rewireAgent(getTokenStore(), agent.id, entry, {
       rotate: options.rotate,
       ...(options.configPath ? { configPath: options.configPath } : {}),
       ...(options.tokenOut ? { tokenOut: options.tokenOut } : {}),
+      onTokenIssued: () => {
+        issued = true;
+      },
     });
   } catch (err) {
     console.log(`  ${red("✗")} ${describeWiringError(err)}`);
-    if (options.rotate && hasAgentToken(getTokenStore(), agent.id)) {
-      console.log(`  ${orange("!")} ${oldTokenInvalid(agent.id)}`);
+    // Only a token that was actually replaced makes the old one invalid.
+    if (options.rotate) {
+      console.log(
+        `  ${orange("!")} ` +
+          (issued ? oldTokenInvalid(agent.id) : `No new token was issued: ${agent.id}'s current token is unchanged.`),
+      );
     }
     return "failed";
   }
