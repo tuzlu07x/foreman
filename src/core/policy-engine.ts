@@ -367,23 +367,25 @@ export class PolicyEngine {
       )
       .all();
 
-    candidates.sort((a, b) => {
-      const aExact = a.sourceAgent === req.sourceAgent ? 0 : 1;
-      const bExact = b.sourceAgent === req.sourceAgent ? 0 : 1;
-      if (aExact !== bExact) return aExact - bExact;
-      // Conditional rules win over conditionless ones — a path-pattern `ask`
-      // must be evaluated before a blanket `allow` on the same target.
-      const aSpec = a.conditions ? 0 : 1;
-      const bSpec = b.conditions ? 0 : 1;
-      if (aSpec !== bSpec) return aSpec - bSpec;
-      return EFFECT_ORDER[a.effect] - EFFECT_ORDER[b.effect];
-    });
-
-    for (const rule of candidates) {
-      if (this.conditionsPass(rule, req)) {
-        return { decision: rule.effect, matchedRuleId: rule.id };
-      }
-    }
+    const matching = candidates.filter((rule) => this.conditionsPass(rule, req));
+    // An explicit deny aimed at this agent always wins.
+    const exactDeny = matching.find(
+      (r) => r.sourceAgent === req.sourceAgent && r.effect === "deny",
+    );
+    if (exactDeny) return { decision: "deny", matchedRuleId: exactDeny.id };
+    // Otherwise the most specific matching rule decides: conditions count
+    // more than an exact source, so a targeted guard (".env reads ask")
+    // still applies after the user clicked "always allow read_file" for one
+    // agent. Ties go to the stricter effect.
+    const specificity = (r: (typeof matching)[number]): number =>
+      (r.conditions ? 2 : 0) + (r.sourceAgent === req.sourceAgent ? 1 : 0);
+    matching.sort(
+      (a, b) =>
+        specificity(b) - specificity(a) ||
+        EFFECT_ORDER[a.effect] - EFFECT_ORDER[b.effect],
+    );
+    const winner = matching[0];
+    if (winner) return { decision: winner.effect, matchedRuleId: winner.id };
     return { decision: "ask" };
   }
 
@@ -534,27 +536,52 @@ export class PolicyEngine {
     return null;
   }
 
+  // Conditions narrow a rule to specific calls. Anything the engine cannot
+  // evaluate (corrupt JSON, an invalid regex such as the glob "*.env")
+  // fails SAFE: a restrictive rule (deny / ask) still applies, a permissive
+  // one (allow) does not. Previously an invalid pattern silently disabled a
+  // deny rule and let the blanket allow win.
   private conditionsPass(
     rule: typeof policies.$inferSelect,
     req: EvaluateRequest,
   ): boolean {
     if (!rule.conditions) return true;
+    const restrictive = rule.effect !== "allow";
     const cond = this.parseConditions(rule.conditions);
-    if (!cond) return true;
+    if (!cond) return restrictive;
+    const paths = extractPaths(req.args);
     if (cond.pathNotMatch) {
-      const path = this.extractPath(req.args);
-      if (path && new RegExp(cond.pathNotMatch).test(path)) return false;
+      // The exclusion only lifts the rule when EVERY path in the call is
+      // excluded — one excluded path must not smuggle a second one past.
+      const excluded = paths.map((p) => testPattern(cond.pathNotMatch!, p));
+      if (excluded.includes("invalid")) {
+        if (!restrictive) return false;
+      } else if (paths.length > 0 && excluded.every((hit) => hit === true)) {
+        return false;
+      }
     }
     if (cond.pathMatch && cond.pathMatch.length > 0) {
-      const path = this.extractPath(req.args);
-      if (!path) return false;
-      const hit = cond.pathMatch.some((p) => safeRegexTest(p, path));
+      if (paths.length === 0) return false;
+      let hit = false;
+      for (const pattern of cond.pathMatch) {
+        for (const p of paths) {
+          const r = testPattern(pattern, p);
+          if (r === "invalid") {
+            if (restrictive) hit = true;
+          } else if (r) {
+            hit = true;
+          }
+        }
+      }
       if (!hit) return false;
     }
     if (cond.commandMatch && cond.commandMatch.length > 0) {
       const command = this.extractCommand(req.args);
       if (!command) return false;
-      const hit = cond.commandMatch.some((sub) => command.includes(sub));
+      const normalised = command.replace(/\s+/g, " ");
+      const hit = cond.commandMatch.some((sub) =>
+        normalised.includes(sub.replace(/\s+/g, " ")),
+      );
       if (!hit) return false;
     }
     // #526 — toolPattern: rule applies when the request's targetTool matches
@@ -605,7 +632,10 @@ export class PolicyEngine {
 
   private extractCommand(args: unknown): string | null {
     if (typeof args !== "object" || args === null) return null;
-    const obj = args as { command?: unknown; args?: unknown };
+    const obj = args as { command?: unknown; args?: unknown; cmd?: unknown; script?: unknown };
+    // Adapters emit `cmd` (shell_exec); MCP shell tools use `command`.
+    if (typeof obj.cmd === "string") return obj.cmd;
+    if (typeof obj.script === "string" && obj.command === undefined) return obj.script;
     if (typeof obj.command === "string") {
       if (Array.isArray(obj.args)) {
         return [obj.command, ...obj.args.map(String)].join(" ");
@@ -662,11 +692,6 @@ export class PolicyEngine {
     }
   }
 
-  private extractPath(args: unknown): string | null {
-    if (typeof args !== "object" || args === null) return null;
-    const path = (args as { path?: unknown }).path;
-    return typeof path === "string" ? path : null;
-  }
 
   private makeRow(
     sourceAgent: string,
@@ -796,4 +821,77 @@ function safeRegexTest(pattern: string, input: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Path patterns match case-insensitively (macOS and Windows filesystems
+ *  are, so `.ENV` is `.env`). `"invalid"` lets callers fail safe. */
+function testPattern(pattern: string, input: string): boolean | "invalid" {
+  let re: RegExp;
+  try {
+    re = new RegExp(pattern, "i");
+  } catch {
+    return "invalid";
+  }
+  return re.test(input);
+}
+
+/** Every regex in a conditions block that fails to compile — surfaced by
+ *  `foreman doctor` so a typo'd pattern doesn't go unnoticed. */
+export function invalidPatterns(conditions: RuleConditions): string[] {
+  const candidates = [
+    ...(conditions.pathMatch ?? []),
+    ...(conditions.pathNotMatch ? [conditions.pathNotMatch] : []),
+    ...(conditions.toolPattern ? [conditions.toolPattern] : []),
+  ];
+  return candidates.filter((p) => {
+    try {
+      new RegExp(p);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+}
+
+const PATH_KEYS = [
+  "path",
+  "file_path",
+  "filePath",
+  "filename",
+  "file",
+  "notebook_path",
+  "target_path",
+  "source",
+  "destination",
+  "paths",
+];
+
+/** Every path-like argument of a call, each also in a normalised form
+ *  (backslashes → '/', `a/../b` collapsed) so `x/../.env` and `{file_path}`
+ *  can't slip past a pattern written for `args.path`. */
+export function extractPaths(args: unknown): string[] {
+  if (typeof args !== "object" || args === null) return [];
+  const out = new Set<string>();
+  const add = (value: unknown): void => {
+    if (typeof value === "string" && value.length > 0) {
+      out.add(value);
+      out.add(normalisePath(value));
+    } else if (Array.isArray(value)) {
+      for (const v of value.slice(0, 256)) add(v);
+    }
+  };
+  for (const key of PATH_KEYS) add((args as Record<string, unknown>)[key]);
+  return [...out];
+}
+
+function normalisePath(p: string): string {
+  const slashed = p.replace(/\\/g, "/").replace(/\/{2,}/g, "/");
+  const absolute = slashed.startsWith("/");
+  const parts: string[] = [];
+  for (const seg of slashed.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === ".." && parts.length > 0 && parts[parts.length - 1] !== "..") parts.pop();
+    else parts.push(seg);
+  }
+  return `${absolute ? "/" : ""}${parts.join("/")}`;
 }
