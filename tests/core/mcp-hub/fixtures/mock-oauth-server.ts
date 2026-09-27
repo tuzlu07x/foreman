@@ -159,7 +159,18 @@ export class MockOAuthServer {
       return
     }
     if (path === '/redirect-cross') {
-      res.writeHead(307, { location: url.searchParams.get('to') ?? '' }).end()
+      // Test fixture: only ever redirects to another server on this machine.
+      let to: URL | null = null
+      try {
+        to = new URL(url.searchParams.get('to') ?? '')
+      } catch {
+        to = null
+      }
+      if (!to || to.protocol !== 'http:' || to.hostname !== '127.0.0.1') {
+        res.writeHead(400).end()
+        return
+      }
+      res.writeHead(307, { location: `http://127.0.0.1:${to.port}${to.pathname}` }).end()
       return
     }
     if (path === '/probe' || path === '/mcp') {

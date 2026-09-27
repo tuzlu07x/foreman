@@ -280,7 +280,7 @@ describe('MCP hub OAuth hardening', () => {
         return fetch(url, init)
       }
       await expect(login({ fetchFn: spy })).rejects.toThrow(/non-https/)
-      expect(requested.some((u) => u.includes('as.example.com'))).toBe(false)
+      expect(requested.some((u) => new URL(u).hostname === 'as.example.com')).toBe(false)
     })
 
     it('requests exactly the scope asked for, and none by default', async () => {

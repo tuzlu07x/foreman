@@ -1,5 +1,17 @@
 import { randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, renameSync, linkSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { McpOAuthError } from "./oauth-http.js";
@@ -79,13 +91,21 @@ function assertRegularFile(path: string): void {
 }
 
 function breakIfStale(path: string, staleMs: number): void {
+  // Age and holder come from one open file (never following a symlink), so
+  // they describe the same lock.
   let holder: string;
   let ageMs: number;
+  let fd: number | undefined;
   try {
-    ageMs = Date.now() - lstatSync(path).mtimeMs;
-    holder = readFileSync(path, "utf-8");
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return;
+    ageMs = Date.now() - stat.mtimeMs;
+    holder = readFileSync(fd, "utf-8");
   } catch {
     return;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
   if (ageMs <= staleMs && processAlive(holder)) return;
   const aside = `${path}.stale-${randomBytes(6).toString("hex")}`;
