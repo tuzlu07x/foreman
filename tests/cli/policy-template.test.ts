@@ -56,6 +56,19 @@ describe("DEFAULT_POLICY_YAML", () => {
       expect(result.decision).toBe("ask");
     });
 
+    it.each(["write_file", "file_write"])(
+      "guards secret-shaped writes whether the agent calls it %s",
+      (targetTool) => {
+        const result = engine.evaluate({
+          sourceAgent: "claude-code",
+          targetTool,
+          args: { path: "/repo/.env" },
+        });
+        expect(result.decision).toBe("ask");
+        expect(result.matchedRuleId).toBeDefined();
+      },
+    );
+
     it.each(safePaths)("allows when reading %s (non-secret path)", (path) => {
       const result = engine.evaluate({
         sourceAgent: "hermes",

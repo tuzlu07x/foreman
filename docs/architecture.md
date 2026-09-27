@@ -65,7 +65,7 @@ Each command:
 Owns the `agents` table. `register` issues a fresh Ed25519 keypair per agent; the private key is returned **once** to the caller and never persisted. `list()` filters out blocked rows; `listAll()` exposes them for the Agents page. `block / unblock / remove / regenerateKey` give the TUI agents page everything it needs.
 
 ### PolicyEngine — `policy-engine.ts`
-Loads `policy.yaml` into the `policies` table inside one transaction (PR #128 closed a race where readers saw the empty-policy window). `evaluate(req)` walks rules by specificity: conditional `tool:read_file` ASK rules win over blanket `*` ALLOW rules. `evaluateSecretAccess` is deny-by-default — only an explicit allow rule grants access.
+Loads `policy.yaml` into the `policies` table inside one transaction (PR #128 closed a race where readers saw the empty-policy window). `evaluate(req)` picks among the matching rules by specificity. An explicit per-agent deny always wins. Otherwise a rule overrides another only when it is more specific on one axis (exact source, conditions) and no less specific on the other, and among the rules nothing overrides, the strictest wins. So conditional `tool:read_file` ASK rules win over blanket `*` ALLOW rules, and over a remembered per-agent allow. `evaluateSecretAccess` is deny-by-default — only an explicit allow rule grants access.
 
 ### MediatorService — `mediator.ts`
 The chokepoint. Every tool call (`foreman mcp-stdio`, `foreman wrap`, in-TUI Chat console) calls `handleRequest`:

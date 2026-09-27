@@ -193,7 +193,8 @@ const PolicyDocSchema = z
 
 export type BucketOverrides = z.infer<typeof BucketOverridesSchema>;
 
-const EFFECT_ORDER: Record<Effect, number> = { deny: 0, allow: 1, ask: 2 };
+/** Strictest first: ties between otherwise equal rules go to the safer effect. */
+const EFFECT_ORDER: Record<Effect, number> = { deny: 0, ask: 1, allow: 2 };
 
 export class PolicyRuleNotFoundError extends Error {
   constructor(public readonly ruleId: number) {
@@ -373,18 +374,24 @@ export class PolicyEngine {
       (r) => r.sourceAgent === req.sourceAgent && r.effect === "deny",
     );
     if (exactDeny) return { decision: "deny", matchedRuleId: exactDeny.id };
-    // Otherwise the most specific matching rule decides: conditions count
-    // more than an exact source, so a targeted guard (".env reads ask")
-    // still applies after the user clicked "always allow read_file" for one
-    // agent. Ties go to the stricter effect.
-    const specificity = (r: (typeof matching)[number]): number =>
-      (r.conditions ? 2 : 0) + (r.sourceAgent === req.sourceAgent ? 1 : 0);
-    matching.sort(
-      (a, b) =>
-        specificity(b) - specificity(a) ||
-        EFFECT_ORDER[a.effect] - EFFECT_ORDER[b.effect],
-    );
-    const winner = matching[0];
+    // A rule overrides another only when it is more specific on one axis
+    // (exact source, conditions) and no less specific on the other. Among
+    // the rules nothing overrides, the strictest decides. So "always allow
+    // read_file" for one agent beats a blanket wildcard ask, but not a
+    // targeted wildcard guard (".env reads ask"); and a wildcard conditional
+    // allow can't lift an ask aimed at this agent.
+    const rank = (r: (typeof matching)[number]): [number, number] => [
+      r.sourceAgent === req.sourceAgent ? 1 : 0,
+      r.conditions ? 1 : 0,
+    ];
+    const overrides = (a: (typeof matching)[number], b: (typeof matching)[number]): boolean => {
+      const [aSource, aCond] = rank(a);
+      const [bSource, bCond] = rank(b);
+      return aSource >= bSource && aCond >= bCond && (aSource > bSource || aCond > bCond);
+    };
+    const undominated = matching.filter((r) => !matching.some((o) => overrides(o, r)));
+    undominated.sort((a, b) => EFFECT_ORDER[a.effect] - EFFECT_ORDER[b.effect] || a.id - b.id);
+    const winner = undominated[0];
     if (winner) return { decision: winner.effect, matchedRuleId: winner.id };
     return { decision: "ask" };
   }
@@ -550,47 +557,52 @@ export class PolicyEngine {
     const cond = this.parseConditions(rule.conditions);
     if (!cond) return restrictive;
     const paths = extractPaths(req.args);
+    // Restrictive rules apply when ANY path/command in the call matches;
+    // an allow rule only when EVERY one does, so a second argument (or the
+    // `..`-collapsed form of the first) can't ride along on an allowed one.
     if (cond.pathNotMatch) {
-      // The exclusion only lifts the rule when EVERY path in the call is
-      // excluded — one excluded path must not smuggle a second one past.
       const excluded = paths.map((p) => testPattern(cond.pathNotMatch!, p));
       if (excluded.includes("invalid")) {
         if (!restrictive) return false;
-      } else if (paths.length > 0 && excluded.every((hit) => hit === true)) {
+      } else if (restrictive) {
+        if (paths.length > 0 && excluded.every((hit) => hit === true)) return false;
+      } else if (excluded.some((hit) => hit === true)) {
         return false;
       }
     }
     if (cond.pathMatch && cond.pathMatch.length > 0) {
       if (paths.length === 0) return false;
-      let hit = false;
-      for (const pattern of cond.pathMatch) {
-        for (const p of paths) {
+      const hits = paths.map((p) => {
+        let hit = false;
+        for (const pattern of cond.pathMatch!) {
           const r = testPattern(pattern, p);
           if (r === "invalid") {
-            if (restrictive) hit = true;
+            if (!restrictive) return false;
+            hit = true;
           } else if (r) {
             hit = true;
           }
         }
-      }
-      if (!hit) return false;
+        return hit;
+      });
+      if (restrictive ? !hits.some(Boolean) : !hits.every(Boolean)) return false;
     }
     if (cond.commandMatch && cond.commandMatch.length > 0) {
-      const command = this.extractCommand(req.args);
-      if (!command) return false;
-      const normalised = command.replace(/\s+/g, " ");
-      const hit = cond.commandMatch.some((sub) =>
-        normalised.includes(sub.replace(/\s+/g, " ")),
-      );
-      if (!hit) return false;
+      const commands = extractCommands(req.args);
+      if (commands.length === 0) return false;
+      const hits = commands.map((command) => {
+        const normalised = command.replace(/\s+/g, " ");
+        return cond.commandMatch!.some((sub) => normalised.includes(sub.replace(/\s+/g, " ")));
+      });
+      if (restrictive ? !hits.some(Boolean) : !hits.every(Boolean)) return false;
     }
     // #526 — toolPattern: rule applies when the request's targetTool matches
     // the regex. AND'd with the other predicates so a "block all read_* on
     // hermes" rule narrows by tool while leaving path matching open.
     if (cond.toolPattern) {
-      if (!req.targetTool || !safeRegexTest(cond.toolPattern, req.targetTool)) {
-        return false;
-      }
+      if (!req.targetTool) return false;
+      const r = testPattern(cond.toolPattern, req.targetTool, "");
+      if (r === "invalid" ? !restrictive : !r) return false;
     }
     // #526 — argContains: case-insensitive substring across all string
     // values in args. The "block any call mentioning pastebin.com" pattern
@@ -628,24 +640,6 @@ export class PolicyEngine {
     };
     walk(args);
     return parts.join(" ");
-  }
-
-  private extractCommand(args: unknown): string | null {
-    if (typeof args !== "object" || args === null) return null;
-    const obj = args as { command?: unknown; args?: unknown; cmd?: unknown; script?: unknown };
-    // Adapters emit `cmd` (shell_exec); MCP shell tools use `command`.
-    if (typeof obj.cmd === "string") return obj.cmd;
-    if (typeof obj.script === "string" && obj.command === undefined) return obj.script;
-    if (typeof obj.command === "string") {
-      if (Array.isArray(obj.args)) {
-        return [obj.command, ...obj.args.map(String)].join(" ");
-      }
-      return obj.command;
-    }
-    if (Array.isArray(obj.command)) {
-      return obj.command.map(String).join(" ");
-    }
-    return null;
   }
 
   private checkRateLimits(req: EvaluateRequest): Evaluation | null {
@@ -815,24 +809,36 @@ function renderApprovalRuleYamlBlock(
   return `${lines.join("\n")}\n`;
 }
 
-function safeRegexTest(pattern: string, input: string): boolean {
-  try {
-    return new RegExp(pattern).test(input);
-  } catch {
-    return false;
-  }
-}
-
-/** Path patterns match case-insensitively (macOS and Windows filesystems
- *  are, so `.ENV` is `.env`). `"invalid"` lets callers fail safe. */
-function testPattern(pattern: string, input: string): boolean | "invalid" {
+/** Path patterns match case-insensitively by default (macOS and Windows
+ *  filesystems are, so `.ENV` is `.env`). `"invalid"` lets callers fail safe. */
+function testPattern(pattern: string, input: string, flags = "i"): boolean | "invalid" {
   let re: RegExp;
   try {
-    re = new RegExp(pattern, "i");
+    re = new RegExp(pattern, flags);
   } catch {
     return "invalid";
   }
   return re.test(input);
+}
+
+/** Every command-like field of a call. Adapters emit `cmd` (shell_exec),
+ *  MCP shell tools use `command` (+ `args`), some use `script`; a call that
+ *  carries several is judged on all of them, so a decoy `cmd` can't hide
+ *  the `command` that actually runs. */
+function extractCommands(args: unknown): string[] {
+  if (typeof args !== "object" || args === null) return [];
+  const obj = args as { command?: unknown; args?: unknown; cmd?: unknown; script?: unknown };
+  const out: string[] = [];
+  if (typeof obj.cmd === "string") out.push(obj.cmd);
+  if (typeof obj.script === "string") out.push(obj.script);
+  if (typeof obj.command === "string") {
+    out.push(
+      Array.isArray(obj.args) ? [obj.command, ...obj.args.map(String)].join(" ") : obj.command,
+    );
+  } else if (Array.isArray(obj.command)) {
+    out.push(obj.command.map(String).join(" "));
+  }
+  return out;
 }
 
 /** Every regex in a conditions block that fails to compile — surfaced by
