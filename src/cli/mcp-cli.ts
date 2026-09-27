@@ -17,12 +17,22 @@ import {
   setMode,
   setServerEnabled,
 } from "../core/mcp-hub/manage.js";
+import { hubOAuthSessions } from "../core/mcp-hub/boot.js";
+import { DEFAULT_LOGIN_TIMEOUT_MS, runMcpOAuthLogin } from "../core/mcp-hub/oauth-login.js";
+import {
+  clearMcpOAuthRecord,
+  describeMcpOAuthStatus,
+  mcpOAuthStatus,
+  saveMcpOAuthRecord,
+} from "../core/mcp-hub/oauth-store.js";
 import { ToolPinStore } from "../core/mcp-hub/pins.js";
 import { SecretStore } from "../core/secret-store.js";
 import { closeDb, getDb } from "../db/client.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
+import { openInBrowser } from "../utils/browser-open.js";
 import { getForemanPaths } from "../utils/config.js";
 import { bold, dim, green, orange, red } from "./colors.js";
+import { isHeadlessEnvironment } from "./run-oauth-flow.js";
 
 // =============================================================================
 // `foreman mcp` — the MCP hub: one place to connect every agent to GitHub,
@@ -73,6 +83,7 @@ mcpCommand
     {},
   )
   .option("--header <KEY=VALUE>", "HTTP header for a remote server (repeatable)", collectPairs, {})
+  .option("--oauth", "the remote server uses MCP OAuth — sign in with `foreman mcp login <name>`")
   .option("--force", "replace an existing server with the same name")
   .action(
     (
@@ -84,6 +95,7 @@ mcpCommand
         url?: string;
         env: Record<string, string>;
         header: Record<string, string>;
+        oauth?: boolean;
         force?: boolean;
       },
     ) => {
@@ -100,6 +112,7 @@ mcpCommand
           ...(opts.url ? { url: opts.url } : {}),
           ...(Object.keys(opts.env).length > 0 ? { env: opts.env } : {}),
           ...(Object.keys(opts.header).length > 0 ? { headers: opts.header } : {}),
+          ...(opts.oauth ? { auth: "oauth" as const } : {}),
           ...(opts.force ? { force: true } : {}),
         });
       } catch (err) {
@@ -109,6 +122,9 @@ mcpCommand
       const name = opts.name ?? id;
       console.log(`${green("✓")} added ${bold(name)} to ${dim(paths.mcpConfigPath)}`);
       reportSecrets(next, name);
+      if (next.servers[name]?.auth === "oauth") {
+        console.log(orange(`  sign in (tokens stay in Foreman's encrypted store): foreman mcp login ${name}`));
+      }
       console.log(
         dim(
           "Every agent connected through `foreman mcp-stdio` now sees this server's tools. " +
@@ -146,6 +162,11 @@ mcpCommand
       const secretNote =
         missing.length > 0 ? red(` missing secrets: ${missing.join(", ")}`) : "";
       console.log(`  ${flag} ${bold(name.padEnd(18))} ${dim(where)}${secretNote}`);
+      if (s.auth === "oauth") {
+        const status = mcpOAuthStatus(store, name, s.url);
+        const text = `oauth: ${describeMcpOAuthStatus(name, status)}`;
+        console.log(`    ${" ".repeat(18)} ${status.state === "needs-login" ? orange(text) : green(text)}`);
+      }
     }
     console.log("");
     console.log(dim(`mode: ${config.mode} · result cap ${config.limits.max_result_chars} chars`));
@@ -164,7 +185,74 @@ mcpCommand
       fail(err);
     }
     new ToolPinStore(paths.mcpPinsPath).forget(name);
+    clearMcpOAuthRecord(openSecretStore(), name);
+    closeDb();
     console.log(`${green("✓")} removed ${bold(name)}`);
+  });
+
+mcpCommand
+  .command("login <name>")
+  .description("Sign in to a server marked `auth: oauth` (MCP authorization flow in your browser)")
+  .option("--scope <scopes>", "space-separated scopes (default: what the server advertises)")
+  .option("--no-browser", "only print the URL; do not try to open a browser")
+  .option("--timeout <seconds>", "how long to wait for the browser sign-in", String(DEFAULT_LOGIN_TIMEOUT_MS / 1000))
+  .action(async (name: string, opts: { scope?: string; browser: boolean; timeout: string }) => {
+    requireInitialised();
+    const paths = getForemanPaths();
+    const server = readConfig(paths.mcpConfigPath).servers[name];
+    if (!server) fail(new Error(`no server named '${name}' in mcp.yaml`));
+    if (server.auth !== "oauth" || !server.url) {
+      fail(
+        new Error(
+          `'${name}' is not an OAuth server — set \`auth: oauth\` on it in mcp.yaml, or add it with \`foreman mcp add ${name} --url <url> --oauth\``,
+        ),
+      );
+    }
+    const timeoutSeconds = Number(opts.timeout);
+    if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+      fail(new Error("--timeout must be a positive number of seconds"));
+    }
+    const autoOpen = opts.browser && !isHeadlessEnvironment();
+    try {
+      const record = await runMcpOAuthLogin({
+        server: name,
+        serverUrl: server.url,
+        ...(opts.scope ? { scope: opts.scope } : {}),
+        timeoutMs: Math.round(timeoutSeconds * 1000),
+        presentAuthUrl: async (url) => {
+          console.log(`Open this URL in your browser to sign in to ${bold(name)}:`);
+          console.log("");
+          console.log(`  ${url}`);
+          console.log("");
+          if (autoOpen) {
+            const opened = await openInBrowser(url);
+            if (!opened.ok) console.log(dim(`(could not open a browser: ${opened.reason ?? "unknown"})`));
+          }
+          console.log(dim(`Waiting for the sign-in to redirect back to this machine (up to ${timeoutSeconds}s)…`));
+        },
+      });
+      const store = openSecretStore();
+      saveMcpOAuthRecord(store, record);
+      const status = mcpOAuthStatus(store, name, server.url);
+      console.log(`${green("✓")} ${name}: ${describeMcpOAuthStatus(name, status)}`);
+      console.log(dim("Tokens are stored encrypted; only the hub attaches them upstream — agents never see them."));
+    } catch (err) {
+      fail(err);
+    } finally {
+      closeDb();
+    }
+  });
+
+mcpCommand
+  .command("logout <name>")
+  .description("Delete the stored OAuth session for a server")
+  .action((name: string) => {
+    requireInitialised();
+    const removed = clearMcpOAuthRecord(openSecretStore(), name);
+    closeDb();
+    console.log(
+      removed ? `${green("✓")} logged out of ${bold(name)} (local tokens deleted)` : dim(`${name}: not logged in`),
+    );
   });
 
 for (const [verb, enabled] of [
@@ -319,6 +407,7 @@ function openHub(): { hub: McpHub; config: HubConfig } {
     config,
     resolveSecret: (n) => (store.exists(n) ? store.get(n) : null),
     pins: new ToolPinStore(config.security.pin_tool_definitions ? paths.mcpPinsPath : null),
+    oauth: hubOAuthSessions(paths, store),
   });
   return { hub, config };
 }

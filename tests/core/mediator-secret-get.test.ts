@@ -131,6 +131,24 @@ agents:
     expect(e.args.name).toBe("anthropic-key");
   });
 
+  it("never hands an MCP hub OAuth session to an agent, even when policy allows it", async () => {
+    store.add("mcp-oauth-linear", JSON.stringify({ tokens: { access_token: "at-secret" } }));
+    const { mediator, policy } = buildMediator(db, bus, store);
+    policy.loadYamlText(`
+agents:
+  hermes:
+    can_access_secrets:
+      - mcp-oauth-linear
+`);
+    const out = await mediator.handleSecretGet({
+      sourceAgent: "hermes",
+      secretName: "mcp-oauth-linear",
+    });
+    expect(out.decision).toBe("denied");
+    expect(out.decidedBy).toBe("reserved:mcp-oauth");
+    expect(out.value).toBeUndefined();
+  });
+
   it("returns denied with secret-store:not-found when policy allows but the secret is missing", async () => {
     const { mediator, policy } = buildMediator(db, bus, store);
     policy.loadYamlText(`

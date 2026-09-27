@@ -4,6 +4,7 @@ import {
   StdioClientTransport,
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { FOREMAN_VERSION } from "../../version.js";
 
@@ -45,6 +46,9 @@ export interface ResolvedHttpServer {
   name: string;
   url: string;
   headers: Record<string, string>;
+  /** For `auth: oauth` servers: the hub's fetch that attaches the bearer
+   *  token (and refreshes it on 401). */
+  fetch?: FetchLike;
 }
 
 export type ResolvedServer = ResolvedStdioServer | ResolvedHttpServer;
@@ -118,6 +122,7 @@ class SdkUpstreamClient implements UpstreamClient {
     } else {
       transport = new StreamableHTTPClientTransport(new URL(this.server.url), {
         requestInit: { headers: this.server.headers },
+        ...(this.server.fetch ? { fetch: this.server.fetch } : {}),
       });
     }
     try {

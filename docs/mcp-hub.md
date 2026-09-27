@@ -38,6 +38,16 @@ foreman mcp add my-db --command npx --env DATABASE_URL='${secret:db-url}' -- -y 
 foreman mcp add docs --url https://mcp.example.com/mcp --header 'Authorization=Bearer ${secret:docs-token}'
 ```
 
+Hosted servers that use the MCP OAuth flow (Linear, and the hosted
+servers from Notion and Slack, for example):
+
+```bash
+foreman mcp add linear --url https://mcp.linear.app/mcp --oauth
+foreman mcp login linear                 # sign in in your browser
+```
+
+See *OAuth servers* below.
+
 ## What happens on a call
 
 1. The agent calls `github__create_issue`.
@@ -88,6 +98,80 @@ servers:
   They are a *fallback*: an explicit rule in `policy.yaml` (e.g. `target:
   "tool:github__create_issue"`) always wins, and the risk engine can still
   escalate an allowed call. Tools without any rule ask.
+- **`auth: oauth`** (remote servers only) makes the hub sign in with the MCP
+  OAuth flow and attach the token itself. Don't set an `Authorization`
+  header on such a server; the hub adds one.
+
+## OAuth servers
+
+Some hosted servers don't take a static token. They use the MCP
+authorization flow, which is OAuth 2.1 with PKCE. Mark the server with
+`auth: oauth` (or add it with `--oauth`), then sign in once:
+
+```yaml
+servers:
+  linear:
+    url: https://mcp.linear.app/mcp
+    auth: oauth
+```
+
+```bash
+foreman mcp login linear            # prints the sign-in URL and opens it in a browser if it can
+foreman mcp list                    # linear … oauth: logged in · expires in 59m
+foreman mcp logout linear           # delete the stored tokens
+```
+
+`foreman mcp login` does the following:
+
+1. It finds the server's authorization server from the server's
+   protected-resource metadata (RFC 9728) and the authorization server's
+   own metadata (RFC 8414).
+2. It registers Foreman as a client (dynamic client registration,
+   RFC 7591).
+3. It starts a one-shot listener on `127.0.0.1` with a random port and
+   prints the authorization URL. The URL carries a PKCE S256 challenge and
+   a random `state`.
+4. It exchanges the code the browser brings back for tokens.
+
+Options: `--scope "<scopes>"` (the default is what the server advertises),
+`--no-browser` (only print the URL; this is also automatic over SSH and
+without a display), and `--timeout <seconds>` (default 300).
+
+Once you're signed in, the hub keeps the session working by itself:
+
+- The token is refreshed shortly before it expires. If the server rejects
+  a token with 401, the hub refreshes it once and retries the request.
+- When the server rotates refresh tokens, the new access and refresh
+  tokens are saved together in one write before they are used. Agents
+  each run their own `foreman mcp-stdio`, so these processes take turns
+  (a lock file in the state directory). A refresh token is never sent
+  twice.
+- If a refresh is refused, or `url` in `mcp.yaml` changes, the server
+  stays offline. `foreman mcp list` and `foreman doctor` then show *needs
+  login*.
+
+Security:
+
+- Tokens are kept in the encrypted secret store as `mcp-oauth-<name>`.
+  They never appear in `mcp.yaml`, in `foreman mcp list` or `doctor`
+  output, in errors or in the audit log. Error text from the upstream or
+  the authorization server is scrubbed of token values before it's shown.
+- Agents never see the tokens. Only the hub process attaches them, on its
+  own connection and after mediation. `secrets/get` refuses every
+  `mcp-oauth-*` name whatever `policy.yaml` says, and `mcp.yaml` can't
+  reference those names with `${secret:…}`.
+- A token is only ever sent to the origin of the URL it was issued for.
+- The redirect listener binds `127.0.0.1` only. It accepts a single
+  callback, checks `state` (and `iss` when the server sends it), and times
+  out.
+- Foreman refuses any authorization, token or registration endpoint that
+  isn't https, except for loopback addresses. It also refuses an
+  authorization server that doesn't advertise PKCE S256, and protected-
+  resource metadata that names a different server. Requests that carry a
+  code or a token never follow redirects.
+
+`foreman mcp logout` deletes the local tokens only. To revoke Foreman's
+access completely, also remove the app in the provider's settings.
 
 ## Security
 
@@ -125,8 +209,10 @@ cost three ways:
 | Command | |
 | --- | --- |
 | `foreman mcp catalog [--category c] [--json]` | Curated servers |
-| `foreman mcp add <id> [args…]` | Add from the catalog, or `--command` / `--url` for your own |
-| `foreman mcp list` | Configured servers + missing secrets |
+| `foreman mcp add <id> [args…]` | Add from the catalog, or `--command` / `--url` for your own (`--oauth` for MCP OAuth) |
+| `foreman mcp list` | Configured servers, missing secrets, OAuth status |
+| `foreman mcp login <name> [--scope s] [--no-browser] [--timeout sec]` | Sign in to an `auth: oauth` server |
+| `foreman mcp logout <name>` | Delete a server's stored OAuth tokens |
 | `foreman mcp tools [name] [--refresh]` | Connect, list tools, scan findings, token cost |
 | `foreman mcp trust <name> [--include-flagged]` | Accept current definitions (after an update) |
 | `foreman mcp enable / disable / remove <name>` | |
@@ -134,9 +220,8 @@ cost three ways:
 
 ## Limits and roadmap
 
-- Remote servers that require an OAuth browser flow (Linear, Slack's and
-  Notion's hosted servers) are not supported yet — use their token-based
-  local servers or a bearer header.
+- OAuth servers must support dynamic client registration. Servers that
+  only accept pre-registered clients aren't supported yet.
 - Each agent's `foreman mcp-stdio` runs its own copy of stdio servers
   (started lazily, reusing the pinned listing). A shared daemon is planned.
 - Resources and prompts from upstream servers are not proxied yet — tools only.

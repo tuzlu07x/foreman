@@ -1,3 +1,4 @@
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
   enabledServers,
@@ -15,6 +16,7 @@ import { guardToolResult, type ResultGuardStats } from "./result-guard.js";
 import { hasBlockingFinding, scanToolDefinition, type ToolScanFinding } from "./tool-scan.js";
 import {
   sdkUpstreamClientFactory,
+  type ResolvedHttpServer,
   type ResolvedServer,
   type UpstreamClient,
   type UpstreamClientFactory,
@@ -90,11 +92,24 @@ export class HubToolUnavailableError extends Error {
   }
 }
 
+/** Hub-held OAuth session for an `auth: oauth` server (see oauth-session). */
+export interface HubOAuthSession {
+  /** Fetch that attaches the bearer token; refreshes once on 401. */
+  fetch: FetchLike;
+  /** Resolves when a usable token exists; throws when login is needed. */
+  accessToken(): Promise<string>;
+  /** Token values to scrub from upstream error text. */
+  knownSecrets(): string[];
+}
+
 export interface McpHubOptions {
   config: HubConfig;
   /** Secret-store lookup; `null` means the secret does not exist. */
   resolveSecret: (name: string) => string | null;
   pins: ToolPinStore;
+  /** Session factory for `auth: oauth` servers. Without it such servers
+   *  stay unavailable (fail closed). */
+  oauth?: (server: string, url: string) => HubOAuthSession;
   clientFactory?: UpstreamClientFactory;
   now?: () => number;
 }
@@ -113,6 +128,7 @@ interface ServerState {
   /** Secret values resolved into this server's launch config; scrubbed
    *  from upstream error text before it reaches an agent or the audit log. */
   secretValues: string[];
+  oauth: HubOAuthSession | null;
 }
 
 export class McpHub {
@@ -139,6 +155,7 @@ export class McpHub {
         verified: false,
         error: null,
         secretValues: [],
+        oauth: null,
       });
     }
   }
@@ -447,7 +464,7 @@ export class McpHub {
     if (state.client) return state.client;
     if (!state.connecting) {
       state.connecting = (async () => {
-        const client = this.clientFactory(this.resolveServer(state));
+        const client = this.clientFactory(await this.resolveServer(state));
         try {
           await client.connect();
         } catch (err) {
@@ -467,7 +484,7 @@ export class McpHub {
    *  token back; mask the values Foreman injected and anything secret-shaped. */
   private scrub(state: ServerState, text: string): string {
     let out = text;
-    for (const value of state.secretValues) {
+    for (const value of [...state.secretValues, ...(state.oauth?.knownSecrets() ?? [])]) {
       if (value.length >= 4) out = out.split(value).join("[redacted]");
     }
     return redactSecretShapes(out).text;
@@ -478,7 +495,7 @@ export class McpHub {
     return new Error(this.scrub(state, describeError(err)));
   }
 
-  private resolveServer(state: ServerState): ResolvedServer {
+  private async resolveServer(state: ServerState): Promise<ResolvedServer> {
     const secrets: string[] = [];
     const lookup = (name: string): string | null => {
       const value = this.opts.resolveSecret(name);
@@ -489,7 +506,22 @@ export class McpHub {
     const resolve = (v: string): string => resolveSecretRefs(state.name, v, lookup);
     const c = state.config;
     if (c.url) {
-      return { kind: "http", name: state.name, url: resolve(c.url), headers: mapValues(c.headers, resolve) };
+      const server: ResolvedHttpServer = {
+        kind: "http",
+        name: state.name,
+        url: resolve(c.url),
+        headers: mapValues(c.headers, resolve),
+      };
+      if (c.auth === "oauth") {
+        if (!this.opts.oauth) {
+          throw new HubToolUnavailableError(`MCP server '${state.name}' uses OAuth, which this process cannot provide`);
+        }
+        state.oauth ??= this.opts.oauth(state.name, c.url);
+        // Fail fast, with a clear message, when there is no usable session.
+        await state.oauth.accessToken();
+        server.fetch = state.oauth.fetch;
+      }
+      return server;
     }
     return {
       kind: "stdio",
