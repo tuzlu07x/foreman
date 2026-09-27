@@ -31,6 +31,8 @@ export interface AddServerInput {
   url?: string;
   env?: Record<string, string>;
   headers?: Record<string, string>;
+  /** Hub-managed OAuth (`foreman mcp login <name>`). */
+  auth?: "oauth";
   force?: boolean;
 }
 
@@ -67,6 +69,7 @@ export function addServer(config: HubConfig, catalog: McpCatalog, input: AddServ
   }
   if (input.env) server.env = { ...(server.env ?? {}), ...input.env };
   if (input.headers) server.headers = { ...(server.headers ?? {}), ...input.headers };
+  if (input.auth) server.auth = input.auth;
   return HubConfigSchema.parse({ ...config, servers: { ...config.servers, [name]: server } });
 }
 

@@ -23,6 +23,7 @@ import { eq } from "drizzle-orm";
 import type { ForemanDb } from "../db/client.js";
 import { requests } from "../db/schema.js";
 import type { SessionManager } from "./session.js";
+import { isMcpOAuthSecretName } from "./mcp-hub/config.js";
 import { SecretNotFoundError, type SecretStore } from "./secret-store.js";
 
 export interface MediatorInput {
@@ -377,10 +378,11 @@ export class MediatorService {
     const createdAt = Date.now();
     const args = { name: input.secretName };
 
-    const evaluation = this.deps.policy.evaluateSecretAccess(
-      input.sourceAgent,
-      input.secretName,
-    );
+    // Hub OAuth sessions are attached upstream by the hub itself; no policy
+    // rule can hand them to an agent.
+    const evaluation = isMcpOAuthSecretName(input.secretName)
+      ? { decision: "deny" as const, decidedBy: "reserved:mcp-oauth" }
+      : this.deps.policy.evaluateSecretAccess(input.sourceAgent, input.secretName);
 
     if (evaluation.decision !== "allow") {
       this.emitSecretDecision({

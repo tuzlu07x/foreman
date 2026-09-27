@@ -68,7 +68,8 @@ export class SecretStore {
       .run();
   }
 
-  get(name: string): string {
+  /** `touch: false` reads without recording an access (status checks). */
+  get(name: string, opts: { touch?: boolean } = {}): string {
     const row = this.db
       .select()
       .from(secrets)
@@ -83,6 +84,7 @@ export class SecretStore {
       },
       this.masterKey,
     );
+    if (opts.touch === false) return plaintext;
     this.db
       .update(secrets)
       .set({ lastAccessedAt: Date.now() })
