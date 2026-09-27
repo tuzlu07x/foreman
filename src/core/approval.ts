@@ -755,12 +755,33 @@ export class ApprovalBridge {
         ...(row.deadlineMs != null ? { deadlineMs: row.deadlineMs } : {}),
       });
     }
-    // Forget seen ids that have left the table (resolved + cleared later).
-    if (this.seen.size > 100) {
-      const live = new Set(rows.map((r) => r.requestId));
-      for (const id of this.seen) {
-        if (!live.has(id)) this.seen.delete(id);
+    // Approvals this process surfaced that are no longer pending were
+    // decided elsewhere: in another process (a relayed Telegram tap, the
+    // requester's own timeout) or by the stale sweep above. Announce them,
+    // so the TUI drops the prompt instead of offering a decision that no
+    // longer counts.
+    const live = new Set(rows.map((r) => r.requestId));
+    const gone = [...this.seen].filter((id) => !live.has(id));
+    if (gone.length > 0) {
+      const resolved = this.db
+        .select()
+        .from(pendingApprovals)
+        .where(inArray(pendingApprovals.requestId, gone))
+        .all();
+      for (const row of resolved) {
+        this.seen.delete(row.requestId);
+        if (row.status !== "resolved") continue;
+        this.bus.emit("approval:resolved", {
+          requestId: row.requestId,
+          decision: row.decision ?? "denied",
+          ...(row.remember ? { remember: row.remember } : {}),
+          resolvedBy: row.resolvedBy ?? "timeout",
+          ...(row.resolvedBy === "agent" ? { via: "agent_mcp" as const } : {}),
+        });
       }
+      // Rows that vanished entirely (pruned) are simply forgotten.
+      const found = new Set(resolved.map((r) => r.requestId));
+      for (const id of gone) if (!found.has(id)) this.seen.delete(id);
     }
     void lt;
   }

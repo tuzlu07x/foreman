@@ -195,6 +195,34 @@ describe("ApprovalBridge", () => {
     expect(row?.resolvedBy).toBe("user");
   });
 
+  it("announces an approval decided in another process so the TUI drops it", async () => {
+    db.insert(pendingApprovals)
+      .values({
+        requestId: "bridge-remote",
+        sourceAgent: "hermes",
+        args: "{}",
+        riskScore: 70,
+        riskReasons: "[]",
+        status: "pending",
+        requestedAt: Date.now(),
+      })
+      .run();
+    const resolved: ForemanEventMap["approval:resolved"][] = [];
+    bus.on("approval:resolved", (e) => resolved.push(e));
+    const bridge = new ApprovalBridge(db, { bus, pollIntervalMs: 25 });
+    bridge.start();
+    await new Promise((r) => setTimeout(r, 40));
+    // Another process (a relayed Telegram tap) resolves the row directly.
+    db.update(pendingApprovals)
+      .set({ status: "resolved", decision: "allowed", resolvedBy: "agent", resolvedAt: Date.now() })
+      .run();
+    await new Promise((r) => setTimeout(r, 80));
+    bridge.stop();
+    expect(resolved).toEqual([
+      { requestId: "bridge-remote", decision: "allowed", resolvedBy: "agent", via: "agent_mcp" },
+    ]);
+  });
+
   it("does not re-emit the same pending row twice", async () => {
     db.insert(pendingApprovals)
       .values({
