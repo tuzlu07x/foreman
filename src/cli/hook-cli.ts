@@ -98,9 +98,19 @@ export const hookCommand = new Command("hook")
     (v) => Number.parseInt(v, 10),
     600_000,
   )
+  // A usage error (missing agent id, unknown flag) must block too: commander
+  // exits 1 by default, which Claude Code treats as "run the tool".
+  .exitOverride((err) => {
+    if (err.exitCode === 0) process.exit(0); // --help
+    process.exit(BLOCK);
+  })
   .action(async (agentId: string, opts: { timeoutMs: number }) => {
     // Anything that escapes the try/catch below (a rejected promise inside
     // a library callback, a synchronous throw from a listener) still blocks.
+    // The main CLI installs a handler that rethrows (exit 7, which Claude
+    // Code would treat as "run the tool"), so ours must be the only one.
+    process.removeAllListeners("uncaughtException");
+    process.removeAllListeners("unhandledRejection");
     process.on("uncaughtException", (err) =>
       block(`internal error (${err.message}) — blocking the call`),
     );

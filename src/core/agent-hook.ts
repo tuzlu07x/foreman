@@ -32,7 +32,7 @@ export const FOREMAN_HOOK_MARKER = "foreman.pre-tool-use" as const;
  *  reads still pass without a prompt — the policy only asks for
  *  secret-shaped paths. */
 export const DEFAULT_PRETOOLUSE_MATCHER =
-  "Bash|Write|Edit|MultiEdit|NotebookEdit|Read|WebFetch|WebSearch|mcp__.*" as const;
+  "Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob|WebFetch|WebSearch|mcp__.*" as const;
 
 /** Seconds Claude Code waits for the hook. Must exceed Foreman's own
  *  approval window (600s) so a pending approval is resolved by the human —
