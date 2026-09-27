@@ -40,6 +40,7 @@ import { defaultLlmConfig, saveLlmConfig } from "../core/llm/config.js";
 import { ForemanCommandRouter, registerBuiltinCommands } from "../core/foreman-command.js";
 import { InboxRecorder, InboxService, oneLineSummary, recordDelegationOutcome } from "../core/inbox.js";
 import { auditAgentTokens, describeTokenAudit } from "../core/agent-wiring.js";
+import { responsibilityLookup } from "../core/mediator-stack.js";
 import { OrchestratorChat } from "../core/orchestrator-chat.js";
 import { RegistryService } from "../core/registry.js";
 import { RiskScorer } from "../core/risk-scorer.js";
@@ -211,8 +212,7 @@ export function startForeman(
     // Wire the responsibility-violation rule (#300). Both lookups close
     // over `registry` + `policy` so a YAML reload or agent edit shows up
     // on the next request without rebuilding the scorer.
-    getAgentResponsibility: (agentId) =>
-      registry.get(agentId)?.responsibilityNote ?? null,
+    getAgentResponsibility: responsibilityLookup(registry),
     responsibilityPolicies: () => policy.getResponsibilityPolicies(),
   });
   // QA-fix 2026-05-24 — wire the cost provider (#530 out-of-scope) so

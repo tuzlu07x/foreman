@@ -8,6 +8,7 @@ import { issueAgentToken, resolveAgentIdentity } from '../../src/core/agent-toke
 import { EventBus, type ForemanEventMap } from '../../src/core/event-bus.js'
 import { scopeForAgent } from '../../src/core/mcp-hub/boot.js'
 import { MediatorService } from '../../src/core/mediator.js'
+import { responsibilityLookup } from '../../src/core/mediator-stack.js'
 import { OrgComms } from '../../src/core/org/comms.js'
 import { orgDelegationVerdict } from '../../src/core/org/guard.js'
 import { allowedMcpServers, checkDelegation, parseOrgText, rolesForAgent } from '../../src/core/org/org.js'
@@ -116,6 +117,26 @@ rules:
     expect(policy.evaluate({ sourceAgent: spoofed(), targetTool: 'status' }).decision).toBe('ask')
     // Another agent's rules don't leak onto it either way.
     expect(policy.evaluate({ sourceAgent: 'untrusted:hermes', targetTool: 'deploy' }).decision).toBe('allow')
+  })
+
+  it("stays bound by the agent's responsibility rules", () => {
+    registry.register({ id: 'writer', displayName: 'Writer', transport: 'stdio', responsibilityNote: 'content writing' })
+    policy.loadYamlText(`
+responsibility_policies:
+  - responsibility: content writing
+    cannot_access: ["/billing/"]
+`)
+    const risk = new RiskScorer(db, undefined, {
+      getAgentResponsibility: responsibilityLookup(registry),
+      responsibilityPolicies: () => policy.getResponsibilityPolicies(),
+    })
+    const rules = (source: string): string[] =>
+      risk
+        .assess({ sourceAgent: source, targetTool: 'read_file', args: { path: '/app/billing/invoices.csv' } })
+        .factors.map((f) => f.rule)
+    expect(rules('writer')).toContain('responsibility_violation')
+    expect(rules('untrusted:writer')).toContain('responsibility_violation')
+    expect(rules('untrusted:nobody')).not.toContain('responsibility_violation')
   })
 
   describe('rate limits', () => {
