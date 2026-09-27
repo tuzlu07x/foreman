@@ -16,43 +16,13 @@ This is the operational playbook for shipping `foreman-agent@0.1.0` to npm and t
 - [ ] **GitHub repo Settings → Social preview** — upload `assets/social/og-card.png` (carryover from #27)
 - [ ] **Asciinema cast** — record via `examples/phishing-scenario/run-demo.sh`, upload, paste embed in README placeholder (carryover from #27)
 
-## Tag and GitHub release
+## Tag, GitHub release and npm publish
 
-```bash
-# from main, after the publish-prep PR is merged
-git checkout main && git pull
-git tag -a v0.1.0 -m "v0.1.0 — initial release"
-git push origin v0.1.0
-
-# auto-generate release notes from merged PRs
-gh release create v0.1.0 --generate-notes --title "v0.1.0 — initial release"
-```
-
-If the auto-generated notes are noisy, edit them in the GitHub UI after creation — keep the "What's new" punchy, hide the per-PR list under a collapsible if needed.
-
-The `release-binaries` workflow (`.github/workflows/release-binaries.yml`) fires on release-published and attaches the four standalone binaries (`foreman-{darwin,linux}-{arm64,x64}`) to the release automatically. Watch the run from the Actions tab — if anything fails, the workflow re-runnable via "Run workflow" once fixed.
-
-## npm publish
-
-```bash
-# one-time login if you haven't published from this machine
-npm login
-
-# verify the right account + scope
-npm whoami
-
-# real publish (no dry-run flag this time)
-npm publish
-
-# confirm
-npm view foreman-agent version
-```
-
-If publish fails because the name is taken, check the registry and either claim an unscoped name variant or use `@tuzlu07x/foreman-agent`. Update `package.json#name` and `README.md` install line, then republish.
+Releases are automated: see [`docs/releasing.md`](docs/releasing.md). Publishing a GitHub release `vX.Y.Z` publishes `foreman-agent` to npm with provenance (`release-npm.yml`), attaches the four standalone binaries plus `SHA256SUMS` (`release-binaries.yml`) and opens the Homebrew tap PR (`homebrew-bump.yml`). Nothing needs `npm publish` from a laptop.
 
 ## Smoke test the published package
 
-On a clean machine (or a fresh Docker container — `docker run --rm -it node:20 bash`):
+On a clean machine (or a fresh Docker container — `docker run --rm -it node:22 bash`):
 
 ```bash
 npm install -g foreman-agent
