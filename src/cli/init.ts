@@ -24,6 +24,17 @@ export interface InitResult {
   soulWasReset: boolean;
 }
 
+/** Write `content` only when `path` does not exist yet; true when written. */
+function writeIfAbsent(path: string, content: string, mode?: number): boolean {
+  try {
+    writeFileSync(path, content, { flag: "wx", ...(mode !== undefined ? { mode } : {}) });
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw err;
+  }
+}
+
 /** Pure logic — no console output, no process.exit. CLI action wraps this. */
 export function runInit(options: InitOptions = {}): InitResult {
   const paths = getForemanPaths();
@@ -31,16 +42,16 @@ export function runInit(options: InitOptions = {}): InitResult {
   ensurePrivateDir(paths.stateDir);
   const identityWasNew = !existsSync(paths.identityPath);
   const { publicKey } = loadOrCreateMasterKey();
-  const policyExisted = existsSync(paths.policyPath);
-  const policyWasNew = !policyExisted;
-  const policyWasReset = policyExisted && options.resetPolicy === true;
-  if (policyWasNew || policyWasReset) {
+  // Create-if-absent in one step ("wx"), so a file that appears between a
+  // check and the write is never clobbered.
+  const policyWasNew = writeIfAbsent(paths.policyPath, DEFAULT_POLICY_YAML, 0o600);
+  const policyWasReset = !policyWasNew && options.resetPolicy === true;
+  if (policyWasReset) {
     writeFileSync(paths.policyPath, DEFAULT_POLICY_YAML, { mode: 0o600 });
   }
-  const soulExisted = existsSync(paths.soulPath);
-  const soulWasNew = !soulExisted;
-  const soulWasReset = soulExisted && options.resetSoul === true;
-  if (soulWasNew || soulWasReset) {
+  const soulWasNew = writeIfAbsent(paths.soulPath, DEFAULT_FOREMAN_SOUL);
+  const soulWasReset = !soulWasNew && options.resetSoul === true;
+  if (soulWasReset) {
     writeFileSync(paths.soulPath, DEFAULT_FOREMAN_SOUL);
   }
   getDb();
