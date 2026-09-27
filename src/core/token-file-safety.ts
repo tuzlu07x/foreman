@@ -23,7 +23,11 @@ import { basename, dirname, join, resolve } from "node:path";
 export const TOKEN_FILE_MODE = 0o600;
 
 export class UnsafeTokenPathError extends Error {
-  constructor(message: string) {
+  /** `path`: the file refused (absolute), so callers can tell which. */
+  constructor(
+    message: string,
+    readonly path?: string,
+  ) {
     super(message);
     this.name = "UnsafeTokenPathError";
   }
@@ -81,6 +85,7 @@ export function checkTokenPath(path: string, home: string = homedir()): string |
     throw new UnsafeTokenPathError(
       `${abs} is a symlink; Foreman won't write an agent token through one. ` +
         "Replace it with a regular file (or pass --config-path with the real file) and rewire.",
+      abs,
     );
   }
   // Where the file really lands, through symlinked parents (a GNU stow
@@ -94,6 +99,7 @@ export function checkTokenPath(path: string, home: string = homedir()): string |
       throw new UnsafeTokenPathError(
         `${abs} is inside the git work tree ${repo}, where an agent token could be committed. ` +
           "Use the agent's user-level config or a path outside the repository.",
+        abs,
       );
     }
     atHome = true;
@@ -115,7 +121,10 @@ function openNoFollow(path: string, flags: number, mode?: number): number {
     return mode === undefined ? openSync(path, flags | NOFOLLOW | NONBLOCK) : openSync(path, flags | NOFOLLOW | NONBLOCK, mode);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ELOOP") {
-      throw new UnsafeTokenPathError(`${path} is a symlink, not a regular file; Foreman won't follow it for an agent token.`);
+      throw new UnsafeTokenPathError(
+        `${path} is a symlink, not a regular file; Foreman won't follow it for an agent token.`,
+        resolve(path),
+      );
     }
     throw err;
   }
@@ -155,6 +164,21 @@ export function writeTokenFile(path: string, content: string, mode: number = TOK
     checkOwnedRegularFile(fd, path);
     fchmodSync(fd, mode);
     ftruncateSync(fd, 0);
+    writeFileSync(fd, content, "utf-8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Create a token-bearing file that must not exist yet (a temp file, a
+ *  seeded config): O_CREAT | O_EXCL, so nothing already at the path (not
+ *  even a dangling symlink) is written through or replaced, and the
+ *  content goes through that one descriptor, `mode` from the first byte.
+ *  EEXIST when anything is there. */
+export function createTokenFile(path: string, content: string, mode: number = TOKEN_FILE_MODE): void {
+  const fd = openNoFollow(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, mode);
+  try {
+    fchmodSync(fd, mode);
     writeFileSync(fd, content, "utf-8");
   } finally {
     closeSync(fd);

@@ -14,7 +14,8 @@ All notable changes to Foreman are documented here. The format follows
     `FOREMAN_AGENT_TOKEN` in the server's `env`, never as an argument
     (`FOREMAN_AGENT_TOKEN_FILE`, a 0600 file, works too). Files that carry
     it are owner-only, never written through a symlink or inside a
-    project's git work tree.
+    project's git work tree; the setup wizard leaves such a config alone
+    (no template seed, no projected keys) and says why.
   - `foreman mcp-stdio` resolves the agent from the token. `--source`
     without a valid token runs as `untrusted:<id>`: none of that agent's
     allow rules, org role, delegation rights, secrets or MCP hub servers,

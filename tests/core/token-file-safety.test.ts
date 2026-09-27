@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import {
   chmodSync,
   chownSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -25,6 +26,7 @@ import type { RiskContext } from '../../src/core/risk-rules/types.js'
 import { SecretStore } from '../../src/core/secret-store.js'
 import {
   checkTokenPath,
+  createTokenFile,
   readTokenFile,
   tightenTokenFile,
   UnsafeTokenPathError,
@@ -116,6 +118,17 @@ describe('token file safety', () => {
       chmodSync(real, 0o644)
       tightenTokenFile(join(dir, 'link'))
       expect(mode(real)).toBe(0o644) // chmod didn't follow the link
+    })
+
+    it('creates a new file exclusively: never through a symlink, dangling or not', () => {
+      const fresh = join(dir, 'fresh.json')
+      createTokenFile(fresh, '{}\n')
+      expect(readFileSync(fresh, 'utf-8')).toBe('{}\n')
+      expect(mode(fresh)).toBe(0o600)
+      expect(() => createTokenFile(fresh, 'again')).toThrow(/EEXIST/)
+      symlinkSync(join(dir, 'target.json'), join(dir, 'dangling.json'))
+      expect(() => createTokenFile(join(dir, 'dangling.json'), 'x')).toThrow(/EEXIST/)
+      expect(existsSync(join(dir, 'target.json'))).toBe(false)
     })
 
     it('writes owner-only from the first byte and refuses FIFOs', () => {

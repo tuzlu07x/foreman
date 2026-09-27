@@ -1,17 +1,10 @@
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { dirname, extname } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { AGENT_TOKEN_ENV } from "./agent-token.js";
-import { checkTokenPath, tightenTokenFile, TOKEN_FILE_MODE } from "./token-file-safety.js";
+import { checkTokenPath, createTokenFile, tightenTokenFile } from "./token-file-safety.js";
 
 export type ConfigFormat = "yaml" | "json" | "toml";
 
@@ -207,13 +200,14 @@ export function applyInjection(configPath: string, plan: InjectionPlan): string 
 
 /** Replace the file in one step (temp file + rename), so the agent never
  *  reads a half-written config — Claude Code rewrites ~/.claude.json
- *  itself. The new file is owner-only from its first byte. */
+ *  itself. The temp file is created exclusively and written through one
+ *  descriptor, owner-only from its first byte; the rename replaces the
+ *  path itself, never a symlink's target. */
 export function writeConfigAtomically(configPath: string, text: string): void {
   mkdirSync(dirname(configPath), { recursive: true });
-  const tmp = `${configPath}.foreman-${process.pid}-${Date.now()}.tmp`;
+  const tmp = `${configPath}.foreman-${process.pid}-${randomBytes(6).toString("hex")}.tmp`;
   try {
-    writeFileSync(tmp, text, { encoding: "utf-8", mode: TOKEN_FILE_MODE, flag: "wx" });
-    chmodSync(tmp, TOKEN_FILE_MODE);
+    createTokenFile(tmp, text);
     renameSync(tmp, configPath);
   } catch (err) {
     rmSync(tmp, { force: true });

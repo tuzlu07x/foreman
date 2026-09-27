@@ -120,6 +120,9 @@ policy rules and org role.
   refuses to write a token through a symlink, or into a file inside a
   project's git work tree (where it could be committed); a dotfiles repo at
   your home directory is allowed with a warning to keep the file ignored.
+  When `foreman setup` refuses an agent's config file this way, it leaves
+  the file alone (no template seed, no projected keys) and says why; fix it,
+  then run `foreman agent rewire <id>` and `foreman secrets repush <id>`.
   `foreman doctor` flags token files others can read, and tamper protection
   flags an agent reading another agent's wiring or any `/proc/*/environ`.
 - `foreman mcp-stdio` reads the variable (trimmed once), removes it from its

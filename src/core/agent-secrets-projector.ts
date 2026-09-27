@@ -21,6 +21,7 @@ import {
   type AgentEntry,
 } from './registry-catalog.js'
 import type { SecretStore } from './secret-store.js'
+import { createTokenFile } from './token-file-safety.js'
 
 // =============================================================================
 // Agent secrets projector (#222 / #223)
@@ -130,7 +131,9 @@ export function projectSecretsForAgent(
       // user-specific. Template should keep `~/` literal; we substitute here.
       const expanded = contents.replace(/~\//g, `${home}/`)
       mkdirSync(dirname(path), { recursive: true })
-      writeFileSync(path, expanded, { mode: 0o600 })
+      // Exclusive create (#618): never through a symlink planted at the
+      // path, dangling or not, since the file may later hold an agent token.
+      createTokenFile(path, expanded)
       return true
     } catch {
       return false

@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { pickConfigPath } from "../../core/agent-add-flow.js";
 import { UnsupportedConfigFormatError } from "../../core/agent-config-injector.js";
 import { ensureAgentToken } from "../../core/agent-token.js";
@@ -10,19 +10,27 @@ import {
   type AgentEntry,
 } from "../../core/registry-catalog.js";
 import type { SecretStore } from "../../core/secret-store.js";
+import {
+  checkTokenPath,
+  createTokenFile,
+  UnsafeTokenPathError,
+} from "../../core/token-file-safety.js";
 
 /** The install step's config substep for one agent: seed its config file
  *  from the bundled template when missing (#385), then write Foreman's MCP
- *  entry into it. Best-effort: every failure is logged as a warning. */
+ *  entry into it. Best-effort: every failure is logged as a warning.
+ *  Returns true when the agent's config file itself was refused as a place
+ *  for its token (a symlink, a git work tree), so the caller leaves it
+ *  alone too. */
 export function wireAgentConfig(
   id: string,
   entry: AgentEntry,
   secretStore: SecretStore,
   log: (line: string) => void,
-): void {
+): boolean {
   const configPath = pickConfigPath(entry);
   const requiresExisting = entry.install.requires_existing_config === true;
-  if (!configPath) return;
+  if (!configPath) return false;
   try {
     // #385 — Seed bundled template first when the agent's config file
     // doesn't exist (OpenClaw). Template ships under
@@ -38,15 +46,19 @@ export function wireAgentConfig(
         const raw = readFileSync(templatePath, "utf-8");
         const expanded = raw.replace(/~\//g, `${homedir()}/`);
         mkdirSync(dirname(configPath), { recursive: true });
-        // "wx" (O_CREAT | O_EXCL) is the existence check: an existing
-        // config (or a symlink at its path) is never overwritten or
-        // written through.
-        writeFileSync(configPath, expanded, { mode: 0o600, flag: "wx" });
+        // The exclusive create (O_CREAT | O_EXCL) is the existence check:
+        // an existing config is never overwritten. The file is about to
+        // hold the agent's token (#618), so a symlink at its path, even a
+        // dangling one, is refused with the reason, and nothing is ever
+        // written through one.
+        checkTokenPath(configPath);
+        createTokenFile(configPath, expanded);
         seeded = true;
         log(
           `  ✓ seeded ${entry.name} config from bundled template → ${configPath}`,
         );
       } catch (seedErr) {
+        if (seedErr instanceof UnsafeTokenPathError) throw seedErr;
         // EEXIST: the agent already has a config — keep it.
         if ((seedErr as NodeJS.ErrnoException).code !== "EEXIST") {
           log(
@@ -88,6 +100,8 @@ export function wireAgentConfig(
     } else {
       // Never a raw parser message: it may quote a token-bearing file.
       log(`  ⚠ config inject skipped: ${describeWiringError(err)}`);
+      return err instanceof UnsafeTokenPathError && err.path === resolve(configPath);
     }
   }
+  return false;
 }

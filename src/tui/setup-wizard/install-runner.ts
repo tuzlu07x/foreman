@@ -226,46 +226,52 @@ export async function runInstallStep(
 
     // The agent's config file: seed it from the bundled template when
     // missing, then write Foreman's MCP entry (install-config.ts).
-    wireAgentConfig(id, entry, services.secretStore, log);
+    const configRefused = wireAgentConfig(id, entry, services.secretStore, log);
 
     // Secret projection (#222 / #223) — write Foreman-stored keys to the
     // agent's own env/config files so it launches without a separate setup
     // step. Best-effort: any failure is a warning, not an install abort.
-    try {
-      // #471 — Mirror the register-time fallback so projection sees the
-      // resolved provider for single-compat agents.
-      const projCompat = entry.llm_compat ?? [];
-      const projProvider =
-        agentConfigs[id]?.llmProvider ??
-        (projCompat.length === 1 ? projCompat[0] : undefined);
-      const projection = projectSecretsForAgent(entry, {
-        providersSelected: projectionCtx.providersSelected,
-        servicesSelected: projectionCtx.servicesSelected,
-        // #389 — per-agent llmProvider so config_overrides' if_provider
-        // resolves to the user's per-agent pick (not the global Step 1 set).
-        llmProvider: projProvider,
-        // #450 — per-agent variant override (e.g. Codex OAuth instead
-        // of OpenRouter for Hermes/openai).
-        providerVariant: agentConfigs[id]?.providerVariant,
-        // #434 — per-agent specific model id chosen in the wizard's
-        // model-pick phase; falls back to the variant default when omitted.
-        modelVersion: agentConfigs[id]?.modelVersion,
-        secretStore: services.secretStore,
-        // #426 — Skip channel-tied writes for agents that aren't the
-        // primary for a messaging channel.
-        chatPrimary: services.chatPrimary,
-      });
-      for (const f of projection.files) {
-        const tag = f.replacedStale ? "⟳ rotated" : f.created ? "✓ wrote" : "✓ updated";
-        log(`  ${tag} ${f.secrets.length} secret${f.secrets.length === 1 ? "" : "s"} → ${f.path}`);
+    // Not into a config file just refused for the agent's token (#618): the
+    // projector would replace that symlink with a regular file.
+    if (configRefused) {
+      log(`  ◦ keys not projected either: fix that file, then \`foreman secrets repush ${id}\``);
+    } else {
+      try {
+        // #471 — Mirror the register-time fallback so projection sees the
+        // resolved provider for single-compat agents.
+        const projCompat = entry.llm_compat ?? [];
+        const projProvider =
+          agentConfigs[id]?.llmProvider ??
+          (projCompat.length === 1 ? projCompat[0] : undefined);
+        const projection = projectSecretsForAgent(entry, {
+          providersSelected: projectionCtx.providersSelected,
+          servicesSelected: projectionCtx.servicesSelected,
+          // #389 — per-agent llmProvider so config_overrides' if_provider
+          // resolves to the user's per-agent pick (not the global Step 1 set).
+          llmProvider: projProvider,
+          // #450 — per-agent variant override (e.g. Codex OAuth instead
+          // of OpenRouter for Hermes/openai).
+          providerVariant: agentConfigs[id]?.providerVariant,
+          // #434 — per-agent specific model id chosen in the wizard's
+          // model-pick phase; falls back to the variant default when omitted.
+          modelVersion: agentConfigs[id]?.modelVersion,
+          secretStore: services.secretStore,
+          // #426 — Skip channel-tied writes for agents that aren't the
+          // primary for a messaging channel.
+          chatPrimary: services.chatPrimary,
+        });
+        for (const f of projection.files) {
+          const tag = f.replacedStale ? "⟳ rotated" : f.created ? "✓ wrote" : "✓ updated";
+          log(`  ${tag} ${f.secrets.length} secret${f.secrets.length === 1 ? "" : "s"} → ${f.path}`);
+        }
+        for (const s of projection.skipped) {
+          log(`  ◦ skip projection of ${s.secret}: ${s.reason}`);
+        }
+      } catch (err) {
+        log(
+          `  ⚠ secret projection failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
-      for (const s of projection.skipped) {
-        log(`  ◦ skip projection of ${s.secret}: ${s.reason}`);
-      }
-    } catch (err) {
-      log(
-        `  ⚠ secret projection failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
     }
 
     // #350 — provider-config conflict check. Many agents have `provider:`
