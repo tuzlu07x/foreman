@@ -62,6 +62,7 @@ import {
   handleServicesEscape,
   renderServicesStep,
 } from "./setup-wizard/services.js";
+import { handleCtrlC, isModifiedLetter } from "./setup-wizard/quit.js";
 import { snapshotSession, useWizardState } from "./setup-wizard/state.js";
 import type {
   FailureResolution,
@@ -93,8 +94,13 @@ export function SetupWizard({
   initialState,
   services,
   afterExit = "exit",
+  onQuit,
 }: SetupWizardProps): JSX.Element {
   const { exit } = useApp();
+  const quit = (): void => {
+    onQuit?.();
+    exit();
+  };
   // Agents already registered in this Foreman home — drive the wizard's
   // diff logic: still-checked = no-op or re-verify; newly-checked = install;
   // previously-checked-now-unchecked = uninstall + remove.
@@ -183,6 +189,7 @@ export function SetupWizard({
   const ctx: WizardContext = {
     services,
     exit,
+    quit,
     afterExit,
     state,
     set,
@@ -218,6 +225,12 @@ export function SetupWizard({
   // The handlers run in the original order; each returns true when it
   // consumed the key (stop) and false to fall through to the next.
   useInput((input, key) => {
+    if (key.ctrl && input === "c") {
+      handleCtrlC(ctx);
+      return;
+    }
+    // Single-letter hotkeys never fire for Ctrl/Meta combos (setup-wizard/quit.ts).
+    if (isModifiedLetter(input, key)) return;
     if (handleForemanLlmInput(ctx, input, key)) return;
     if (handleAgentVariantPickInput(ctx, input, key)) return;
     if (handleAgentModelPickInput(ctx, input, key)) return;

@@ -26,6 +26,8 @@ import type { FailureResolution, WizardServices } from "./types.js";
 export interface WizardContext {
   services: WizardServices;
   exit: () => void;
+  /** Quit (not finish): tells the host via onQuit, then exits normally. */
+  quit: () => void;
   afterExit: "exit" | "launch-tui";
   state: WizardState;
   set: WizardSetters;

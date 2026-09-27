@@ -45,6 +45,10 @@ export interface SetupWizardProps {
    *  [Enter] label so it doesn't promise a TUI that never opens. Default
    *  `"exit"`. */
   afterExit?: "exit" | "launch-tui";
+  /** Called when the user quits (Ctrl-C, or [q] on Welcome) rather than
+   *  finishing. The host must not carry on as if setup completed —
+   *  `foreman start` uses it to exit instead of launching the TUI. */
+  onQuit?: () => void;
 }
 
 export interface AgentConfig {

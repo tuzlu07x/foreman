@@ -8,6 +8,7 @@ import { computeAgentDiff } from "./agents-logic.js";
 import type { WizardContext } from "./context.js";
 import { stepProgress } from "./progress.js";
 import { runInstallStep } from "./install-runner.js";
+import { INSTALL_QUIT_NOTICE } from "./quit.js";
 import type { AgentInstallFailure, FailureResolution } from "./types.js";
 
 // #459 — Braille spinner frames used by the install step. 10-frame rotation
@@ -175,6 +176,7 @@ export function renderInstallStep(ctx: WizardContext): JSX.Element {
     installStartedAt,
     spinnerFrame,
     manualFixOpen,
+    installQuitNotice,
   } = ctx.state;
   // #459 — Render path. Split the streamed log into Foreman's own
   // headline markers (✓/✗/⚠/▸) + a single rotating milestone line
@@ -286,6 +288,9 @@ export function renderInstallStep(ctx: WizardContext): JSX.Element {
           (install running — back-navigation disabled mid-flight)
         </Text>
       )}
+      {installQuitNotice ? (
+        <Text color={theme.accent.warning}>{INSTALL_QUIT_NOTICE}</Text>
+      ) : null}
     </Box>
   );
 }

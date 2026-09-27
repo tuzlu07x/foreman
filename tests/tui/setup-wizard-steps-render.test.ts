@@ -186,6 +186,7 @@ interface Mounted {
   services: WizardServices
   chatPrimarySet: Mock<[string, string], void>
   launchEditor: Mock<[string], Promise<unknown>>
+  onQuit: Mock<[], void>
 }
 
 async function mount(
@@ -224,6 +225,7 @@ async function mount(
     voiceConfigPath: join(dir, 'voice.yaml'),
     launchEditor,
   }
+  const onQuit = vi.fn<[], void>()
   const wizard = React.createElement(SetupWizard, {
     initialState: opts.initialState ?? {
       version: 1,
@@ -233,6 +235,7 @@ async function mount(
     },
     services,
     ...(opts.afterExit ? { afterExit: opts.afterExit } : {}),
+    onQuit,
   })
   const inst = render(wizard)
   unmount = () => inst.unmount()
@@ -261,8 +264,71 @@ async function mount(
     await sleep(60)
   }
   await sleep(60)
-  return { frame, press, type, until, secretStore, services, chatPrimarySet, launchEditor }
+  return {
+    frame,
+    press,
+    type,
+    until,
+    secretStore,
+    services,
+    chatPrimarySet,
+    launchEditor,
+    onQuit,
+  }
 }
+
+const CTRL_C = '\u0003'
+
+describe('Ctrl-C and modified hotkeys', () => {
+  it('Ctrl-C quits from the Welcome screen', async () => {
+    const w = await mount('welcome')
+    await w.until('Welcome to Foreman')
+    expect(w.frame()).toContain('Quit any time with Ctrl-C (except while agents are installing)')
+    await w.press(CTRL_C)
+    expect(w.onQuit).toHaveBeenCalledTimes(1)
+  })
+
+  it('Ctrl-C quits from a picker screen', async () => {
+    const w = await mount('providers')
+    await w.until('pick which to configure')
+    await w.press(CTRL_C)
+    expect(w.onQuit).toHaveBeenCalledTimes(1)
+  })
+
+  it('Ctrl-C at "ready to install" quits instead of starting the install', async () => {
+    const before = vi.mocked(runInstallStep).mock.calls.length
+    const w = await mount('required-setup')
+    await w.until('Ready to install')
+    // Ctrl-C reaches the handlers as input "c" + ctrl — this screen's
+    // "[c] continue" used to start the install.
+    await w.press(CTRL_C)
+    expect(w.onQuit).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(runInstallStep).mock.calls.length - before).toBe(0)
+  })
+
+  it('Meta+letter never fires a single-letter hotkey', async () => {
+    const before = vi.mocked(runInstallStep).mock.calls.length
+    const w = await mount('required-setup')
+    await w.until('Ready to install')
+    await w.press('\u001Bc')
+    expect(w.frame()).toContain('Required setup')
+    expect(vi.mocked(runInstallStep).mock.calls.length - before).toBe(0)
+    expect(w.onQuit).not.toHaveBeenCalled()
+  })
+
+  it('Ctrl-C during install shows a notice, then quits once install is done', async () => {
+    const before = vi.mocked(runInstallStep).mock.calls.length
+    const w = await mount('install')
+    await w.until('✗ Hermes — install failed')
+    await w.press(CTRL_C, 'Install in progress — Ctrl-C again after it finishes')
+    expect(w.onQuit).not.toHaveBeenCalled()
+    expect(install.resolution).toBeNull()
+    await w.press('s', 'Setup complete')
+    await w.press(CTRL_C)
+    expect(w.onQuit).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(runInstallStep).mock.calls.length - before).toBe(1)
+  })
+})
 
 describe('welcome step', () => {
   it('previews the steps and starts on Enter', async () => {

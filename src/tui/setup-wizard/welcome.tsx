@@ -72,7 +72,8 @@ export function renderWelcomeStep(ctx: WizardContext): JSX.Element {
       </Box>
       <Box marginTop={1}>
         <Text color={theme.fg.muted}>
-          Quit any time with Ctrl-C and resume with `foreman setup --resume`.
+          Quit any time with Ctrl-C (except while agents are installing) and
+          resume with `foreman setup --resume`.
         </Text>
       </Box>
       <Box marginTop={1}>
@@ -102,14 +103,14 @@ export function handleWelcomeInput(
   input: string,
   key: Key,
 ): boolean {
-  const { exit, currentStep, advance } = ctx;
+  const { quit, currentStep, advance } = ctx;
   if (currentStep === "welcome") {
     if (key.return) {
       advance("welcome");
       return true;
     }
     if (input === "q") {
-      exit();
+      quit();
       return true;
     }
     // Esc on welcome: defer to the user. We don't auto-exit because the

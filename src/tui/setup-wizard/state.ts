@@ -132,6 +132,8 @@ export interface WizardState {
   installStartedAt: number | null;
   spinnerFrame: number;
   manualFixOpen: boolean;
+  // Ctrl-C pressed while the installer runs → show INSTALL_QUIT_NOTICE.
+  installQuitNotice: boolean;
 
   donePhase: "main" | "doctor" | "log";
   doctorReport: DoctorReport | null;
@@ -209,6 +211,7 @@ export function createInitialWizardState(
     installStartedAt: null,
     spinnerFrame: 0,
     manualFixOpen: false,
+    installQuitNotice: false,
 
     donePhase: "main",
     doctorReport: null,

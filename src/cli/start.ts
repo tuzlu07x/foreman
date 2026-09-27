@@ -1430,7 +1430,10 @@ function seedHomeIfMissing(): void {
   console.log(`${green("✓")} initialised at ${paths.root}\n`);
 }
 
-async function runOnboardingWizard(): Promise<void> {
+/** Runs the setup wizard. Resolves true when the user quit it (Ctrl-C, or
+ *  [q] on Welcome) instead of finishing — the caller must then exit rather
+ *  than launch the TUI. */
+async function runOnboardingWizard(): Promise<boolean> {
   const paths = getForemanPaths();
   if (!existsSync(paths.root) || !existsSync(paths.identityPath)) {
     seedHomeIfMissing();
@@ -1462,6 +1465,7 @@ async function runOnboardingWizard(): Promise<void> {
   // the wizard's [y] hotkey hands its OAuth steps here and we run them
   // post-unmount so interactive stdio reaches the child cleanly.
   const oauthQueue: WizardOauthRunStep[] = [];
+  let quit = false;
   const instance = render(
     React.createElement(SetupWizard, {
       initialState: loadSetupState() ?? freshState(),
@@ -1481,6 +1485,9 @@ async function runOnboardingWizard(): Promise<void> {
       },
       // `foreman start` continues into the TUI once the wizard exits.
       afterExit: "launch-tui",
+      onQuit: () => {
+        quit = true;
+      },
     }),
     { exitOnCtrlC: false },
   );
@@ -1489,6 +1496,7 @@ async function runOnboardingWizard(): Promise<void> {
     runOauthFlows(oauthQueue);
   }
   closeDb();
+  return quit;
 }
 
 export type StartChoice = "setup" | "skip" | "quit";
@@ -1661,7 +1669,9 @@ export const startCommand = new Command("start")
       if (!hasUserOptedOut(previousState)) {
         const choice = await promptStartChoice();
         if (choice === "setup") {
-          await runOnboardingWizard();
+          // Quitting the wizard quits Foreman; only a finished setup goes
+          // on to launch the TUI.
+          if (await runOnboardingWizard()) process.exit(0);
         } else if (choice === "skip") {
           seedHomeIfMissing();
           saveSetupState(markSetupSkipped(previousState));
