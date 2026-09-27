@@ -1104,7 +1104,9 @@ export function checkNotifyChannels(): CheckResult {
   } catch {
     // database check reports DB problems
   }
-  const { channels, problems } = buildEnabledChannels(config, { secrets });
+  // Built to validate only (nothing is started); the signer is a stand-in
+  // so two-way Slack / Discord configs get checked too.
+  const { channels, problems } = buildEnabledChannels(config, { secrets, signApproval: () => "" });
   const routed = new Set(
     Object.values(config.routing).flatMap((r) => (r ? r.channels : [])),
   );
@@ -1122,21 +1124,27 @@ export function checkNotifyChannels(): CheckResult {
         "Fix the listed fields in notify.yaml, then route levels with e.g. `foreman notify route critical telegram slack`.",
     };
   }
+  if (channels.size === 0) return { name: "notify_channels", status: "ok", message: "no channels enabled" };
+  // Channels where you can decide approvals yourself, over a connection
+  // only Foreman holds.
   const telegram = channelConfig(config, "telegram");
+  const slack = channelConfig(config, "slack");
+  const discord = channelConfig(config, "discord");
+  const twoWay = [
+    channels.has("telegram") && telegram?.approval_bot_token_ref ? "telegram (approval bot)" : null,
+    channels.has("slack") && slack?.app_token_ref ? `slack (${slack.allowed_user_ids?.length ?? 0} user(s))` : null,
+    channels.has("discord") && discord?.interactive ? `discord (${discord.allowed_user_ids?.length ?? 0} user(s))` : null,
+  ].filter((c): c is string => c !== null);
+  const parts = [`ready: ${[...channels.keys()].join(", ")}`];
+  if (twoWay.length > 0) parts.push(`two-way: ${twoWay.join(", ")}`);
   if (channels.has("telegram") && !telegram?.approval_bot_token_ref) {
-    return {
-      name: "notify_channels",
-      status: "ok",
-      message:
-        `ready: ${[...channels.keys()].join(", ")} · tip: \`foreman notify approval-bot\` keeps ` +
-        "Telegram approvals away from your chat agent",
-    };
+    parts.push("tip: `foreman notify approval-bot` keeps Telegram approvals away from your chat agent");
+  } else if (channels.has("slack") && !slack?.app_token_ref) {
+    parts.push("tip: `foreman notify slack-interactive` lets you approve from Slack");
+  } else if (channels.has("discord") && !discord?.interactive) {
+    parts.push("tip: `foreman notify discord-interactive` lets you approve from Discord");
   }
-  return {
-    name: "notify_channels",
-    status: "ok",
-    message: channels.size > 0 ? `ready: ${[...channels.keys()].join(", ")}` : "no channels enabled",
-  };
+  return { name: "notify_channels", status: "ok", message: parts.join(" · ") };
 }
 
 // MCP hub — mcp.yaml parses, and every enabled server has its secrets.

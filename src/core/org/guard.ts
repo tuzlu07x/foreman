@@ -11,8 +11,10 @@ import { checkDelegation, loadOrg, type DelegationVerdict } from "./org.js";
 // a runaway agent cannot fan tasks out across the company — but it is not
 // an identity boundary: an agent id is still self-declared (see SECURITY.md).
 
-/** Source ids that mean "the human asked". */
-const HUMAN_SOURCES = new Set(["cli", "user", "human", "tui"]);
+/** Source ids that mean "the human asked": the CLI, the TUI, and
+ *  `/foreman` typed in Slack or Discord by an allowed user. Agents can't
+ *  claim them (`foreman mcp-stdio --source` refuses these ids). */
+const HUMAN_SOURCES = new Set(["cli", "user", "human", "tui", "slack", "discord"]);
 
 /** The person at the keyboard (CLI or TUI), not an agent: nobody to nudge,
  *  and no agent chain to watch for runaway loops. */

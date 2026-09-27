@@ -283,9 +283,48 @@ export function startForeman(
   // OOB notification bridge (#235 / C11a-2). Best-effort: any failure here
   // (notify.yaml malformed, secret missing, etc.) is logged but does NOT
   // block start — the TUI modal still works on its own.
+  // Shared by the TUI console and by `/foreman` in Slack / Discord.
+  const commandContext = {
+    db,
+    registry,
+    llmConfigPath: paths.llmConfigPath,
+    configDir: paths.configDir,
+    controlChannel,
+    ownerStore: secretStore,
+    secretStore,
+    ...(orchestratorChat ? { orchestratorChat } : {}),
+  };
+  // `/foreman …` typed in Slack or Discord. The channel already checked the
+  // sender against its allowed_user_ids over a connection only Foreman
+  // holds, so it runs as the owner, like the TUI. Audited either way.
+  const runChatCommand = async (
+    channel: "slack" | "discord",
+    text: string,
+    userId: string,
+  ): Promise<string> => {
+    const [verb = "help", ...args] = text.trim().replace(/^\/?foreman\b\s*/i, "").split(/\s+/).filter(Boolean);
+    const sourceUser = `${channel}:${userId}`;
+    const result = await commandRouter.dispatch(verb, args, {
+      ...commandContext,
+      sourceAgent: channel,
+      sourceUser,
+      trustedOwner: true,
+    });
+    audit.logEvent("foreman:command", {
+      command: verb,
+      args,
+      sourceAgent: channel,
+      sourceUser,
+      ok: result.ok,
+      errorCode: result.errorCode ?? null,
+    });
+    return result.text;
+  };
+
   const notificationSetup = setupNotificationBridge({
     db,
     secretStore,
+    onChatCommand: runChatCommand,
     notifyConfigPath: paths.notifyConfigPath,
     notifyStatePath: paths.notifyStatePath,
     llmConfigPath: paths.llmConfigPath,
@@ -446,16 +485,7 @@ export function startForeman(
           inbox,
           pendingApprovals: () => approvalBridge.pending(),
           commandRouter,
-          commandContext: {
-            db,
-            registry,
-            llmConfigPath: paths.llmConfigPath,
-            configDir: paths.configDir,
-            controlChannel,
-            ownerStore: secretStore,
-            secretStore,
-            ...(orchestratorChat ? { orchestratorChat } : {}),
-          },
+          commandContext,
           audit,
           orgConfigPath: paths.orgConfigPath,
         },
@@ -1046,6 +1076,7 @@ function setupNotificationBridge(args: {
   notifyStatePath: string;
   llmConfigPath: string;
   onChannelWarning?: (message: string) => void;
+  onChatCommand?: (channel: "slack" | "discord", text: string, userId: string) => Promise<string>;
 }): {
   bridge: NotificationBridge;
   scheduler: DailyScheduler | null;
@@ -1067,6 +1098,7 @@ function setupNotificationBridge(args: {
     // cannot approve a call the user never tapped.
     signApproval: approvalSigner(loadOrCreateSecretsMasterKey()),
     ...(args.onChannelWarning ? { onChannelWarning: args.onChannelWarning } : {}),
+    ...(args.onChatCommand ? { onChatCommand: args.onChatCommand } : {}),
   });
 
   if (channels.size === 0) return null;

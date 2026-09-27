@@ -16,6 +16,15 @@ const ChannelToggleSchema = z
      *  prompts go through it, so the chat agent that shares the main bot
      *  never sees an approval button. */
     approval_bot_token_ref: z.string().optional(),
+    /** Slack: app-level token (`xapp-…`, secret ref). Turns on two-way
+     *  Slack over Socket Mode: approval buttons and `/foreman` (#615). */
+    app_token_ref: z.string().optional(),
+    /** Discord: keep a Gateway connection for approval buttons and
+     *  `/foreman` (#615). Needs bot_token_ref + channel. */
+    interactive: z.boolean().optional(),
+    /** Slack / Discord two-way mode: the only user ids that may decide
+     *  approvals or run commands. */
+    allowed_user_ids: z.array(z.string().regex(/^[A-Za-z0-9]{1,40}$/)).optional(),
     /** Telegram chat_id (string to preserve large numeric ids). */
     chat_id: z.string().optional(),
     /** Webhook destination URL — stored as a secret ref so the URL itself is

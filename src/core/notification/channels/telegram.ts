@@ -1,8 +1,15 @@
 import { formatApprovalIdForDisplay } from '../../approval-id.js'
-import { timingSafeEqual } from 'node:crypto'
-import { compactBlockActionId, parseApprovalToken } from '../../approval-token.js'
+import { compactBlockActionId } from '../../approval-token.js'
+import {
+  APPROVAL_BUTTON_ACTIONS,
+  decisionFromButton,
+  decisionLabel,
+  pause,
+  verifyApprovalButton,
+} from './approval-buttons.js'
 import {
   intentForActionId,
+  StaleDecisionError,
   type ChannelAction,
   type ChannelMessageRef,
   type Notification,
@@ -69,7 +76,7 @@ export interface TelegramChannelOptions {
 }
 
 /** Button actions the approval bot resolves itself. */
-const APPROVAL_BOT_ACTIONS = new Set(['allow', 'deny', 'allow_always', 'deny_always'])
+const APPROVAL_BOT_ACTIONS: ReadonlySet<string> = new Set(APPROVAL_BUTTON_ACTIONS)
 /** Message refs sent through the approval bot carry this prefix, so edits
  *  go through the same bot. */
 const APPROVAL_REF_PREFIX = 'a:'
@@ -334,26 +341,18 @@ export class TelegramChannel implements NotificationChannel {
       await answer('Not allowed.')
       return
     }
-    const match = /^fa:([a-z_]+):(.+)$/.exec(tap.data ?? '')
-    const action = match?.[1]
-    if (!match || !action || !APPROVAL_BOT_ACTIONS.has(action)) {
-      await answer('Unsupported button.')
+    const check = verifyApprovalButton(tap.data ?? '', this.signApproval)
+    if (!check.ok) {
+      await answer(check.reason === 'invalid' ? 'This button is no longer valid.' : 'Unsupported button.')
       return
     }
-    const { approvalId, tag } = parseApprovalToken(match[2]!)
-    if (!this.signApproval || !tag || !sameText(this.signApproval(approvalId, action), tag)) {
-      await answer('This button is no longer valid.')
-      return
+    let reply = decisionLabel(check.decision)
+    try {
+      await onDecision(decisionFromButton(check, { channel: 'telegram', userId: fromId }))
+    } catch (err) {
+      reply = err instanceof StaleDecisionError ? 'Already decided.' : "Couldn't record that decision."
     }
-    await onDecision({
-      notificationId: '',
-      requestId: approvalId,
-      decision: action as UserDecision['decision'],
-      decidedBy: `telegram:${fromId}`,
-      decidedAt: Date.now(),
-      channel: 'telegram',
-    })
-    await answer(action.startsWith('allow') ? 'Allowed ✓' : 'Denied ✗')
+    await answer(reply)
     // Take the buttons away so a second tap can't race the first.
     if (tap.message) {
       await this.call(
@@ -560,23 +559,4 @@ export function escapeMd(s: string): string {
   return s.replace(MD_ESCAPE_RE, '\\$1')
 }
 
-function sameText(a: string, b: string): boolean {
-  const x = Buffer.from(a)
-  const y = Buffer.from(b)
-  return x.length === y.length && timingSafeEqual(x, y)
-}
 
-function pause(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) return resolve()
-    const t = setTimeout(resolve, ms)
-    signal.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(t)
-        resolve()
-      },
-      { once: true },
-    )
-  })
-}

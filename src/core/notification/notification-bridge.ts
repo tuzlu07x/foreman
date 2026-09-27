@@ -15,7 +15,7 @@ import {
   renderSessionStarted,
   renderUserQuestion,
 } from './render.js'
-import type { ChannelId, Notification, UserDecision } from './types.js'
+import { StaleDecisionError, type ChannelId, type Notification, type UserDecision } from './types.js'
 
 // =============================================================================
 // NotificationBridge (#235 / C11a-2)
@@ -223,15 +223,16 @@ export class NotificationBridge {
     // silencing is to stop being woken up for medium/low risks).
     if (isSilenced(state) && payload.level !== 'critical') return
 
-    const result = await this.service.send(payload.level, payload)
-
-    // Track every notification id we created for this request so a later
-    // resolution can update each channel's message.
+    // Registered before sending: a tap on a button can arrive as soon as
+    // the message exists.
     let set = this.outstanding.get(req.requestId)
     if (!set) {
       set = new Set()
       this.outstanding.set(req.requestId, set)
     }
+    const result = await this.service.send(payload.level, payload)
+    // Track every notification id we created for this request so a later
+    // resolution can update each channel's message.
     set.add(result.notificationId)
     // #525 — Register the message with the countdown ticker so the
     // "⏱ Auto-deny in Xm Ys" tail refreshes each minute. Cache the
@@ -268,7 +269,10 @@ export class NotificationBridge {
     this.approvalBodies.delete(res.requestId)
 
     const ids = this.outstanding.get(res.requestId)
-    if (!ids || ids.size === 0) return
+    if (!ids || ids.size === 0) {
+      this.outstanding.delete(res.requestId)
+      return
+    }
     for (const notificationId of ids) {
       const ref = this.service.getMessageRef(notificationId)
       const row = this.service.getNotification(notificationId)
@@ -287,6 +291,7 @@ export class NotificationBridge {
         await channel.updateMessage(
           { channelMessageId: ref.channelMessageId },
           `${row.body}\n\n${footer}`,
+          { final: true },
         )
       } catch {
         // Message edit failed (Telegram rate limit, channel down, …) —
@@ -377,6 +382,10 @@ export class NotificationBridge {
     const row = d.notificationId ? this.service.getNotification(d.notificationId) : null
     const requestId = d.requestId ?? row?.requestId
     if (!requestId) return
+    // Buttons that carry the approval id directly (approval bot, Slack,
+    // Discord) count only while this bridge still has that prompt open:
+    // a tap on an old message must not overwrite the real outcome.
+    if (d.requestId && !this.outstanding.has(requestId)) throw new StaleDecisionError()
     // Translate channel verbs into the approval:resolved shape that
     // ApprovalBridge + BusApprovalService already understand.
     const decision = d.decision === 'allow' || d.decision === 'allow_always' ? 'allowed' : 'denied'
