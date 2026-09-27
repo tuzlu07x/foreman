@@ -2,13 +2,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { pickConfigPath } from "../../core/agent-add-flow.js";
-import {
-  applyInjection,
-  planInjection,
-  UnsupportedConfigFormatError,
-} from "../../core/agent-config-injector.js";
-import { buildMcpSnippet } from "../../core/agent-mcp-snippet.js";
+import { UnsupportedConfigFormatError } from "../../core/agent-config-injector.js";
 import { ensureAgentToken } from "../../core/agent-token.js";
+import { writeAgentWiring } from "../../core/agent-wiring.js";
 import {
   resolveBundledTemplatePath,
   type AgentEntry,
@@ -69,17 +65,20 @@ export function wireAgentConfig(
         `     Run \`${entry.install.binary ?? id}\` once to create it, then \`foreman secrets repush ${id}\` and \`foreman agent rewire ${id}\` to apply Foreman's keys and MCP wiring.`,
       );
     } else {
-      // #618 — the wiring carries the agent's identity token.
-      const snippet = buildMcpSnippet(id, entry, ensureAgentToken(secretStore, id));
-      const plan = planInjection(configPath, snippet.json);
-      if (plan.alreadyHasForeman) {
-        log(`  ✓ config already wired at ${configPath}`);
-      } else if (plan.replacedStale) {
-        applyInjection(configPath, plan);
-        log(`  ⟳ replaced stale foreman entry at ${configPath}`);
-      } else {
-        applyInjection(configPath, plan);
-        log(`  ✓ wrote MCP snippet to ${configPath}`);
+      // #618 — the wiring carries the agent's identity token, and goes
+      // where the agent reads MCP servers (Claude Code: ~/.claude.json).
+      const wiring = writeAgentWiring(id, entry, ensureAgentToken(secretStore, id));
+      const mcpPath = wiring.configPath ?? configPath;
+      if (wiring.config === "current") {
+        log(`  ✓ config already wired at ${mcpPath}`);
+      } else if (wiring.config === "replaced") {
+        log(`  ⟳ replaced stale foreman entry at ${mcpPath}`);
+      } else if (wiring.config === "written") {
+        log(`  ✓ wrote MCP snippet to ${mcpPath}`);
+      } else if (wiring.config === "unsupported") {
+        log(`  ⚠ ${mcpPath} unsupported format — paste manually`);
+      } else if (wiring.config === "missing") {
+        log(`  ⚠ ${mcpPath} not found — run the agent once, then \`foreman agent rewire ${id}\``);
       }
     }
   } catch (err) {

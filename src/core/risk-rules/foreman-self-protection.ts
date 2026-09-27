@@ -37,7 +37,7 @@ const FOREMAN_STATE_PATTERNS: ReadonlyArray<{ re: RegExp; reason: string }> = [
  *  would unhook itself or impersonate another agent id. */
 const AGENT_WIRING_PATTERNS: ReadonlyArray<{ re: RegExp; reason: string }> = [
   { re: /\.claude[/\\]settings(\.local)?\.json\b/i, reason: 'Claude Code settings (holds the Foreman hook)' },
-  { re: /(^|[/\\\s"'~])\.claude\.json\b/i, reason: 'Claude Code MCP config (holds the Foreman --source id)' },
+  { re: /(^|[/\\\s"'~])\.claude\.json\b/i, reason: 'Claude Code MCP config (holds the Foreman wiring and agent token)' },
   { re: /(^|[/\\\s"'])\.mcp\.json\b/i, reason: "project MCP config (can shadow Foreman's MCP server)" },
   { re: /\.codex[/\\]config\.toml\b/i, reason: 'Codex config (MCP wiring)' },
   { re: /\.hermes[/\\]config\.ya?ml\b/i, reason: 'Hermes config (MCP wiring)' },

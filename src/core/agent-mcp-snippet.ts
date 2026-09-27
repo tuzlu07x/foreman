@@ -9,8 +9,8 @@ export interface McpSnippet {
   // Generic shape: agents either copy this YAML block, or our injector merges
   // it into whatever format their config file uses.
   yaml: string;
-  // Equivalent JSON object representation. Claude Code style config files
-  // (~/.claude/settings.json) accept this directly under `mcpServers`.
+  // Equivalent JSON object representation, merged into the agent's MCP
+  // config (e.g. `mcpServers` in Claude Code's ~/.claude.json).
   json: Record<string, unknown>;
 }
 
@@ -33,6 +33,12 @@ export function buildMcpSnippet(
     args: ["mcp-stdio", "--source", agentId],
     env: { [AGENT_TOKEN_ENV]: token ?? AGENT_TOKEN_PLACEHOLDER },
   };
+  // Where the agent actually reads MCP servers, when the registry says so.
+  if (entry.mcp_config) {
+    const json = nestUnder(entry.mcp_config.key ?? "mcpServers", { foreman: block });
+    return { yaml: stringifyYaml(json), json };
+  }
+
   const topKey = entry.mcp_servers_key ?? "mcpServers";
 
   // #385 — explicit mcp_format takes precedence over the (mcp_compatible
@@ -54,6 +60,13 @@ export function buildMcpSnippet(
         };
 
   return { yaml: stringifyYaml(json), json };
+}
+
+/** `a.b` + value → `{ a: { b: value } }`. */
+function nestUnder(dottedKey: string, value: unknown): Record<string, unknown> {
+  return dottedKey
+    .split(".")
+    .reduceRight<Record<string, unknown>>((inner, key) => ({ [key]: inner }), value as Record<string, unknown>);
 }
 
 // Reads the snippet file shipped with the registry entry (if any) so we can

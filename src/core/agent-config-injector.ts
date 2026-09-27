@@ -1,4 +1,13 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, extname } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
@@ -84,13 +93,27 @@ function serialize(doc: Record<string, unknown>, format: ConfigFormat): string {
 // is made owner-only before the token lands in it.
 export function applyInjection(configPath: string, plan: InjectionPlan): void {
   if (plan.alreadyHasForeman && !plan.replacedStale) return;
-  mkdirSync(dirname(configPath), { recursive: true });
-  if (existsSync(configPath)) chmodSync(configPath, CONFIG_MODE);
-  writeFileSync(configPath, plan.after, { encoding: "utf-8", mode: CONFIG_MODE });
-  chmodSync(configPath, CONFIG_MODE);
+  writeConfigAtomically(configPath, plan.after);
 }
 
 const CONFIG_MODE = 0o600;
+
+/** Replace the file in one step (temp file + rename), so the agent never
+ *  reads a half-written config — Claude Code rewrites ~/.claude.json
+ *  itself. A symlinked dotfile is written through, not replaced. */
+export function writeConfigAtomically(configPath: string, text: string): void {
+  mkdirSync(dirname(configPath), { recursive: true });
+  const target = existsSync(configPath) ? realpathSync(configPath) : configPath;
+  const tmp = `${target}.foreman-${process.pid}-${Date.now()}.tmp`;
+  try {
+    writeFileSync(tmp, text, { encoding: "utf-8", mode: CONFIG_MODE, flag: "wx" });
+    chmodSync(tmp, CONFIG_MODE);
+    renameSync(tmp, target);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
+}
 
 /** The agent token the file's foreman entry passes: `undefined` when the
  *  file has no foreman entry (or can't be read), `null` when the entry

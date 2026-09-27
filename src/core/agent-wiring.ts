@@ -1,5 +1,5 @@
 import { chmodSync, existsSync, writeFileSync } from "node:fs";
-import { pickConfigPath } from "./agent-add-flow.js";
+import { pickMcpConfigPath } from "./agent-add-flow.js";
 import {
   applyInjection,
   planInjection,
@@ -54,7 +54,7 @@ export function writeAgentWiring(
   token: string,
   options: WireOptions = {},
 ): WiringResult {
-  const configPath = options.configPath ?? pickConfigPath(entry);
+  const configPath = options.configPath ?? pickMcpConfigPath(entry);
   let config: ConfigOutcome = "none";
   if (configPath) {
     if (!existsSync(configPath) && entry.install.requires_existing_config === true) {
@@ -120,7 +120,7 @@ export function rewireAgent(
   options: RewireOptions = {},
 ): RewireResult {
   const hadToken = hasAgentToken(store, agentId);
-  const configPath = options.configPath ?? (entry ? pickConfigPath(entry) : null);
+  const configPath = options.configPath ?? (entry ? pickMcpConfigPath(entry) : null);
   const hasWrapper = Boolean(entry?.mcp_register_cli?.wrapper);
   if (!configPath && !hasWrapper && !options.tokenOut) {
     return { configPath: null, config: "none", wrapperPath: null, wrapperWritten: false, minted: false, tokenOutPath: null };
@@ -157,7 +157,7 @@ export function auditAgentTokens(
     }
     const registryId = typeof agent.metadata?.registryId === "string" ? agent.metadata.registryId : null;
     const entry = registryId ? entryFor(registryId) : null;
-    const configPath = entry ? pickConfigPath(entry) : null;
+    const configPath = entry ? pickMcpConfigPath(entry) : null;
     if (!configPath) continue;
     // A file with no foreman entry may mean the agent was wired elsewhere
     // (--config-path); only a foreman entry with the wrong token is stale.

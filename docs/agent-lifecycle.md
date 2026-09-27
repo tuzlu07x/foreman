@@ -102,10 +102,17 @@ policy rules and org role.
   }
   ```
 
-  Codex gets the same under `[mcp_servers.foreman.env]` in `config.toml`.
+  The entry goes where each agent reads its MCP servers:
+
+  | Agent | File | Where |
+  | --- | --- | --- |
+  | Claude Code | `~/.claude.json` | top-level `mcpServers.foreman` (user scope; `settings.json` is not an MCP config) |
+  | Codex | `~/.codex/config.toml` | `[mcp_servers.foreman]` and `[mcp_servers.foreman.env]` |
+
   Hermes also gets it in its MCP wrapper script
   (`~/.foreman/wrappers/hermes-mcp.sh`, mode 0700). Config files that carry a
-  token are made owner-only (0600).
+  token are made owner-only (0600) and replaced in one step (temp file and
+  rename; a symlinked dotfile is written through), keeping every other key.
 - `foreman mcp-stdio` reads the variable, removes it from its own environment
   (so nothing it starts inherits it), and compares it in constant time with
   the stored token. It re-checks before every message, so a rotation takes

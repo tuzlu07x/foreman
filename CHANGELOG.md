@@ -169,6 +169,13 @@ All notable changes to Foreman are documented here. The format follows
   on with the other agents. `foreman doctor` warns while a registered or
   installed OpenClaw can't run. The range lives in the registry as
   `engines.node`.
+- **Agent MCP wiring lands where each agent reads it** (#591, #618):
+  - **Claude Code:** the `foreman` MCP server goes into `~/.claude.json`
+    (top-level `mcpServers`), where Claude Code reads user-scope servers.
+    `~/.claude/settings.json` has no `mcpServers` key; it keeps only the env
+    projection and the PreToolUse hook. Config writes keep every other key,
+    are owner-only and replace the file in one step. Run
+    `foreman agent rewire claude-code` to move an existing install.
 - **Opening a browser on Windows** no longer goes through `cmd /c start`.
   A URL with `&` or `|` in it could be cut short there or run a command.
   Foreman now uses `rundll32 url.dll,FileProtocolHandler` with no shell.

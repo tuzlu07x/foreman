@@ -473,6 +473,7 @@
       },
       "config_paths": ["~/.claude/settings.json"],
       "config_snippet": "registry/snippets/claude-code.yaml",
+      "mcp_config": { "paths": ["~/.claude.json"], "layout": "map", "key": "mcpServers" },
       "required_secrets": [],
       "optional_secrets": ["anthropic-key"],
       "llm_compat": ["anthropic"],
