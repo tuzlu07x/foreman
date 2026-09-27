@@ -850,6 +850,33 @@ describe('done step [Enter] label', () => {
     expect(w.frame()).not.toContain('Launch Foreman TUI')
   })
 
+  it.each([
+    ['exit', '[Enter] Run mandatory OAuth (1 step) + exit'],
+    ['launch-tui', '[Enter] Run mandatory OAuth (1 step), then launch Foreman TUI'],
+  ] as const)('the mandatory-OAuth label follows afterExit=%s', async (afterExit, label) => {
+    // A queued Claude sign-in (restored from the session) makes one
+    // mandatory step; the label used to say "+ exit" under both hosts.
+    const w = await mount('done', {
+      afterExit,
+      initialState: {
+        version: 1,
+        completed: ALL_BEFORE.done,
+        startedAt: 1,
+        lastUpdatedAt: 1,
+        session: {
+          providersSelected: ['anthropic'],
+          providersSignedIn: ['anthropic'],
+          agentsSelected: [],
+          agentConfigs: {},
+          servicesSelected: [],
+          registeredAtSnapshot: [],
+        },
+      },
+    })
+    await w.until('What next?')
+    expect(w.frame()).toContain(label)
+  })
+
   it('offers the TUI when the host launches it (`foreman start`)', async () => {
     const w = await mount('done', { afterExit: 'launch-tui' })
     await w.until('What next?')

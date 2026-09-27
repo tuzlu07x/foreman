@@ -407,10 +407,15 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
             requiredSetupResolution.oauthSteps.filter((o) => o.mandatory).length +
             providersSignedIn.length;
           if (mandatoryCount > 0) {
+            // Same host rule as below: under `foreman start` the sign-ins
+            // run and then the TUI launches; `foreman setup` just exits.
             return (
               <Text color={theme.accent.warning}>
                 {"  "}[Enter] Run mandatory OAuth ({mandatoryCount} step
-                {mandatoryCount === 1 ? "" : "s"}) + exit
+                {mandatoryCount === 1 ? "" : "s"})
+                {afterExit === "launch-tui"
+                  ? ", then launch Foreman TUI"
+                  : " + exit"}
               </Text>
             );
           }
