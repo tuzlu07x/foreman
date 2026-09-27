@@ -237,6 +237,7 @@ export interface ControlDrainPollerOptions {
 export class ControlDrainPoller {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private inFlight: Promise<void> | null = null;
   private readonly intervalMs: number;
 
   constructor(
@@ -259,18 +260,24 @@ export class ControlDrainPoller {
       }
     };
     this.timer = setInterval(() => {
-      void tick();
+      if (this.running) return;
+      this.inFlight = tick().finally(() => {
+        this.inFlight = null;
+      });
     }, this.intervalMs);
     // Don't keep the event loop alive solely on the poller — foreman
     // start has its own keepAlive interval.
     this.timer.unref?.();
   }
 
-  stop(): void {
+  /** Stop polling and wait for a command that is already running, so the
+   *  database isn't closed underneath it on shutdown. */
+  async stop(): Promise<void> {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
+    await this.inFlight?.catch(() => undefined);
   }
 }
 
