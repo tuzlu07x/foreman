@@ -268,7 +268,15 @@ export function startForeman(
   // exporter settings automatically (see telemetry-env.ts).
   const usageLedger = new UsageLedger(db, { orgConfigPath: paths.orgConfigPath });
   const usageKey = loadOrCreateUsageKey(paths.root);
-  const otlp = new OtlpReceiver({ ledger: usageLedger, key: usageKey, port: otlpPort() });
+  // Budgets are checked as soon as usage arrives (the watcher is created
+  // below, once the notification channels exist).
+  let onUsageRecorded: () => void = () => {};
+  const otlp = new OtlpReceiver({
+    ledger: usageLedger,
+    key: usageKey,
+    port: otlpPort(),
+    onRecorded: () => onUsageRecorded(),
+  });
   let otlpBoundPort: number | null = null;
   otlp
     .start()
@@ -399,6 +407,7 @@ export function startForeman(
       : {}),
   });
   budgetWatcher.start();
+  onUsageRecorded = () => budgetWatcher.checkSoon();
 
   // #303 / #304 / #305 — ForemanVoice + pattern detection. Only started
   // when notify is configured (no proactive messages to send otherwise).
@@ -991,6 +1000,7 @@ export function startForeman(
                     model: printed.model ?? registryRow?.modelVersion ?? null,
                     taskRef: String(row.id),
                   });
+                  onUsageRecorded();
                 } catch {
                   /* reporting only */
                 }
