@@ -13,7 +13,14 @@ export type NotificationLevel =
   | "risk_deny"
   | "session_lifecycle";
 
-export type ChannelId = "telegram" | "discord" | "slack" | "webhook" | "system";
+export type ChannelId =
+  | "telegram"
+  | "discord"
+  | "slack"
+  | "webhook"
+  | "system"
+  | "email"
+  | "ntfy";
 
 /** Runtime-checkable list of every valid channel id. Exported so the notify
  *  CLI can reject typos before they end up in the user's notify.yaml (#264). */
@@ -23,6 +30,8 @@ export const KNOWN_CHANNELS: readonly ChannelId[] = [
   "slack",
   "webhook",
   "system",
+  "email",
+  "ntfy",
 ] as const;
 
 export function isKnownChannel(id: string): id is ChannelId {
