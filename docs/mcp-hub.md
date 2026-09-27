@@ -148,4 +148,7 @@ cost three ways:
   make sure `HTTPS_PROXY` / `NODE_EXTRA_CA_CERTS` are set (they are passed
   through to servers).
 - **A tool disappeared**: `foreman mcp tools <name>` shows why (denied,
-  quarantined, changed since pinned).
+  quarantined, changed since pinned). A rug pull caught during a call is
+  remembered, so it shows there even without `--refresh`; the call itself
+  is logged as denied (`mcp:withheld:<server>`). `--refresh` compares with
+  the live server, and `foreman mcp trust <name>` accepts the new version.

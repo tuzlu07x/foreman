@@ -23,6 +23,7 @@ import {
 import { deriveApprovalKey } from "../core/approval-token.js";
 import { createMediatorStack } from "../core/mediator-stack.js";
 import { loadHub, scopeForAgent } from "../core/mcp-hub/boot.js";
+import { HubToolUnavailableError } from "../core/mcp-hub/hub.js";
 import type {
   AgentScope,
   AgentTool,
@@ -1204,12 +1205,18 @@ async function handleHubCall(
     // The hub already masks the secrets it injected; this catches anything
     // else secret-shaped an upstream error might echo.
     const message = redactSecretShapes(err instanceof Error ? err.message : String(err)).text;
+    // Withheld by the hub (a changed or newly appeared definition, a server
+    // that dropped the tool): the call never ran, so the log must not keep
+    // saying the policy allowed it (#635).
+    const withheld = err instanceof HubToolUnavailableError;
+    if (withheld) services.audit.amendDecision?.(decision.requestId, "denied", `mcp:withheld:${tool.server}`);
     services.audit.logEvent("mcp:call", {
       requestId: decision.requestId,
       sourceAgent,
       server: tool.server,
       tool: tool.name,
       isError: true,
+      ...(withheld ? { withheld: true } : {}),
       error: message,
     });
     return reply(id, {
