@@ -1,13 +1,10 @@
-# OpenClaw uses JSON natively (~/.openclaw/openclaw.json). This YAML mirror
+# OpenClaw uses JSON5 natively (~/.openclaw/openclaw.json). This YAML mirror
 # is the canonical form `foreman agent add` rewrites into the agent's
-# actual config syntax. #395 — `mcp.enabled` is rejected by OpenClaw's
-# strict schema; only `mcp.servers` is valid.
+# actual config syntax. OpenClaw validates its config strictly and refuses
+# to start on unknown keys (upstream: docs/gateway/configuration.md), so only
+# `mcp.servers` belongs here. #395: `mcp.enabled` is rejected.
 mcp:
   servers:
     foreman:
       command: foreman
       args: ["mcp-stdio", "--source", "openclaw"]
-secrets:
-  source: foreman
-  required:
-    - anthropic-key

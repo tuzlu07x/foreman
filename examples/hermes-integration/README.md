@@ -1,8 +1,8 @@
 # Wiring Hermes through Foreman
 
-Hermes (Nous Research's personal AI assistant for Telegram and Discord) sits in the same stack as Foreman's target user. Hermes ≥ 2.0 speaks MCP, so we hand its tool calls to `foreman mcp-stdio` and watch them flow through the gateway. For pre-2.0 Hermes, see the note about `foreman wrap` at the bottom.
+Hermes (Nous Research's personal AI assistant for Telegram and Discord) sits in the same stack as Foreman's target user. Hermes speaks MCP, so we hand its tool calls to `foreman mcp-stdio` and watch them flow through the gateway. For a Hermes build without MCP support, see the note about `foreman wrap` at the bottom.
 
-This recipe is intentionally short — when Hermes changes its config format, follow the [upstream config docs](https://github.com/NousResearch/hermes-agent#configuration) and only the `foreman:` MCP server entry is ours to maintain.
+This recipe is intentionally short — when Hermes changes its config format, follow the [upstream MCP config reference](https://hermes-agent.nousresearch.com/docs/) and only the `foreman:` MCP server entry is ours to maintain.
 
 ## 1. Install Foreman + Hermes
 
@@ -35,20 +35,15 @@ hermes setup     # one-time bootstrap; writes ~/.hermes/config.yaml
 ```
 
 ```yaml
-# ~/.hermes/config.yaml — append this block, leave the rest of the file alone
-mcp:
-  enabled: true
-  servers:
-    foreman:
-      command: foreman
-      args: ["mcp-stdio", "--source", "hermes"]
-secrets:
-  source: foreman
-  required:
-    - anthropic-key
+# ~/.hermes/config.yaml — Hermes reads MCP servers from the top-level
+# `mcp_servers` map. Merge this entry, leave the rest of the file alone.
+mcp_servers:
+  foreman:
+    command: foreman
+    args: ["mcp-stdio", "--source", "hermes"]
 ```
 
-Hermes' real config keys evolve faster than this doc — pull the current skeleton from upstream (`hermes setup` regenerates it) and just merge in the `foreman:` server entry.
+Hermes' real config keys evolve faster than this doc — pull the current skeleton from upstream (`hermes setup` regenerates it) and just merge in the `foreman:` server entry. `hermes mcp list` should then show `foreman`. API keys belong in `~/.hermes/.env`, not in `config.yaml`.
 
 ## 3. Apply the phishing-safe policy
 
@@ -98,4 +93,4 @@ foreman log show <request-id>        # full payload of a single call
 | Hermes logs `MCP server foreman: connection refused` | `which foreman` — update the `command` in the Hermes config to the absolute path. Try `foreman mcp-stdio --source hermes` manually to confirm it stays alive.                                              |
 | Activity panel stays empty                           | Hermes only fires tool calls when the conversation needs one. Ask it to read a file or run a command.                                                                                                      |
 | `foreman` not on PATH after the curl installer       | `export PATH="$(npm prefix -g)/bin:$PATH"` or source nvm first if the installer bootstrapped it.                                                                                                           |
-| Hermes < 2.0 (no MCP support)                        | Use `foreman wrap --name hermes -- hermes` — Foreman launches Hermes as a child and signs every MCP-framed response. See [`examples/wrap-example/README.md`](../wrap-example/README.md) for the mechanics. |
+| Hermes build without MCP support                     | Use `foreman wrap --name hermes -- hermes` — Foreman launches Hermes as a child and signs every MCP-framed response. See [`examples/wrap-example/README.md`](../wrap-example/README.md) for the mechanics. |
