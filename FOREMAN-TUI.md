@@ -765,4 +765,31 @@ yap. İlk gün doğru hissetmeli.
 
 ---
 
-*FOREMAN.md ile birlikte okunur. Sürüm hedefi: v0.1.0.*
+## 15. v0.2 — TUI bir kontrol yüzeyi
+
+Kullanıcı dokümanı: [`docs/tui.md`](docs/tui.md). Tasarım kararları:
+
+- **Başlık satırı** her sayfada tek soruyu cevaplar: "benden bir şey
+  bekleyen var mı?" Online agent sayısı, bekleyen onaylar, okunmamış
+  bildirimler, bugünün izin/red sayıları.
+- **Sekme satırı** her sayfayı görünür kılar; `Tab` / `Shift+Tab`
+  dolaşır, tek harfli kısayollar aynen kalır. Alt satır sadece o sayfanın
+  tuşlarını gösterir.
+- **Boot banner bir splash'tir**: birkaç saniye ya da ilk tuşa kadar
+  görünür, sonra kompakt başlığa yerini bırakır.
+- **Onay kuyruğu**: aynı anda bekleyen her onay kuyrukta durur (en yakın
+  deadline önce). Tuş her zaman ekrandaki isteğe uygulanır; TUI kendi
+  saatiyle onay reddetmez, deadline isteyen servisindir.
+- **Komut konsolu (`:`)**: tek harfli hotkey ilkesi sayfalarda geçerli;
+  konsol ise chat'teki `/foreman` fiillerini (`write`, `assign`, `org`,
+  `status`, …) terminale getirir. Sadece kullanıcının yazdığı çalışır;
+  agent'tan gelen metin asla komut olarak çalıştırılmaz.
+- **Inbox (`n`)**: dış kanal olmadan da her uyarı kalıcı olarak okunmuş /
+  okunmamış durumuyla saklanır; yeni uyarılar tek satırlık toast olarak
+  görünür.
+- Paneller yuvarlak köşeli çerçeve (`roundBorder()`); `NO_COLOR`,
+  `FOREMAN_ASCII`, `FOREMAN_HIGH_CONTRAST` desteklenir.
+
+---
+
+*FOREMAN.md ile birlikte okunur. Sürüm hedefi: v0.2.0.*
