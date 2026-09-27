@@ -18,6 +18,8 @@ import { loadOAuthTokens } from "./llm/oauth/token-store.js";
 import { loadActiveProviders, loadActiveRegistry } from "./registry-catalog.js";
 import { detectProviderByPrefix } from "./key-prefix-detect.js";
 import { loadVoiceConfig } from "./notification/voice-config.js";
+import { buildEnabledChannels } from "./notification/channel-factory.js";
+import { loadNotifyConfig } from "./notification/notify-config.js";
 import { enabledServers, loadHubConfig } from "./mcp-hub/config.js";
 import { missingSecrets } from "./mcp-hub/manage.js";
 import { loadOrg, OrgValidationError } from "./org/org.js";
@@ -1077,6 +1079,56 @@ export function checkAcpAgents(
   return out;
 }
 
+// Notification channels — every enabled channel can actually be built
+// (credentials + required fields) and receives at least one level. The
+// wizard can enable Slack / Discord from an agent bot token without a
+// channel id; this makes that gap visible instead of silent.
+export function checkNotifyChannels(): CheckResult {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.notifyConfigPath)) {
+    return { name: "notify_channels", status: "ok", message: "no notify.yaml" };
+  }
+  let config;
+  try {
+    config = loadNotifyConfig(paths.notifyConfigPath);
+  } catch {
+    // notify_config reports parse errors
+    return { name: "notify_channels", status: "ok", message: "skipped (notify.yaml does not parse)" };
+  }
+  let secrets: { exists(n: string): boolean; get(n: string): string } = {
+    exists: () => false,
+    get: () => "",
+  };
+  try {
+    secrets = new SecretStore(getDb(), loadOrCreateSecretsMasterKey());
+  } catch {
+    // database check reports DB problems
+  }
+  const { channels, problems } = buildEnabledChannels(config, { secrets });
+  const routed = new Set(
+    Object.values(config.routing).flatMap((r) => (r ? r.channels : [])),
+  );
+  const unrouted = [...channels.keys()].filter((c) => !routed.has(c));
+  const issues = [
+    ...problems.map((p) => `${p.channel}: ${p.problem}`),
+    ...unrouted.map((c) => `${c}: enabled but no level routes to it`),
+  ];
+  if (issues.length > 0) {
+    return {
+      name: "notify_channels",
+      status: "warn",
+      message: issues.join("; "),
+      remediation:
+        "Fix the listed fields in notify.yaml, then route levels with e.g. `foreman notify route critical telegram slack`.",
+    };
+  }
+  return {
+    name: "notify_channels",
+    status: "ok",
+    message: channels.size > 0 ? `ready: ${[...channels.keys()].join(", ")}` : "no channels enabled",
+  };
+}
+
 // MCP hub — mcp.yaml parses, and every enabled server has its secrets.
 // Connectivity is checked on demand by `foreman mcp tools` (it spawns
 // servers, which doctor must not do).
@@ -1190,6 +1242,7 @@ const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkFts5,
   checkPolicyYaml,
   checkNotifyConfig,
+  checkNotifyChannels,
   checkLlmConfig,
   checkLlmCredentials,
   checkLlmBudget,

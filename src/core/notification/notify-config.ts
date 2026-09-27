@@ -21,8 +21,24 @@ const ChannelToggleSchema = z
      *  webhook POST carries a `X-Foreman-Signature` header receivers can
      *  verify. */
     signing_secret_ref: z.string().optional(),
-    /** Slack channel name + bot token ref. */
+    /** Slack channel name + bot token ref; Discord channel id for a bot. */
     channel: z.string().optional(),
+    /** Email (SMTP submission). */
+    smtp_host: z.string().optional(),
+    smtp_port: z.number().int().positive().max(65535).optional(),
+    /** tls = implicit TLS (465), starttls = upgrade (587), none = localhost relays only. */
+    smtp_security: z.enum(['tls', 'starttls', 'none']).optional(),
+    smtp_username: z.string().optional(),
+    /** Secret ref for the SMTP password / app password. */
+    password_ref: z.string().optional(),
+    email_from: z.string().optional(),
+    email_to: z.array(z.string()).optional(),
+    /** ntfy server base URL (default https://ntfy.sh). */
+    server: z.string().url().optional(),
+    /** Secret ref holding the ntfy topic (the topic name is the secret). */
+    topic_ref: z.string().optional(),
+    /** Optional ntfy access token (secret ref). */
+    access_token_ref: z.string().optional(),
   })
   .strict()
 
@@ -45,6 +61,8 @@ export const NotifyConfigSchema = z
         slack: ChannelToggleSchema.optional(),
         webhook: ChannelToggleSchema.optional(),
         system: ChannelToggleSchema.optional(),
+        email: ChannelToggleSchema.optional(),
+        ntfy: ChannelToggleSchema.optional(),
       })
       .default({}),
     routing: z
@@ -176,4 +194,18 @@ export function channelConfig(
     (config.channels as Record<string, ChannelToggle | undefined>)[channelId] ??
     null
   )
+}
+
+/** Append `channel` to the routes for `levels` (creating them if absent). */
+export function addChannelToRoutes(
+  config: NotifyConfig,
+  channel: string,
+  levels: readonly NotificationLevel[],
+): void {
+  const routing = config.routing as Record<string, Route | undefined>
+  for (const level of levels) {
+    const route = routing[level] ?? { channels: [], timeout_seconds: 0, default_action: 'deny' as const }
+    if (!route.channels.includes(channel)) route.channels = [...route.channels, channel]
+    routing[level] = route
+  }
 }
