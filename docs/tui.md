@@ -48,8 +48,9 @@ it leaves the queue right away. The TUI never times approvals out itself;
 the agent's request keeps its own deadline.
 
 With [approval escalation](org.md#approval-escalation) on, a manager
-agent's recommendation shows under "Manager review" on the approval. It is
-advice only; the keys above still decide.
+agent's recommendation shows under "Manager review" on the approval,
+labelled "unverified id" (agent ids are self-declared). It is advice only;
+the keys above still decide.
 
 ## Command console
 

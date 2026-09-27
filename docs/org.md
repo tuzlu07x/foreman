@@ -214,14 +214,15 @@ in the chart:
 
 1. The approval comes to you as usual (TUI, Telegram, Slack, Discord).
 2. Foreman also posts a review request on the manager's thread with that
-   report (`cto ↔ engineer`, kind `review`). It has the approval id, the
-   tool, the arguments (secrets redacted, clipped), the risk score and the
-   reasons.
+   report (`cto ↔ engineer`, kind `review`). It has a review id (`rv_…`),
+   the tool, the arguments, the risk score and the reasons. It never
+   contains the approval id, so the review can't be used to answer the
+   approval itself.
 3. The manager answers once, with the `org_recommend` MCP tool:
-   `org_recommend(approval_id, recommendation: "allow" | "deny", reason)`.
+   `org_recommend(review_id, recommendation: "allow" | "deny", reason)`.
 4. You see the recommendation where you decide:
    - on the TUI approval screen, under "Manager review":
-     `CTO (claude-code) recommends allow: read-only, same repo`;
+     `CTO (claude-code, unverified id) recommends allow: read-only, same repo`;
    - in the inbox;
    - as a follow-up on the chat where the approval is waiting.
 
@@ -233,19 +234,39 @@ default is still deny).
 Who can recommend:
 - only the requester's manager, as the chart says now;
 - not a colleague, another department, or the requesting agent itself;
+- not a blocked or disabled agent, whatever the case of its id;
 - not you. You decide instead.
-
-The manager agent can't turn the approval id it was given into a decision
-either. `submit_approval` from that agent needs the token from your own
-tap, even to deny.
 
 **High and critical** approvals are never sent for review. They come
 straight to you. Approvals from agents that report to you directly, or
-whose manager is the same agent, aren't sent for review either.
+whose manager is the same agent, aren't sent for review either. A burst is
+coalesced: a report's manager gets at most one review request every 30
+seconds, and the approvals in between come only to you.
 
-Every recommendation is audited as `org:recommendation`. The reason is
-redacted and clipped like any org message. The review needs `foreman start`
-running, since that is where approvals reach you.
+### What is sent where
+
+| What | Where it goes |
+| --- | --- |
+| Review request: tool name, risk, reasons, arguments | The manager agent (through `org_read`, so into its model's context) and `org_messages` in Foreman's local database. It is **not** mirrored to Slack or Discord, even when `channels.direct` is mapped. |
+| The recommendation and its reason | Your TUI, inbox and approval chat; the thread (`foreman org messages`), which is mirrored to `channels.direct` if you mapped it; the audit log (`org:recommendation`). |
+
+Before the arguments go to the manager, Foreman masks the values of keys
+that look sensitive (`pass`, `secret`, `token`, `key`, `auth`, `cookie`,
+`credential`, `session`, at any depth, any case), inline credentials such
+as `Authorization: Bearer …` or `--password=…`, and known secret shapes
+(API keys, private keys). A secret under an innocent key, in a format
+Foreman doesn't recognise, can still get through. Don't turn escalation on
+for reports whose tool calls routinely carry secrets the manager shouldn't
+see.
+
+Tool names, agent ids and reasons are shown on one line each, with control,
+bidi and zero-width characters removed and a length cap, so they can't pose
+as a line of Foreman's own. Reasons are clipped to 300 characters (160 on
+the approval screen).
+
+Every recommendation attempt is audited as `org:recommendation`. Closed
+reviews are pruned after 30 days. The review needs `foreman start` running,
+since that is where approvals reach you.
 
 ## Spend and reports
 
@@ -339,7 +360,11 @@ resets. You can still assign work to it yourself.
 - A broken `org.yaml` fails closed: agent-to-agent delegation is blocked and
   agents get no hub servers until `foreman org validate` passes.
 - A manager's recommendation is only as trustworthy as the manager agent.
-  Agent ids are self-declared, so treat it as a second opinion, not proof.
+  Agent ids are self-declared, so any process that starts
+  `foreman mcp-stdio --source <manager-id>` can recommend as that manager.
+  That is why recommendations are labelled "unverified id". Treat them as a
+  second opinion, not proof. Per-agent identity tokens (#618) will close
+  this gap.
 - Messages you or your team type in a mirrored Slack / Discord channel are
   not read back (that needs privileged message-content access). Use
   `/foreman tell <department> …` there instead.
