@@ -244,4 +244,39 @@ describe('ApprovalModal — bucket-coloured border + grouped factor view', () =>
     const frame = stripAnsi(lastFrame() ?? '')
     expect(frame).not.toContain(']halt session')
   })
+
+  it("shows a manager's recommendation as advice, next to the usual keys (#623)", () => {
+    const recommendations = [
+      {
+        approvalId: 'req-1',
+        managerRole: 'cto',
+        managerTitle: 'CTO',
+        managerAgent: 'claude-code',
+        requesterRole: 'engineer',
+        requesterAgent: 'hermes',
+        targetTool: 'read_file',
+        riskBucket: 'medium' as const,
+        recommendation: 'deny' as const,
+        reason: 'no reason to read .env',
+        recommendedAt: 1,
+      },
+    ]
+    const without = stripAnsi(
+      render(React.createElement(ApprovalModal, { request: makeRequest({ riskBucket: 'medium' }), remainingSeconds: 30 })).lastFrame() ?? '',
+    )
+    expect(without).not.toContain('Manager review')
+    const frame = stripAnsi(
+      render(
+        React.createElement(ApprovalModal, {
+          request: makeRequest({ riskBucket: 'medium' }),
+          remainingSeconds: 30,
+          recommendations,
+        }),
+      ).lastFrame() ?? '',
+    )
+    expect(frame).toContain('Manager review')
+    expect(frame).toContain('CTO (claude-code) recommends deny: no reason to read .env')
+    expect(frame).toContain('Advice only. Your decision is final.')
+    expect(frame).toContain(']llow once')
+  })
 })

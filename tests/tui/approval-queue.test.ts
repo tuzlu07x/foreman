@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ApprovalRequest } from '../../src/core/approval.js'
 import {
+  addRecommendation,
   EMPTY_QUEUE,
   EXPIRY_GRACE_MS,
   enqueueApproval,
@@ -78,5 +79,31 @@ describe('approval queue (#614)', () => {
   it('falls back to a display deadline when the request has none', () => {
     const q = enqueueApproval(EMPTY_QUEUE, req('a'), 5_000)
     expect(q.items[0]!.deadline).toBe(65_000)
+  })
+
+  it('a manager recommendation is attached once and changes nothing else (#623)', () => {
+    const rec = {
+      approvalId: 'b',
+      managerRole: 'cto',
+      managerTitle: 'CTO',
+      managerAgent: 'claude-code',
+      requesterRole: 'engineer',
+      requesterAgent: 'codex',
+      targetTool: 'tool',
+      riskBucket: 'medium' as const,
+      recommendation: 'allow' as const,
+      reason: 'fine',
+      recommendedAt: 1,
+    }
+    let q = enqueueApproval(EMPTY_QUEUE, req('a', 1_000), 0)
+    q = enqueueApproval(q, req('b', 2_000), 0)
+    const before = q
+    q = addRecommendation(q, rec)
+    q = addRecommendation(q, { ...rec, recommendation: 'deny' })
+    expect(q.items[1]!.recommendations).toEqual([rec])
+    expect(q.selectedId).toBe(before.selectedId)
+    expect(q.items.map((i) => [i.request.requestId, i.deadline])).toEqual(before.items.map((i) => [i.request.requestId, i.deadline]))
+    expect(addRecommendation(q, { ...rec, approvalId: 'gone' })).toBe(q)
+    expect(enqueueApproval(EMPTY_QUEUE, req('c', 1_000), 0, [rec]).items[0]!.recommendations).toEqual([rec])
   })
 })
