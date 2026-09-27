@@ -1,5 +1,6 @@
 import {
   actionIdForDecision,
+  matchesBlockActionId,
   parseApprovalToken,
   verifyApprovalTag,
 } from "./approval-token.js";
@@ -62,6 +63,9 @@ export interface ApprovalDecision {
     | "agent_mcp";
   /** Nobody answered before the deadline; the default (deny) applied. */
   timedOut?: boolean;
+  /** The requester went away (MCP client disconnected) before anyone
+   *  answered; the call was denied without a decision. */
+  cancelled?: boolean;
 }
 
 export interface SubmitApprovalFromAgentOpts {
@@ -118,6 +122,9 @@ export interface ApprovalService {
    *  an answer (e.g. the MCP client disconnected). Only rows that are
    *  still `pending` are touched. */
   cancelPending?(requestIds: readonly string[]): void;
+  /** Stop taking approvals: waiting requests are cancelled (denied) and new
+   *  ones are denied without ever reaching the TUI or Telegram. */
+  close?(): void;
 }
 
 export class DenyAllApprovalService implements ApprovalService {
@@ -316,6 +323,8 @@ export class DbApprovalService implements ApprovalService {
   ) => number;
 
   private readonly approvalKey?: Buffer;
+  private readonly cancelled = new Set<string>();
+  private closed = false;
 
   constructor(
     private readonly db: ForemanDb,
@@ -341,6 +350,7 @@ export class DbApprovalService implements ApprovalService {
   }
 
   async request(req: ApprovalRequest): Promise<ApprovalDecision> {
+    if (this.closed) return { decision: "denied", cancelled: true };
     const requestedAt = Date.now();
     // #525 — Persist the absolute deadline so the bridge re-emits a
     // matching value to TUI / Telegram consumers without needing to
@@ -368,6 +378,7 @@ export class DbApprovalService implements ApprovalService {
 
     const deadline = requestedAt + this.timeoutMs;
     while (Date.now() < deadline) {
+      if (this.closed) this.cancelPending([req.requestId]);
       const row = this.db
         .select()
         .from(pendingApprovals)
@@ -378,7 +389,11 @@ export class DbApprovalService implements ApprovalService {
           decision: row.decision ?? "denied",
           ...(row.remember ? { remember: row.remember } : {}),
           ...(row.resolvedBy === "agent" ? { via: "agent_mcp" as const } : {}),
-          ...(row.resolvedBy === "timeout" ? { timedOut: true } : {}),
+          ...(this.cancelled.delete(req.requestId)
+            ? { cancelled: true }
+            : row.resolvedBy === "timeout"
+              ? { timedOut: true }
+              : {}),
         };
         this.bus.emit("approval:resolved", {
           requestId: req.requestId,
@@ -416,8 +431,13 @@ export class DbApprovalService implements ApprovalService {
     return { decision: "denied", timedOut: true };
   }
 
+  close(): void {
+    this.closed = true;
+  }
+
   cancelPending(requestIds: readonly string[]): void {
     if (requestIds.length === 0) return;
+    for (const id of requestIds) this.cancelled.add(id);
     this.db
       .update(pendingApprovals)
       .set({
@@ -448,7 +468,9 @@ export class DbApprovalService implements ApprovalService {
     // `approvalId` arrives as `<id>.<tag>` from a tagged button / command.
     const token = parseApprovalToken(rawOpts.approvalId);
     const opts = { ...rawOpts, approvalId: token.approvalId };
-    const grants = opts.decision === "allow" || Boolean(opts.actionId);
+    // A remembered deny changes policy too, so it needs the token as well.
+    const grants =
+      opts.decision === "allow" || Boolean(opts.actionId) || opts.remember === true;
     if (this.approvalKey && grants) {
       const actionId = actionIdForDecision(
         opts.decision,
@@ -459,8 +481,9 @@ export class DbApprovalService implements ApprovalService {
         return {
           ok: false,
           error:
-            `approval ${opts.approvalId}: missing or invalid approval token — only the user's own ` +
-            "tap or typed command (which carries the token Foreman issued) can allow a call or change policy",
+            `approval ${opts.approvalId}: missing or invalid approval token — only the user's tap on ` +
+            "a Foreman button (which carries the token Foreman issued) can allow a call or change policy. " +
+            "Ask the user to tap the button, or to decide in the Foreman TUI.",
         };
       }
     }
@@ -574,9 +597,7 @@ function resolveProposalFromRow(
   actionId: string,
   row: typeof pendingApprovals.$inferSelect,
 ): ApprovalRuleInjection | null {
-  if (!actionId.startsWith("block_")) return null;
-  const factorRule = actionId.slice("block_".length);
-  if (!factorRule) return null;
+  if (!actionId.startsWith("block_") || actionId.length <= "block_".length) return null;
   let factors: RiskFactor[] = [];
   try {
     factors = row.riskFactors
@@ -585,7 +606,9 @@ function resolveProposalFromRow(
   } catch {
     factors = [];
   }
-  const matched = factors.find((f) => f.rule === factorRule);
+  // The id is `block_<rule>`, or its compact form when the full one did
+  // not fit Telegram's callback_data cap.
+  const matched = factors.find((f) => matchesBlockActionId(actionId, `block_${f.rule}`));
   if (!matched) return null;
   let args: unknown = null;
   try {
@@ -595,7 +618,7 @@ function resolveProposalFromRow(
   }
   const proposal = predicateHintForFactor(matched, args, row.sourceAgent);
   if (!proposal) return null;
-  if (proposal.actionId !== actionId) return null;
+  if (!matchesBlockActionId(actionId, proposal.actionId)) return null;
   if (!row.targetTool) return null;
   return {
     approvalId: row.requestId,

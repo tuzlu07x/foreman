@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 // =============================================================================
 // Approval tokens — proof that a relayed decision came from the human
@@ -10,13 +10,22 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 // That agent is often the very one whose call is waiting — so without a
 // check it could "approve" its own request by inventing the tap.
 //
-// Each button / command therefore carries `<approvalId>.<tag>` where
+// Each button carries `<approvalId>.<tag>` where
 // `tag = HMAC(key, approvalId | actionId)`. The key is derived from the
-// secret-store master key and never leaves Foreman. The Bot API does not
-// deliver a bot's own messages to `getUpdates`, so the agent only learns a
-// tag when the user actually taps (the tap's `callback_data`) or types the
-// command — and the tag binds the specific action, so a tap on "Deny"
-// cannot be replayed as "Allow".
+// secret-store master key and never leaves Foreman, and the tag binds the
+// specific action. A relayed allow (or policy change) without a valid tag
+// is refused, so:
+//   - an agent that is not the relay (any other MCP client) cannot approve
+//     anything, even with a pending approval's id in hand;
+//   - the relay cannot approve before the user interacts with the message.
+//
+// Limit: the relaying chat agent holds the bot token. When the user taps
+// ANY button on the message (or replies to it), Telegram hands the agent
+// the whole message, keyboard included, so a compromised relay can then
+// submit a different action than the one tapped. Tags are therefore
+// defence in depth against the relay itself; approve a chat agent's own
+// risky calls in the TUI. For the same reason allow tokens never appear in
+// the message text, which a bot can read back without any user action.
 
 const TAG_LENGTH = 10;
 const SEPARATOR = ".";
@@ -69,4 +78,17 @@ export function actionIdForDecision(
   if (customActionId) return customActionId;
   if (decision === "allow") return remember ? "allow_always" : "allow";
   return remember ? "deny_always" : "deny";
+}
+
+/** Telegram caps callback_data at 64 bytes; `block_<rule>` ids for long
+ *  rule names don't fit next to a signed approval token. The compact form
+ *  keeps the `block_` prefix the relay agent keys on and is resolved back
+ *  to the risk factor by `matchesBlockActionId`. */
+export function compactBlockActionId(actionId: string): string {
+  const digest = createHash("sha256").update(actionId).digest("base64url").slice(0, 10);
+  return `block_~${digest}`;
+}
+
+export function matchesBlockActionId(candidate: string, fullActionId: string): boolean {
+  return candidate === fullActionId || candidate === compactBlockActionId(fullActionId);
 }

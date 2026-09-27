@@ -76,5 +76,7 @@ describe('foreman mcp-stdio lifecycle', () => {
     const log = spawnSync('node', [FM_BIN, 'log', 'tail', '--json'], { env, encoding: 'utf-8' })
     expect(log.stdout).toContain('read_file')
     expect(log.stdout).toContain('denied')
+    // Told apart from a real timeout in the audit trail.
+    expect(log.stdout).toContain('approval-cancelled')
   }, 20_000)
 })

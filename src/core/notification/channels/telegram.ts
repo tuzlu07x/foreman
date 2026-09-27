@@ -1,4 +1,5 @@
 import { formatApprovalIdForDisplay } from '../../approval-id.js'
+import { compactBlockActionId } from '../../approval-token.js'
 import {
   intentForActionId,
   type ChannelAction,
@@ -48,8 +49,8 @@ export interface TelegramChannelOptions {
   /** Injected so tests can supply a mocked transport. Defaults to global fetch. */
   fetchImpl?: TelegramFetch
   /** Approval-token signer (see approval-token.ts). When set, approval
-   *  buttons and commands carry `<approvalId>.<tag>` so the relaying agent
-   *  can only submit decisions the user actually tapped or typed. */
+   *  buttons carry `<approvalId>.<tag>` and the message text offers only
+   *  the (harmless) typed deny: anything that grants access needs a tap. */
   signApproval?: (approvalId: string, actionId: string) => string
 }
 
@@ -147,12 +148,17 @@ export class TelegramChannel implements NotificationChannel {
   private renderText(n: Notification): string {
     const head = `*${escapeMd(n.title)}*`
     const summary = escapeMd(n.body)
-    const commands = renderActionCommands(n, this.targets(n))
+    const targets = this.targets(n)
+    const commands = renderActionCommands(n, targets)
+    const tapHint =
+      targets.sign && n.actions.some((a) => a.id === 'allow')
+        ? `\n${escapeMd('To allow, tap a button (or use the Foreman TUI).')}`
+        : ''
     if (commands.length === 0) {
-      return `${head}\n\n${summary}`
+      return `${head}\n\n${summary}${tapHint}`
     }
     const sep = escapeMd('Reply in this chat:')
-    return `${head}\n\n${summary}\n\n${sep}\n${commands}`
+    return `${head}\n\n${summary}\n\n${sep}\n${commands}${tapHint}`
   }
 
   private async call(method: string, body: unknown): Promise<unknown> {
@@ -197,6 +203,12 @@ function actionToCommand(
   // ids (those are UUIDs; ours are ULIDs, but at a glance they can both
   // look like "long random string"). submit_approval strips the prefix
   // back off so the underlying DB id stays unchanged.
+  if (targets.sign && targets.approvalId) {
+    // Message text can be read back by any holder of the bot token without
+    // the user doing anything, so no token that grants access goes there.
+    // A plain deny needs none.
+    return a.id === 'deny' ? `/deny ${formatApprovalIdForDisplay(targets.approvalId)}` : null
+  }
   const displayId = formatApprovalIdForDisplay(approvalTargetFor(a.id, notifId, targets))
   switch (a.id) {
     case 'allow':
@@ -304,7 +316,12 @@ export function renderInlineKeyboard(
   const buttons: InlineKeyboardButton[] = []
   for (const a of actions) {
     if (!isInteractiveAction(a)) continue
-    const data = `${CALLBACK_DATA_PREFIX}:${a.id}:${callbackTailFor(a, notifId, targets)}`
+    let data = `${CALLBACK_DATA_PREFIX}:${a.id}:${callbackTailFor(a, notifId, targets)}`
+    if (Buffer.byteLength(data, 'utf8') > MAX_CALLBACK_BYTES && a.id.startsWith('block_')) {
+      // Long rule names: send the compact id (signed as such) instead.
+      const compact = { ...a, id: compactBlockActionId(a.id) }
+      data = `${CALLBACK_DATA_PREFIX}:${compact.id}:${callbackTailFor(compact, notifId, targets)}`
+    }
     if (Buffer.byteLength(data, 'utf8') > MAX_CALLBACK_BYTES) continue
     buttons.push({ text: a.label, callback_data: data })
   }
