@@ -133,4 +133,13 @@ describe('channel factory', () => {
     const noSecret = buildChannel('ntfy', { enabled: true, topic_ref: 'ntfy-topic' }, { secrets: secrets({}) })
     expect(noSecret).toMatchObject({ problem: expect.stringMatching(/foreman secrets add ntfy-topic/) })
   })
+
+  it('keeps a webhook off, rather than unsigned, when its signing secret is missing', () => {
+    const built = buildChannel(
+      'webhook',
+      { enabled: true, webhook_url_ref: 'hook-url', signing_secret_ref: 'hook-signing' },
+      { secrets: secrets({ 'hook-url': 'https://example.com/hook' }) },
+    )
+    expect(built).toMatchObject({ problem: expect.stringMatching(/foreman secrets add hook-signing/) })
+  })
 })

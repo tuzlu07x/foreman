@@ -61,6 +61,12 @@ describe('least-privilege MCP access', () => {
     expect([...allowedMcpServers(org, 'codex')!]).toEqual(['github', 'filesystem', 'playwright', 'sentry'])
     expect([...allowedMcpServers(org, 'zeroclaw')!]).toEqual(['stripe'])
   })
+  it('matches agent ids case-insensitively, so a spelling change is no way out', () => {
+    expect([...allowedMcpServers(org, 'ZeroClaw')!]).toEqual(['stripe'])
+    const cased = { ...org, roles: { ...org.roles, cfo: { ...org.roles.cfo!, agent: 'ZeroClaw' } } }
+    expect([...allowedMcpServers(cased, 'zeroclaw')!]).toEqual(['stripe'])
+    expect(checkDelegation(cased, 'zeroclaw', 'codex')?.allowed).toBe(false)
+  })
   it('leaves roles without a list (and non-members) unrestricted', () => {
     expect(allowedMcpServers(org, 'hermes')).toBeNull() // ceo has no department
     expect(allowedMcpServers(org, 'not-in-org')).toBeNull()

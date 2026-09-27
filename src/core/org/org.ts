@@ -204,10 +204,13 @@ export function chainOf(doc: OrgDoc, roleId: string): { chain: string[]; cycle: 
   return { chain, cycle: false };
 }
 
+/** Agent ids compare case-insensitively: callers lowercase what they get
+ *  from chat commands, while org.yaml keeps whatever the user typed. */
 export function rolesForAgent(doc: OrgDoc, agentId: string): string[] {
+  const id = agentId.trim().toLowerCase();
   return Object.entries(doc.roles)
-    .filter(([, r]) => r.agent === agentId)
-    .map(([id]) => id);
+    .filter(([, r]) => r.agent.trim().toLowerCase() === id)
+    .map(([roleId]) => roleId);
 }
 
 export function directReports(doc: OrgDoc, roleId: string): string[] {
