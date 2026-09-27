@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { UsageEntry, UsageLedger } from "./ledger.js";
 
@@ -14,10 +14,16 @@ import type { UsageEntry, UsageLedger } from "./ledger.js";
 //                            input/output/cached token counts
 //
 // Prompts, responses and every other attribute are dropped on the floor.
-// The endpoint accepts JSON only (OTEL_EXPORTER_OTLP_PROTOCOL=http/json),
-// needs the per-install key in `x-foreman-usage-key`, and caps bodies at
-// 1 MB. Usage is reporting, never an input to an approval decision, but the
-// key keeps other local processes from padding someone's bill.
+// The endpoint accepts JSON only (OTEL_EXPORTER_OTLP_PROTOCOL=http/json)
+// and caps bodies at 1 MB. Two kinds of key are accepted in
+// `x-foreman-usage-key`:
+//   - a per-task key Foreman hands each task it starts: the agent and task
+//     come from Foreman's own record of that key, never from the payload,
+//     so a task can only report usage as itself;
+//   - the per-install key, for agents you start yourself and set up with
+//     `foreman usage env`: the payload's `foreman.agent` is trusted there.
+// Usage never feeds an approval, but it does drive budgets (which can
+// pause delegation), hence the keys.
 
 export const USAGE_KEY_HEADER = "x-foreman-usage-key";
 export const DEFAULT_OTLP_PORT = 4319;
@@ -41,6 +47,7 @@ export interface OtlpReceiverOptions {
 export class OtlpReceiver {
   private server: Server | null = null;
   private boundPort: number | null = null;
+  private readonly taskKeys = new Map<string, { agentId: string; taskRef: string; timer: NodeJS.Timeout | null }>();
 
   constructor(private readonly opts: OtlpReceiverOptions) {}
 
@@ -63,7 +70,25 @@ export class OtlpReceiver {
     });
   }
 
+  /** A key only this task can report with; its usage is booked to
+   *  `agentId` / `taskRef` whatever the payload says. */
+  issueTaskKey(agentId: string, taskRef: string): string {
+    const key = randomBytes(24).toString("hex");
+    this.taskKeys.set(key, { agentId, taskRef, timer: null });
+    return key;
+  }
+
+  /** Stop accepting a task key after `graceMs` (exporters flush on exit). */
+  revokeTaskKey(key: string, graceMs = 5 * 60_000): void {
+    const entry = this.taskKeys.get(key);
+    if (!entry || entry.timer) return;
+    entry.timer = setTimeout(() => this.taskKeys.delete(key), graceMs);
+    entry.timer.unref?.();
+  }
+
   async stop(): Promise<void> {
+    for (const entry of this.taskKeys.values()) if (entry.timer) clearTimeout(entry.timer);
+    this.taskKeys.clear();
     const server = this.server;
     this.server = null;
     if (!server) return;
@@ -78,20 +103,25 @@ export class OtlpReceiver {
     if (req.method !== "POST") return reply(405, { error: "POST only" });
     const path = (req.url ?? "").split("?")[0];
     if (path !== "/v1/logs" && path !== "/v1/metrics" && path !== "/v1/traces") return reply(404);
-    if (!this.authorised(req.headers[USAGE_KEY_HEADER])) return reply(401, { error: "missing or wrong usage key" });
+    const caller = this.caller(req.headers[USAGE_KEY_HEADER]);
+    if (!caller) return reply(401, { error: "missing or wrong usage key" });
     if (!String(req.headers["content-type"] ?? "").includes("json")) {
       return reply(415, { error: "set OTEL_EXPORTER_OTLP_PROTOCOL=http/json" });
     }
-    let raw: string;
+    let raw: string | null;
     try {
       raw = await readBody(req, MAX_BODY_BYTES);
     } catch {
+      return; // the client went away, or kept sending far past the limit
+    }
+    if (raw === null) {
+      res.setHeader("connection", "close");
       return reply(413, { error: "body too large" });
     }
     // Metrics and traces are accepted (so exporters don't retry) and ignored.
     if (path === "/v1/logs") {
       try {
-        this.ingestLogs(JSON.parse(raw) as unknown);
+        this.ingestLogs(JSON.parse(raw) as unknown, caller === "install" ? undefined : caller);
       } catch (err) {
         this.opts.onError?.(`telemetry: ${err instanceof Error ? err.message : String(err)}`);
         return reply(400, { error: "not OTLP JSON" });
@@ -100,17 +130,24 @@ export class OtlpReceiver {
     reply(200, { partialSuccess: {} });
   }
 
-  private authorised(header: string | string[] | undefined): boolean {
-    const given = Buffer.from(Array.isArray(header) ? (header[0] ?? "") : (header ?? ""));
-    const expected = Buffer.from(this.opts.key);
-    return given.length === expected.length && timingSafeEqual(given, expected);
+  /** "install", the task a per-task key belongs to, or null. */
+  private caller(header: string | string[] | undefined): "install" | { agentId: string; taskRef: string } | null {
+    const raw = Array.isArray(header) ? (header[0] ?? "") : (header ?? "");
+    const given = Buffer.from(raw);
+    const install = Buffer.from(this.opts.key);
+    if (given.length === install.length && timingSafeEqual(given, install)) return "install";
+    // Task keys are random 48-hex strings; a Map lookup leaks nothing useful.
+    const task = this.taskKeys.get(raw);
+    return task ? { agentId: task.agentId, taskRef: task.taskRef } : null;
   }
 
-  /** Record the usage events in an OTLP logs payload; returns how many. */
-  ingestLogs(payload: unknown): number {
+  /** Record the usage events in an OTLP logs payload; returns how many.
+   *  With `task`, every entry is booked to that agent and task. */
+  ingestLogs(payload: unknown, task?: { agentId: string; taskRef: string }): number {
     let recorded = 0;
     for (const entry of usageEntriesFromLogs(payload)) {
-      if (this.opts.ledger.record(entry)) recorded += 1;
+      const booked = task ? { ...entry, agentId: task.agentId, taskRef: task.taskRef } : entry;
+      if (this.opts.ledger.record(booked)) recorded += 1;
     }
     return recorded;
   }
@@ -210,20 +247,23 @@ function arr(v: unknown): unknown[] {
   return Array.isArray(v) ? v : [];
 }
 
-function readBody(req: IncomingMessage, limit: number): Promise<string> {
+/** The body, or null when it is over `limit`. An oversize body is read and
+ *  discarded up to 8× the limit so the client sees the 413; past that the
+ *  connection is dropped. */
+function readBody(req: IncomingMessage, limit: number): Promise<string | null> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > limit) {
+      if (size > limit * 8) {
         reject(new Error("too large"));
         req.destroy();
         return;
       }
-      chunks.push(chunk);
+      if (size <= limit) chunks.push(chunk);
     });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("end", () => resolve(size > limit ? null : Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
 }

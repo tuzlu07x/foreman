@@ -67,10 +67,10 @@ describe('department channels (#630)', () => {
     expect(post('stranger', 'engineering')).toMatchObject({ ok: false })
     expect(post('stranger', 'boss')).toMatchObject({ ok: true })
     // You can post anywhere.
-    expect(comms.post({ from: BOSS, to: 'writer', text: 'x' })).toMatchObject({ ok: true, label: 'boss ↔ writer'.replace('boss', 'you') })
+    expect(comms.post({ from: BOSS, asOwner: true, to: 'writer', text: 'x' })).toMatchObject({ ok: true, label: 'boss ↔ writer'.replace('boss', 'you') })
     expect(post('codex', 'nobody')).toMatchObject({ ok: false, reason: expect.stringContaining("no department, role or agent called 'nobody'") })
     expect(post('codex', 'engineer')).toMatchObject({ ok: false, reason: "that's you" })
-    expect(events.length).toBe(comms.read({ viewer: BOSS, limit: 200 }).length)
+    expect(events.length).toBe(comms.read({ viewer: BOSS, asOwner: true, limit: 200 }).length)
   })
 
   it('shows each agent only what it may read; you see everything', () => {
@@ -83,22 +83,22 @@ describe('department channels (#630)', () => {
     expect(texts('codex')).toEqual(['CI is green', 'launch week'])
     expect(texts('claude-code')).toEqual(['CI is green', 'ship Friday?', 'launch week'])
     expect(texts('gemini')).toEqual(['draft ready', 'tighten the intro', 'launch week'])
-    expect(texts(BOSS)).toHaveLength(5)
+    expect(comms.read({ viewer: BOSS, asOwner: true })).toHaveLength(5)
     expect(comms.read({ viewer: 'codex', channel: 'marketing' })).toEqual([])
-    expect(comms.read({ viewer: BOSS, channel: 'marketing' }).map((m) => m.text)).toEqual(['draft ready'])
+    expect(comms.read({ viewer: BOSS, asOwner: true, channel: 'marketing' }).map((m) => m.text)).toEqual(['draft ready'])
   })
 
   it('reports go to the manager, or to you from the top', () => {
     expect(comms.report('codex', 'done: rate limiting')).toMatchObject({ ok: true, label: 'cto ↔ engineer' })
     expect(comms.report('hermes', 'weekly summary')).toMatchObject({ ok: true, label: '→ you' })
-    const [first] = comms.read({ viewer: BOSS })
+    const [first] = comms.read({ viewer: BOSS, asOwner: true })
     expect(first!.kind).toBe('report')
   })
 
   it('stores messages clean: no secrets, no terminal escapes, clipped', () => {
     const r = comms.post({ from: 'codex', to: 'engineering', text: `key ghp_${'a'.repeat(36)} \u001b[2Jdone ${'x'.repeat(5000)}` })
     expect(r.ok).toBe(true)
-    const [m] = comms.read({ viewer: BOSS })
+    const [m] = comms.read({ viewer: BOSS, asOwner: true })
     expect(m!.text).not.toContain('ghp_')
     expect(m!.text).not.toContain('\u001b')
     expect(m!.text.length).toBeLessThanOrEqual(4000)

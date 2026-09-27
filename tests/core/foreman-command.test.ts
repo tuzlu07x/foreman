@@ -1744,6 +1744,18 @@ credentials:
       expect(typo.text).toContain("marketing");
     });
 
+    it("a question about a department still goes to Foreman's LLM when it is on", async () => {
+      const answer = vi.fn(async () => ({ status: "ok" as const, text: "LLM says hi", costUsd: 0, durationMs: 1 }));
+      const withLlm = { ...ctx, orchestratorChat: { isEnabled: () => true, answer } };
+      const q = await router.dispatch("report", ["claude-code", "why", "is", "it", "stuck"], withLlm);
+      expect(answer).toHaveBeenCalled();
+      expect(q.text).toContain("LLM says hi");
+      const plain = await router.dispatch("report", ["marketing", "week"], withLlm);
+      expect(plain.text.split("\n")[0]).toBe("Marketing · last 7 days");
+      // Task output excerpts are only for you.
+      expect(plain.text).not.toContain("Latest results");
+    });
+
     it("report me still goes to Foreman's LLM", async () => {
       const result = await router.dispatch("report", ["me"], ctx);
       expect(result.errorCode).toBe("NOT_AVAILABLE");

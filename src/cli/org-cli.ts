@@ -370,7 +370,7 @@ orgCommand
     const comms = new OrgComms(getDb(), { orgConfigPath: paths.orgConfigPath });
     try {
       const read = (since?: number) =>
-        comms.read({ viewer: BOSS, ...(channel ? { channel } : {}), limit: opts.limit, ...(since ? { since } : {}) });
+        comms.read({ viewer: BOSS, asOwner: true, ...(channel ? { channel } : {}), limit: opts.limit, ...(since ? { since } : {}) });
       let messages = read();
       console.log(renderMessages(messages));
       if (!opts.follow) return;
@@ -399,6 +399,7 @@ orgCommand
       const comms = new OrgComms(getDb(), { orgConfigPath: paths.orgConfigPath });
       const result = comms.post({
         from: BOSS,
+        asOwner: true,
         to: target,
         text: message.join(" "),
         kind: target.toLowerCase() === "all" ? "announcement" : "message",

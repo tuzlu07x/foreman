@@ -28,6 +28,23 @@ import { z } from "zod";
 
 export const HUMAN = "human";
 
+/** Words that name channels or you (#630); no role or department may use
+ *  them, or a role called `boss` could read your threads. */
+export const RESERVED_ORG_IDS: ReadonlySet<string> = new Set([
+  "all",
+  "all-hands",
+  "allhands",
+  "everyone",
+  "company",
+  "leadership",
+  "heads",
+  "boss",
+  HUMAN,
+  "owner",
+  "you",
+  "me",
+]);
+
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
 
 const RoleSchema = z
@@ -169,7 +186,12 @@ export function validateOrg(doc: OrgDoc, knownAgents?: ReadonlySet<string>): Org
   const roleIds = Object.keys(doc.roles);
   for (const id of roleIds) {
     if (!ID_RE.test(id)) issues.push({ level: "error", message: `role id '${id}' must be lowercase kebab-case` });
-    if (id === HUMAN) issues.push({ level: "error", message: `'${HUMAN}' is reserved for you` });
+    if (RESERVED_ORG_IDS.has(id)) issues.push({ level: "error", message: `'${id}' is reserved (it names you or a channel)` });
+  }
+  for (const id of Object.keys(doc.departments)) {
+    if (RESERVED_ORG_IDS.has(id)) {
+      issues.push({ level: "error", message: `department id '${id}' is reserved (it names you or a channel)` });
+    }
   }
   for (const [id, role] of Object.entries(doc.roles)) {
     if (role.reports_to !== HUMAN && !doc.roles[role.reports_to]) {
@@ -268,6 +290,8 @@ export const HUMAN_SOURCES: ReadonlySet<string> = new Set([
   "cli",
   "user",
   HUMAN,
+  "boss",
+  "owner",
   "foreman",
   "telegram",
   "tui",

@@ -83,7 +83,9 @@ export class BudgetWatcher {
           kind: "budget",
           title,
           body,
-          dedupeKey: `org-budget:${id}:${c.period}:${periodKey}:${crossed}`,
+          // The limit is part of the key: raising a budget mid-period
+          // re-arms its alerts.
+          dedupeKey: `org-budget:${id}:${c.period}:${periodKey}:${c.limitUsd}:${crossed}`,
         });
         if (added) this.opts.notify?.(title, body);
       }

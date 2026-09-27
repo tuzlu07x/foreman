@@ -154,7 +154,9 @@ Agents use three MCP tools (every agent on `foreman mcp-stdio` has them):
 
 Refusals say why ("write to your department head, who can take it to
 marketing"). Every post is audited (`org:message`), secrets are redacted,
-and nothing in a message is ever executed.
+and nothing in a message is ever executed. Only you post as yourself:
+`boss`, `all`, `leadership` and the other channel words are reserved, so
+no role, department or agent can use them.
 
 **You** read and write from anywhere Foreman knows it's you:
 
@@ -227,8 +229,10 @@ summary.
 | **Foreman itself** | Its own LLM calls (`llm_usage`) | Exact |
 
 Tasks Foreman starts (`foreman write`, `assign`, delegation between
-agents) report automatically: the agent gets the exporter settings and a
-tag for the task. For agents **you** start, run this once:
+agents) report automatically: the agent gets the exporter settings with a
+key of its own. Foreman books whatever arrives with that key to that
+agent and task, so an agent can't bill another department. For agents
+**you** start, run this once:
 
 ```bash
 foreman usage env claude-code   # prints the export lines for your shell profile

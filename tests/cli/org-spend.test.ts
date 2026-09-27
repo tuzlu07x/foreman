@@ -79,6 +79,22 @@ describe('foreman org / usage (#629)', () => {
     expect(run('org', 'report', 'nosuch').stderr).toContain("'nosuch' is not a department")
   })
 
+  it("an agent's `foreman write` can't reach a department paused by its budget; you still can", () => {
+    expect(run('org', 'budget', 'marketing', '1', '--daily', '--pause').status).toBe(0)
+    const db = new Database(join(home, 'foreman.db'))
+    db.prepare(
+      `INSERT INTO agent_usage (id, ts, agent_id, role, department, source, input_tokens, total_tokens, cost_usd, cost_estimated)
+       VALUES ('u9', ?, 'openclaw', 'cmo', 'marketing', 'telemetry', 1, 1, 5, 0)`,
+    ).run(Date.now())
+    db.prepare(`INSERT INTO agents (id, display_name, public_key, transport, status, registered_at) VALUES ('openclaw', 'OpenClaw', x'00', 'stdio', 'active', ?)`).run(Date.now())
+    db.close()
+    const agentEnv = { ...env, FOREMAN_SPAWNED_BY: 'hermes' }
+    const fromAgent = spawnSync('node', [FM_BIN, 'write', 'openclaw', 'draft', 'the', 'post'], { env: agentEnv, encoding: 'utf-8' })
+    expect(fromAgent.status).toBe(2)
+    expect(fromAgent.stderr).toContain('paused by budget')
+    expect(run('write', 'openclaw', 'draft', 'the', 'post').status).toBe(0)
+  })
+
   it('prints telemetry setup for agents you start yourself', () => {
     const claude = run('usage', 'env', 'claude-code')
     expect(claude.stdout).toContain('export CLAUDE_CODE_ENABLE_TELEMETRY=1')

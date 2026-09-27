@@ -1042,6 +1042,14 @@ describe("mcp-stdio handleMessage", () => {
         params: { name, arguments: args },
       } as JSONRPCMessage)) as unknown as { result: { content: { text: string }[]; isError?: boolean } };
 
+    it("gives a blocked agent no voice", async () => {
+      const services = await withComms();
+      (services.registry as unknown as { get: (id: string) => unknown }).get = (id: string) => ({ id, status: "blocked" });
+      const out = await call(services, "codex", "org_post", { to: "engineering", text: "hi" });
+      expect(out.result.isError).toBe(true);
+      expect(out.result.content[0]!.text).toContain("codex is blocked");
+    });
+
     it("advertises org_post, org_read and org_report", async () => {
       const out = (await handleMessage(makeServices("allowed"), "codex", {
         jsonrpc: "2.0",
