@@ -12,12 +12,17 @@ import { persistForemanLlmChoice } from '../../src/tui/setup-wizard/foreman-llm-
 import type { WizardServices } from '../../src/tui/setup-wizard/types.js'
 
 // =============================================================================
-// The setup wizard writes OpenAI-compatible preset credentials as
-// `key_secret` / `endpoint_secret` (the schema's own names), but doctor only
-// read `secret_name` — so it warned "openai_compatible.secret_name is unset"
-// right after a successful preset setup. Doctor now reads the schema's names
-// and still honours `secret_name` for existing hand-written llm.yaml files.
-// All secret values are fakes.
+// Doctor's llm_credentials check for OpenAI-compatible and Ollama brains.
+//
+// llmCredentialSlots maps each provider to the fields it really uses: the
+// wizard writes OpenAI-compatible preset credentials as key_secret /
+// endpoint_secret (the schema's own names), with secret_name still honoured
+// for older llm.yaml files.
+//
+// But this build has no LLM client for either provider (buildLlmClient throws
+// LlmProviderUnavailableError; `foreman start` falls back to heuristics), so
+// checkLlmCredentials must warn for them rather than report stored
+// credentials as "ok". All secret values are fakes.
 // =============================================================================
 
 describe('llmCredentialSlots', () => {
@@ -41,7 +46,7 @@ describe('llmCredentialSlots', () => {
     )
   })
 
-  it('treats a keyless Ollama block as fine', () => {
+  it('treats a keyless Ollama block as keyless', () => {
     expect(llmCredentialSlots('ollama', { secret_name: null })).toMatchObject({
       keySecret: null,
       keyOptional: true,
@@ -49,7 +54,7 @@ describe('llmCredentialSlots', () => {
   })
 })
 
-describe('checkLlmCredentials for wizard-written presets', () => {
+describe('checkLlmCredentials for brains without a runtime client', () => {
   let tmp: string
   let previousHome: string | undefined
 
@@ -71,7 +76,15 @@ describe('checkLlmCredentials for wizard-written presets', () => {
     return new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
   }
 
-  it('is ok right after the wizard saves a preset', () => {
+  function expectNoRuntimeWarning(provider: string): void {
+    const r = checkLlmCredentials()
+    expect(r.status).toBe('warn')
+    expect(r.message).toContain(`LLM provider ${provider} has no client in this build yet`)
+    expect(r.message).toContain('heuristic-only')
+    expect(r.remediation).toContain('anthropic, openai or gemini')
+  }
+
+  it('warns for an OpenAI-compatible preset even with its credentials stored', () => {
     const preset = findPreset(loadLlmPresets(), 'deepseek')
     expect(preset).not.toBeNull()
     persistForemanLlmChoice({
@@ -84,12 +97,11 @@ describe('checkLlmCredentials for wizard-written presets', () => {
       preset,
       presetKey: 'fake-deepseek-key-000',
     })
-    const r = checkLlmCredentials()
-    expect(r.status).toBe('ok')
-    expect(r.message).toContain('deepseek-api-key')
+    // Used to report "ok — credentials present (deepseek-api-key)".
+    expectNoRuntimeWarning('openai_compatible')
   })
 
-  it('still accepts an existing llm.yaml that uses secret_name', () => {
+  it('warns for an older secret_name-style openai_compatible block', () => {
     store().add('legacy-compat-key', 'fake-legacy-key')
     writeFileSync(
       join(tmp, 'llm.yaml'),
@@ -102,45 +114,10 @@ credentials:
 `,
       'utf-8',
     )
-    expect(checkLlmCredentials().status).toBe('ok')
+    expectNoRuntimeWarning('openai_compatible')
   })
 
-  it('warns when the endpoint secret is missing', () => {
-    store().add('compat-key', 'fake-compat-key')
-    writeFileSync(
-      join(tmp, 'llm.yaml'),
-      `enabled: true
-provider: openai_compatible
-model: m
-credentials:
-  openai_compatible:
-    key_secret: compat-key
-    endpoint_secret: compat-endpoint
-`,
-      'utf-8',
-    )
-    const r = checkLlmCredentials()
-    expect(r.status).toBe('warn')
-    expect(r.message).toContain('compat-endpoint')
-  })
-
-  it('names key_secret when nothing is configured for openai_compatible', () => {
-    writeFileSync(
-      join(tmp, 'llm.yaml'),
-      `enabled: true
-provider: openai_compatible
-model: m
-credentials:
-  openai_compatible: {}
-`,
-      'utf-8',
-    )
-    const r = checkLlmCredentials()
-    expect(r.status).toBe('warn')
-    expect(r.message).toContain('openai_compatible.key_secret is unset')
-  })
-
-  it('is ok for a keyless Ollama brain', () => {
+  it('warns for a keyless Ollama brain', () => {
     writeFileSync(
       join(tmp, 'llm.yaml'),
       `enabled: true
@@ -151,6 +128,15 @@ credentials:
     secret_name: null
     endpoint: http://localhost:11434
 `,
+      'utf-8',
+    )
+    expectNoRuntimeWarning('ollama')
+  })
+
+  it('stays ok when the LLM switch is off', () => {
+    writeFileSync(
+      join(tmp, 'llm.yaml'),
+      'enabled: false\nprovider: ollama\nmodel: m\n',
       'utf-8',
     )
     expect(checkLlmCredentials().status).toBe('ok')

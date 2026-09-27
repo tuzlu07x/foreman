@@ -13,6 +13,7 @@ import { legacyHasInterestingFiles } from "../utils/migrate-config.js";
 import { EventBus, type ForemanEventMap } from "./event-bus.js";
 import { getBudgetStatus } from "./llm/budget.js";
 import { loadLlmConfig } from "./llm/config.js";
+import { hasRuntimeClient } from "./llm/factory.js";
 import { isOAuthProviderId } from "./llm/oauth/oauth-providers.js";
 import { loadOAuthTokens } from "./llm/oauth/token-store.js";
 import { loadActiveProviders, loadActiveRegistry } from "./registry-catalog.js";
@@ -477,6 +478,19 @@ export function checkLlmCredentials(): CheckResult {
       name: "llm_credentials",
       status: "ok",
       message: "LLM global switch is off — credentials not required",
+    };
+  }
+
+  // A provider the schema accepts but this build has no client for
+  // (ollama, openai_compatible — v0.2): buildLlmClient throws
+  // LlmProviderUnavailableError and `foreman start` silently runs
+  // heuristic-only, so credentials being present would be a false "ok".
+  if (!hasRuntimeClient(config.provider)) {
+    return {
+      name: "llm_credentials",
+      status: "warn",
+      message: `LLM provider ${config.provider} has no client in this build yet (coming in v0.2) — verification + smart-report run heuristic-only`,
+      remediation: `Pick anthropic, openai or gemini as Foreman's brain (\`foreman setup\`, Step 2), or set \`enabled: false\` in ${paths.llmConfigPath}.`,
     };
   }
 
