@@ -193,6 +193,8 @@ A new chat platform is a small adapter (`OrgMirror`) plus a key in
 
 Ask what a department did and what it cost, from any surface:
 
+![A department report and the agents' conversations in the TUI console](images/tui-org-report.png)
+
 ```bash
 foreman org report marketing today        # or week, month, 7d, 24h
 foreman org report                        # the whole company, by department
@@ -221,7 +223,7 @@ summary.
 | Source | How | Precision |
 | --- | --- | --- |
 | **Agent telemetry** | Claude Code (and Codex) export OpenTelemetry. `foreman start` listens on `127.0.0.1:4319` and keeps only per-request token counts, model and cost; prompts never reach Foreman. | Exact, cost included |
-| **Task output** | Usage an agent CLI prints when it finishes a task (`tokens used: N`, Claude JSON results), used only when that task sent no telemetry | Tokens exact; cost estimated (≈) from list prices |
+| **Task output** | Usage an agent CLI prints when it finishes a task (`tokens used: N`, Claude JSON results), used only when that task sent no telemetry | Tokens exact; cost estimated (≈) from list prices when the model is known (the role's or agent's `model`), otherwise shown as *unpriced* |
 | **Foreman itself** | Its own LLM calls (`llm_usage`) | Exact |
 
 Tasks Foreman starts (`foreman write`, `assign`, delegation between

@@ -160,6 +160,20 @@ describe('usage ledger, receiver, reports and budgets (#629)', () => {
     expect(spendBy(db, 'model', today).map((r) => r.key)).toContain('gpt-5')
   })
 
+  it('shows tokens without a known price as unpriced, not as $0', () => {
+    ledger.record({ agentId: 'codex', source: 'task-output', total: 48_213 })
+    const today = parsePeriod('today')!
+    const [codex] = spendBy(db, 'agent', today)
+    expect(codex).toMatchObject({ costUsd: 0, estimated: false, tokens: 48_213, unpricedTokens: 48_213 })
+    const text = renderOrgReport(buildOrgReport(db, parseOrgText(ORG), { kind: 'agent', id: 'codex' }, today))
+    expect(text).toContain('48.2k tokens (48.2k unpriced)')
+    expect(text).not.toContain('≈$0.000')
+    ledger.record({ agentId: 'claude-code', source: 'telemetry', costUsd: 0.12, input: 100 })
+    const company = renderOrgReport(buildOrgReport(db, parseOrgText(ORG), { kind: 'company' }, parsePeriod('today')!))
+    expect(company).toMatch(/codex\s+unpriced/)
+    expect(company).toMatch(/engineering\s+\$0\.120\+/)
+  })
+
   it('files budget alerts at 80% and 100%, once each per period', () => {
     const inbox = new InboxService(db, new EventBus<ForemanEventMap>())
     const pushed: string[] = []

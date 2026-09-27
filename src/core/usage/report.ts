@@ -58,6 +58,8 @@ export interface SpendRow {
   /** Some of the cost comes from the price table. */
   estimated: boolean;
   tokens: number;
+  /** Tokens with no known price (the model wasn't reported). */
+  unpricedTokens: number;
 }
 
 /** Usage rows in scope, counting a task's printed usage only when the
@@ -80,12 +82,21 @@ export function spendBy(
         : sql`coalesce(model, '(unknown model)')`;
   const scope = agents ? sql`AND agent_id IN (${sql.join(agents.map((a) => sql`${a}`), sql`, `)})` : sql``;
   if (agents && agents.length === 0) return [];
-  const rows = db.all<{ key: string; cost: number; est: number; tokens: number }>(sql`
-    SELECT ${column} AS key, sum(cost_usd) AS cost, max(cost_estimated) AS est, sum(total_tokens) AS tokens
+  const rows = db.all<{ key: string; cost: number; est: number; tokens: number; unpriced: number }>(sql`
+    SELECT ${column} AS key, sum(cost_usd) AS cost,
+      max(CASE WHEN cost_estimated = 1 AND cost_usd > 0 THEN 1 ELSE 0 END) AS est, sum(total_tokens) AS tokens,
+      sum(CASE WHEN cost_estimated = 1 AND cost_usd = 0 THEN total_tokens ELSE 0 END) AS unpriced
     FROM agent_usage
     WHERE ts >= ${period.since} AND ts < ${period.until + 1} AND ${DEDUPED} ${scope}
     GROUP BY key ORDER BY cost DESC, tokens DESC`);
-  return rows.map((r) => ({ key: r.key, costUsd: r.cost ?? 0, estimated: r.est === 1, tokens: r.tokens ?? 0 }));
+  return rows.map((r) => ({
+    key: r.key,
+    costUsd: r.cost ?? 0,
+    // Estimated only when the price table was actually applied.
+    estimated: r.est === 1,
+    tokens: r.tokens ?? 0,
+    unpricedTokens: r.unpriced ?? 0,
+  }));
 }
 
 /** Foreman's own LLM spend (summaries, verification, chat). */
@@ -94,7 +105,7 @@ export function foremanSpend(db: ForemanDb, period: Period): SpendRow | null {
     SELECT sum(cost_usd) AS cost, sum(input_tokens + output_tokens) AS tokens
     FROM llm_usage WHERE ts >= ${period.since} AND ts < ${period.until + 1}`);
   if (!row?.tokens && !row?.cost) return null;
-  return { key: "foreman", costUsd: row.cost ?? 0, estimated: false, tokens: row.tokens ?? 0 };
+  return { key: "foreman", costUsd: row.cost ?? 0, estimated: false, tokens: row.tokens ?? 0, unpricedTokens: 0 };
 }
 
 export interface BudgetStatus {
@@ -134,7 +145,7 @@ export function budgetStatus(
 export interface OrgReport {
   target: { kind: "company" | "department" | "role" | "agent"; id: string; name: string };
   period: Period;
-  spend: { costUsd: number; estimated: boolean; tokens: number };
+  spend: { costUsd: number; estimated: boolean; tokens: number; unpricedTokens: number };
   byDepartment: SpendRow[];
   byAgent: SpendRow[];
   foreman: SpendRow | null;
@@ -185,6 +196,7 @@ export function buildOrgReport(
     costUsd: rows.reduce((s, r) => s + r.costUsd, 0),
     estimated: rows.some((r) => r.estimated),
     tokens: rows.reduce((s, r) => s + r.tokens, 0),
+    unpricedTokens: rows.reduce((s, r) => s + r.unpricedTokens, 0),
   };
   const tasks = taskCounts(db, period, agents);
   const departments =
@@ -280,6 +292,13 @@ export function formatUsd(n: number, estimated = false): string {
   return `${estimated ? "≈" : ""}$${v}`;
 }
 
+/** Cost cell for a row: `unpriced` when no token had a known price, and a
+ *  trailing `+` when some did not. */
+export function formatCost(r: Pick<SpendRow, "costUsd" | "estimated" | "tokens" | "unpricedTokens">): string {
+  if (r.tokens > 0 && r.unpricedTokens >= r.tokens) return "unpriced";
+  return `${formatUsd(r.costUsd, r.estimated)}${r.unpricedTokens > 0 ? "+" : ""}`;
+}
+
 export function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
@@ -291,7 +310,10 @@ export function renderOrgReport(r: OrgReport): string {
   lines.push(`${r.target.name} · ${r.period.label}`);
   lines.push(
     `Spend ${formatUsd(r.spend.costUsd, r.spend.estimated)} · ${formatTokens(r.spend.tokens)} tokens` +
-      (r.costPerFinishedTask !== null ? ` · ${formatUsd(r.costPerFinishedTask, r.spend.estimated)} per finished task` : ""),
+      (r.spend.unpricedTokens > 0 ? ` (${formatTokens(r.spend.unpricedTokens)} unpriced)` : "") +
+      (r.costPerFinishedTask !== null && r.spend.unpricedTokens === 0
+        ? ` · ${formatUsd(r.costPerFinishedTask, r.spend.estimated)} per finished task`
+        : ""),
   );
   lines.push(
     `Tasks ${r.tasks.finished} finished, ${r.tasks.failed} failed` +
@@ -307,12 +329,12 @@ export function renderOrgReport(r: OrgReport): string {
   }
   if (r.byDepartment.length > 0) {
     lines.push("", "By department");
-    for (const d of r.byDepartment) lines.push(`  ${d.key.padEnd(18)} ${formatUsd(d.costUsd, d.estimated).padStart(9)}  ${formatTokens(d.tokens)} tokens`);
+    for (const d of r.byDepartment) lines.push(`  ${d.key.padEnd(18)} ${formatCost(d).padStart(9)}  ${formatTokens(d.tokens)} tokens`);
     if (r.foreman) lines.push(`  ${"foreman (itself)".padEnd(18)} ${formatUsd(r.foreman.costUsd).padStart(9)}  ${formatTokens(r.foreman.tokens)} tokens`);
   }
   if (r.byAgent.length > 0 && r.target.kind !== "agent") {
     lines.push("", "By agent");
-    for (const a of r.byAgent.slice(0, 8)) lines.push(`  ${a.key.padEnd(18)} ${formatUsd(a.costUsd, a.estimated).padStart(9)}  ${formatTokens(a.tokens)} tokens`);
+    for (const a of r.byAgent.slice(0, 8)) lines.push(`  ${a.key.padEnd(18)} ${formatCost(a).padStart(9)}  ${formatTokens(a.tokens)} tokens`);
   }
   if (r.recent.length > 0) {
     lines.push("", "Latest results");

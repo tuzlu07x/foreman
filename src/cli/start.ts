@@ -973,7 +973,14 @@ export function startForeman(
               const printed = parseTaskUsage(exec.spawn.stdout, exec.spawn.stderr);
               if (printed) {
                 try {
-                  usageLedger.record({ agentId, source: "task-output", ...printed, taskRef: String(row.id) });
+                  usageLedger.record({
+                    agentId,
+                    source: "task-output",
+                    ...printed,
+                    // The agent's configured model prices a bare token count.
+                    model: printed.model ?? registryRow?.modelVersion ?? null,
+                    taskRef: String(row.id),
+                  });
                 } catch {
                   /* reporting only */
                 }
