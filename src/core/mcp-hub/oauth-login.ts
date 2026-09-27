@@ -30,6 +30,7 @@ import type { McpOAuthRecord } from "./oauth-store.js";
 // on and never lets a token or code reach an error message.
 
 export const DEFAULT_LOGIN_TIMEOUT_MS = 5 * 60_000;
+export const MAX_LOGIN_TIMEOUT_MS = 30 * 60_000;
 const CALLBACK_PATH = "/callback";
 const CLIENT_NAME = "Foreman MCP Hub";
 
@@ -69,6 +70,12 @@ async function login(opts: McpOAuthLoginOptions, secrets: string[]): Promise<Mcp
       `no OAuth authorization-server metadata found for ${authServerUrl.origin} — the server may not support MCP OAuth`,
     );
   }
+  // RFC 8414 §3.3: the metadata must describe the server we asked about.
+  if (trimSlash(metadata.issuer) !== trimSlash(authServerUrl.href)) {
+    throw new McpOAuthError(
+      `the authorization-server metadata names issuer ${metadata.issuer}, not ${authServerUrl.href}`,
+    );
+  }
   assertSecureEndpoint(metadata.authorization_endpoint, "authorization endpoint");
   assertSecureEndpoint(metadata.token_endpoint, "token endpoint");
   if (!metadata.registration_endpoint) {
@@ -79,9 +86,11 @@ async function login(opts: McpOAuthLoginOptions, secrets: string[]): Promise<Mcp
     throw new McpOAuthError("the authorization server does not advertise PKCE with S256 — refusing to continue");
   }
 
-  let resource: URL | undefined;
+  // RFC 8707: always bind the tokens to this server — the published
+  // resource when there is protected-resource metadata, else the URL itself.
+  const requested = resourceUrlFromServerUrl(serverUrl);
+  let resource = requested;
   if (info.resourceMetadata) {
-    const requested = resourceUrlFromServerUrl(serverUrl);
     if (!checkResourceAllowed({ requestedResource: requested, configuredResource: info.resourceMetadata.resource })) {
       throw new McpOAuthError(
         `the protected-resource metadata is for ${info.resourceMetadata.resource}, not ${requested.href}`,
@@ -89,13 +98,16 @@ async function login(opts: McpOAuthLoginOptions, secrets: string[]): Promise<Mcp
     }
     resource = new URL(info.resourceMetadata.resource);
   }
-  const scope = opts.scope ?? (info.resourceMetadata?.scopes_supported?.join(" ") || undefined);
+  // Least privilege: no scope unless the user asks for one; the server
+  // grants its default.
+  const scope = opts.scope;
 
   const state = generateState();
   const receiver = await startLoopbackReceiver({
     state,
-    timeoutMs: opts.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
+    timeoutMs: Math.min(opts.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS, MAX_LOGIN_TIMEOUT_MS),
     issuer: metadata.issuer,
+    requireIss: (metadata as Record<string, unknown>)["authorization_response_iss_parameter_supported"] === true,
   });
   try {
     const client = await registerClient(authServerUrl, {
@@ -118,7 +130,7 @@ async function login(opts: McpOAuthLoginOptions, secrets: string[]): Promise<Mcp
       redirectUrl: receiver.redirectUri,
       state,
       ...(scope ? { scope } : {}),
-      ...(resource ? { resource } : {}),
+      resource,
     });
     secrets.push(codeVerifier);
     await opts.presentAuthUrl(authorizationUrl.href);
@@ -131,7 +143,7 @@ async function login(opts: McpOAuthLoginOptions, secrets: string[]): Promise<Mcp
       authorizationCode: code,
       codeVerifier,
       redirectUri: receiver.redirectUri,
-      ...(resource ? { resource } : {}),
+      resource,
       fetchFn,
     });
     secrets.push(tokens.access_token);
@@ -146,7 +158,7 @@ async function login(opts: McpOAuthLoginOptions, secrets: string[]): Promise<Mcp
       server: opts.server,
       server_url: opts.serverUrl,
       authorization_server_url: authServerUrl.href,
-      ...(resource ? { resource: resource.href } : {}),
+      resource: resource.href,
       ...(scope ? { scope } : {}),
       metadata: JSON.parse(JSON.stringify(metadata)) as Record<string, unknown>,
       client: {
@@ -191,6 +203,8 @@ export interface LoopbackReceiverOptions {
   timeoutMs: number;
   /** When set and the callback carries RFC 9207 `iss`, they must match. */
   issuer?: string;
+  /** The server promised `iss` (RFC 9207): a callback without it is refused. */
+  requireIss?: boolean;
 }
 
 const RESULT_PAGE = (ok: boolean): string =>
@@ -279,12 +293,19 @@ function checkCallback(params: URLSearchParams, opts: LoopbackReceiverOptions): 
     return { ok: false, reason: `the authorization server refused the request (${code})` };
   }
   const iss = params.get("iss");
+  if (iss === null && opts.requireIss) {
+    return { ok: false, reason: "the callback is missing the `iss` parameter the server promised (RFC 9207)" };
+  }
   if (iss !== null && opts.issuer !== undefined && iss !== opts.issuer) {
     return { ok: false, reason: "the callback came from a different issuer than the one discovered" };
   }
   const code = params.get("code");
   if (!code) return { ok: false, reason: "the callback carried no authorization code" };
   return { ok: true, code };
+}
+
+function trimSlash(url: string): string {
+  return url.replace(/\/+$/, "");
 }
 
 function constantTimeEqual(a: string, b: string): boolean {

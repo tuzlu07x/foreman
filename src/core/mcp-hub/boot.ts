@@ -39,20 +39,19 @@ export function loadHub(
   });
 }
 
-/** OAuth sessions for `auth: oauth` servers, backed by the encrypted store.
- *  Refreshes are serialised across processes by a lock file next to the
- *  pins (state dir). */
+/** The lock every writer of a server's OAuth session takes (hub refresh,
+ *  `foreman mcp login / logout / remove`): a file next to the pins. */
+export function mcpOAuthLockPath(paths: Pick<HubPaths, "mcpPinsPath">, server: string): string {
+  return join(dirname(paths.mcpPinsPath), `${mcpOAuthSecretName(server)}.lock`);
+}
+
+/** OAuth sessions for `auth: oauth` servers, backed by the encrypted store. */
 export function hubOAuthSessions(
   paths: Pick<HubPaths, "mcpPinsPath">,
   store: McpOAuthSecretStore,
 ): (server: string, url: string) => HubOAuthSession {
   return (server, url) =>
-    new McpOAuthSession({
-      server,
-      serverUrl: url,
-      store,
-      lockPath: join(dirname(paths.mcpPinsPath), `${mcpOAuthSecretName(server)}.lock`),
-    });
+    new McpOAuthSession({ server, serverUrl: url, store, lockPath: mcpOAuthLockPath(paths, server) });
 }
 
 /** Which hub servers `agentId` may use according to org.yaml. An org.yaml

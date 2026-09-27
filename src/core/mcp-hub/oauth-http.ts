@@ -46,13 +46,16 @@ export function assertSecureEndpoint(raw: string | URL | undefined, what: string
   );
 }
 
-const OAUTH_HTTP_TIMEOUT_MS = 30_000;
+/** Shorter than the session lock's stale threshold (oauth-lock). */
+export const OAUTH_HTTP_TIMEOUT_MS = 15_000;
 
-/** Discovery GETs may follow redirects (to https / loopback targets only);
- *  anything carrying a code, verifier or token (POST) must not be replayed
- *  to another location, so redirects there are an error. */
+/** Every OAuth request goes to an https (or loopback) URL. Discovery GETs
+ *  may follow redirects (to https / loopback targets only); anything
+ *  carrying a code, verifier or token (POST) must not be replayed to another
+ *  location, so redirects there are an error. */
 export function hardenedOAuthFetch(base: FetchLike = fetch): FetchLike {
   return async (url, init) => {
+    assertSecureEndpoint(url, "OAuth endpoint");
     const method = (init?.method ?? "GET").toUpperCase();
     const res = await base(url, {
       ...init,

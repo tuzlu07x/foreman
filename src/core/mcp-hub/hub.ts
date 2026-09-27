@@ -301,12 +301,17 @@ export class McpHub {
       .catch((err: unknown) => {
         throw this.scrubbed(state, err);
       });
+    // The values Foreman itself injected (secrets, OAuth tokens) are masked
+    // unconditionally — an upstream that echoes its credentials must not
+    // hand them to the agent, whatever the result-guard settings say.
+    const known = scrubKnownValues(raw, this.knownValues(state));
     const { security, limits } = this.opts.config;
-    const guarded = guardToolResult(raw, {
+    const guarded = guardToolResult(known.value, {
       maxChars: limits.max_result_chars,
       redactSecrets: security.redact_secrets_in_results,
       flagInjection: security.flag_injection_in_results,
     });
+    guarded.stats.redactions += known.count;
     return { ...guarded, durationMs: this.now() - started };
   }
 
@@ -484,10 +489,14 @@ export class McpHub {
    *  token back; mask the values Foreman injected and anything secret-shaped. */
   private scrub(state: ServerState, text: string): string {
     let out = text;
-    for (const value of [...state.secretValues, ...(state.oauth?.knownSecrets() ?? [])]) {
+    for (const value of this.knownValues(state)) {
       if (value.length >= 4) out = out.split(value).join("[redacted]");
     }
     return redactSecretShapes(out).text;
+  }
+
+  private knownValues(state: ServerState): string[] {
+    return [...state.secretValues, ...(state.oauth?.knownSecrets() ?? [])];
   }
 
   private scrubbed(state: ServerState, err: unknown): Error {
@@ -640,6 +649,37 @@ function mapValues(input: Record<string, string>, fn: (v: string) => string): Re
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(input)) out[k] = fn(v);
   return out;
+}
+
+/** Shorter injected values (a port, a flag) are left alone so ordinary
+ *  result text is not mangled; tokens and keys are far longer. */
+const MIN_SCRUB_CHARS = 8;
+
+/** Replace every occurrence of a known secret value in any string of a
+ *  tool result (text, resources, structured content, error results). */
+export function scrubKnownValues<T>(value: T, secrets: readonly string[]): { value: T; count: number } {
+  const needles = [...new Set(secrets)].filter((s) => s.length >= MIN_SCRUB_CHARS).sort((a, b) => b.length - a.length);
+  let count = 0;
+  if (needles.length === 0) return { value, count };
+  const walk = (node: unknown, depth: number): unknown => {
+    if (typeof node === "string") {
+      let out = node;
+      for (const needle of needles) {
+        const parts = out.split(needle);
+        if (parts.length > 1) {
+          count += parts.length - 1;
+          out = parts.join("[REDACTED credential]");
+        }
+      }
+      return out;
+    }
+    if (depth > 32 || node === null || typeof node !== "object") return node;
+    if (Array.isArray(node)) return node.map((n) => walk(n, depth + 1));
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) out[k] = walk(v, depth + 1);
+    return out;
+  };
+  return { value: walk(value, 0) as T, count };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

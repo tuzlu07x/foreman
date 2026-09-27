@@ -89,7 +89,8 @@ describe('MCP hub OAuth', () => {
       expect(params.get('state')).toMatch(/^[0-9a-f]{32}$/)
       expect(params.get('redirect_uri')).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback$/)
       expect(params.get('resource')).toBe(mock.mcpUrl)
-      expect(params.get('scope')).toBe('mcp:tools')
+      // Least privilege: no scope unless asked (not every scopes_supported).
+      expect(params.get('scope')).toBeNull()
       expect(mock.calls.register).toBe(1)
       expect(mock.calls.token).toBe(1)
 

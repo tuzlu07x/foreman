@@ -118,10 +118,30 @@ describe('foreman mcp login / logout (MCP OAuth)', () => {
 
     const logout = await run(['mcp', 'logout', 'hosted'])
     expect(logout.stdout).toContain('logged out of')
+    expect(logout.stdout).toContain('revoked at the provider')
+    expect(mock.calls.revoke).toBe(2)
+    for (const secret of mock.allSecrets()) expect(logout.stdout + logout.stderr).not.toContain(secret)
     const after = await run(['mcp', 'tools', 'hosted', '--refresh', '--json'])
     const status = (JSON.parse(after.stdout) as { servers: Array<{ error: string | null }> }).servers[0]!
     expect(status.error).toContain('foreman mcp login hosted')
   }, 60_000)
+
+  it('clamps --timeout to 30 minutes', async () => {
+    await run(['mcp', 'add', 'hosted', '--url', mock.mcpUrl, '--oauth'])
+    const child = spawn('node', [FM_BIN, 'mcp', 'login', 'hosted', '--no-browser', '--timeout', '999999'], { env })
+    const out = await new Promise<string>((done) => {
+      let stdout = ''
+      child.stdout.on('data', (d: Buffer) => {
+        stdout += d.toString()
+        if (stdout.includes('Waiting for the sign-in')) {
+          child.kill()
+          done(stdout)
+        }
+      })
+      child.on('exit', () => done(stdout))
+    })
+    expect(out).toContain('(up to 1800s)')
+  }, 30_000)
 
   it('refuses to log in to a server that is not marked auth: oauth', async () => {
     await run(['mcp', 'add', 'plain', '--url', mock.mcpUrl])

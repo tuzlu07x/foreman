@@ -21,6 +21,18 @@ export interface MockOAuthOptions {
   withoutS256?: boolean
   /** Token endpoint answers 500 and echoes what it was sent. */
   tokenEndpointBroken?: boolean
+  /** Delay every token response (to race logout / login against a refresh). */
+  tokenDelayMs?: number
+  /** Publish this issuer instead of our own base URL. */
+  issuer?: string
+  /** `authorization_servers` in the protected-resource metadata. */
+  authorizationServers?: string[]
+  /** 404 the protected-resource metadata (legacy servers). */
+  withoutResourceMetadata?: boolean
+  /** Advertise RFC 9207 `iss` but leave it off the callback. */
+  omitIssOnCallback?: boolean
+  /** Add tools that echo the Authorization header back (ok and isError). */
+  echoAuthTools?: boolean
 }
 
 interface Client {
@@ -36,7 +48,9 @@ interface PendingCode {
 export class MockOAuthServer {
   base = ''
   readonly issued = { access: [] as string[], refresh: [] as string[], codes: [] as string[], clients: [] as string[] }
-  readonly calls = { register: 0, authorize: 0, token: 0, refresh: 0, refreshReuse: 0, unauthorized: 0, mcp: 0 }
+  readonly calls = { register: 0, authorize: 0, token: 0, refresh: 0, refreshReuse: 0, unauthorized: 0, mcp: 0, revoke: 0 }
+  readonly revoked: string[] = []
+  readonly authorizeParams: URLSearchParams[] = []
   readonly bearerSeen: string[] = []
   private server: HttpServer | null = null
   private readonly clients = new Map<string, Client>()
@@ -101,7 +115,8 @@ export class MockOAuthServer {
 
   private metadata(): Record<string, unknown> {
     return {
-      issuer: this.base,
+      issuer: this.opts.issuer ?? this.base,
+      revocation_endpoint: `${this.base}/revoke`,
       authorization_endpoint: this.opts.authorizationEndpoint ?? `${this.base}/authorize`,
       token_endpoint: `${this.base}/token`,
       registration_endpoint: `${this.base}/register`,
@@ -117,9 +132,10 @@ export class MockOAuthServer {
     const url = new URL(req.url ?? '/', this.base)
     const path = url.pathname
     if (req.method === 'GET' && path.startsWith('/.well-known/oauth-protected-resource')) {
+      if (this.opts.withoutResourceMetadata) return json(res, 404, {})
       return json(res, 200, {
         resource: this.mcpUrl,
-        authorization_servers: [this.base],
+        authorization_servers: this.opts.authorizationServers ?? [this.base],
         scopes_supported: ['mcp:tools'],
       })
     }
@@ -129,6 +145,23 @@ export class MockOAuthServer {
     if (req.method === 'POST' && path === '/register') return this.register(req, res)
     if (req.method === 'GET' && path === '/authorize') return this.authorize(url, res)
     if (req.method === 'POST' && path === '/token') return this.token(req, res)
+    if (req.method === 'POST' && path === '/revoke') {
+      this.calls.revoke++
+      const token = new URLSearchParams(await readBody(req)).get('token') ?? ''
+      this.revoked.push(token)
+      this.access.delete(token)
+      this.refresh.delete(token)
+      res.writeHead(200).end()
+      return
+    }
+    if (path === '/redirect-same') {
+      res.writeHead(307, { location: `${this.base}/probe` }).end()
+      return
+    }
+    if (path === '/redirect-cross') {
+      res.writeHead(307, { location: url.searchParams.get('to') ?? '' }).end()
+      return
+    }
     if (path === '/probe' || path === '/mcp') {
       const auth = req.headers.authorization ?? ''
       const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
@@ -144,7 +177,7 @@ export class MockOAuthServer {
       this.bearerSeen.push(token)
       if (path === '/probe') return json(res, 200, { ok: true })
       this.calls.mcp++
-      return this.mcp(req, res)
+      return this.mcp(req, res, auth)
     }
     res.writeHead(404).end()
   }
@@ -165,6 +198,7 @@ export class MockOAuthServer {
   private authorize(url: URL, res: ServerResponse): void {
     this.calls.authorize++
     const p = url.searchParams
+    this.authorizeParams.push(new URLSearchParams(p))
     const client = this.clients.get(p.get('client_id') ?? '')
     const redirectUri = p.get('redirect_uri') ?? ''
     if (!client || !client.redirectUris.includes(redirectUri)) {
@@ -186,13 +220,14 @@ export class MockOAuthServer {
     const back = new URL(redirectUri)
     back.searchParams.set('code', code)
     back.searchParams.set('state', p.get('state') ?? '')
-    back.searchParams.set('iss', this.base)
+    if (!this.opts.omitIssOnCallback) back.searchParams.set('iss', this.opts.issuer ?? this.base)
     res.writeHead(302, { location: back.href }).end()
   }
 
   private async token(req: IncomingMessage, res: ServerResponse): Promise<void> {
     this.calls.token++
     const raw = await readBody(req)
+    if (this.opts.tokenDelayMs) await new Promise((r) => setTimeout(r, this.opts.tokenDelayMs))
     if (this.opts.tokenEndpointBroken) {
       res.writeHead(500, { 'content-type': 'text/plain' }).end(`upstream exploded while handling ${raw}`)
       return
@@ -246,20 +281,32 @@ export class MockOAuthServer {
     return out
   }
 
-  private async mcp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  private async mcp(req: IncomingMessage, res: ServerResponse, authorization: string): Promise<void> {
     const server = new Server({ name: 'mock-hosted', version: '1.0.0' }, { capabilities: { tools: {} } })
-    server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [
-        {
-          name: 'echo',
-          description: 'Echo back the text you pass in.',
-          inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
-        },
-      ],
-    }))
-    server.setRequestHandler(CallToolRequestSchema, async (request) => ({
-      content: [{ type: 'text', text: String((request.params.arguments ?? {}).text ?? '') }],
-    }))
+    const tools: Array<{ name: string; description: string; inputSchema: { type: 'object'; [k: string]: unknown } }> = [
+      {
+        name: 'echo',
+        description: 'Echo back the text you pass in.',
+        inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+      },
+    ]
+    if (this.opts.echoAuthTools) {
+      for (const name of ['whoami', 'whoami_error']) {
+        tools.push({ name, description: 'Show the request headers.', inputSchema: { type: 'object', properties: {}, required: [] } })
+      }
+    }
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }))
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      if (request.params.name === 'whoami' || request.params.name === 'whoami_error') {
+        const text = `you sent Authorization: ${authorization}`
+        return {
+          content: [{ type: 'text', text }],
+          structuredContent: { authorization },
+          ...(request.params.name === 'whoami_error' ? { isError: true } : {}),
+        }
+      }
+      return { content: [{ type: 'text', text: String((request.params.arguments ?? {}).text ?? '') }] }
+    })
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
     res.on('close', () => {
       void transport.close()
