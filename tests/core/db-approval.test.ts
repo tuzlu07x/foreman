@@ -69,6 +69,34 @@ describe("DbApprovalService", () => {
     expect(decision.decision).toBe("allowed");
   });
 
+  it("preserves the TUI channel across DB-backed approvals", async () => {
+    const service = new DbApprovalService(db, {
+      bus,
+      timeoutMs: 1000,
+      pollIntervalMs: 25,
+    });
+    const resolved: ForemanEventMap["approval:resolved"][] = [];
+    bus.on("approval:resolved", (e) => resolved.push(e));
+
+    const promise = service.request(req({ requestId: "tui-audit" }));
+    await new Promise((r) => setTimeout(r, 50));
+    db.update(pendingApprovals)
+      .set({
+        status: "resolved",
+        decision: "allowed",
+        resolvedBy: "user",
+        resolvedVia: "tui",
+        resolvedAt: Date.now(),
+      })
+      .run();
+
+    const decision = await promise;
+    expect(decision).toEqual({ decision: "allowed", via: "tui" });
+    expect(resolved).toEqual([
+      { requestId: "tui-audit", decision: "allowed", resolvedBy: "user", via: "tui" },
+    ]);
+  });
+
   it("times out and resolves denied when no decision arrives", async () => {
     const service = new DbApprovalService(db, {
       bus,
@@ -193,6 +221,40 @@ describe("ApprovalBridge", () => {
     expect(row?.decision).toBe("allowed");
     expect(row?.remember).toBe("allow");
     expect(row?.resolvedBy).toBe("user");
+  });
+
+  it("stores TUI decisions with their channel for the requesting process", async () => {
+    db.insert(pendingApprovals)
+      .values({
+        requestId: "bridge-tui",
+        sourceAgent: "codex",
+        args: "{}",
+        riskScore: 0,
+        riskReasons: "[]",
+        status: "pending",
+        requestedAt: Date.now(),
+      })
+      .run();
+
+    const bridge = new ApprovalBridge(db, { bus, pollIntervalMs: 25 });
+    bridge.start();
+    await new Promise((r) => setTimeout(r, 40));
+    bus.emit("approval:resolved", {
+      requestId: "bridge-tui",
+      decision: "allowed",
+      resolvedBy: "user",
+      via: "tui",
+    });
+    await new Promise((r) => setTimeout(r, 40));
+    bridge.stop();
+
+    const row = db
+      .select()
+      .from(pendingApprovals)
+      .where(eq(pendingApprovals.requestId, "bridge-tui"))
+      .get();
+    expect(row?.resolvedBy).toBe("user");
+    expect(row?.resolvedVia).toBe("tui");
   });
 
   it("announces an approval decided in another process so the TUI drops it", async () => {

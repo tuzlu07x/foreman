@@ -361,6 +361,7 @@ export class MediatorService {
       input,
       decision,
       decidedBy,
+      responseDecidedBy: decidedBy === "user:tui" ? "user" : undefined,
       assessment,
       createdAt,
       result,
@@ -554,6 +555,8 @@ export class MediatorService {
     input: MediatorInput;
     decision: "allowed" | "denied";
     decidedBy: string;
+    /** User-facing summary can stay generic while the audit trail records the channel. */
+    responseDecidedBy?: string;
     assessment: RiskAssessment;
     createdAt: number;
     result?: unknown;
@@ -596,7 +599,7 @@ export class MediatorService {
     return {
       requestId: args.requestId,
       decision: args.decision,
-      decidedBy: args.decidedBy,
+      decidedBy: args.responseDecidedBy ?? args.decidedBy,
       riskScore: args.assessment.totalScore,
       riskReasons,
       riskFactors: args.assessment.factors,

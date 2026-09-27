@@ -388,7 +388,11 @@ export class DbApprovalService implements ApprovalService {
         const decision: ApprovalDecision = {
           decision: row.decision ?? "denied",
           ...(row.remember ? { remember: row.remember } : {}),
-          ...(row.resolvedBy === "agent" ? { via: "agent_mcp" as const } : {}),
+          ...(row.resolvedVia
+            ? { via: row.resolvedVia }
+            : row.resolvedBy === "agent"
+              ? { via: "agent_mcp" as const }
+              : {}),
           ...(this.cancelled.delete(req.requestId) || row.resolvedBy === "cancelled"
             ? { cancelled: true }
             : row.resolvedBy === "timeout"
@@ -400,6 +404,11 @@ export class DbApprovalService implements ApprovalService {
           decision: decision.decision,
           remember: decision.remember,
           resolvedBy: row.resolvedBy ?? "timeout",
+          ...(row.resolvedVia
+            ? { via: row.resolvedVia }
+            : row.resolvedBy === "agent"
+              ? { via: "agent_mcp" as const }
+              : {}),
         });
         return decision;
       }
@@ -672,6 +681,7 @@ export class ApprovalBridge {
           decision: e.decision,
           remember: e.remember ?? null,
           resolvedBy: e.resolvedBy,
+          resolvedVia: e.via ?? null,
           resolvedAt: Date.now(),
         })
         .where(
@@ -787,7 +797,11 @@ export class ApprovalBridge {
           decision: row.decision ?? "denied",
           ...(row.remember ? { remember: row.remember } : {}),
           resolvedBy: row.resolvedBy ?? "timeout",
-          ...(row.resolvedBy === "agent" ? { via: "agent_mcp" as const } : {}),
+          ...(row.resolvedVia
+            ? { via: row.resolvedVia }
+            : row.resolvedBy === "agent"
+              ? { via: "agent_mcp" as const }
+              : {}),
         });
       }
       // Rows that vanished entirely (pruned) are simply forgotten.

@@ -202,6 +202,27 @@ agents:
     expect(result.decidedBy).toBe('user')
   })
 
+  it('audits TUI approval decisions by channel without changing the agent-facing summary', async () => {
+    approval.request = vi.fn(
+      async (): Promise<ApprovalDecision> => ({ decision: 'allowed', via: 'tui' }),
+    )
+    const decided: ForemanEventMap['request:decided'][] = []
+    bus.on('request:decided', (event) => decided.push(event))
+
+    const mediator = new MediatorService({ registry, policy, risk, approval, bus })
+    const result = await mediator.handleRequest({
+      sourceAgent: 'hermes',
+      targetAgent: 'claude-code',
+      targetTool: 'read_file',
+      message: callMessage(1, 'read_file', { path: 'x.ts' }),
+      policyFallback: { effect: 'ask', source: 'test' },
+    })
+
+    expect(result.decidedBy).toBe('user')
+    expect(decided).toHaveLength(1)
+    expect(decided[0]?.decidedBy).toBe('user:tui')
+  })
+
   it('policy allow + high risk → still asks approval (threshold)', async () => {
     policy.loadYamlText(`
 agents:

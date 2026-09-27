@@ -232,6 +232,12 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   // Every pending approval, oldest deadline first (#614).
   const queue = useApprovalQueue(bus, pendingApprovals);
   const pendingApproval: ApprovalRequest | null = queue.current?.request ?? null;
+  const quitWithPendingApprovals = useCallback(() => {
+    for (const item of queue.state.items) {
+      queue.resolve(item.request.requestId, { decision: "denied" });
+    }
+    exit();
+  }, [exit, queue.resolve, queue.state.items]);
   const [inspectOpen, setInspectOpen] = useState(false);
   const [inspectOffset, setInspectOffset] = useState(0);
   const [technicalExpanded, setTechnicalExpanded] = useState(false);
@@ -920,6 +926,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           setPage={setPage}
           quitConfirm={quitConfirm}
           setQuitConfirm={setQuitConfirm}
+          onConfirmQuit={quitWithPendingApprovals}
           helpOpen={helpOpen}
           setHelpOpen={setHelpOpen}
           pendingApproval={pendingApproval}
@@ -1191,6 +1198,7 @@ interface KeyboardHandlerProps {
   setPage: (p: Page) => void;
   quitConfirm: boolean;
   setQuitConfirm: (v: boolean) => void;
+  onConfirmQuit: () => void;
   helpOpen: boolean;
   setHelpOpen: (v: boolean) => void;
   pendingApproval: ApprovalRequest | null;
@@ -1287,6 +1295,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     setPage,
     quitConfirm,
     setQuitConfirm,
+    onConfirmQuit,
     helpOpen,
     setHelpOpen,
     pendingApproval,
@@ -1381,6 +1390,11 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       if (key.escape || input === "?" || input === "h") setHelpOpen(false);
       return;
     }
+    if (quitConfirm) {
+      if (input === "y" || input === "Y") onConfirmQuit();
+      else if (input === "n" || input === "N" || key.escape) setQuitConfirm(false);
+      return;
+    }
     // Keys that work on every page, unless the page is taking typed text.
     const textEntry =
       (page === "logs" && logSearchMode) ||
@@ -1390,6 +1404,10 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       ((page === "providers" || page === "services") && pageEditing);
     const letter = /^[a-zA-Z]$/.test(input) && !key.ctrl && !key.meta;
     if (letter && (pendingApproval || !textEntry) && swallowUnsettledKey()) return;
+    if (pendingApproval && input === "q") {
+      setQuitConfirm(true);
+      return;
+    }
     if (pendingApproval && inspectOpen) {
       if (key.escape) {
         setInspectOpen(false);
@@ -1688,12 +1706,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     // global dispatch (which would simultaneously try to setPage('sessions')).
     if (page === "providers" || page === "services") {
       if (input === "q") exit();
-      return;
-    }
-    if (quitConfirm) {
-      if (input === "y" || input === "Y") exit();
-      else if (input === "n" || input === "N" || key.escape)
-        setQuitConfirm(false);
       return;
     }
     if (input === "/") openCommand();

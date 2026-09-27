@@ -129,6 +129,32 @@ describe('TUI control surface', () => {
     expect(strip(app.lastFrame())).toContain('nothing waiting')
   })
 
+  it('confirms quit from the approval screen and denies every pending request', async () => {
+    const now = Date.now()
+    bus.emit('approval:requested', approval('quit-r1', 'codex', 'write_file', now + 60_000))
+    bus.emit('approval:requested', approval('quit-r2', 'hermes', 'shell_exec', now + 90_000))
+    await tick()
+    expect(strip(app.lastFrame())).toContain('Approval 1 of 2')
+
+    app.stdin.write('q')
+    await tick()
+    expect(strip(app.lastFrame())).toContain('Quit Foreman?')
+    expect(resolved).toEqual([])
+
+    app.stdin.write('n')
+    await tick()
+    expect(strip(app.lastFrame())).toContain('Approval 1 of 2')
+
+    app.stdin.write('q')
+    await tick()
+    app.stdin.write('y')
+    await tick()
+    expect(resolved).toEqual([
+      { requestId: 'quit-r1', decision: 'denied', resolvedBy: 'user', via: 'tui' },
+      { requestId: 'quit-r2', decision: 'denied', resolvedBy: 'user', via: 'tui' },
+    ])
+  })
+
   it('never auto-denies on its own clock', async () => {
     bus.emit('approval:requested', approval('r3', 'codex', 'write_file', Date.now() + 1_000))
     await tick(1_300)
