@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { getForemanPaths } from '../../utils/config.js'
-import { claimedAgentOf } from '../agent-identity.js'
+import { isUntrustedSource } from '../agent-identity.js'
 import { shortFingerprint } from './secret-patterns.js'
 import type { RiskFactor, RiskRule } from './types.js'
 
@@ -124,7 +124,9 @@ export const foremanSelfProtectionRule: RiskRule = {
     }
 
     // Any access, read included: the file holds another agent's token.
-    const self = claimedAgentOf(req.sourceAgent).trim().toLowerCase()
+    // Only a verified agent's own file is exempt; `untrusted:<id>` hasn't
+    // proven it is <id>, and <id>'s file is exactly what it would want.
+    const self = isUntrustedSource(req.sourceAgent) ? null : req.sourceAgent.trim().toLowerCase()
     for (const { re, agent, label } of TOKEN_WIRING_FILES) {
       const m = re.exec(text)
       if (m && agent !== self) {

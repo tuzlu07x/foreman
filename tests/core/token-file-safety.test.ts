@@ -176,6 +176,12 @@ describe('self-protection: token-bearing wiring and process environments', () =>
     expect(rules('hermes', { path: '/home/u/.zeroclaw/config.toml' })).toContain('agent_token_access')
   })
 
+  it('exempts only a VERIFIED agent reading its own config (#618 review L4)', () => {
+    expect(rules('claude-code', { command: 'cat ~/.claude.json' })).not.toContain('agent_token_access')
+    expect(rules('untrusted:claude-code', { command: 'cat ~/.claude.json' })).toContain('agent_token_access')
+    expect(rules('untrusted:codex', { path: '/home/u/.codex/config.toml' })).toContain('agent_token_access')
+  })
+
   it('flags reads of any process environment', () => {
     expect(rules('codex', { command: 'cat /proc/4242/environ' })).toContain('process_environ_access')
     expect(rules('codex', { command: 'tr "\\0" "\\n" < /proc/self/environ' })).toContain('process_environ_access')
