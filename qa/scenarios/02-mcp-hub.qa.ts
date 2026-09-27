@@ -167,11 +167,8 @@ it('MCP agent through mcp-stdio and the hub: allow, ask/timeout, poisoning, rug 
     ev(`call reply: "${replyText(res).slice(0, 150)}…"`)
     ev('second tools/list: demo__echo withheld')
     ev(`audit_events mcp:call: tool=echo isError=true error="…possible rug pull…"; requests ${row.id}: decision=${row.decision} decided_by=${row.decided_by}`)
-    if (row.decision === 'allowed') {
-      j.note(
-        `The rug-pull call is audited in \`requests\` (what \`foreman log tail\` shows) as "allowed by ${row.decided_by}", although the hub withheld it; the block is only visible in the mcp:call audit event.`,
-      )
-    }
+    // #635: the withheld call is recorded as denied, not as the policy's allow.
+    expect(row).toMatchObject({ decision: 'denied', decided_by: 'mcp:withheld:demo' })
     const refreshed = sb.json<HubTools>(['mcp', 'tools', 'demo', '--refresh', '--json'])
     const echo = refreshed.tools.find((t) => t.name === 'echo')
     expect(echo?.status).toBe('quarantined')
@@ -179,11 +176,9 @@ it('MCP agent through mcp-stdio and the hub: allow, ask/timeout, poisoning, rug 
     ev('`foreman mcp tools demo --refresh --json`: echo quarantined, "definition changed since it was pinned"')
     const cached = sb.json<HubTools>(['mcp', 'tools', 'demo', '--json'])
     const cachedEcho = cached.tools.find((t) => t.name === 'echo')
-    if (cachedEcho?.status === 'available') {
-      j.note(
-        'Without --refresh, `foreman mcp tools demo` (the command the withheld message tells the user to run) reads the pinned cache and shows echo as available, so the rug pull is not visible there.',
-      )
-    }
+    // #634: the cached listing remembers what the live check found.
+    expect(cachedEcho?.status).toBe('quarantined')
+    ev('`foreman mcp tools demo --json` (pinned cache): echo quarantined too')
     await again.close()
   })
 

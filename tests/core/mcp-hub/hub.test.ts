@@ -119,6 +119,38 @@ describe('McpHub against a real stdio MCP server', () => {
     expect(trusted.find((t) => t.name === 'echo')!.status).toBe('available')
   })
 
+  it('remembers a detected rug pull, so the cached listing shows it too (#634)', async () => {
+    await hub(config()).listForAgent() // pins the clean definitions
+    const changed = config({}, 'changed')
+    changed.servers.demo!.env = { DEMO_VARIANT: 'changed' }
+    const h = hub(changed)
+    const resolution = await h.resolveCall('demo__echo', { text: 'x' })
+    if (resolution?.kind !== 'tool') throw new Error('expected tool')
+    await expect(h.call(resolution.tool, resolution.args)).rejects.toThrow(/--refresh/)
+    // A later listing from the pinned cache (what `foreman mcp tools demo`
+    // shows) no longer claims echo is available.
+    const cached = hub(changed)
+    const tools = await cached.inventory()
+    expect(cached.status()[0]!.source).toBe('pinned-cache')
+    const echo = tools.find((t) => t.name === 'echo')!
+    expect(echo.status).toBe('quarantined')
+    expect(echo.reasons.join(' ')).toMatch(/rug pull; seen \d{4}-\d{2}-\d{2}/)
+    expect((await cached.listForAgent()).map((t) => t.name)).not.toContain('demo__echo')
+    // Trusting the new definitions clears it.
+    await hub(changed).trust('demo')
+    const trusted = await hub(changed).inventory()
+    expect(trusted.find((t) => t.name === 'echo')!.status).toBe('available')
+    expect(JSON.parse(readFileSync(pinsPath, 'utf-8')).servers.demo.drift).toBeUndefined()
+  })
+
+  it('lists tools that appeared since pinning even from the cache (#634)', async () => {
+    await hub(config()).listForAgent()
+    await hub(config({}, 'extra')).inventory({ refresh: true })
+    const cached = hub(config({}, 'extra'))
+    await cached.inventory()
+    expect(cached.status()[0]!.newSincePinning).toEqual(['new_tool'])
+  })
+
   it('quarantines tools that appear after pinning', async () => {
     await hub(config()).listForAgent()
     const tools = await hub(config({}, 'extra')).inventory({ refresh: true })
