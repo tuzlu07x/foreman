@@ -1703,4 +1703,112 @@ credentials:
       expect(result.text.toLowerCase()).toContain("help");
     });
   });
+
+  describe("org reports and budgets (#629)", () => {
+    const ORG = [
+      "version: 1",
+      "company: Acme",
+      "departments:",
+      "  engineering: { name: Engineering, head: cto }",
+      "  marketing: { name: Marketing, head: cmo, budget: { daily_usd: 1, on_exceed: pause } }",
+      "roles:",
+      "  ceo: { title: CEO, agent: hermes, reports_to: human }",
+      "  cto: { title: CTO, agent: claude-code, department: engineering, reports_to: ceo }",
+      "  cmo: { title: CMO, agent: writer-bot, department: marketing, reports_to: ceo }",
+      "",
+    ].join("\n");
+
+    beforeEach(async () => {
+      writeFileSync(join(tmp, "org.yaml"), ORG);
+      for (const id of ["hermes", "claude-code", "writer-bot"]) registry.register({ id, displayName: id, transport: "stdio" });
+      const { UsageLedger } = await import("../../src/core/usage/ledger.js");
+      const ledger = new UsageLedger(db, { orgConfigPath: join(tmp, "org.yaml") });
+      ledger.record({ agentId: "writer-bot", source: "telemetry", costUsd: 1.5, input: 10 });
+      ledger.record({ agentId: "claude-code", source: "telemetry", costUsd: 0.25, input: 10 });
+    });
+
+    it("report <department> [period] answers without an LLM", async () => {
+      const result = await router.dispatch("report", ["marketing", "month"], ctx);
+      expect(result.ok).toBe(true);
+      expect(result.text.split("\n")[0]).toBe("Marketing · this month");
+      expect(result.text).toContain("Spend $1.50");
+      expect(result.text).toContain("Budget marketing (day): $1.50 of $1.00 (150%) — over, paused");
+    });
+
+    it("spend shows the company by department, and names valid targets on a typo", async () => {
+      const all = await router.dispatch("spend", [], ctx);
+      expect(all.text).toMatch(/engineering\s+\$0\.250/);
+      expect(all.text).toMatch(/marketing\s+\$1\.50/);
+      const typo = await router.dispatch("spend", ["marketting"], ctx);
+      expect(typo.ok).toBe(false);
+      expect(typo.text).toContain("marketing");
+    });
+
+    it("a question about a department still goes to Foreman's LLM when it is on", async () => {
+      const answer = vi.fn(async () => ({ status: "ok" as const, text: "LLM says hi", costUsd: 0, durationMs: 1 }));
+      const withLlm = { ...ctx, orchestratorChat: { isEnabled: () => true, answer } };
+      const q = await router.dispatch("report", ["claude-code", "why", "is", "it", "stuck"], withLlm);
+      expect(answer).toHaveBeenCalled();
+      expect(q.text).toContain("LLM says hi");
+      const plain = await router.dispatch("report", ["marketing", "week"], withLlm);
+      expect(plain.text.split("\n")[0]).toBe("Marketing · last 7 days");
+      // Task output excerpts are only for you.
+      expect(plain.text).not.toContain("Latest results");
+    });
+
+    it("report me still goes to Foreman's LLM", async () => {
+      const result = await router.dispatch("report", ["me"], ctx);
+      expect(result.errorCode).toBe("NOT_AVAILABLE");
+    });
+
+    it("an over-budget, paused department takes no new work from agents, but does from you", async () => {
+      const channel = new ControlChannel(db);
+      const fromAgent = await router.dispatch("write", ["writer-bot", "one", "more", "post"], {
+        ...ctx,
+        sourceAgent: "hermes",
+        controlChannel: channel,
+      });
+      expect(fromAgent.errorCode).toBe("ORG_POLICY");
+      expect(fromAgent.text).toContain("Marketing is over its daily budget ($1.50 of $1.00)");
+      const fromOwner = await router.dispatch("write", ["writer-bot", "one", "more", "post"], {
+        ...ctx,
+        sourceAgent: "tui",
+        controlChannel: channel,
+        trustedOwner: true,
+      });
+      expect(fromOwner.ok).toBe(true);
+    });
+  });
+
+  describe("department channels from chat (#630)", () => {
+    beforeEach(() => {
+      writeFileSync(
+        join(tmp, "org.yaml"),
+        [
+          "version: 1",
+          "company: Acme",
+          "departments:",
+          "  marketing: { name: Marketing, head: cmo }",
+          "roles:",
+          "  cmo: { title: CMO, agent: writer-bot, department: marketing, reports_to: human }",
+          "",
+        ].join("\n"),
+      );
+    });
+
+    it("tell and comms are yours only: the TUI / Slack / Discord, never a relayed chat", async () => {
+      const relayed = await router.dispatch("tell", ["marketing", "hi"], { ...ctx, sourceUser: "12345" });
+      expect(relayed.errorCode).toBe("NOT_AUTHORIZED");
+      expect((await router.dispatch("comms", [], ctx)).errorCode).toBe("NOT_AUTHORIZED");
+
+      const owner = { ...ctx, sourceAgent: "tui", trustedOwner: true };
+      const told = await router.dispatch("tell", ["marketing", "ship", "the", "post", "Friday"], owner);
+      expect(told.ok).toBe(true);
+      expect(told.text).toContain("#marketing");
+      const read = await router.dispatch("comms", ["marketing"], owner);
+      expect(read.text).toContain("#marketing · you: ship the post Friday");
+      const bad = await router.dispatch("tell", ["legal", "x"], owner);
+      expect(bad.ok).toBe(false);
+    });
+  });
 });

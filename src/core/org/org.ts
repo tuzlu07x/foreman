@@ -28,6 +28,23 @@ import { z } from "zod";
 
 export const HUMAN = "human";
 
+/** Words that name channels or you (#630); no role or department may use
+ *  them, or a role called `boss` could read your threads. */
+export const RESERVED_ORG_IDS: ReadonlySet<string> = new Set([
+  "all",
+  "all-hands",
+  "allhands",
+  "everyone",
+  "company",
+  "leadership",
+  "heads",
+  "boss",
+  HUMAN,
+  "owner",
+  "you",
+  "me",
+]);
+
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
 
 const RoleSchema = z
@@ -47,6 +64,20 @@ const RoleSchema = z
   })
   .strict();
 
+/** Where a channel is mirrored: platform → channel (`slack: "#marketing"`,
+ *  `discord: "123456789012345678"`). Any platform with a mirror adapter. */
+const ChannelMapSchema = z.record(z.string().regex(/^[a-z][a-z0-9-]{0,31}$/), z.string().min(1).max(120));
+
+const BudgetSchema = z
+  .object({
+    monthly_usd: z.number().positive().max(1_000_000).optional(),
+    daily_usd: z.number().positive().max(1_000_000).optional(),
+    /** warn: alert only. pause: agents can't hand work into the department
+     *  until the period resets; you still can. */
+    on_exceed: z.enum(["warn", "pause"]).default("warn"),
+  })
+  .strict();
+
 const DepartmentSchema = z
   .object({
     name: z.string().min(1).max(80),
@@ -54,6 +85,10 @@ const DepartmentSchema = z
     description: z.string().max(400).optional(),
     /** MCP hub servers members of this department may use. Omit = no limit. */
     mcp_servers: z.array(z.string().min(1)).optional(),
+    /** Spend limit for the department's agents (#629). */
+    budget: BudgetSchema.optional(),
+    /** Chat channels the department's conversation is mirrored to (#630). */
+    channels: ChannelMapSchema.optional(),
   })
   .strict();
 
@@ -79,12 +114,24 @@ export const OrgDocSchema = z
       .default({}),
     departments: z.record(z.string(), DepartmentSchema).default({}),
     roles: z.record(z.string(), RoleSchema),
+    /** Company-wide channel mirrors (#630): all-hands, leadership,
+     *  reports to you, and role-to-role threads. */
+    channels: z
+      .object({
+        all: ChannelMapSchema.optional(),
+        leadership: ChannelMapSchema.optional(),
+        boss: ChannelMapSchema.optional(),
+        direct: ChannelMapSchema.optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
 export type OrgDoc = z.infer<typeof OrgDocSchema>;
 export type OrgRole = z.infer<typeof RoleSchema>;
 export type OrgDepartment = z.infer<typeof DepartmentSchema>;
+export type OrgBudget = z.infer<typeof BudgetSchema>;
 
 export interface OrgIssue {
   level: "error" | "warning";
@@ -139,7 +186,12 @@ export function validateOrg(doc: OrgDoc, knownAgents?: ReadonlySet<string>): Org
   const roleIds = Object.keys(doc.roles);
   for (const id of roleIds) {
     if (!ID_RE.test(id)) issues.push({ level: "error", message: `role id '${id}' must be lowercase kebab-case` });
-    if (id === HUMAN) issues.push({ level: "error", message: `'${HUMAN}' is reserved for you` });
+    if (RESERVED_ORG_IDS.has(id)) issues.push({ level: "error", message: `'${id}' is reserved (it names you or a channel)` });
+  }
+  for (const id of Object.keys(doc.departments)) {
+    if (RESERVED_ORG_IDS.has(id)) {
+      issues.push({ level: "error", message: `department id '${id}' is reserved (it names you or a channel)` });
+    }
   }
   for (const [id, role] of Object.entries(doc.roles)) {
     if (role.reports_to !== HUMAN && !doc.roles[role.reports_to]) {
@@ -219,7 +271,7 @@ export function directReports(doc: OrgDoc, roleId: string): string[] {
     .map(([id]) => id);
 }
 
-function isHead(doc: OrgDoc, roleId: string): boolean {
+export function isHead(doc: OrgDoc, roleId: string): boolean {
   const dept = doc.roles[roleId]?.department;
   return Boolean(dept && doc.departments[dept]?.head === roleId);
 }
@@ -238,6 +290,8 @@ export const HUMAN_SOURCES: ReadonlySet<string> = new Set([
   "cli",
   "user",
   HUMAN,
+  "boss",
+  "owner",
   "foreman",
   "telegram",
   "tui",
@@ -275,7 +329,7 @@ export function checkDelegation(
   };
 }
 
-function checkRolePair(doc: OrgDoc, from: string, to: string): DelegationVerdict {
+export function checkRolePair(doc: OrgDoc, from: string, to: string): DelegationVerdict {
   const fromRole = doc.roles[from]!;
   const toRole = doc.roles[to]!;
   if (toRole.reports_to === from) return { allowed: true, reason: `${from} manages ${to}` };

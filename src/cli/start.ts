@@ -65,7 +65,13 @@ import { SecretStore } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { approvalButtonSigner, approvalSigner } from "../core/approval-token.js";
 import { buildEnabledChannels } from "../core/notification/channel-factory.js";
-import { isHumanSource } from "../core/org/guard.js";
+import { isHumanSource, orgBudgetBlock } from "../core/org/guard.js";
+import { CommsMirrorWorker, mirrorsFromNotifyConfig } from "../core/org/comms-mirror.js";
+import { BudgetWatcher } from "../core/usage/budget-watcher.js";
+import { UsageLedger } from "../core/usage/ledger.js";
+import { OtlpReceiver } from "../core/usage/otlp-receiver.js";
+import { parseTaskUsage } from "../core/usage/task-usage.js";
+import { loadOrCreateUsageKey, otlpPort, telemetryEnv } from "../core/usage/telemetry-env.js";
 import {
   costBySession,
   recordUsageAndCheckBudget,
@@ -88,6 +94,7 @@ import {
 } from "../core/notification/voice-config.js";
 import { PatternDetectionService } from "../core/pattern-detection-service.js";
 import {
+  channelConfig,
   loadNotifyConfig,
   routeFor,
 } from "../core/notification/notify-config.js";
@@ -256,6 +263,28 @@ export function startForeman(
   const inboxRecorder = new InboxRecorder(db, inbox, { bus });
   inboxRecorder.start();
 
+  // Spend ledger (#629): agents report their token usage over
+  // OpenTelemetry to a receiver on 127.0.0.1; spawned tasks get the
+  // exporter settings automatically (see telemetry-env.ts).
+  const usageLedger = new UsageLedger(db, { orgConfigPath: paths.orgConfigPath });
+  const usageKey = loadOrCreateUsageKey(paths.root);
+  const otlp = new OtlpReceiver({ ledger: usageLedger, key: usageKey, port: otlpPort() });
+  let otlpBoundPort: number | null = null;
+  otlp
+    .start()
+    .then((port) => {
+      otlpBoundPort = port;
+    })
+    .catch(() => {
+      inbox.add({
+        level: "warning",
+        kind: "system",
+        title: `Agent spend tracking is off: port ${otlpPort()} is in use`,
+        body: "Set FOREMAN_OTLP_PORT to a free port and restart foreman start.",
+        dedupeKey: `otlp-port:${otlpPort()}`,
+      });
+    });
+
   // Chat verbs for the TUI command bar (#612) — the same router the
   // Telegram / MCP path uses. Created up front so the TUI gets it.
   const controlChannel = new ControlChannel(db, bus);
@@ -337,6 +366,39 @@ export function startForeman(
   const notificationBridge = notificationSetup?.bridge ?? null;
   const dailyScheduler = notificationSetup?.scheduler ?? null;
   approvalBridge.start();
+
+  // Department channels (#630): mirror what agents say to each other to
+  // the Slack / Discord channels org.yaml maps, with the bot tokens from
+  // notify.yaml. Agents never hold those tokens.
+  const commsMirror = new CommsMirrorWorker(db, {
+    orgConfigPath: paths.orgConfigPath,
+    mirrors: mirrorsFromNotifyConfig(chatBotTokens(paths.notifyConfigPath, secretStore)),
+    inbox,
+  });
+  commsMirror.start();
+
+  // Department budgets from org.yaml (#629): inbox + alert channels.
+  const budgetWatcher = new BudgetWatcher(db, {
+    orgConfigPath: paths.orgConfigPath,
+    inbox,
+    ...(notificationSetup
+      ? {
+          notify: (title: string, body: string) => {
+            void notificationSetup.service
+              .send("budget_alert", {
+                level: "budget_alert",
+                requestId: null,
+                title,
+                body,
+                actions: [],
+                agentBlocking: false,
+              })
+              .catch(() => undefined);
+          },
+        }
+      : {}),
+  });
+  budgetWatcher.start();
 
   // #303 / #304 / #305 — ForemanVoice + pattern detection. Only started
   // when notify is configured (no proactive messages to send otherwise).
@@ -524,6 +586,9 @@ export function startForeman(
     }
     approvalBridge.stop();
     inboxRecorder.stop();
+    budgetWatcher.stop();
+    commsMirror.stop();
+    void otlp.stop();
     controlPoller.stop();
     if (dailyScheduler) dailyScheduler.stop();
     if (activitySummaryScheduler) activitySummaryScheduler.stop();
@@ -793,6 +858,13 @@ export function startForeman(
                     },
                   }
                 : undefined;
+            // Department budgets, enforced here too: whichever path queued
+            // it (chat, CLI, flow routing), an agent can't hand work into
+            // a department that has spent its budget.
+            if (!isHumanSource(row.sourceAgent ?? "cli")) {
+              const overBudget = orgBudgetBlock(db, paths.orgConfigPath, agentId);
+              if (overBudget) return { status: "failed", error: `paused by budget: ${overBudget}` };
+            }
             // Mark the step running before the spawn so `foreman flow
             // show` reflects in-progress state in real time.
             if (flowId && stepId) {
@@ -821,6 +893,7 @@ export function startForeman(
                 );
               }
             }
+            const taskUsageKey = otlpBoundPort ? otlp.issueTaskKey(agentId, String(row.id)) : null;
             const exec = await executeWriteDirective(
               {
                 agentId,
@@ -830,6 +903,18 @@ export function startForeman(
                 modelVersion: registryRow?.modelVersion ?? null,
                 taskSkipPermissions: registryRow?.taskSkipPermissions === true,
                 ...(derivedCwd ? { cwd: derivedCwd } : {}),
+                // Report the task's token usage to the spend ledger, with
+                // a key that can only book usage to this agent and task.
+                ...(otlpBoundPort && taskUsageKey
+                  ? {
+                      extraEnv: telemetryEnv({
+                        port: otlpBoundPort,
+                        key: taskUsageKey,
+                        agentId,
+                        taskRef: String(row.id),
+                      }),
+                    }
+                  : {}),
                 // QA-fix 2026-05-24 (Wiring 4) — hand the session
                 // manager to the executor so it opens/closes a session
                 // around the spawn. Lights up #523 lifecycle pushes,
@@ -891,6 +976,26 @@ export function startForeman(
                 exec.spawn.kind === "unsupported" ? exec.spawn.reason : null,
               outputRelay: exec.outputRelay,
             });
+            if (taskUsageKey) otlp.revokeTaskKey(taskUsageKey);
+            // Usage the agent printed (Codex `tokens used`, Claude JSON
+            // results); telemetry for the same task takes precedence.
+            if ("stdout" in exec.spawn) {
+              const printed = parseTaskUsage(exec.spawn.stdout, exec.spawn.stderr);
+              if (printed) {
+                try {
+                  usageLedger.record({
+                    agentId,
+                    source: "task-output",
+                    ...printed,
+                    // The agent's configured model prices a bare token count.
+                    model: printed.model ?? registryRow?.modelVersion ?? null,
+                    taskRef: String(row.id),
+                  });
+                } catch {
+                  /* reporting only */
+                }
+              }
+            }
             // The TUI promised "output will arrive in your inbox".
             recordDelegationOutcome(inbox, {
               controlId: row.id,
@@ -1073,6 +1178,22 @@ function setupLlmVerifier(args: {
     }
     throw err;
   }
+}
+
+/** Slack / Discord bot tokens from notify.yaml, for the comms mirror. */
+function chatBotTokens(
+  notifyConfigPath: string,
+  secretStore: SecretStore,
+): { slack: string | null; discord: string | null } {
+  const token = (channel: "slack" | "discord"): string | null => {
+    try {
+      const ref = channelConfig(loadNotifyConfig(notifyConfigPath), channel)?.bot_token_ref;
+      return ref && secretStore.exists(ref) ? secretStore.get(ref) : null;
+    } catch {
+      return null;
+    }
+  };
+  return { slack: token("slack"), discord: token("discord") };
 }
 
 function setupNotificationBridge(args: {

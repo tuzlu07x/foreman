@@ -1,5 +1,7 @@
 import { existsSync } from "node:fs";
-import { checkDelegation, HUMAN_SOURCES, loadOrg, type DelegationVerdict } from "./org.js";
+import type { ForemanDb } from "../../db/client.js";
+import { budgetStatus, formatUsd } from "../usage/report.js";
+import { checkDelegation, HUMAN_SOURCES, loadOrg, rolesForAgent, type DelegationVerdict } from "./org.js";
 
 // Enforcement point for org.yaml reporting lines. Called when a directive
 // (`foreman write <agent> …`) is queued — from an agent's MCP
@@ -31,6 +33,33 @@ export function orgDelegationVerdict(
     // An org chart that fails to load must not silently open every path.
     return { allowed: false, reason: "org.yaml is invalid — run `foreman org validate`" };
   }
+}
+
+/** Why `toAgent`'s department can't take new work from agents right now
+ *  (its budget is spent and set to `on_exceed: pause`), or null. */
+export function orgBudgetBlock(db: ForemanDb, orgConfigPath: string, toAgent: string): string | null {
+  if (!existsSync(orgConfigPath)) return null;
+  let org;
+  try {
+    org = loadOrg(orgConfigPath);
+  } catch {
+    return null; // orgDelegationVerdict already reports an invalid org.yaml
+  }
+  if (!org) return null;
+  for (const roleId of rolesForAgent(org, toAgent)) {
+    const deptId = org.roles[roleId]?.department;
+    const dept = deptId ? org.departments[deptId] : undefined;
+    if (!deptId || !dept?.budget || dept.budget.on_exceed !== "pause") continue;
+    const status = budgetStatus(db, deptId, dept.budget);
+    const over = status.checks.find((c) => c.spentUsd >= c.limitUsd);
+    if (over) {
+      return (
+        `${dept.name} is over its ${over.period === "day" ? "daily" : "monthly"} budget ` +
+        `(${formatUsd(over.spentUsd)} of ${formatUsd(over.limitUsd)})`
+      );
+    }
+  }
+  return null;
 }
 
 /** Who is delegating when `foreman write` runs: the spawned agent when

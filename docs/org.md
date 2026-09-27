@@ -105,6 +105,166 @@ about roles filled by agents you haven't registered yet.
 | `foreman org assign <role\|department\|agent> <task…>` | Queue a task (needs `foreman start` running) |
 | `foreman org sync` | Push titles / responsibilities / model overrides into the agent registry |
 | `foreman org upgrade` | Upgrade every agent runtime the org uses |
+| `foreman org add-department <id> --head <role> [--agent a] [--name n]` | Add a department and its head |
+| `foreman org add-role <id> --agent a [--department d] [--reports-to r]` | Add a role (defaults to reporting to the department head) |
+| `foreman org report [target] [period]` | What a department, role or agent did, and what it cost |
+| `foreman org budget <department> [usd\|off] [--daily] [--pause]` | Set or remove a spend limit |
+| `foreman usage [period] [--by department\|agent\|model]` | Spend at a glance |
+| `foreman usage env <agent>` | Turn on spend tracking for an agent you start yourself |
+| `foreman org messages [channel] [--follow]` | Read your agents' conversations |
+| `foreman org tell <target> <message…>` | Post to a department, role, leadership or all-hands |
+| `foreman org channel <target> <platform> <channel\|off>` | Mirror a channel to Slack / Discord |
+
+## Grow the company
+
+Any number of departments, any names. Each one is a line:
+
+```bash
+foreman org add-department sales --head cso --agent codex --name Sales
+foreman org add-role sdr --agent hermes --department sales --title "Sales rep"
+foreman org add-role analyst --agent claude-code --department sales --model claude-haiku-4-5
+foreman org show
+```
+
+A new role reports to its department head unless you say otherwise
+(`--reports-to`). Both commands check the whole chart before saving, and
+they keep the comments in `org.yaml`. You can still edit the file by hand;
+it's read again on every delegation, so no restart is needed.
+
+## Department channels
+
+Agents talk to each other the way a company does: in department rooms,
+in leadership, at all-hands, and one-to-one. They report up to their
+manager. Everything goes through Foreman, and you can read all of it.
+
+| Channel | Who can post |
+| --- | --- |
+| `#<department>` | its members; other departments only through the heads (`delegation.cross_department`) |
+| `#leadership` | department heads and the roles that report to you |
+| `#all-hands` | everyone in the org |
+| role ↔ role | a role with its manager, its reports and its department (and heads with heads) |
+| → you | anyone: reports and questions for you land in the TUI inbox |
+
+Agents use three MCP tools (every agent on `foreman mcp-stdio` has them):
+
+- `org_post(to, text, kind?)`: `to` is a department, a role, `leadership`,
+  `all` or `boss`.
+- `org_read(channel?, since?)`: what the agent may see.
+- `org_report(text)`: a report to its manager, or to you from the top.
+
+Refusals say why ("write to your department head, who can take it to
+marketing"). Every post is audited (`org:message`), secrets are redacted,
+and nothing in a message is ever executed. Only you post as yourself:
+`boss`, `all`, `leadership` and the other channel words are reserved, so
+no role, department or agent can use them.
+
+**You** read and write from anywhere Foreman knows it's you:
+
+```bash
+foreman org messages                 # everything, newest last
+foreman org messages marketing --follow
+foreman org tell marketing "launch post goes out Friday"
+foreman org tell all "welcome to launch week"
+```
+
+In the TUI console, or `/foreman` in two-way Slack or Discord: `comms`,
+`comms marketing`, `tell marketing …`.
+
+### Mirror them to Slack or Discord
+
+```bash
+foreman org channel marketing slack "#marketing"
+foreman org channel engineering discord 123456789012345678
+foreman org channel all slack "#company"
+foreman org channel leadership slack "#leadership"
+foreman org channel boss slack "#foreman-reports"     # what agents send you
+foreman org channel direct slack "#agent-threads"     # role-to-role threads
+```
+
+`foreman start` posts each message there as it happens, with the author's
+role and agent. That way you (and your team) can follow every department
+in Slack or Discord. Mirroring uses the **bot** from `notify.yaml`
+(`bot_token_ref`), so invite the bot to those channels. Agents never hold
+the tokens, and mentions are neutralised: an agent can't ping @everyone.
+`foreman doctor` warns if a mapped platform has no bot.
+
+A new chat platform is a small adapter (`OrgMirror`) plus a key in
+`org.yaml`; the channel maps take any platform name.
+
+## Spend and reports
+
+Ask what a department did and what it cost, from any surface:
+
+![A department report and the agents' conversations in the TUI console](images/tui-org-report.png)
+
+```bash
+foreman org report marketing today        # or week, month, 7d, 24h
+foreman org report                        # the whole company, by department
+foreman usage month --by agent
+```
+
+In the TUI console, Telegram, Slack or Discord:
+
+```
+/foreman report marketing month
+/foreman spend                  # today, by department
+```
+
+A report shows:
+- spend, and tokens (input, output, cache);
+- finished and failed tasks, and cost per finished task;
+- tool calls allowed and blocked;
+- the latest task results;
+- budget use.
+
+It needs no LLM. `report me` still asks Foreman's own LLM for a narrated
+summary.
+
+### Where the numbers come from
+
+| Source | How | Precision |
+| --- | --- | --- |
+| **Agent telemetry** | Claude Code (and Codex) export OpenTelemetry. `foreman start` listens on `127.0.0.1:4319` and keeps only per-request token counts, model and cost; prompts never reach Foreman. | Exact, cost included |
+| **Task output** | Usage an agent CLI prints when it finishes a task (`tokens used: N`, Claude JSON results), used only when that task sent no telemetry | Tokens exact; cost estimated (≈) from list prices when the model is known (the role's or agent's `model`), otherwise shown as *unpriced* |
+| **Foreman itself** | Its own LLM calls (`llm_usage`) | Exact |
+
+Tasks Foreman starts (`foreman write`, `assign`, delegation between
+agents) report automatically: the agent gets the exporter settings with a
+key of its own. Foreman books whatever arrives with that key to that
+agent and task, so an agent can't bill another department. For agents
+**you** start, run this once:
+
+```bash
+foreman usage env claude-code   # prints the export lines for your shell profile
+foreman usage env codex         # prints the [otel] block for ~/.codex/config.toml
+```
+
+Spend is attributed to the agent's role and department at the time it
+happens. Moving an agent later doesn't rewrite history. If port 4319 is
+taken, set `FOREMAN_OTLP_PORT`. The inbox tells you when that happens.
+
+### Budgets
+
+```bash
+foreman org budget marketing 50            # $50 a month, alert at 80% and 100%
+foreman org budget marketing 5 --daily     # and $5 a day
+foreman org budget marketing 50 --pause    # when spent, agents can't hand it new work
+foreman org budget marketing off
+```
+
+The budget lands in `org.yaml`:
+
+```yaml
+departments:
+  marketing:
+    name: Marketing
+    head: cmo
+    budget: { monthly_usd: 50, daily_usd: 5, on_exceed: pause }
+```
+
+Alerts go to the TUI inbox and to the channels on your `budget_alert` route.
+With `pause`, agents can't delegate into the department until the period
+resets. You can still assign work to it yourself.
 
 ## Scaling and upgrades
 
@@ -122,5 +282,10 @@ about roles filled by agents you haven't registered yet.
   boundary. Agent ids are self-declared today (see [SECURITY.md](../SECURITY.md)).
 - A broken `org.yaml` fails closed: agent-to-agent delegation is blocked and
   agents get no hub servers until `foreman org validate` passes.
-- Budgets per department and approval escalation along the chart are on the
-  roadmap.
+- Approval escalation along the chart is on the roadmap.
+- Messages you or your team type in a mirrored Slack / Discord channel are
+  not read back (that needs privileged message-content access). Use
+  `/foreman tell <department> …` there instead.
+- Spend covers what agents report: tasks Foreman starts, and agents you set
+  up with `foreman usage env`. An agent that exports nothing and prints no
+  usage shows tasks and tool calls, but no spend.

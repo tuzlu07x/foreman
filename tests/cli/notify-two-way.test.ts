@@ -72,7 +72,7 @@ describe('two-way Slack and Discord setup (#615)', () => {
   })
 
   it('an agent cannot claim a human source id', () => {
-    for (const id of ['tui', 'Telegram', 'foreman', 'slack']) {
+    for (const id of ['tui', 'Telegram', 'foreman', 'slack', 'boss', 'Owner']) {
       const out = run('mcp-stdio', '--source', id)
       expect(out.status).toBe(1)
       expect(out.stderr).toContain(`'${id}' is reserved`)

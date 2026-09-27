@@ -540,7 +540,7 @@ export const inboxItems = sqliteTable(
     createdAt: integer("created_at").notNull(),
     level: text("level", { enum: ["info", "warning", "critical"] }).notNull(),
     kind: text("kind", {
-      enum: ["approval", "block", "delegation", "budget", "agent", "update", "system"],
+      enum: ["approval", "block", "delegation", "budget", "agent", "update", "system", "message"],
     }).notNull(),
     title: text("title").notNull(),
     body: text("body").notNull().default(""),
@@ -558,6 +558,61 @@ export const inboxItems = sqliteTable(
 
 export type InboxItem = typeof inboxItems.$inferSelect;
 export type NewInboxItem = typeof inboxItems.$inferInsert;
+
+// Agent spend ledger (#629). See 0024_agent_usage.sql.
+export const agentUsage = sqliteTable(
+  "agent_usage",
+  {
+    id: text("id").primaryKey(),
+    ts: integer("ts").notNull(),
+    agentId: text("agent_id").notNull(),
+    role: text("role"),
+    department: text("department"),
+    source: text("source", { enum: ["telemetry", "task-output", "foreman"] }).notNull(),
+    model: text("model"),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    totalTokens: integer("total_tokens").notNull().default(0),
+    costUsd: real("cost_usd").notNull().default(0),
+    costEstimated: integer("cost_estimated").notNull().default(0),
+    taskRef: text("task_ref"),
+    sessionRef: text("session_ref"),
+  },
+  (t) => ({
+    tsIdx: index("agent_usage_ts_idx").on(t.ts),
+    departmentIdx: index("agent_usage_department_idx").on(t.department, t.ts),
+    agentIdx: index("agent_usage_agent_idx").on(t.agentId, t.ts),
+    taskIdx: index("agent_usage_task_idx").on(t.taskRef),
+  }),
+);
+
+export type AgentUsage = typeof agentUsage.$inferSelect;
+export type NewAgentUsage = typeof agentUsage.$inferInsert;
+
+// Department channels (#630). See 0025_org_messages.sql.
+export const orgMessages = sqliteTable(
+  "org_messages",
+  {
+    id: text("id").primaryKey(),
+    ts: integer("ts").notNull(),
+    channel: text("channel").notNull(),
+    fromAgent: text("from_agent").notNull(),
+    fromRole: text("from_role"),
+    kind: text("kind", { enum: ["message", "report", "question", "handoff", "announcement"] }).notNull(),
+    text: text("text").notNull(),
+    replyTo: text("reply_to"),
+    mirroredAt: integer("mirrored_at"),
+  },
+  (t) => ({
+    channelIdx: index("org_messages_channel_idx").on(t.channel, t.ts),
+    tsIdx: index("org_messages_ts_idx").on(t.ts),
+    unmirroredIdx: index("org_messages_unmirrored_idx").on(t.mirroredAt, t.ts),
+  }),
+);
+
+export type OrgMessage = typeof orgMessages.$inferSelect;
 
 // FTS5 virtual table and triggers live in a hand-written migration
 // (drizzle-kit cannot emit virtual tables). See:
