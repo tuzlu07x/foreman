@@ -79,6 +79,13 @@ fts5                 fail   requests_fts virtual table not present after migrati
 ```
 The loaded `better-sqlite3` has no FTS5. Since better-sqlite3 13 the npm package ships prebuilt binaries that include FTS5 (there is no install-time build any more), so this usually means an unsupported platform or a hand-built copy. Reinstall Foreman with `npm install -g foreman-agent` on a [supported platform](install.md#supported-platforms).
 
+**Agent needs a newer Node:**
+```
+node_engines:openclaw  warn   OpenClaw needs Node >=24.16.0 <25 || >=26.1.0; found v22.12.0 on PATH
+(exit 1 — warnings only)
+```
+Shown only when the agent is registered or on PATH. Foreman itself is fine; OpenClaw won't start until the `node` on PATH is in that range. Switch Node (e.g. `nvm install 24`), or run OpenClaw's upstream installer yourself: `curl -fsSL https://openclaw.ai/install.sh | bash`.
+
 ## Using doctor from scripts
 
 ```bash

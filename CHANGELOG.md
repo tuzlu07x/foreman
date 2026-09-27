@@ -142,6 +142,15 @@ All notable changes to Foreman are documented here. The format follows
   - Node 22/24 test matrix.
 
 ### Fixed
+- **OpenClaw on an older Node** (#646). OpenClaw needs Node
+  `>=24.16.0 <25 || >=26.1.0` since v2026.9.3; Foreman runs on 22.12+.
+  When the `node` on PATH is outside that range, the setup wizard,
+  `foreman agent add` and `foreman agent update` no longer run
+  `npm install -g openclaw`. They print the requirement and OpenClaw's
+  upstream installer command for you to run yourself, and the wizard goes
+  on with the other agents. `foreman doctor` warns while a registered or
+  installed OpenClaw can't run. The range lives in the registry as
+  `engines.node`.
 - **Opening a browser on Windows** no longer goes through `cmd /c start`.
   A URL with `&` or `|` in it could be cut short there or run a command.
   Foreman now uses `rundll32 url.dll,FileProtocolHandler` with no shell.

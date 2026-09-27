@@ -29,6 +29,11 @@ import { findDuplicateSlots } from "./secret-slot-migration.js";
 import { SecretStore } from "./secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { RegistryService } from "./registry.js";
+import {
+  checkNodeEngine,
+  resolveInstallerNodeVersion,
+  type InstallerNode,
+} from "./node-engines.js";
 import { getUpdateCachePath, isNewer } from "./update-check.js";
 
 export type CheckStatus = "ok" | "warn" | "fail";
@@ -1149,6 +1154,85 @@ export function checkAcpAgents(
   return out;
 }
 
+export interface AgentNodeEnginesOptions {
+  env?: NodeJS.ProcessEnv;
+  /** Registry ids of registered agents. Defaults to reading the database. */
+  registeredIds?: string[];
+  /** Defaults to `node --version` on `env.PATH`. */
+  resolveNode?: () => InstallerNode;
+}
+
+/**
+ * #646 — Warn when an agent that is registered or on PATH declares an
+ * `engines.node` range the node on PATH doesn't satisfy (OpenClaw needs
+ * >=24.16.0 <25 || >=26.1.0 while Foreman runs on 22.12+). A warning, not a
+ * failure: Foreman itself is fine, only that agent won't start. One row per
+ * affected agent; no rows when no such agent is registered or installed.
+ */
+export function checkAgentNodeEngines(
+  options: AgentNodeEnginesOptions = {},
+): CheckResult[] {
+  const env = options.env ?? process.env;
+  let doc: ReturnType<typeof loadActiveRegistry>["doc"];
+  try {
+    doc = loadActiveRegistry().doc;
+  } catch {
+    return [];
+  }
+  const withRange = doc.agents.filter((a) => a.engines?.node);
+  if (withRange.length === 0) return [];
+  const registered = new Set(options.registeredIds ?? registeredRegistryIds());
+  const relevant = withRange.filter((a) => {
+    if (registered.has(a.id)) return true;
+    const bin = a.install.binary ?? a.install.npm ?? a.acp_command?.command;
+    return bin ? whichOnPath(bin, env) !== null : false;
+  });
+  if (relevant.length === 0) return [];
+  let node: InstallerNode | null = null;
+  const resolveNode = (): InstallerNode => {
+    node ??= options.resolveNode
+      ? options.resolveNode()
+      : resolveInstallerNodeVersion(env);
+    return node;
+  };
+  return relevant.map((agent) => {
+    const mismatch = checkNodeEngine(agent, resolveNode);
+    if (!mismatch) {
+      return {
+        name: `node_engines:${agent.id}`,
+        status: "ok" as const,
+        message: `${agent.name}: Node ${resolveNode().version} satisfies ${agent.engines?.node ?? ""}`,
+      };
+    }
+    const where = mismatch.current.source === "PATH" ? " on PATH" : "";
+    return {
+      name: `node_engines:${agent.id}`,
+      status: "warn" as const,
+      message: `${agent.name} needs Node ${mismatch.required}; found v${mismatch.current.version}${where}`,
+      remediation:
+        `Put a Node in that range first on PATH (e.g. with nvm); ${agent.name} won't start until then.` +
+        (mismatch.upstreamCommand
+          ? ` Or run the upstream installer yourself: ${mismatch.upstreamCommand}`
+          : ""),
+    };
+  });
+}
+
+function registeredRegistryIds(): string[] {
+  if (!existsSync(getForemanPaths().dbPath)) return [];
+  try {
+    const registry = new RegistryService(
+      getDb(),
+      new EventBus<ForemanEventMap>(),
+    );
+    return registry.listAll().map((r) =>
+      typeof r.metadata?.registryId === "string" ? r.metadata.registryId : r.id,
+    );
+  } catch {
+    return [];
+  }
+}
+
 // Notification channels — every enabled channel can actually be built
 // (credentials + required fields) and receives at least one level. The
 // wizard can enable Slack / Discord from an agent bot token without a
@@ -1387,6 +1471,7 @@ const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkVoiceConfig,
   checkAgentsRegistered,
   checkAcpAgents,
+  () => checkAgentNodeEngines(),
   checkProviderMapping,
   checkMcpGateway,
   checkMcpHub,

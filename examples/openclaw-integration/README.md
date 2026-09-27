@@ -17,7 +17,7 @@ foreman secrets add anthropic-key  # stored once, every agent reads it back
 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-Or have Foreman install OpenClaw for you when you select it (registry uses `npm install -g openclaw` as the primary path, which needs a supported Node; the curl script is a fallback for systems without one):
+Or have Foreman install OpenClaw for you when you select it. Foreman uses `npm install -g openclaw`, which needs the `node` on your PATH to be in OpenClaw's range (`>=24.16.0 <25 || >=26.1.0`). On an older Node, Foreman doesn't run the install: it prints the requirement and the curl command above for you to run yourself, and `foreman doctor` warns until OpenClaw has a Node it can run on.
 
 ```bash
 foreman agent add openclaw --type openclaw --auto-install

@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { getForemanPaths } from "../utils/config.js";
+import { isValidNodeRange } from "./node-engines.js";
 
 const REGISTRY_VERSION = 1;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -274,6 +275,21 @@ export const AgentEntrySchema = z
     mcp_format: z.enum(["flat", "nested"]).optional(),
     supported_versions: z.string().min(1),
     min_foreman_version: z.string().min(1),
+    /** #646 — Node.js range the agent itself needs, copied from its npm
+     *  package's `engines.node` (OpenClaw: `>=24.16.0 <25 || >=26.1.0`).
+     *  When the `node` on PATH is outside it, the wizard and `foreman agent
+     *  add` don't run the installer; they print the requirement and the
+     *  upstream script command instead, and `foreman doctor` warns. Only
+     *  `>=`/`>`/`<=`/`<`/`=` comparators joined by spaces and `||`. */
+    engines: z
+      .object({
+        node: z.string().refine(isValidNodeRange, {
+          message:
+            "engines.node must be a range like \">=24.16.0 <25 || >=26.1.0\" (>=, >, <=, <, = comparators; partial versions only after >= or <)",
+        }),
+      })
+      .strict()
+      .optional(),
     /** Optional background daemon (#349). When set, `foreman start` spawns
      *  this command + tracks the PID in `<stateDir>/daemons/<id>.pid`;
      *  shutdown sends SIGTERM. Null = the agent has no long-running

@@ -321,6 +321,28 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
           </Text>
         </Box>
       )}
+      {/* #646 — The install screen advances to Done on its own, so an
+          agent held back by its Node range would otherwise only appear in
+          a log the user never saw. Repeat the requirement and the
+          upstream installer command here. */}
+      {installSummary && installSummary.nodeEngineSkipped.length > 0 && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold color={theme.accent.warning}>
+            ⚠ Not installed: these agents need a newer Node.js
+          </Text>
+          {installSummary.nodeEngineSkipped.map((s) => (
+            <Box key={s.agentId} flexDirection="column" marginLeft={2}>
+              <Text color={theme.accent.warning}>✗ {s.agentId}</Text>
+              {s.lines.map((line) => (
+                <Text key={line} color={theme.fg.muted}>
+                  {"    "}
+                  {line}
+                </Text>
+              ))}
+            </Box>
+          ))}
+        </Box>
+      )}
       {installSummary && installSummary.registered.length > 0 && (
         <LaunchCommands agentIds={installSummary.registered} />
       )}
