@@ -6,7 +6,11 @@ import {
 } from "react";
 import type { DoctorReport } from "../../core/doctor.js";
 import type { DiscoveredModel } from "../../core/llm/models-discovery.js";
-import type { SetupState, WizardSessionSnapshot } from "../setup-state.js";
+import {
+  pickSessionAgentConfig,
+  type SetupState,
+  type WizardSessionSnapshot,
+} from "../setup-state.js";
 import type {
   AgentConfigPrompt,
   AgentsPhase,
@@ -228,7 +232,8 @@ export function createInitialWizardState(
 export function snapshotSession(state: WizardState): WizardSessionSnapshot {
   const agentConfigs: WizardSessionSnapshot["agentConfigs"] = {};
   for (const [id, cfg] of Object.entries(state.agentConfigs)) {
-    if (cfg) agentConfigs[id] = { ...cfg };
+    // Same four-field whitelist the loader applies (sanitizeSession).
+    if (cfg) agentConfigs[id] = pickSessionAgentConfig({ ...cfg });
   }
   return {
     providersSelected: [...state.providersSelected],

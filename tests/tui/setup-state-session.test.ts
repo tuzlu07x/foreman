@@ -97,6 +97,70 @@ describe('sanitizeSession', () => {
   })
 })
 
+describe('sanitizeSession with a catalog', () => {
+  const catalog = {
+    agents: [
+      {
+        id: 'hermes',
+        llm_compat: ['anthropic', 'openai'],
+        provider_mapping: { openai: { variants: { 'via-openrouter': {}, 'via-codex-oauth': {} } } },
+      },
+      { id: 'codex', llm_compat: ['openai'], provider_mapping: { openai: { variants: { oauth: {} } } } },
+    ],
+    providerIds: ['anthropic', 'openai'],
+    serviceIds: ['telegram'],
+  }
+
+  it('drops agent, provider and service ids the registry no longer knows', () => {
+    const out = sanitizeSession(
+      {
+        providersSelected: ['openai', 'retired-provider'],
+        providersSignedIn: [],
+        agentsSelected: ['hermes', 'retired-agent'],
+        agentConfigs: { hermes: { llmProvider: 'openai' }, 'retired-agent': { llmProvider: 'openai' } },
+        servicesSelected: ['telegram', 'retired-service'],
+      },
+      catalog,
+    )
+    expect(out?.providersSelected).toEqual(['openai'])
+    expect(out?.agentsSelected).toEqual(['hermes'])
+    expect(Object.keys(out?.agentConfigs ?? {})).toEqual(['hermes'])
+    expect(out?.servicesSelected).toEqual(['telegram'])
+  })
+
+  it("drops a per-agent provider or variant the agent's mapping doesn't declare", () => {
+    const out = sanitizeSession(
+      {
+        providersSelected: [],
+        providersSignedIn: [],
+        agentsSelected: ['hermes', 'codex'],
+        agentConfigs: {
+          // gemini isn't in hermes' llm_compat → provider, route and model go.
+          hermes: { llmProvider: 'gemini', providerVariant: 'direct', modelVersion: 'm', responsibilityNote: 'n' },
+          // single-provider agent: variant checked against its sole provider.
+          codex: { providerVariant: 'retired-route' },
+        },
+        servicesSelected: [],
+      },
+      catalog,
+    )
+    expect(out?.agentConfigs).toEqual({ hermes: { responsibilityNote: 'n' }, codex: {} })
+  })
+})
+
+describe('snapshotSession whitelist', () => {
+  it('keeps only the four per-agent fields', () => {
+    const s = createInitialWizardState(freshState(), [])
+    const withExtra = {
+      ...s,
+      agentConfigs: {
+        hermes: { llmProvider: 'openai', apiKey: 'fake-should-not-persist' } as unknown as WizardSessionSnapshot['agentConfigs'][string],
+      },
+    }
+    expect(snapshotSession(withExtra).agentConfigs).toEqual({ hermes: { llmProvider: 'openai' } })
+  })
+})
+
 describe('wizard state ↔ snapshot', () => {
   it('seeds a resumed wizard from the snapshot', () => {
     const s = createInitialWizardState({ ...freshState(), session }, ['codex'])

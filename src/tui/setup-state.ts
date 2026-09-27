@@ -167,9 +167,27 @@ function optionalString(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
 
+/** The slice of the registry a session snapshot is checked against. */
+export interface SessionCatalogAgent {
+  id: string;
+  llm_compat?: string[];
+  provider_mapping?: Record<string, { variants: Record<string, unknown> }> | null;
+}
+
+export interface SessionCatalog {
+  agents: SessionCatalogAgent[];
+  providerIds: string[];
+  serviceIds: string[];
+}
+
 /** Validated copy of a stored session snapshot, or undefined when absent or
- *  malformed. Unknown per-agent fields are dropped. */
-export function sanitizeSession(raw: unknown): WizardSessionSnapshot | undefined {
+ *  malformed. Per-agent configs keep only the four known fields. With a
+ *  `catalog`, ids the registry no longer knows are dropped too: agents,
+ *  providers, services, and per-agent providers / variants. */
+export function sanitizeSession(
+  raw: unknown,
+  catalog?: SessionCatalog,
+): WizardSessionSnapshot | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const r = raw as Record<string, unknown>;
   if (
@@ -185,28 +203,67 @@ export function sanitizeSession(raw: unknown): WizardSessionSnapshot | undefined
   const signedIn = r.providersSignedIn.filter(
     (p): p is "anthropic" | "openai" => p === "anthropic" || p === "openai",
   );
+  const agents = catalog
+    ? new Map(catalog.agents.map((a) => [a.id, a]))
+    : null;
+  const knownProvider = (id: string): boolean =>
+    !catalog || catalog.providerIds.includes(id);
+  const knownService = (id: string): boolean =>
+    !catalog || catalog.serviceIds.includes(id);
+  const knownAgent = (id: string): boolean => !agents || agents.has(id);
   const agentConfigs: Record<string, SessionAgentConfig> = {};
   for (const [id, cfgRaw] of Object.entries(r.agentConfigs)) {
     if (typeof cfgRaw !== "object" || cfgRaw === null) continue;
-    const c = cfgRaw as Record<string, unknown>;
-    const cfg: SessionAgentConfig = {};
-    const llmProvider = optionalString(c.llmProvider);
-    const providerVariant = optionalString(c.providerVariant);
-    const modelVersion = optionalString(c.modelVersion);
-    const responsibilityNote = optionalString(c.responsibilityNote);
-    if (llmProvider !== undefined) cfg.llmProvider = llmProvider;
-    if (providerVariant !== undefined) cfg.providerVariant = providerVariant;
-    if (modelVersion !== undefined) cfg.modelVersion = modelVersion;
-    if (responsibilityNote !== undefined) cfg.responsibilityNote = responsibilityNote;
+    if (!knownAgent(id)) continue;
+    const cfg = pickSessionAgentConfig(cfgRaw as Record<string, unknown>);
+    const entry = agents?.get(id);
+    if (entry) dropUnknownRoute(cfg, entry);
     agentConfigs[id] = cfg;
   }
   return {
-    providersSelected: [...r.providersSelected],
+    providersSelected: r.providersSelected.filter(knownProvider),
     providersSignedIn: signedIn,
-    agentsSelected: [...r.agentsSelected],
+    agentsSelected: r.agentsSelected.filter(knownAgent),
     agentConfigs,
-    servicesSelected: [...r.servicesSelected],
+    servicesSelected: r.servicesSelected.filter(knownService),
   };
+}
+
+/** Only the four per-agent fields the wizard owns — anything else found in
+ *  a stored or in-memory config is dropped rather than persisted. */
+export function pickSessionAgentConfig(
+  c: Record<string, unknown>,
+): SessionAgentConfig {
+  const cfg: SessionAgentConfig = {};
+  const llmProvider = optionalString(c.llmProvider);
+  const providerVariant = optionalString(c.providerVariant);
+  const modelVersion = optionalString(c.modelVersion);
+  const responsibilityNote = optionalString(c.responsibilityNote);
+  if (llmProvider !== undefined) cfg.llmProvider = llmProvider;
+  if (providerVariant !== undefined) cfg.providerVariant = providerVariant;
+  if (modelVersion !== undefined) cfg.modelVersion = modelVersion;
+  if (responsibilityNote !== undefined) cfg.responsibilityNote = responsibilityNote;
+  return cfg;
+}
+
+// A provider the agent can't use, or a variant its mapping doesn't declare
+// (registry changed since the snapshot), is dropped; the wizard re-asks.
+function dropUnknownRoute(cfg: SessionAgentConfig, agent: SessionCatalogAgent): void {
+  const compat = agent.llm_compat ?? [];
+  if (cfg.llmProvider !== undefined && !compat.includes(cfg.llmProvider)) {
+    delete cfg.llmProvider;
+    delete cfg.providerVariant;
+    delete cfg.modelVersion;
+  }
+  if (cfg.providerVariant === undefined) return;
+  const provider =
+    cfg.llmProvider ?? (compat.length === 1 ? compat[0] : undefined);
+  const variants = provider
+    ? agent.provider_mapping?.[provider]?.variants
+    : undefined;
+  if (!variants || !(cfg.providerVariant in variants)) {
+    delete cfg.providerVariant;
+  }
 }
 
 function isValidState(raw: unknown): raw is SetupState {
