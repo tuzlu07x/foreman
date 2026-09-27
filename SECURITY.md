@@ -55,8 +55,14 @@ Known limits, which we track as roadmap items rather than hide:
   path. Per-agent identity tokens are planned. Blocked and paused agents
   are denied on every transport today.
 - **Relayed approvals.** Telegram decisions reach Foreman through the chat
-  agent, and each one is bound to the tapped button by an HMAC tag the agent
-  cannot forge. Push-only channels (Slack, Discord, email, ntfy) never carry
+  agent that polls the bot. Each allow button carries an HMAC tag bound to
+  that action. Other agents can't approve anything, and the chat agent
+  can't approve before you tap, because allow tokens never appear in the
+  message text. But once you tap *any* button on a message, Telegram hands
+  the chat agent the whole keyboard. So against a compromised chat agent,
+  the tags are defence in depth only. Approve that agent's own risky calls
+  in the TUI. A dedicated approval bot that Foreman polls itself is
+  planned. Push-only channels (Slack, Discord, email, ntfy) never carry
   approval tokens.
 - **Pre-execution only.** Foreman decides before a call runs; it does not
   roll back side effects of calls you approved.
