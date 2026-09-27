@@ -29,6 +29,18 @@ describe('redactSecretShapes', () => {
     expect(out.text).toBe('before\n[REDACTED private key]\nafter')
   })
 
+  it('masks a private key whose END line was cut off', () => {
+    const out = redactSecretShapes('key:\n-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA1x2y3z\nabc+/=')
+    expect(out.text).toBe('key:\n[REDACTED private key]')
+  })
+
+  it('masks consecutive key blocks separately', () => {
+    const pem = '-----BEGIN PRIVATE KEY-----\nAAA\n-----END PRIVATE KEY-----'
+    const out = redactSecretShapes(`${pem} and ${pem}`)
+    expect(out.text).toBe('[REDACTED private key] and [REDACTED private key]')
+    expect(out.count).toBe(2)
+  })
+
   it('keeps a database URL readable but masks only the password', () => {
     const out = redactSecretShapes('postgres://app:s3cr3t@db.internal:5432/main')
     expect(out.text).toBe('postgres://app:[REDACTED]@db.internal:5432/main')
@@ -54,6 +66,16 @@ describe('database-URL pattern is not a ReDoS', () => {
     redactSecretShapes(hostile)
     // Previously ~97 s of synchronous CPU; bounded quantifiers keep it linear.
     expect(Date.now() - started).toBeLessThan(5_000)
+  })
+
+  it('masks 1 MB of repeated private-key headers quickly', () => {
+    const hostile = '-----BEGIN RSA PRIVATE KEY-----'.repeat(33_000)
+    const started = Date.now()
+    const out = redactSecretShapes(`${hostile}\n-----END RSA PRIVATE KEY-----`)
+    // A lazy BEGIN…END regex took ~2.3 s per MB here.
+    expect(Date.now() - started).toBeLessThan(500)
+    expect(out.count).toBeGreaterThan(0)
+    expect(out.text).not.toContain('-----BEGIN RSA PRIVATE KEY-----')
   })
 })
 

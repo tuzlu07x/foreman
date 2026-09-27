@@ -66,6 +66,8 @@ export function hashToolDefinition(tool: PinnableTool): string {
         name: tool.name,
         description: tool.description ?? "",
         inputSchema: tool.inputSchema ?? null,
+        // A flipped readOnlyHint / destructiveHint is a change worth re-review.
+        ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
       }),
     )
     .digest("hex");

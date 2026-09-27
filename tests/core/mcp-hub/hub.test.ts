@@ -137,6 +137,24 @@ describe('McpHub against a real stdio MCP server', () => {
     expect(result.content).toEqual([{ type: 'text', text: 'hi' }])
   })
 
+  it('scrubs injected secrets from an upstream start-up error', async () => {
+    const cfg = HubConfigSchema.parse({
+      servers: {
+        leaky: {
+          command: process.execPath,
+          args: ['-e', 'console.error("rejected token " + process.env.TOKEN); process.exit(1)'],
+          env: { TOKEN: '${secret:leaky-token}' },
+        },
+      },
+    })
+    const h = hub(cfg, { resolveSecret: (n) => (n === 'leaky-token' ? 'hunter2hunter2' : null) })
+    await h.inventory({ refresh: true })
+    const [status] = h.status()
+    expect(status!.source).toBe('unavailable')
+    expect(status!.error).toContain('rejected token [redacted]')
+    expect(status!.error).not.toContain('hunter2hunter2')
+  })
+
   it('honours an org scope: servers outside the role are invisible and refused', async () => {
     const h = hub(config())
     const scope = { allowedServers: new Set(['github']) }

@@ -38,6 +38,7 @@ const FOREMAN_STATE_PATTERNS: ReadonlyArray<{ re: RegExp; reason: string }> = [
 const AGENT_WIRING_PATTERNS: ReadonlyArray<{ re: RegExp; reason: string }> = [
   { re: /\.claude[/\\]settings(\.local)?\.json\b/i, reason: 'Claude Code settings (holds the Foreman hook)' },
   { re: /(^|[/\\\s"'~])\.claude\.json\b/i, reason: 'Claude Code MCP config (holds the Foreman --source id)' },
+  { re: /(^|[/\\\s"'])\.mcp\.json\b/i, reason: "project MCP config (can shadow Foreman's MCP server)" },
   { re: /\.codex[/\\]config\.toml\b/i, reason: 'Codex config (MCP wiring)' },
   { re: /\.hermes[/\\]config\.ya?ml\b/i, reason: 'Hermes config (MCP wiring)' },
   { re: /\.openclaw[/\\][^\s"']*\.(json|ya?ml|toml)\b/i, reason: 'OpenClaw config (MCP wiring)' },
@@ -89,7 +90,8 @@ export const foremanSelfProtectionRule: RiskRule = {
       })
     }
 
-    const tool = (req.targetTool ?? '').toLowerCase()
+    // Hub tools are namespaced `<server>__<tool>` (e.g. `fs__write_file`).
+    const tool = (req.targetTool ?? '').toLowerCase().split('__').pop() ?? ''
     if (WRITE_TOOLS.has(tool)) {
       for (const { re, reason } of AGENT_WIRING_PATTERNS) {
         const m = re.exec(text)
