@@ -40,6 +40,7 @@ import type { SessionManager } from "../core/session.js";
 import { closeDb, getDb } from "../db/client.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { redactSecretShapes } from "../core/risk-rules/secret-patterns.js";
+import { isHumanSource } from "../core/org/guard.js";
 import { createDecoder, encodeMessage } from "../mcp/framing.js";
 import type { JSONRPCMessage } from "../mcp/types.js";
 import { getForemanPaths } from "../utils/config.js";
@@ -65,6 +66,15 @@ export const mcpStdioCommand = new Command("mcp-stdio")
       process.stderr.write(
         red("error: ") +
           `Foreman is not initialised at ${paths.root}. Run 'foreman init' first.\n`,
+      );
+      process.exit(1);
+    }
+    // Human surfaces skip org delegation rules; an agent must not be able
+    // to pass itself off as one.
+    if (isHumanSource(options.source)) {
+      process.stderr.write(
+        red("error: ") +
+          `'${options.source}' is reserved for you (the CLI, TUI and chat commands). Give the agent its own id with --source.\n`,
       );
       process.exit(1);
     }

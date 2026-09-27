@@ -131,7 +131,7 @@ describe('Telegram approval bot (#610)', () => {
       { requestId: 'req-1', decision: 'allow_always', decidedBy: `telegram:${CHAT}`, channel: 'telegram' },
     ])
     expect(calls.filter((c) => c.method === 'getUpdates').every((c) => c.token === APPROVAL)).toBe(true)
-    expect(calls.find((c) => c.method === 'answerCallbackQuery')!.body.text).toBe('Allowed ✓')
+    expect(calls.find((c) => c.method === 'answerCallbackQuery')!.body.text).toBe('Allowed ✓ (always)')
     expect(calls.find((c) => c.method === 'editMessageReplyMarkup')!.body).toMatchObject({
       reply_markup: { inline_keyboard: [] },
     })

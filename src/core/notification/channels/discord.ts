@@ -5,6 +5,13 @@ import type {
   UserDecision,
 } from "../types.js";
 import {
+  approvalButtons,
+  buttonStyle,
+  encodeApprovalButton,
+  type ApprovalSigner,
+} from "./approval-buttons.js";
+import { DiscordGatewayListener, type DiscordGatewayOptions } from "./discord-gateway.js";
+import {
   ChannelDeliveryError,
   clipText,
   decisionHint,
@@ -19,9 +26,11 @@ import {
 //
 // Outbound alerts and digests as a coloured embed. `allowed_mentions` is
 // always empty: notification text can quote agent output, and an agent must
-// never be able to make Foreman ping @everyone. Approvals are decided in the
-// TUI / Telegram (Discord buttons need Foreman to host an interactions
-// endpoint or a gateway connection).
+// never be able to make Foreman ping @everyone.
+//
+// With a bot token and `interactive: true`, the channel is two-way over the
+// Gateway (discord-gateway.ts): approval messages get buttons and
+// `/foreman` works, for the allowed user ids only.
 
 export type DiscordTarget =
   | { kind: "webhook"; url: string }
@@ -31,6 +40,8 @@ export interface DiscordChannelOptions {
   target: DiscordTarget;
   fetchImpl?: HttpFetch;
   timeoutMs?: number;
+  /** Two-way mode over the Gateway (#615). Needs the bot target. */
+  interactive?: Omit<DiscordGatewayOptions, "fetchImpl" | "sign" | "botToken"> & { sign: ApprovalSigner };
 }
 
 const DISCORD_API = "https://discord.com/api/v10";
@@ -49,10 +60,16 @@ export class DiscordChannel implements NotificationChannel {
   readonly id = "discord" as const;
   private readonly fetchImpl: HttpFetch;
   private readonly timeoutMs: number;
+  private readonly listener: DiscordGatewayListener | null;
 
   constructor(private readonly opts: DiscordChannelOptions) {
     this.fetchImpl = opts.fetchImpl ?? defaultFetch;
     this.timeoutMs = opts.timeoutMs ?? 10_000;
+    const t = opts.target;
+    this.listener =
+      opts.interactive && t.kind === "bot"
+        ? new DiscordGatewayListener({ ...opts.interactive, botToken: t.token, fetchImpl: this.fetchImpl })
+        : null;
   }
 
   async isReady(): Promise<boolean> {
@@ -61,7 +78,7 @@ export class DiscordChannel implements NotificationChannel {
   }
 
   async send(n: Notification): Promise<ChannelMessageRef> {
-    const payload = renderDiscordMessage(n);
+    const payload = renderDiscordMessage(n, this.listener ? this.opts.interactive?.sign : undefined);
     const t = this.opts.target;
     const url = t.kind === "webhook" ? withWait(t.url) : `${DISCORD_API}/channels/${t.channelId}/messages`;
     const text = await this.request("POST", url, payload);
@@ -74,21 +91,26 @@ export class DiscordChannel implements NotificationChannel {
     return { channelMessageId: id };
   }
 
-  async updateMessage(ref: ChannelMessageRef, body: string): Promise<void> {
+  async updateMessage(ref: ChannelMessageRef, body: string, opts: { final?: boolean } = {}): Promise<void> {
     if (!ref.channelMessageId) return;
     const t = this.opts.target;
     const base = t.kind === "webhook" ? stripQuery(t.url) : `${DISCORD_API}/channels/${t.channelId}`;
     await this.request("PATCH", `${base}/messages/${ref.channelMessageId}`, {
       content: clipText(body, 1_900),
+      // The outcome removes the approval buttons.
+      ...(opts.final ? { components: [] } : {}),
       allowed_mentions: { parse: [] },
     });
   }
 
-  async listen(_onDecision: (d: UserDecision) => Promise<void>): Promise<void> {
-    // Outbound only — see file header.
+  async listen(onDecision: (d: UserDecision) => Promise<void>): Promise<void> {
+    // Push-only unless two-way mode is configured (see file header).
+    this.listener?.start(onDecision);
   }
 
-  async shutdown(): Promise<void> {}
+  async shutdown(): Promise<void> {
+    await this.listener?.stop();
+  }
 
   private request(method: "POST" | "PATCH", url: string, payload: unknown): Promise<string> {
     const t = this.opts.target;
@@ -110,8 +132,13 @@ export class DiscordChannel implements NotificationChannel {
   }
 }
 
-export function renderDiscordMessage(n: Notification): unknown {
-  const hint = decisionHint(n);
+const BUTTON_STYLE = { primary: 3, danger: 4, neutral: 2 } as const;
+
+/** With a signer (two-way mode), approval prompts get HMAC-tagged buttons. */
+export function renderDiscordMessage(n: Notification, sign?: ApprovalSigner): unknown {
+  const buttons = sign && n.requestId ? approvalButtons(n) : [];
+  const hint = buttons.length > 0 ? "" : decisionHint(n);
+  const requestId = n.requestId ?? "";
   return {
     embeds: [
       {
@@ -121,6 +148,21 @@ export function renderDiscordMessage(n: Notification): unknown {
         ...(hint ? { footer: { text: hint } } : {}),
       },
     ],
+    ...(buttons.length > 0
+      ? {
+          components: [
+            {
+              type: 1,
+              components: buttons.map((a) => ({
+                type: 2,
+                style: BUTTON_STYLE[buttonStyle(a.id)],
+                label: clipText(a.label, 80),
+                custom_id: encodeApprovalButton(requestId, a.id, sign!),
+              })),
+            },
+          ],
+        }
+      : {}),
     allowed_mentions: { parse: [] },
   };
 }

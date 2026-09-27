@@ -122,7 +122,7 @@ export class CountdownTicker {
     if (!entry) return
     const stripped = stripCountdownTail(entry.body)
     try {
-      await entry.channel.updateMessage(entry.ref, `${stripped}\n\n${footer}`)
+      await entry.channel.updateMessage(entry.ref, `${stripped}\n\n${footer}`, { final: true })
     } catch {
       // Message edit failure is non-fatal; the decision is still
       // recorded in the audit log and the original message body

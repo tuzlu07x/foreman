@@ -12,6 +12,7 @@ import {
   saveNotifyConfig,
   type ChannelToggle,
 } from '../core/notification/notify-config.js'
+import { approvalSigner } from '../core/approval-token.js'
 import { buildChannel } from '../core/notification/channel-factory.js'
 import {
   defaultNotifyState,
@@ -448,8 +449,10 @@ async function buildChannelForCli(
 ): Promise<NotificationChannel | null> {
   if (!isKnownChannel(channelId)) return null
   const toggle = channelConfig(config, channelId) ?? { enabled: true }
-  const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
-  const built = buildChannel(channelId, toggle, { secrets: store })
+  const masterKey = loadOrCreateSecretsMasterKey()
+  const store = new SecretStore(getDb(), masterKey)
+  // The signer lets two-way Slack / Discord build; a test only sends.
+  const built = buildChannel(channelId, toggle, { secrets: store, signApproval: approvalSigner(masterKey) })
   if ('problem' in built) {
     console.error(red('error: ') + built.problem)
     return null
@@ -579,6 +582,130 @@ notifyCommand
     console.log('  2. Restart foreman start. It polls the approval bot itself.')
     console.log(dim('  Never give this token to an agent. Undo: foreman notify approval-bot --off'))
   })
+
+// #615 — Two-way Slack over Socket Mode: approval buttons and `/foreman`
+// in Slack, with no public URL. Foreman holds the app-level token.
+notifyCommand
+  .command('slack-interactive')
+  .description('Approve and run /foreman from Slack (Socket Mode)')
+  .option('--user <id>', 'Slack user id (U…) allowed to decide and command; repeatable', collect, [])
+  .option('--app-token-ref <name>', 'secret holding the app-level token (xapp-…)', 'slack-app-token')
+  .option('--no-verify', 'skip checking the token with Slack')
+  .option('--off', 'back to push-only Slack')
+  .action(async (opts: { user: string[]; appTokenRef: string; verify: boolean; off?: boolean }) => {
+    requireInitialised()
+    const paths = getForemanPaths()
+    const config = existsSync(paths.notifyConfigPath)
+      ? safeLoadConfig(paths.notifyConfigPath, loadNotifyConfig, { label: 'notify.yaml' })
+      : defaultNotifyConfig()
+    const slack = channelConfig(config, 'slack')
+    if (opts.off) {
+      if (slack) {
+        const { app_token_ref: _t, allowed_user_ids: _u, ...rest } = slack
+        setChannel(config, 'slack', rest)
+        saveNotifyConfig(paths.notifyConfigPath, config)
+      }
+      console.log(`${green('✓')} Slack is push-only again`)
+      return
+    }
+    if (!slack?.webhook_url_ref && !(slack?.bot_token_ref && slack.channel)) {
+      fail('set up Slack first (a webhook or a bot in notify.yaml, then foreman notify enable slack) — see docs/notifications.md')
+    }
+    const users = normaliseUserIds(opts.user, /^[UW][A-Z0-9]{2,39}$/i)
+    if (users.length === 0) {
+      fail('say who may approve: --user U0123ABCD (Slack: your profile → ⋮ → Copy member ID)')
+    }
+    const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
+    try {
+      if (!store.exists(opts.appTokenRef)) {
+        fail(
+          `no secret '${opts.appTokenRef}'. In your Slack app: Socket Mode → on, then generate an app-level token with connections:write, and: foreman secrets add ${opts.appTokenRef}`,
+        )
+      }
+      if (opts.verify) {
+        const res = await fetch('https://slack.com/api/apps.connections.open', {
+          method: 'POST',
+          headers: { authorization: `Bearer ${store.get(opts.appTokenRef)}` },
+        }).catch(() => null)
+        const body = (await res?.json().catch(() => null)) as { ok?: boolean; error?: string } | null
+        if (!body?.ok) {
+          fail(`Slack rejected the app token (${body?.error ?? 'no answer'}). Re-run with --no-verify to skip this check.`)
+        }
+      }
+      setChannel(config, 'slack', { ...slack, app_token_ref: opts.appTokenRef, allowed_user_ids: users })
+      saveNotifyConfig(paths.notifyConfigPath, config)
+    } finally {
+      closeDb()
+    }
+    console.log(`${green('✓')} two-way Slack is on for ${users.join(', ')}`)
+    console.log('')
+    console.log('  In your Slack app settings (api.slack.com/apps), once:')
+    console.log('  1. Interactivity & Shortcuts → on (no URL needed with Socket Mode).')
+    console.log('  2. Slash Commands → create /foreman.')
+    console.log('  3. Reinstall the app if Slack asks. Then restart foreman start.')
+    console.log(dim('  Only these users can press Allow / Deny or run /foreman. Undo: foreman notify slack-interactive --off'))
+  })
+
+// #615 — Two-way Discord over the Gateway: approval buttons and `/foreman`.
+notifyCommand
+  .command('discord-interactive')
+  .description('Approve and run /foreman from Discord (Gateway)')
+  .option('--user <id>', 'Discord user id allowed to decide and command; repeatable', collect, [])
+  .option('--no-verify', 'skip checking the bot token with Discord')
+  .option('--off', 'back to push-only Discord')
+  .action(async (opts: { user: string[]; verify: boolean; off?: boolean }) => {
+    requireInitialised()
+    const paths = getForemanPaths()
+    const config = existsSync(paths.notifyConfigPath)
+      ? safeLoadConfig(paths.notifyConfigPath, loadNotifyConfig, { label: 'notify.yaml' })
+      : defaultNotifyConfig()
+    const discord = channelConfig(config, 'discord')
+    if (opts.off) {
+      if (discord) {
+        const { interactive: _i, allowed_user_ids: _u, ...rest } = discord
+        setChannel(config, 'discord', rest)
+        saveNotifyConfig(paths.notifyConfigPath, config)
+      }
+      console.log(`${green('✓')} Discord is push-only again`)
+      return
+    }
+    if (!discord?.bot_token_ref || !discord.channel) {
+      fail('two-way Discord needs a bot, not a webhook: set bot_token_ref and channel (channel id) — see docs/notifications.md')
+    }
+    const users = normaliseUserIds(opts.user, /^\d{5,25}$/)
+    if (users.length === 0) {
+      fail('say who may approve: --user 123456789012345678 (Discord: Developer Mode → right-click yourself → Copy User ID)')
+    }
+    if (opts.verify) {
+      const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
+      try {
+        if (!store.exists(discord.bot_token_ref)) fail(`no secret '${discord.bot_token_ref}'`)
+        const res = await fetch('https://discord.com/api/v10/users/@me', {
+          headers: { authorization: `Bot ${store.get(discord.bot_token_ref)}` },
+        }).catch(() => null)
+        if (!res?.ok) fail('Discord rejected the bot token. Re-run with --no-verify to skip this check.')
+      } finally {
+        closeDb()
+      }
+    }
+    setChannel(config, 'discord', { ...discord, interactive: true, allowed_user_ids: users })
+    saveNotifyConfig(paths.notifyConfigPath, config)
+    console.log(`${green('✓')} two-way Discord is on for ${users.join(', ')}`)
+    console.log('')
+    console.log('  Restart foreman start. It connects to the Discord gateway and registers /foreman.')
+    console.log(dim('  Only these users can press Allow / Deny or run /foreman. Undo: foreman notify discord-interactive --off'))
+  })
+
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value]
+}
+
+function normaliseUserIds(raw: string[], pattern: RegExp): string[] {
+  const ids = raw.flatMap((v) => v.split(',')).map((v) => v.trim()).filter(Boolean)
+  const bad = ids.filter((id) => !pattern.test(id))
+  if (bad.length > 0) fail(`not a user id: ${bad.join(', ')}`)
+  return [...new Set(ids)]
+}
 
 function fail(message: string): never {
   console.error(`${red('error:')} ${message}`)

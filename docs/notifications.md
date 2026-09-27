@@ -154,6 +154,77 @@ goes back to relaying approvals through the chat bot.
 
 ---
 
+## 3a. Two-way Slack and Discord (#615)
+
+By default Slack and Discord are push-only: they alert you, and you decide in
+the TUI or Telegram. Turn on two-way mode and you get **Allow / Deny buttons**
+on approval messages and a **`/foreman` command** (`status`, `org`, `report`,
+`write codex fix the flaky test`, …). No public URL is needed: Foreman opens
+the connection itself (Slack Socket Mode, the Discord Gateway), with tokens
+that only Foreman holds.
+
+Only the user ids you list can press a button or run a command. Everyone
+else gets a private "not allowed" reply. Each button carries an HMAC tag
+bound to that approval and that action, so a payload Foreman didn't render
+is refused. After a decision, the buttons are replaced with the outcome.
+A button whose approval was already decided answers "Already decided."
+
+### Slack (Socket Mode)
+
+You need the Slack channel set up first (webhook or bot, see
+[Channel setup](#channel-setup)).
+
+1. Open your app at [api.slack.com/apps](https://api.slack.com/apps). Create
+   one "from scratch" if you don't have one, and install it to your workspace.
+2. **Socket Mode** → turn it on. Generate an **app-level token** with the
+   `connections:write` scope (it starts with `xapp-`).
+3. **Interactivity & Shortcuts** → turn it on. Socket Mode needs no request
+   URL.
+4. **Slash Commands** → create `/foreman` (any description).
+5. Reinstall the app if Slack asks you to.
+6. Store the token and turn two-way mode on for yourself. Your member id is
+   under your Slack profile → ⋮ → *Copy member ID*.
+   ```bash
+   foreman secrets add slack-app-token          # paste the xapp-… token
+   foreman notify slack-interactive --user U0123ABCD
+   ```
+7. Restart `foreman start`.
+
+### Discord (Gateway)
+
+Two-way Discord needs a **bot**; a channel webhook can't receive button
+presses.
+
+1. [discord.com/developers/applications](https://discord.com/developers/applications)
+   → New Application → **Bot** → reset and copy the token. No privileged
+   intents are needed.
+2. **OAuth2 → URL Generator**: select the scopes `bot` and
+   `applications.commands`, and the bot permissions *Send Messages* and
+   *Embed Links*. Open the generated URL and add the bot to your server.
+3. Point Foreman at the bot and the alerts channel. Turn on Developer Mode
+   (User Settings → Advanced), then right-click the channel → *Copy Channel ID*
+   and yourself → *Copy User ID*.
+   ```yaml
+   # notify.yaml
+   channels:
+     discord:
+       enabled: true
+       bot_token_ref: discord-bot-token
+       channel: "123456789012345678"
+   ```
+   ```bash
+   foreman secrets add discord-bot-token
+   foreman notify discord-interactive --user 111111111111111111
+   ```
+4. Restart `foreman start`. It connects to the gateway and registers
+   `/foreman`.
+
+`foreman doctor` lists two-way channels (`two-way: slack (1 user(s))`). If a
+token is rejected or the connection keeps failing, a warning lands in the TUI
+inbox. Undo with `--off`.
+
+---
+
 ## 3b. Webhook + System channels (C11b-1)
 
 Two **outbound-only** channels for deployments that want delivery without bidirectional callbacks. They send alerts but can't capture user decisions — pair them with Telegram (or the TUI) for the actual deciding.
@@ -302,6 +373,7 @@ foreman notify timeout critical --seconds=120
 | **Channel hijack** — anyone with the bot token can send / receive | Token stays in Foreman's encrypted secret store. The configured `chat_id` constraint means even if the bot lands in a group, only YOUR taps are honored. |
 | **Replay attack** — replays of an old "approved" callback | Every callback's `notificationId` is checked against the outstanding-message map. Once resolved, the id is dropped — replays are silently rejected. |
 | **Compromised bot token** — attacker has the token, sends fake approvals | Every callback verifies (a) it's from the configured chat_id, (b) it targets a real outstanding notification id. A spoofed callback for a non-existent notification is dropped. |
+| **Two-way Slack / Discord** — someone else in the channel presses a button, or a forged payload | Only `allowed_user_ids` can act; others get a private refusal. Button values carry an HMAC tag bound to the approval and the action. Payloads arrive over a Socket Mode / Gateway connection opened with a token only Foreman holds, and Slack replies go only to `hooks.slack.com`. A stale button (approval already decided) is refused. |
 | **Relaying chat agent** — an agent that shares the bot reads the approval buttons after any tap | Use the approval bot (`foreman notify approval-bot`): approvals go through a bot only Foreman holds and polls, so no agent sees them. Without it, relayed allows still need the button's HMAC tag, but the relay agent itself can read the keyboard (see SECURITY.md). |
 | **Network unavailable** — Telegram is down | `NotificationService` records the failed delivery in the `notifications` table with `status='failed'` + the error message. `foreman doctor` surfaces channel health. |
 
@@ -373,8 +445,8 @@ C11a-2 ships the **`NotificationBridge`** — the missing wire from `onAnyDecisi
 | Channel | Credentials | Notes |
 | --- | --- | --- |
 | Telegram | `foreman secrets add telegram-bot-token` + `chat_id` | Interactive: inline Allow / Deny buttons carry an HMAC-tagged approval id. Only the typed `/deny` fallback appears in the text. Other agents can't approve; for the chat agent's own calls, see [SECURITY.md](../SECURITY.md#threat-model-in-brief). |
-| Slack | incoming webhook URL → `foreman secrets add slack-webhook-url` | Or `bot_token_ref` + `channel` (needs `chat:write`). Agent text is escaped (no `<!channel>` pings). |
-| Discord | channel webhook URL → `foreman secrets add discord-webhook-url` | Or `bot_token_ref` + `channel` id. Mentions are always disabled. |
+| Slack | incoming webhook URL → `foreman secrets add slack-webhook-url` | Or `bot_token_ref` + `channel` (needs `chat:write`). Agent text is escaped (no `<!channel>` pings). Two-way: [§3a](#3a-two-way-slack-and-discord-615). |
+| Discord | channel webhook URL → `foreman secrets add discord-webhook-url` | Or `bot_token_ref` + `channel` id. Mentions are always disabled. Two-way (bot only): [§3a](#3a-two-way-slack-and-discord-615). |
 | Email | `foreman secrets add smtp-app-password` | Gmail / iCloud / Fastmail need an app password. Credentials are never sent over an unencrypted connection to a remote host. |
 | ntfy | `foreman notify ntfy-setup` | Install the ntfy app and subscribe to the printed topic. Self-host ntfy or set `access_token_ref` for stricter privacy. |
 | Webhook | `webhook_url_ref` (+ `signing_secret_ref`) | JSON POST with `X-Foreman-Signature: sha256=…`. |
