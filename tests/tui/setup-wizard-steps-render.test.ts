@@ -413,6 +413,33 @@ describe('required-setup step', () => {
   })
 })
 
+describe('required-setup step [s] skip', () => {
+  it('leaves a stored secret alone and still skips a missing one', async () => {
+    const w = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
+    await w.until('Agents ▸ pick which to install')
+    // Hermes (needs openrouter-key, missing) + OpenClaw (uses the stored openai-key).
+    await w.press(DOWN)
+    await w.press(SPACE)
+    await w.press(ENTER, 'Hermes (1/8)')
+    await w.press(ENTER, 'how to reach OpenAI')
+    await w.press(ENTER, 'pick a OpenAI model')
+    await w.press(ENTER, 'Hermes — responsibility note')
+    await w.press(ENTER, 'OpenClaw (5/8)')
+    await w.press(ENTER, 'pick a OpenAI model')
+    await w.press(ENTER, 'OpenClaw — responsibility note')
+    await w.press(ENTER, 'Agents ▸ confirm')
+    await w.press('y', 'Services ▸ pick which to configure')
+    await w.press(ENTER, 'Services ▸ summary')
+    await w.press('y', 'Required setup ▸ missing keys')
+    expect(w.frame()).toMatch(/❯ ✓ openai-key .*status: present/)
+    await w.press('s')
+    // Used to flip to "✗ … status: skipped" for a key that is in the store.
+    expect(w.frame()).toMatch(/❯ ✓ openai-key .*status: present/)
+    await w.press(DOWN)
+    await w.press('s', 'openrouter-key  for: hermes · status: skipped')
+  }, 20_000)
+})
+
 describe('install step', () => {
   it('shows the failure prompt, the manual-fix overlay, and resolves skip', async () => {
     const w = await mount('install')

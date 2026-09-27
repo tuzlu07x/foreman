@@ -5,6 +5,7 @@ import {
   isRequiredSetupComplete,
   resolveRequiredSetup,
   type RequiredSetupResolution,
+  type SecretStatus,
 } from "../../core/required-setup.js";
 import { openInBrowser } from "../../utils/browser-open.js";
 import { WizardProgress } from "../components/wizard-progress.js";
@@ -60,6 +61,13 @@ export function useRequiredSetupResolution(
     services.secretStore,
     requiredSetupOverrides,
   ]);
+}
+
+/** `[s]` only skips a secret nobody has provided. A stored key (`present`)
+ *  or one pasted this run (`saved-in-session`) used to flip to "✗ skipped"
+ *  even though the value was right there in the store. */
+export function canSkipRequiredSecret(status: SecretStatus): boolean {
+  return status === "missing";
 }
 
 // #408 / #411 Phase 3 — required-setup step key handling.
@@ -184,12 +192,11 @@ export function handleRequiredSetupInput(
       // Skip the currently focused secret. Install will still write
       // everything else; the agent that needed this secret will fail
       // at start time with a clear error (TUI crash banner).
-      const slot =
-        requiredSetupResolution.secrets[requiredSetupCursor]?.slotName;
-      if (slot) {
+      const cur = requiredSetupResolution.secrets[requiredSetupCursor];
+      if (cur && canSkipRequiredSecret(cur.status)) {
         setRequiredSetupOverrides((prev) => ({
           ...prev,
-          [slot]: "skipped",
+          [cur.slotName]: "skipped",
         }));
       }
       return true;
