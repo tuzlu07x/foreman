@@ -155,7 +155,9 @@ describe('the scripted day (#632)', () => {
     await playDemo(actions, { workDir: '/demo/work', speed: 1_000, onStep: (s) => seen.push(s.label) })
     await flush()
     expect(seen).toEqual(DEMO_SCRIPT.map((s) => s.label))
-    expect(calls.map((c) => c[0])).toEqual([
+    // Steps start in order but run concurrently (an approval must not hold
+    // up the day), so a step's second action can land after the next step.
+    expect(calls.map((c) => c[0]).sort()).toEqual([
       'post',
       'delegate',
       'usage',
@@ -168,7 +170,7 @@ describe('the scripted day (#632)', () => {
       'report',
       'usage',
       'report',
-    ])
+    ].sort())
     // The approval is about the demo's decoy secret, never a real file.
     expect(calls).toContainEqual(['toolCall', 'openclaw', 'read_file', { path: join('/demo/work', '.env') }])
     expect(calls).toContainEqual(['delegate', 'claude-code', 'codex', 'add tests for the new rate limiter'])
@@ -202,7 +204,8 @@ describe('the scripted day (#632)', () => {
     await playDemo(actions, { workDir: '/demo/work', speed: 1_000, onError: (s) => failed.push(s.label) })
     await flush()
     expect(failed).toHaveLength(2)
-    expect(calls.at(-1)?.[0]).toBe('report')
+    // The day still reaches its last step, the CEO's report.
+    expect(calls.filter((c) => c[0] === 'report' && c[1] === 'hermes')).toHaveLength(1)
   })
 })
 
