@@ -1,8 +1,6 @@
 {
-  "version": "5",
+  "version": "6",
   "dialect": "sqlite",
-  "id": "6926ab48-3730-4d3a-ba22-f02cbd4ab6e5",
-  "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "agents": {
       "name": "agents",
@@ -75,7 +73,8 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "checkConstraints": {}
     },
     "audit_events": {
       "name": "audit_events",
@@ -112,7 +111,8 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "checkConstraints": {}
     },
     "policies": {
       "name": "policies",
@@ -188,7 +188,8 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "checkConstraints": {}
     },
     "requests": {
       "name": "requests",
@@ -305,7 +306,8 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "checkConstraints": {}
     },
     "sessions": {
       "name": "sessions",
@@ -366,13 +368,16 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "checkConstraints": {}
     }
   },
   "enums": {},
   "_meta": {
-    "schemas": {},
     "tables": {},
     "columns": {}
-  }
+  },
+  "id": "6926ab48-3730-4d3a-ba22-f02cbd4ab6e5",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "views": {}
 }
