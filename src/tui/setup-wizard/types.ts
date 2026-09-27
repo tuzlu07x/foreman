@@ -65,6 +65,10 @@ export interface InstallStepSummary {
   registered: string[];
   identityPushed: string[];
   identitySkipped: { agentId: string; reason: string }[];
+  /** Registered agents whose registry entry has no identity file (e.g.
+   *  generic-mcp). There is nothing to push, which is not a failure, so
+   *  these are kept out of identitySkipped. */
+  identityNotApplicable: string[];
   failed: string[];
   removed: string[];
   /** #audit-finding-15 — Agents whose Foreman MCP registration failed

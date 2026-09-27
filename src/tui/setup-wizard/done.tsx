@@ -162,6 +162,11 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
   const serviceIds = configuredServiceIds(serviceCatalog, storedNames);
   const agentRows = services.registry.list();
   const policyRuleCount = countPolicyRules(services.policyPath);
+  // Agents without an identity file (generic-mcp) aren't push targets.
+  const identityTargets = installSummary
+    ? installSummary.registered.length -
+      installSummary.identityNotApplicable.length
+    : 0;
 
   if (donePhase === "doctor" && doctorReport) {
     return (
@@ -249,16 +254,24 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
       </Box>
       {installSummary && (
         <Box flexDirection="column" marginTop={1}>
-          <Text color={theme.fg.muted}>
-            Foreman identity pushed to{" "}
-            {installSummary.identityPushed.length} of{" "}
-            {installSummary.registered.length} agent
-            {installSummary.registered.length === 1 ? "" : "s"}
-            {installSummary.identitySkipped.length > 0
-              ? ` (${installSummary.identitySkipped.length} skipped)`
-              : ""}
-            .
-          </Text>
+          {identityTargets > 0 ? (
+            <Text color={theme.fg.muted}>
+              Foreman identity pushed to{" "}
+              {installSummary.identityPushed.length} of {identityTargets} agent
+              {identityTargets === 1 ? "" : "s"}
+              {installSummary.identitySkipped.length > 0
+                ? ` (${installSummary.identitySkipped.length} skipped)`
+                : ""}
+              .
+            </Text>
+          ) : null}
+          {installSummary.identityNotApplicable.length > 0 ? (
+            <Text color={theme.fg.muted}>
+              No Foreman identity file for{" "}
+              {installSummary.identityNotApplicable.join(", ")} (nothing to
+              push).
+            </Text>
+          ) : null}
           {/* #472 — Name the agents whose identity push failed + the
               underlying reason. Previously the count masked which agent
               broke, so the user had no path forward when the Telegram

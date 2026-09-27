@@ -69,6 +69,7 @@ export async function runInstallStep(
     registered: [],
     identityPushed: [],
     identitySkipped: [],
+    identityNotApplicable: [],
     failed: [],
     removed: [],
     mcpRegisterFailed: [],
@@ -525,10 +526,9 @@ export async function runInstallStep(
           log(`  ⚠ identity write skipped: ${reason}`);
         }
       } else {
-        summary.identitySkipped.push({
-          agentId: id,
-          reason: "no identity_path in registry entry",
-        });
+        // No identity file for this agent (generic-mcp): nothing to push,
+        // not a failure — Done used to list it under "Identity push failed".
+        summary.identityNotApplicable.push(id);
       }
     } catch (err) {
       summary.failed.push(id);

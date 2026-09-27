@@ -87,21 +87,26 @@ vi.mock('../../src/tui/setup-wizard/install-runner.js', () => ({
         manualHint: string
       }) => Promise<string>,
     ) => {
-      log('▸ Hermes')
-      install.resolution =
-        (await onFailure?.({
-          agentId: 'hermes',
-          agentName: 'Hermes',
-          stage: 'install',
-          error: 'install command exited with code 7',
-          manualHint: 'Run `fake-install` from your shell.',
-        })) ?? null
-      log('  ✗ skipped by user')
+      // Hermes' install "fails" so the failure prompt can be driven.
+      if (toAdd.includes('hermes')) {
+        log('▸ Hermes')
+        install.resolution =
+          (await onFailure?.({
+            agentId: 'hermes',
+            agentName: 'Hermes',
+            stage: 'install',
+            error: 'install command exited with code 7',
+            manualHint: 'Run `fake-install` from your shell.',
+          })) ?? null
+        log('  ✗ skipped by user')
+      }
       return {
         registered: toAdd.filter((id) => id !== 'hermes'),
         identityPushed: [],
         identitySkipped: [],
-        failed: ['hermes'],
+        // generic-mcp has no identity file (mirrors runInstallStep).
+        identityNotApplicable: toAdd.filter((id) => id === 'generic-mcp'),
+        failed: toAdd.includes('hermes') ? ['hermes'] : [],
         removed: [],
         mcpRegisterFailed: [],
       }
@@ -587,6 +592,30 @@ describe('done step summary', () => {
     })
     await w.until('What next?')
     expect(w.frame()).toContain('2 LLM providers   openai, deepseek')
+  })
+})
+
+describe('done step identity summary', () => {
+  it('does not report an agent without an identity file as a failed push', async () => {
+    const w = await mount('install', {
+      initialState: {
+        version: 1,
+        completed: ALL_BEFORE.install,
+        startedAt: 1,
+        lastUpdatedAt: 1,
+        session: {
+          providersSelected: [],
+          providersSignedIn: [],
+          agentsSelected: ['generic-mcp'],
+          agentConfigs: {},
+          servicesSelected: [],
+        },
+      },
+    })
+    await w.until('What next?')
+    expect(w.frame()).toContain('No Foreman identity file for generic-mcp')
+    expect(w.frame()).not.toContain('Identity push failed')
+    expect(w.frame()).not.toContain('pushed to 0 of 1')
   })
 })
 
