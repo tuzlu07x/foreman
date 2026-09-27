@@ -2,6 +2,7 @@ import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApprovalRequest } from "../core/approval.js";
 import { loadOrg } from "../core/org/org.js";
+import { revokeAgentToken } from "../core/agent-token.js";
 import type { BootInfo } from "./boot-info.js";
 import { AppHeader, NavTabs, nextTab, Toast } from "./components/app-header.js";
 import { CommandBar, type ConsoleEntry } from "./components/command-bar.js";
@@ -675,6 +676,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     if (!target) return;
     try {
       registry.remove(target.id);
+      // A removed agent's identity token must not keep proving it (#618).
+      if (secretStore) revokeAgentToken(secretStore, target.id);
       setAgentsNotice(`✓ ${target.id} removed`);
       setAgentsSelectedIdx((idx) => Math.max(0, idx - 1));
     } catch (err) {
@@ -682,7 +685,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
         `error: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-  }, [registry, agentsSelectedIdx]);
+  }, [registry, secretStore, agentsSelectedIdx]);
 
   const onAgentDisable = useCallback((): void => {
     const all = registry.listAll();

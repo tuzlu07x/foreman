@@ -20,6 +20,15 @@ import {
 } from "../core/agent-hook.js";
 import { buildMcpSnippet } from "../core/agent-mcp-snippet.js";
 import {
+  agentTokenSecretName,
+  hasAgentToken,
+  InvalidTokenAgentIdError,
+  revokeAgentToken,
+} from "../core/agent-token.js";
+import { rewireAgent, wiringDelivered } from "../core/agent-wiring.js";
+import { SecretStore } from "../core/secret-store.js";
+import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
+import {
   checkAgentUpdates,
   type AgentUpdateStatus,
 } from "../core/agent-update-check.js";
@@ -42,6 +51,7 @@ import {
 import { closeDb, getDb } from "../db/client.js";
 import { getForemanPaths } from "../utils/config.js";
 import {
+  logWiring,
   runAgentAddInteractive,
   runAgentAddScripted,
   type AddScriptedOptions,
@@ -65,7 +75,7 @@ function getRegistry(): RegistryService {
 export const agentsCommand = new Command("agent")
   .alias("agents")
   .description(
-    "Agent commands (list / add / remove / regenerate-key / show / update / block / unblock / disable / enable)",
+    "Agent commands (list / add / remove / rewire / token / regenerate-key / show / update / block / unblock / disable / enable)",
   );
 
 agentsCommand
@@ -109,6 +119,10 @@ agentsCommand
     "run the install command when the binary is missing",
   )
   .option("--key-out <path>", "write the new private key to this path (0600)")
+  .option(
+    "--token-out <path>",
+    "also write the agent's identity token to this path (0600), for wiring it by hand",
+  )
   .action(
     async (
       name: string | undefined,
@@ -119,6 +133,7 @@ agentsCommand
         skipProjection?: boolean;
         autoInstall?: boolean;
         keyOut?: string;
+        tokenOut?: string;
       },
     ) => {
       const registry = getRegistry();
@@ -135,6 +150,7 @@ agentsCommand
             skipProjection: options.skipProjection,
             autoInstall: options.autoInstall,
             keyOut: options.keyOut,
+            tokenOut: options.tokenOut,
           };
           exit = await runAgentAddScripted(name, scripted, { registry, db });
         } else {
@@ -188,6 +204,8 @@ agentsCommand
             : null;
         const entry = registryId ? safeFindAgent(doc, registryId) : null;
         registry.remove(name);
+        // A removed agent's token must not keep proving it (#618).
+        revokeAgentToken(getTokenStore(), name);
         console.log(`${green("✓")} agent ${name} removed`);
         if (!options.keepBinary && entry) {
           // #357 — detect HOW the binary got installed, then pick the
@@ -282,12 +300,14 @@ agentsCommand
           ? agent.metadata.registryId
           : null;
       const registryEntry = registryId ? safeFindAgent(doc, registryId) : null;
+      const identityToken = tokenStatus(agent.id);
       if (options.json) {
         const payload = renderAgentJson(agent) as Record<string, unknown>;
         process.stdout.write(
           JSON.stringify(
             {
               ...payload,
+              identityToken,
               mcpSnippet: registryEntry
                 ? buildMcpSnippet(agent.id, registryEntry).json
                 : null,
@@ -320,6 +340,12 @@ agentsCommand
           `  ${dim("transport:")}   ${formatTransportLine(registryEntry)}`,
         );
       }
+      console.log(
+        `  ${dim("token:")}       ` +
+          (identityToken.present
+            ? `set${identityToken.updatedAt ? dim(` (issued ${new Date(identityToken.updatedAt).toISOString()})`) : ""}`
+            : orange(`none — MCP calls run as untrusted:${agent.id}. Run 'foreman agent rewire ${agent.id}'.`)),
+      );
       if (registryEntry) {
         console.log("");
         console.log(bold("MCP snippet:"));
@@ -331,6 +357,163 @@ agentsCommand
       closeDb();
     }
   });
+
+// ============================================================================
+// rewire / token rotate — per-agent identity tokens on the MCP path (#618)
+// ============================================================================
+//
+// `rewire` gives an agent a token (keeping the one it has) and writes it into
+// the agent's MCP wiring; it is how installs from before #618 upgrade.
+// `token rotate` mints a new one: the old token stops working at once, even
+// for sessions already connected. Tokens are never printed; `--token-out`
+// writes one to a 0600 file for agents wired by hand.
+
+agentsCommand
+  .command("rewire [name]")
+  .description(
+    "Give an agent its identity token and rewrite its MCP wiring (all agents with --all)",
+  )
+  .option("--all", "rewire every registered agent")
+  .option("--config-path <path>", "write the wiring to this config file instead of the registry default")
+  .option("--token-out <path>", "also write the token to this path (0600), for wiring by hand")
+  .action(
+    (
+      name: string | undefined,
+      options: { all?: boolean; configPath?: string; tokenOut?: string },
+    ) => {
+      const registry = getRegistry();
+      try {
+        if (Boolean(name) === Boolean(options.all)) {
+          console.error(red("error: ") + "pass an agent id, or --all");
+          process.exitCode = 1;
+          return;
+        }
+        if (options.all && (options.configPath || options.tokenOut)) {
+          console.error(red("error: ") + "--config-path and --token-out take a single agent, not --all");
+          process.exitCode = 1;
+          return;
+        }
+        const agents = options.all
+          ? registry.listAll()
+          : [registry.get(name!) ?? throwNotFound(name!)];
+        if (agents.length === 0) {
+          console.log("(no agents registered)");
+          return;
+        }
+        // With --all, agents Foreman can't wire itself (custom ones) are
+        // reported, not failed: they need --token-out one by one.
+        let failed = 0;
+        for (const agent of agents) {
+          const outcome = rewireOne(agent, { rotate: false, configPath: options.configPath, tokenOut: options.tokenOut });
+          if (outcome === "failed" || (outcome === "manual" && !options.all)) failed++;
+        }
+        process.exitCode = failed > 0 ? 1 : 0;
+      } catch (err) {
+        handleAgentError(err);
+      } finally {
+        closeDb();
+      }
+    },
+  );
+
+const tokenSub = agentsCommand
+  .command("token")
+  .description("Manage an agent's identity token (rotate)");
+
+tokenSub
+  .command("rotate <name>")
+  .description("Mint a new identity token and rewrite the wiring; the old token stops working at once")
+  .option("--config-path <path>", "write the wiring to this config file instead of the registry default")
+  .option("--token-out <path>", "also write the new token to this path (0600), for wiring by hand")
+  .option("--yes", "skip confirmation prompt")
+  .action(
+    async (
+      name: string,
+      options: { configPath?: string; tokenOut?: string; yes?: boolean },
+    ) => {
+      const registry = getRegistry();
+      try {
+        const agent = registry.get(name) ?? throwNotFound(name);
+        const ok = await requireConfirm({
+          yes: options.yes,
+          question: `Rotate ${name}'s identity token? Running sessions drop to untrusted until the agent restarts with the new wiring.`,
+          noun: `rotate the token for "${name}"`,
+        });
+        if (!ok) {
+          console.log("(cancelled)");
+          return;
+        }
+        const outcome = rewireOne(agent, { rotate: true, configPath: options.configPath, tokenOut: options.tokenOut });
+        process.exitCode = outcome === "ok" ? 0 : 1;
+      } catch (err) {
+        handleAgentError(err);
+      } finally {
+        closeDb();
+      }
+    },
+  );
+
+function getTokenStore(): SecretStore {
+  return new SecretStore(getDb(), loadOrCreateSecretsMasterKey());
+}
+
+function tokenStatus(agentId: string): { present: boolean; updatedAt: number | null } {
+  const store = getTokenStore();
+  const present = hasAgentToken(store, agentId);
+  return { present, updatedAt: present ? (store.meta(agentTokenSecretName(agentId))?.updatedAt ?? null) : null };
+}
+
+function throwNotFound(agentId: string): never {
+  throw new AgentNotFoundError(agentId);
+}
+
+/** Rewire (or rotate) one agent and report it. `manual` when the token has
+ *  nowhere to go, so the agent would still run untrusted. */
+function rewireOne(
+  agent: RegisteredAgent,
+  options: { rotate: boolean; configPath?: string | undefined; tokenOut?: string | undefined },
+): "ok" | "manual" | "failed" {
+  const registryId = typeof agent.metadata?.registryId === "string" ? agent.metadata.registryId : null;
+  const entry = registryId ? safeFindAgent(loadActiveRegistry().doc, registryId) : null;
+  console.log(bold(agent.id));
+  let result;
+  try {
+    result = rewireAgent(getTokenStore(), agent.id, entry, {
+      rotate: options.rotate,
+      ...(options.configPath ? { configPath: options.configPath } : {}),
+      ...(options.tokenOut ? { tokenOut: options.tokenOut } : {}),
+    });
+  } catch (err) {
+    console.log(`  ${red("✗")} ${err instanceof Error ? err.message : String(err)}`);
+    return "failed";
+  }
+  if (entry && (result.config !== "none" || result.wrapperPath)) {
+    logWiring(agent.id, entry, result, (line) => console.log(`  ${line}`));
+  }
+  if (result.tokenOutPath) console.log(`  ${dim(`token written to ${result.tokenOutPath} (0600)`)}`);
+  const delivered = wiringDelivered(result) || result.tokenOutPath !== null;
+  if (!delivered) {
+    console.log(
+      `  ${orange("!")} no wiring to write for ${agent.id}` +
+        (entry ? "" : " (not from the registry)") +
+        `. Run 'foreman agent rewire ${agent.id} --token-out <file>' and set FOREMAN_AGENT_TOKEN in its MCP server env.`,
+    );
+    return "manual";
+  }
+  const changed =
+    result.minted ||
+    result.config === "written" ||
+    result.config === "replaced" ||
+    result.wrapperWritten ||
+    result.tokenOutPath !== null;
+  console.log(
+    changed
+      ? `  ${green("✓")} ${result.minted ? (options.rotate ? "new token issued" : "token issued") : "existing token kept"}` +
+          dim(" — restart the agent (or its MCP server) to pick it up")
+      : `  ${green("✓")} already wired with its token`,
+  );
+  return "ok";
+}
 
 agentsCommand
   .command("update [name]")
@@ -1118,6 +1301,10 @@ export async function runAgentUpdateAll(
 function handleAgentError(err: unknown): void {
   if (err instanceof AgentNotFoundError) {
     console.error(red("error: ") + `no agent with id ${err.agentId}`);
+    process.exit(1);
+  }
+  if (err instanceof InvalidTokenAgentIdError) {
+    console.error(red("error: ") + err.message);
     process.exit(1);
   }
   if (err instanceof MissingRequiredSecretsError) {

@@ -42,6 +42,15 @@ import { closeDb, getDb } from "../db/client.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { redactSecretShapes } from "../core/risk-rules/secret-patterns.js";
 import { isHumanSource } from "../core/org/guard.js";
+import {
+  AGENT_TOKEN_ENV,
+  describeUntrustedIdentity,
+  recheckAgentIdentity,
+  resolveAgentIdentity,
+  type ResolvedIdentity,
+} from "../core/agent-token.js";
+import { claimedAgentOf } from "../core/agent-identity.js";
+import { InboxService } from "../core/inbox.js";
 import { OrgComms, renderMessages, silencedReason, type MessageKind } from "../core/org/comms.js";
 import { ApprovalReviews } from "../core/org/review.js";
 import { createDecoder, encodeMessage } from "../mcp/framing.js";
@@ -60,10 +69,14 @@ export const mcpStdioCommand = new Command("mcp-stdio")
   )
   .option(
     "-s, --source <id>",
-    "agent id recorded as the source on every call",
-    "mcp-client",
+    `agent id this connection claims to be; it is trusted only with that agent's token in ${AGENT_TOKEN_ENV}`,
   )
-  .action(async (options: { source: string }) => {
+  .action(async (options: { source?: string }) => {
+    // Read the token once and take it out of this process's environment, so
+    // nothing we spawn (hub servers, agents started by the drain poller)
+    // inherits another agent's credential.
+    const token = process.env[AGENT_TOKEN_ENV];
+    delete process.env[AGENT_TOKEN_ENV];
     const paths = getForemanPaths();
     if (!existsSync(paths.root) || !existsSync(paths.identityPath)) {
       process.stderr.write(
@@ -74,7 +87,7 @@ export const mcpStdioCommand = new Command("mcp-stdio")
     }
     // Human surfaces skip org delegation rules; an agent must not be able
     // to pass itself off as one.
-    if (isHumanSource(options.source)) {
+    if (options.source !== undefined && isHumanSource(options.source)) {
       process.stderr.write(
         red("error: ") +
           `'${options.source}' is reserved for you (the CLI, TUI and chat commands). Give the agent its own id with --source.\n`,
@@ -82,9 +95,17 @@ export const mcpStdioCommand = new Command("mcp-stdio")
       process.exit(1);
     }
     const services = bootServices();
-    services.hubScope = scopeForAgent(paths.orgConfigPath, options.source, warn);
-    autoRegisterSource(services.registry, options.source);
-    runMcpLoop(services, options.source);
+    const identity = resolveAgentIdentity({
+      claimed: options.source,
+      token,
+      store: services.secretStore,
+    });
+    announceIdentity(services, identity);
+    services.hubScope = scopeForAgent(paths.orgConfigPath, identity.source, warn);
+    // Only a verified agent gets a registry row; an unverified connection
+    // must not be able to create identities.
+    if (identity.trusted) autoRegisterSource(services.registry, identity.source);
+    runMcpLoop(services, identity, token ?? "");
   });
 
 interface Services {
@@ -191,6 +212,32 @@ function warn(message: string): void {
   process.stderr.write(`foreman mcp-stdio: ${message}\n`);
 }
 
+/** Record who connected; tell the user loudly when it isn't proven. The
+ *  token itself never reaches stderr, the inbox or the audit log. */
+function announceIdentity(services: Services, identity: ResolvedIdentity): void {
+  services.audit.logEvent("agent:identity", {
+    source: identity.source,
+    claimed: identity.claimed,
+    trusted: identity.trusted,
+    reason: identity.reason,
+  });
+  if (identity.trusted) return;
+  const message = describeUntrustedIdentity(identity);
+  warn(message);
+  try {
+    new InboxService(getDb(), bus).add({
+      level: "warning",
+      kind: "system",
+      title: `${identity.claimed} is connected without a valid agent token`,
+      body: message,
+      agentId: identity.claimed,
+      dedupeKey: `identity:${identity.source}:${identity.reason}`,
+    });
+  } catch {
+    // The inbox is a convenience; stderr and the audit event already say it.
+  }
+}
+
 function autoRegisterSource(
   registry: RegistryService,
   sourceAgent: string,
@@ -207,7 +254,20 @@ function autoRegisterSource(
  *  cancel their pending approvals and exit. */
 const SHUTDOWN_GRACE_MS = 5_000;
 
-function runMcpLoop(services: Services, sourceAgent: string): void {
+function runMcpLoop(services: Services, initial: ResolvedIdentity, token: string): void {
+  const paths = getForemanPaths();
+  let identity = initial;
+  // Re-checked before every message, so `foreman agent token rotate` (or
+  // removing the agent) takes a running session down to untrusted at once.
+  const currentSource = (): string => {
+    const next = recheckAgentIdentity(identity, token, services.secretStore);
+    if (next !== identity) {
+      identity = next;
+      services.hubScope = scopeForAgent(paths.orgConfigPath, identity.source, warn);
+      announceIdentity(services, identity);
+    }
+    return identity.source;
+  };
   const decoder = createDecoder();
   const inFlight = new Set<Promise<void>>();
   let shuttingDown = false;
@@ -217,7 +277,7 @@ function runMcpLoop(services: Services, sourceAgent: string): void {
     // Each message is handled independently: a `tools/call` waiting on a
     // human approval must not hold up a `ping` or a second call behind it.
     for (const message of messages) {
-      const task = respond(services, sourceAgent, message).finally(() => {
+      const task = respond(services, currentSource(), message).finally(() => {
         inFlight.delete(task);
       });
       inFlight.add(task);
@@ -900,8 +960,8 @@ export async function handleMessage(
       const comms = services.comms;
       if (!comms) return replyError(id, -32603, "department channels are not available in this process");
       // A blocked or disabled agent doesn't get a voice either, whatever
-      // the case or spacing of its `--source`.
-      const silenced = silencedReason(services.registry, sourceAgent);
+      // the case or spacing of its `--source`, and with or without its token.
+      const silenced = silencedReason(services.registry, sourceAgent, claimedAgentOf(sourceAgent));
       if (silenced) {
         return reply(id, {
           content: [{ type: "text", text: `Not available: ${silenced}.` }],

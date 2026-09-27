@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
+import { AGENT_TOKEN_ENV } from "./agent-token.js";
 import type { AgentEntry } from "./registry-catalog.js";
 import { resolveBundledRegistryPath } from "./registry-catalog.js";
 
@@ -13,15 +14,24 @@ export interface McpSnippet {
   json: Record<string, unknown>;
 }
 
+/** Stands in for the token wherever the snippet is shown rather than
+ *  written (`foreman agent show`, manual-paste hints). */
+export const AGENT_TOKEN_PLACEHOLDER = "<agent token: written by foreman agent rewire>";
+
 // The JSON skeleton every Foreman-bridged agent needs in its config. The agent
-// id from the *foreman* side is the one we record in `--source`.
+// id from the *foreman* side is the one we record in `--source`; the token
+// that proves it (#618) travels in the server's environment, never in argv.
+// Without `token` the snippet carries a placeholder, so a caller that forgets
+// it wires an untrusted agent rather than a privileged one.
 export function buildMcpSnippet(
   agentId: string,
   entry: AgentEntry,
+  token?: string,
 ): McpSnippet {
   const block = {
     command: "foreman",
     args: ["mcp-stdio", "--source", agentId],
+    env: { [AGENT_TOKEN_ENV]: token ?? AGENT_TOKEN_PLACEHOLDER },
   };
   const topKey = entry.mcp_servers_key ?? "mcpServers";
 

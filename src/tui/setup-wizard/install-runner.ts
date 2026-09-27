@@ -19,6 +19,7 @@ import {
   describeNodeEngineMismatch,
   resolveInstallerNodeVersion,
 } from "../../core/node-engines.js";
+import { ensureAgentToken, revokeAgentToken } from "../../core/agent-token.js";
 import {
   autoRegisterMcp,
   buildMcpRegisterHint,
@@ -83,6 +84,7 @@ export async function runInstallStep(
     const entry = registryId ? safeFind(doc, registryId) : null;
     log(`▸ Removing ${existing.displayName}`);
     services.registry.remove(id);
+    revokeAgentToken(services.secretStore, id);
     summary.removed.push(id);
     log(`  ✓ unregistered "${id}"`);
     if (entry) {
@@ -224,7 +226,7 @@ export async function runInstallStep(
 
     // The agent's config file: seed it from the bundled template when
     // missing, then write Foreman's MCP entry (install-config.ts).
-    wireAgentConfig(id, entry, log);
+    wireAgentConfig(id, entry, services.secretStore, log);
 
     // Secret projection (#222 / #223) — write Foreman-stored keys to the
     // agent's own env/config files so it launches without a separate setup
@@ -375,7 +377,9 @@ export async function runInstallStep(
       // CLI command via `printf 'y\n' | <cmd>` so the user doesn't have
       // to do it manually. Falls back to the manual hint when the run
       // fails (binary missing, prompt won't pipe, etc).
-      const registerHint = buildMcpRegisterHint(id, entry);
+      const registerHint = buildMcpRegisterHint(id, entry, {
+        token: ensureAgentToken(services.secretStore, id),
+      });
       if (registerHint) {
         // #346 — write the wrapper script for agents (Hermes) that can't
         // accept multi-token --args.

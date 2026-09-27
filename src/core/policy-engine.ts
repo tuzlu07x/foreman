@@ -4,6 +4,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { ForemanDb } from "../db/client.js";
 import { policies, requests } from "../db/schema.js";
+import { claimedAgentOf, isUntrustedSource } from "./agent-identity.js";
 import {
   bus as defaultBus,
   type EventBus,
@@ -332,6 +333,24 @@ export class PolicyEngine {
     });
 
     const winner = candidates[0];
+    // #618 — the claimed agent's secret denials bind an unverified connection.
+    if (winner && winner.effect === "allow" && isUntrustedSource(sourceAgent)) {
+      const claimedDeny = this.db
+        .select()
+        .from(policies)
+        .where(
+          and(
+            eq(policies.sourceAgent, claimedAgentOf(sourceAgent)),
+            eq(policies.target, target),
+            eq(policies.effect, "deny"),
+            eq(policies.enabled, 1),
+          ),
+        )
+        .get();
+      if (claimedDeny) {
+        return { decision: "deny", matchedRuleId: claimedDeny.id, decidedBy: `policy:cannot_access_secrets` };
+      }
+    }
     if (winner && winner.effect === "allow") {
       return {
         decision: "allow",
@@ -392,8 +411,26 @@ export class PolicyEngine {
     const undominated = matching.filter((r) => !matching.some((o) => overrides(o, r)));
     undominated.sort((a, b) => EFFECT_ORDER[a.effect] - EFFECT_ORDER[b.effect] || a.id - b.id);
     const winner = undominated[0];
-    if (winner) return { decision: winner.effect, matchedRuleId: winner.id };
-    return { decision: "ask" };
+    const result: Evaluation = winner ? { decision: winner.effect, matchedRuleId: winner.id } : { decision: "ask" };
+    return this.withClaimedRestrictions(req, target, result);
+  }
+
+  /** An unverified `untrusted:<id>` connection (#618) gets none of <id>'s
+   *  allow rules, but <id>'s deny and ask rules still bind it: dropping the
+   *  token must never loosen a restriction. */
+  private withClaimedRestrictions(req: EvaluateRequest, target: string, result: Evaluation): Evaluation {
+    if (!isUntrustedSource(req.sourceAgent) || result.decision === "deny") return result;
+    const claimed = claimedAgentOf(req.sourceAgent);
+    const restrictions = this.db
+      .select()
+      .from(policies)
+      .where(and(eq(policies.sourceAgent, claimed), eq(policies.target, target), eq(policies.enabled, 1)))
+      .all()
+      .filter((r) => r.effect !== "allow" && this.conditionsPass(r, { ...req, sourceAgent: claimed }))
+      .sort((a, b) => EFFECT_ORDER[a.effect] - EFFECT_ORDER[b.effect] || a.id - b.id);
+    const strictest = restrictions[0];
+    if (!strictest || EFFECT_ORDER[strictest.effect] >= EFFECT_ORDER[result.decision]) return result;
+    return { decision: strictest.effect, matchedRuleId: strictest.id };
   }
 
   remember(input: RememberInput): number {

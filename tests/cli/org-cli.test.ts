@@ -49,8 +49,8 @@ describe('foreman org (CLI)', () => {
 
   it('a Foreman-spawned agent cannot delegate outside its chain via `foreman write`', () => {
     run(['org', 'init', '--template', 'startup'])
-    // Register the target the way an agent's first MCP connection does.
-    run(['mcp-stdio', '--source', 'openclaw'])
+    // Register the target (write targets must exist).
+    run(['agent', 'add', 'openclaw', '--type', 'generic-mcp', '--skip-config'])
     const fromAgent = run(['write', 'openclaw', 'post the launch thread'], { FOREMAN_SPAWNED_BY: 'codex' })
     expect(fromAgent.status).toBe(2)
     expect(fromAgent.stderr).toContain('blocked by the org chart')

@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
+import { InvalidTokenAgentIdError, isReservedAgentId } from "./agent-token.js";
 import type { AgentEntry, ProviderEntry } from "./registry-catalog.js";
 import type { RegistryService } from "./registry.js";
 import type { SecretStore } from "./secret-store.js";
@@ -140,6 +141,8 @@ export interface RegisterAgentResult {
 }
 
 export function registerAgent(input: RegisterAgentInput): RegisterAgentResult {
+  // Your own ids and the `untrusted:` namespace can't be agents (#618).
+  if (isReservedAgentId(input.agentId)) throw new InvalidTokenAgentIdError(input.agentId);
   if (input.registry.get(input.agentId)) {
     throw new AgentAlreadyRegisteredError(input.agentId);
   }

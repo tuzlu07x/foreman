@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { isUntrustedSource } from "../agent-identity.js";
 import { allowedMcpServers, loadOrg } from "../org/org.js";
+import { isReservedSecretName } from "../secret-store.js";
 import { enabledServers, loadHubConfig, mcpOAuthSecretName } from "./config.js";
 import { McpHub, type AgentScope, type HubOAuthSession } from "./hub.js";
 import { McpOAuthSession } from "./oauth-session.js";
@@ -33,7 +35,8 @@ export function loadHub(
   if (enabledServers(config).length === 0) return null;
   return new McpHub({
     config,
-    resolveSecret: (name) => (secretStore.exists(name) ? secretStore.get(name) : null),
+    resolveSecret: (name) =>
+      !isReservedSecretName(name) && secretStore.exists(name) ? secretStore.get(name) : null,
     pins: new ToolPinStore(config.security.pin_tool_definitions ? paths.mcpPinsPath : null),
     oauth: hubOAuthSessions(paths, secretStore),
   });
@@ -56,12 +59,14 @@ export function hubOAuthSessions(
 
 /** Which hub servers `agentId` may use according to org.yaml. An org.yaml
  *  that fails to load fails CLOSED (no hub servers) — least privilege must
- *  not silently widen because of a typo. */
+ *  not silently widen because of a typo. An unverified connection
+ *  (`untrusted:<id>`, #618) gets none: hub servers hold your credentials. */
 export function scopeForAgent(
   orgConfigPath: string,
   agentId: string,
   onError: (message: string) => void = () => undefined,
 ): AgentScope {
+  if (isUntrustedSource(agentId)) return { allowedServers: new Set() };
   if (!existsSync(orgConfigPath)) return { allowedServers: null };
   try {
     const org = loadOrg(orgConfigPath);

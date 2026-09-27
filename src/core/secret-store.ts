@@ -24,6 +24,24 @@ export class SecretAlreadyExistsError extends Error {
   }
 }
 
+/** Names under this prefix hold agent identity tokens (#618). The generic
+ *  add / rotate / get refuse them, so no agent-facing path (the MCP
+ *  `secrets/get` tool, hub or notify secret refs, `foreman secrets show`)
+ *  can read or overwrite one; only the agent-token module uses the
+ *  `*Reserved` methods. */
+export const RESERVED_SECRET_PREFIX = "foreman-agent-token:";
+
+export function isReservedSecretName(name: string): boolean {
+  return name.startsWith(RESERVED_SECRET_PREFIX);
+}
+
+export class ReservedSecretError extends Error {
+  constructor(public readonly secretName: string) {
+    super(`"${secretName}" is an agent identity token — manage it with \`foreman agent token\``);
+    this.name = "ReservedSecretError";
+  }
+}
+
 export class SecretStore {
   constructor(
     private readonly db: ForemanDb,
@@ -31,6 +49,11 @@ export class SecretStore {
   ) {}
 
   add(name: string, value: string): void {
+    if (isReservedSecretName(name)) throw new ReservedSecretError(name);
+    this.insert(name, value);
+  }
+
+  private insert(name: string, value: string): void {
     if (this.exists(name)) throw new SecretAlreadyExistsError(name);
     const payload = encrypt(value, this.masterKey);
     const now = Date.now();
@@ -49,6 +72,11 @@ export class SecretStore {
   }
 
   rotate(name: string, value: string): void {
+    if (isReservedSecretName(name)) throw new ReservedSecretError(name);
+    this.update(name, value);
+  }
+
+  private update(name: string, value: string): void {
     const row = this.db
       .select()
       .from(secrets)
@@ -70,6 +98,24 @@ export class SecretStore {
 
   /** `touch: false` reads without recording an access (status checks). */
   get(name: string, opts: { touch?: boolean } = {}): string {
+    if (isReservedSecretName(name)) throw new ReservedSecretError(name);
+    return this.read(name, opts.touch !== false);
+  }
+
+  /** Read a reserved secret without bumping `last_accessed_at`. */
+  getReserved(name: string): string {
+    if (!isReservedSecretName(name)) throw new Error(`"${name}" is not a reserved secret name`);
+    return this.read(name, false);
+  }
+
+  /** Create or replace a reserved secret. */
+  putReserved(name: string, value: string): void {
+    if (!isReservedSecretName(name)) throw new Error(`"${name}" is not a reserved secret name`);
+    if (this.exists(name)) this.update(name, value);
+    else this.insert(name, value);
+  }
+
+  private read(name: string, touch = true): string {
     const row = this.db
       .select()
       .from(secrets)
@@ -84,12 +130,13 @@ export class SecretStore {
       },
       this.masterKey,
     );
-    if (opts.touch === false) return plaintext;
-    this.db
-      .update(secrets)
-      .set({ lastAccessedAt: Date.now() })
-      .where(eq(secrets.name, name))
-      .run();
+    if (touch) {
+      this.db
+        .update(secrets)
+        .set({ lastAccessedAt: Date.now() })
+        .where(eq(secrets.name, name))
+        .run();
+    }
     return plaintext;
   }
 
@@ -113,6 +160,21 @@ export class SecretStore {
       })
       .from(secrets)
       .all();
+  }
+
+  meta(name: string): StoredSecretMeta | null {
+    return (
+      this.db
+        .select({
+          name: secrets.name,
+          createdAt: secrets.createdAt,
+          updatedAt: secrets.updatedAt,
+          lastAccessedAt: secrets.lastAccessedAt,
+        })
+        .from(secrets)
+        .where(eq(secrets.name, name))
+        .get() ?? null
+    );
   }
 
   exists(name: string): boolean {

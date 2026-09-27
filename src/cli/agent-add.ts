@@ -4,14 +4,8 @@ import {
   AgentAlreadyRegisteredError,
   checkSecrets,
   MissingRequiredSecretsError,
-  pickConfigPath,
   registerAgent,
 } from "../core/agent-add-flow.js";
-import {
-  applyInjection,
-  planInjection,
-  UnsupportedConfigFormatError,
-} from "../core/agent-config-injector.js";
 import { projectSecretsForAgent } from "../core/agent-secrets-projector.js";
 import { ChatPrimaryService } from "../core/chat-primary.js";
 import { applyForemanSoul } from "../core/foreman-soul.js";
@@ -23,6 +17,17 @@ import {
   runPostConfigCommands,
 } from "../core/agent-install.js";
 import { buildMcpSnippet } from "../core/agent-mcp-snippet.js";
+import {
+  AGENT_TOKEN_ENV,
+  ensureAgentToken,
+  isReservedAgentId,
+} from "../core/agent-token.js";
+import {
+  rewireAgent,
+  wiringDelivered,
+  writeAgentWiring,
+  type WiringResult,
+} from "../core/agent-wiring.js";
 import {
   checkNodeEngine,
   describeNodeEngineMismatch,
@@ -56,6 +61,9 @@ export interface AddScriptedOptions {
   servicesSelected?: string[];
   autoInstall?: boolean;
   keyOut?: string;
+  /** Also write the agent's identity token to this file (0600), for
+   *  wiring it by hand (#618). */
+  tokenOut?: string;
 }
 
 export interface AddDeps {
@@ -70,6 +78,12 @@ export async function runAgentAddScripted(
   deps: AddDeps,
 ): Promise<number> {
   const log = deps.log ?? ((line: string) => console.log(line));
+  if (isReservedAgentId(agentId)) {
+    logError(
+      `"${agentId}" can't be an agent id: it names you (the CLI, TUI or chat) or an unverified connection.`,
+    );
+    return 1;
+  }
   const { doc } = loadActiveRegistry();
   let entry: AgentEntry;
   try {
@@ -158,41 +172,33 @@ export async function runAgentAddScripted(
     }
   }
 
-  if (!options.skipConfig) {
-    const configPath = options.configPath ?? pickConfigPath(entry);
-    const snippet = buildMcpSnippet(agentId, entry);
-    if (configPath) {
-      try {
-        const plan = planInjection(configPath, snippet.json);
-        if (plan.alreadyHasForeman) {
-          log(dim(`config: foreman entry already current at ${configPath}`));
-        } else if (plan.replacedStale) {
-          applyInjection(configPath, plan);
-          log(
-            orange("⟳") +
-              ` replaced stale foreman MCP entry in ${configPath}`,
-          );
-        } else {
-          applyInjection(configPath, plan);
-          log(green("✓") + ` wrote MCP snippet to ${configPath}`);
-        }
-      } catch (err) {
-        if (err instanceof UnsupportedConfigFormatError) {
-          log(
-            orange("note: ") +
-              `${configPath} has an unsupported format. Paste this manually:`,
-          );
-          log(snippet.yaml);
-        } else {
-          throw err;
-        }
-      }
+  // Identity token (#618): minted here, written into the agent's MCP wiring
+  // as an env var, never printed.
+  if (options.skipConfig) {
+    if (options.tokenOut) {
+      rewireAgent(store, agentId, null, { tokenOut: options.tokenOut });
+      log(dim(`agent token written to ${options.tokenOut} (0600)`));
     } else {
       log(
         orange("note: ") +
-          "no config path declared in the registry — paste this into the agent's config manually:",
+          `you're wiring ${agentId} by hand: get its token with 'foreman agent rewire ${agentId} --token-out <file>' ` +
+          `and pass it as ${AGENT_TOKEN_ENV} in the MCP server's env. Without it the agent runs untrusted.`,
       );
-      log(snippet.yaml);
+    }
+  } else {
+    const token = ensureAgentToken(store, agentId);
+    const wiring = writeAgentWiring(agentId, entry, token, {
+      ...(options.configPath ? { configPath: options.configPath } : {}),
+    });
+    logWiring(agentId, entry, wiring, log);
+    if (options.tokenOut) {
+      rewireAgent(store, agentId, null, { tokenOut: options.tokenOut });
+      log(dim(`agent token written to ${options.tokenOut} (0600)`));
+    } else if (!wiringDelivered(wiring)) {
+      log(
+        `  get its token with 'foreman agent rewire ${agentId} --token-out <file>' and set it as ${AGENT_TOKEN_ENV}; ` +
+          "without it the agent runs untrusted.",
+      );
     }
   }
 
@@ -440,6 +446,51 @@ export async function runAgentAddInteractive(deps: AddDeps): Promise<number> {
     },
     { ...deps, log },
   );
+}
+
+/** Report where the agent's MCP wiring went. The snippet shown for manual
+ *  pasting carries a placeholder, never the token. */
+export function logWiring(
+  agentId: string,
+  entry: AgentEntry,
+  wiring: WiringResult,
+  log: (line: string) => void,
+): void {
+  const path = wiring.configPath;
+  switch (wiring.config) {
+    case "written":
+      log(green("✓") + ` wrote MCP snippet with ${agentId}'s agent token to ${path}`);
+      break;
+    case "replaced":
+      log(orange("⟳") + ` replaced stale foreman MCP entry in ${path}`);
+      break;
+    case "current":
+      log(dim(`config: foreman entry already current at ${path}`));
+      break;
+    case "missing":
+      log(
+        orange("note: ") +
+          `${entry.name} config not initialised at ${path}. Run ${entry.install.binary ?? agentId} once, then 'foreman agent rewire ${agentId}'.`,
+      );
+      break;
+    case "unsupported":
+      log(orange("note: ") + `${path} has an unsupported format. Paste this manually:`);
+      log(buildMcpSnippet(agentId, entry).yaml);
+      break;
+    case "none":
+      log(
+        orange("note: ") +
+          "no config path declared in the registry — paste this into the agent's config manually:",
+      );
+      log(buildMcpSnippet(agentId, entry).yaml);
+      break;
+  }
+  if (wiring.wrapperPath) {
+    log(
+      (wiring.wrapperWritten ? green("✓") + " wrote" : dim("✓ wrapper current:")) +
+        ` ${wiring.wrapperPath}`,
+    );
+  }
 }
 
 function handlePrivateKey(

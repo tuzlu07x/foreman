@@ -1,6 +1,7 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
+import { AGENT_TOKEN_ENV } from "./agent-token.js";
 import type { AgentEntry } from "./registry-catalog.js";
 
 // =============================================================================
@@ -58,9 +59,9 @@ export function buildMcpRegisterHint(
           substitute(entry.mcp_register_cli.wrapper.path_template, agentId),
           homeDir,
         ),
-        content: substitute(
-          entry.mcp_register_cli.wrapper.content_template,
-          agentId,
+        content: withAgentToken(
+          substitute(entry.mcp_register_cli.wrapper.content_template, agentId),
+          options.token,
         ),
       }
     : null;
@@ -80,7 +81,13 @@ export interface BuildHintOptions {
   /** Override the home dir used to expand `~` in wrapper paths. Tests
    *  inject a tmpdir so they don't write into the real $HOME. */
   homeDir?: string;
+  /** The agent's identity token (#618). The wrapper exports it for
+   *  `foreman mcp-stdio`, since these agents don't pass an MCP env block. */
+  token?: string;
 }
+
+/** Owner-only: the wrapper may carry the agent's token. */
+const WRAPPER_MODE = 0o700;
 
 /**
  * Write a wrapper script idempotently. Creates the parent dir, writes the
@@ -92,16 +99,33 @@ export function writeMcpWrapperScript(wrapper: McpRegisterHintWrapper): boolean 
   try {
     const existing = readFileSync(wrapper.path, "utf-8");
     if (existing === wrapper.content) {
-      chmodSync(wrapper.path, 0o755);
+      chmodSync(wrapper.path, WRAPPER_MODE);
       return false;
     }
   } catch {
     /* file missing — fall through to write */
   }
   mkdirSync(dirname(wrapper.path), { recursive: true });
-  writeFileSync(wrapper.path, wrapper.content, "utf-8");
-  chmodSync(wrapper.path, 0o755);
+  // Tighten an existing file before the token lands in it.
+  try {
+    chmodSync(wrapper.path, WRAPPER_MODE);
+  } catch {
+    /* not there yet */
+  }
+  writeFileSync(wrapper.path, wrapper.content, { encoding: "utf-8", mode: WRAPPER_MODE });
+  chmodSync(wrapper.path, WRAPPER_MODE);
   return true;
+}
+
+/** Export the token right after the shebang. Tokens are base64url, so
+ *  single quotes need no escaping; anything else is refused. */
+function withAgentToken(content: string, token: string | undefined): string {
+  if (token === undefined) return content;
+  if (!/^[A-Za-z0-9_-]+$/.test(token)) throw new Error("agent token has unexpected characters");
+  const line = `export ${AGENT_TOKEN_ENV}='${token}'\n`;
+  if (!content.startsWith("#!")) return line + content;
+  const nl = content.indexOf("\n");
+  return nl === -1 ? `${content}\n${line}` : content.slice(0, nl + 1) + line + content.slice(nl + 1);
 }
 
 // =============================================================================

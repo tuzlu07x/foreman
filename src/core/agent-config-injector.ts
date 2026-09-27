@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+import { AGENT_TOKEN_ENV } from "./agent-token.js";
 
 export type ConfigFormat = "yaml" | "json" | "toml";
 
@@ -79,10 +80,36 @@ function serialize(doc: Record<string, unknown>, format: ConfigFormat): string {
   return `${JSON.stringify(doc, null, 2)}\n`;
 }
 
+// The foreman entry carries the agent's identity token (#618), so the file
+// is made owner-only before the token lands in it.
 export function applyInjection(configPath: string, plan: InjectionPlan): void {
   if (plan.alreadyHasForeman && !plan.replacedStale) return;
   mkdirSync(dirname(configPath), { recursive: true });
-  writeFileSync(configPath, plan.after, "utf-8");
+  if (existsSync(configPath)) chmodSync(configPath, CONFIG_MODE);
+  writeFileSync(configPath, plan.after, { encoding: "utf-8", mode: CONFIG_MODE });
+  chmodSync(configPath, CONFIG_MODE);
+}
+
+const CONFIG_MODE = 0o600;
+
+/** The agent token the file's foreman entry passes: `undefined` when the
+ *  file has no foreman entry (or can't be read), `null` when the entry
+ *  carries no token. Lets `doctor` spot wiring that lost its token or still
+ *  carries a rotated one. */
+export function readWiredAgentToken(configPath: string): string | null | undefined {
+  if (!existsSync(configPath)) return undefined;
+  let doc: Record<string, unknown>;
+  try {
+    doc = parseDoc(readFileSync(configPath, "utf-8"), detectConfigFormat(configPath));
+  } catch {
+    return undefined;
+  }
+  const entry = findForemanServer(doc);
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return undefined;
+  const env = (entry as Record<string, unknown>).env;
+  if (!env || typeof env !== "object" || Array.isArray(env)) return null;
+  const token = (env as Record<string, unknown>)[AGENT_TOKEN_ENV];
+  return typeof token === "string" && token.length > 0 ? token : null;
 }
 
 function parseDoc(text: string, format: ConfigFormat): Record<string, unknown> {

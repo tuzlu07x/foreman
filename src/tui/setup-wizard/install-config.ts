@@ -8,10 +8,12 @@ import {
   UnsupportedConfigFormatError,
 } from "../../core/agent-config-injector.js";
 import { buildMcpSnippet } from "../../core/agent-mcp-snippet.js";
+import { ensureAgentToken } from "../../core/agent-token.js";
 import {
   resolveBundledTemplatePath,
   type AgentEntry,
 } from "../../core/registry-catalog.js";
+import type { SecretStore } from "../../core/secret-store.js";
 
 /** The install step's config substep for one agent: seed its config file
  *  from the bundled template when missing (#385), then write Foreman's MCP
@@ -19,6 +21,7 @@ import {
 export function wireAgentConfig(
   id: string,
   entry: AgentEntry,
+  secretStore: SecretStore,
   log: (line: string) => void,
 ): void {
   const configPath = pickConfigPath(entry);
@@ -63,10 +66,11 @@ export function wireAgentConfig(
         `  ⚠ ${entry.name} config not initialised at ${configPath}`,
       );
       log(
-        `     Run \`${entry.install.binary ?? id}\` once to create it, then \`foreman secrets repush ${id}\` to apply Foreman's keys.`,
+        `     Run \`${entry.install.binary ?? id}\` once to create it, then \`foreman secrets repush ${id}\` and \`foreman agent rewire ${id}\` to apply Foreman's keys and MCP wiring.`,
       );
     } else {
-      const snippet = buildMcpSnippet(id, entry);
+      // #618 — the wiring carries the agent's identity token.
+      const snippet = buildMcpSnippet(id, entry, ensureAgentToken(secretStore, id));
       const plan = planInjection(configPath, snippet.json);
       if (plan.alreadyHasForeman) {
         log(`  ✓ config already wired at ${configPath}`);

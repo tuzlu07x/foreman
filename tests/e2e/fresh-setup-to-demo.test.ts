@@ -12,6 +12,7 @@ import { RiskScorer } from '../../src/core/risk-scorer.js'
 import { SessionManager } from '../../src/core/session.js'
 import { AuditLogger } from '../../src/core/audit.js'
 import { SecretStore } from '../../src/core/secret-store.js'
+import { ensureAgentToken } from '../../src/core/agent-token.js'
 import { closeDb, getDb } from '../../src/db/client.js'
 import { requests } from '../../src/db/schema.js'
 import { loadOrCreateSecretsMasterKey } from '../../src/identity/master-key.js'
@@ -160,6 +161,8 @@ describe('#308 — fresh setup to demo (E2E gate)', () => {
       transport: 'stdio',
       responsibilityNote: 'code writing',
     })
+    // The wizard's MCP wiring step mints the agent's identity token (#618).
+    ensureAgentToken(store, TEST_AGENT_ID)
 
     // All three configs land on disk.
     expect(existsSync(paths.llmConfigPath)).toBe(true)

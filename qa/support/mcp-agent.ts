@@ -1,4 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { FOREMAN_BIN, type Sandbox } from './sandbox.js'
 
 // =============================================================================
@@ -54,11 +56,19 @@ export class McpAgent {
     this.exited = new Promise((resolve) => child.once('exit', (code) => resolve(code)))
   }
 
-  /** Start `foreman mcp-stdio --source <source>` and complete the handshake. */
-  static async connect(sandbox: Sandbox, source: string, env: Record<string, string> = {}): Promise<McpAgent> {
+  /** Start `foreman mcp-stdio --source <source>` and complete the handshake.
+   *  The agent proves its id with its token (#618), registering it first
+   *  when needed; `untrusted` connects without one. */
+  static async connect(
+    sandbox: Sandbox,
+    source: string,
+    env: Record<string, string> = {},
+    opts: { untrusted?: boolean } = {},
+  ): Promise<McpAgent> {
+    const token = opts.untrusted ? null : agentToken(sandbox, source)
     const child = spawn(process.execPath, [FOREMAN_BIN, 'mcp-stdio', '--source', source], {
       cwd: sandbox.cwd,
-      env: { ...sandbox.env, ...env },
+      env: { ...sandbox.env, ...(token ? { FOREMAN_AGENT_TOKEN: token } : {}), ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     const agent = new McpAgent(source, child)
@@ -117,7 +127,19 @@ export function replyText(res: RpcResponse): string {
   return (res.result?.content ?? []).map((c) => c.text ?? '').join('\n')
 }
 
-/** An agent that connects once (registering itself) and leaves. */
+/** Register `source` the way a user does (`foreman agent add`, as a generic
+ *  MCP agent so no agent binary is probed) and keep its token for connect. */
+export function agentToken(sandbox: Sandbox, source: string): string {
+  const dir = join(sandbox.root, 'tokens')
+  const file = join(dir, source)
+  if (!existsSync(file)) {
+    mkdirSync(dir, { recursive: true })
+    sandbox.ok(['agent', 'add', source, '--type', 'generic-mcp', '--skip-config', '--token-out', file])
+  }
+  return readFileSync(file, 'utf-8').trim()
+}
+
+/** An agent that is registered, connects once and leaves. */
 export async function registerAgent(sandbox: Sandbox, source: string): Promise<void> {
   const agent = await McpAgent.connect(sandbox, source)
   await agent.close()

@@ -6,3 +6,7 @@ mcp_servers:
   foreman:
     command: foreman
     args: ["mcp-stdio", "--source", "hermes"]
+    # Proves the agent's identity (#618). `foreman agent add` / `rewire`
+    # write the real token here; it never goes in args.
+    env:
+      FOREMAN_AGENT_TOKEN: "<written by foreman agent rewire>"

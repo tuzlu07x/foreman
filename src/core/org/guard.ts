@@ -1,7 +1,15 @@
 import { existsSync } from "node:fs";
 import type { ForemanDb } from "../../db/client.js";
 import { budgetStatus, formatUsd } from "../usage/report.js";
-import { checkDelegation, HUMAN_SOURCES, loadOrg, rolesForAgent, type DelegationVerdict } from "./org.js";
+import { isUntrustedSource } from "../agent-identity.js";
+import {
+  checkDelegation,
+  HUMAN_SOURCES,
+  loadOrg,
+  rolesForAgent,
+  UNTRUSTED_DELEGATION,
+  type DelegationVerdict,
+} from "./org.js";
 
 // Enforcement point for org.yaml reporting lines. Called when a directive
 // (`foreman write <agent> …`) is queued — from an agent's MCP
@@ -10,8 +18,9 @@ import { checkDelegation, HUMAN_SOURCES, loadOrg, rolesForAgent, type Delegation
 // the human at the keyboard).
 //
 // This keeps a crew of agents organised — work flows along the chart and
-// a runaway agent cannot fan tasks out across the company — but it is not
-// an identity boundary: an agent id is still self-declared (see SECURITY.md).
+// a runaway agent cannot fan tasks out across the company. On the MCP path
+// the agent id is proven by its token (#618); a connection without one is
+// `untrusted:<id>` and may not delegate at all.
 
 /** The person at the keyboard (CLI or TUI), not an agent: nobody to nudge,
  *  and no agent chain to watch for runaway loops. */
@@ -25,6 +34,7 @@ export function orgDelegationVerdict(
   toAgent: string,
 ): DelegationVerdict | null {
   if (!fromAgent || isHumanSource(fromAgent)) return null;
+  if (isUntrustedSource(fromAgent)) return UNTRUSTED_DELEGATION;
   if (!existsSync(orgConfigPath)) return null;
   try {
     const org = loadOrg(orgConfigPath);

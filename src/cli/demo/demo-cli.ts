@@ -9,6 +9,9 @@ import { parseDocument } from "yaml";
 import { findOrgTemplate } from "../../core/org/templates.js";
 import { saveOrgText } from "../../core/org/org.js";
 import { RegistryService } from "../../core/registry.js";
+import { AGENT_TOKEN_ENV, ensureAgentToken } from "../../core/agent-token.js";
+import { SecretStore } from "../../core/secret-store.js";
+import { loadOrCreateSecretsMasterKey } from "../../identity/master-key.js";
 import { EventBus, type ForemanEventMap } from "../../core/event-bus.js";
 import { USAGE_KEY_HEADER } from "../../core/usage/otlp-receiver.js";
 import { closeDb, getDb } from "../../db/client.js";
@@ -99,11 +102,17 @@ export function seedDemoHome(): void {
   org.setIn(["departments", "marketing", "budget"], { daily_usd: 1, on_exceed: "pause" });
   saveOrgText(paths.orgConfigPath, org.toString());
   const registry = new RegistryService(getDb(), new EventBus<ForemanEventMap>());
+  const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey());
+  const tokens: Record<string, string> = {};
   for (const a of DEMO_AGENTS) {
     if (!registry.get(a.id)) {
       registry.register({ id: a.id, displayName: a.displayName, transport: "stdio", ...(a.modelVersion ? { modelVersion: a.modelVersion } : {}) });
     }
+    tokens[a.id] = ensureAgentToken(store, a.id);
   }
+  // The stand-ins prove who they are like real agents do (#618). Their
+  // tokens live only in the throwaway demo home.
+  writeFileSync(demoTokensPath(paths.root), JSON.stringify(tokens), { mode: 0o600 });
   closeDb();
 }
 
@@ -119,13 +128,27 @@ function freePort(): Promise<number> {
   });
 }
 
+export function demoTokensPath(home: string): string {
+  return join(home, "demo-agent-tokens.json");
+}
+
+function demoTokens(home: string): Record<string, string> {
+  try {
+    return JSON.parse(readFileSync(demoTokensPath(home), "utf-8")) as Record<string, string>;
+  } catch {
+    return {}; // the calls then run untrusted, which the demo survives
+  }
+}
+
 /** The real actions, as separate processes against the demo home. */
 export function demoActions(layout: DemoLayout, env: NodeJS.ProcessEnv, children: Set<ChildProcess>): DemoActions {
   const me = self();
+  const tokens = demoTokens(layout.home);
   const mcpCall = (agent: string, tool: string, args: Record<string, unknown>): Promise<void> =>
     new Promise((resolve) => {
+      const token = tokens[agent];
       const child = spawn(me.command, [...me.prefix, "mcp-stdio", "--source", agent], {
-        env,
+        env: token ? { ...env, [AGENT_TOKEN_ENV]: token } : env,
         cwd: layout.work,
         stdio: ["pipe", "pipe", "ignore"],
       });
