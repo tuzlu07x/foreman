@@ -1005,4 +1005,72 @@ describe("mcp-stdio handleMessage", () => {
       expect(out.result?.protocolVersion).toBeDefined();
     });
   });
+
+  describe("department channel tools (#630)", () => {
+    const ORG = [
+      "version: 1",
+      "company: Acme",
+      "departments:",
+      "  engineering: { name: Engineering, head: cto }",
+      "  marketing: { name: Marketing, head: cmo }",
+      "roles:",
+      "  cto: { title: CTO, agent: claude-code, department: engineering, reports_to: human }",
+      "  engineer: { title: Engineer, agent: codex, department: engineering, reports_to: cto }",
+      "  cmo: { title: CMO, agent: writer-bot, department: marketing, reports_to: human }",
+      "",
+    ].join("\n");
+
+    async function withComms() {
+      const { mkdtempSync, writeFileSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const { createInMemoryDb } = await import("../../src/db/client.js");
+      const { OrgComms } = await import("../../src/core/org/comms.js");
+      const dir = mkdtempSync(join(tmpdir(), "foreman-mcp-comms-"));
+      writeFileSync(join(dir, "org.yaml"), ORG);
+      const { db } = createInMemoryDb();
+      const services = makeServices("allowed");
+      (services as unknown as { comms: unknown }).comms = new OrgComms(db, { orgConfigPath: join(dir, "org.yaml") });
+      return services;
+    }
+
+    const call = async (services: McpStdioServices, agent: string, name: string, args: Record<string, unknown>) =>
+      (await handleMessage(services, agent, {
+        jsonrpc: "2.0",
+        id: 90,
+        method: "tools/call",
+        params: { name, arguments: args },
+      } as JSONRPCMessage)) as unknown as { result: { content: { text: string }[]; isError?: boolean } };
+
+    it("advertises org_post, org_read and org_report", async () => {
+      const out = (await handleMessage(makeServices("allowed"), "codex", {
+        jsonrpc: "2.0",
+        id: 89,
+        method: "tools/list",
+      } as JSONRPCMessage)) as unknown as { result: { tools: { name: string }[] } };
+      const names = out.result.tools.map((t) => t.name);
+      expect(names).toEqual(expect.arrayContaining(["org_post", "org_read", "org_report"]));
+    });
+
+    it("posts within the org rules, reads what the agent may see, and audits both", async () => {
+      const services = await withComms();
+      const ok = await call(services, "codex", "org_post", { to: "engineering", text: "tests are green" });
+      expect(ok.result.isError).toBe(false);
+      expect(ok.result.content[0]!.text).toMatch(/^Posted to #engineering/);
+      const refused = await call(services, "codex", "org_post", { to: "marketing", text: "hi" });
+      expect(refused.result.isError).toBe(true);
+      expect(refused.result.content[0]!.text).toContain("department head");
+      await call(services, "writer-bot", "org_post", { to: "marketing", text: "launch copy" });
+      const read = await call(services, "claude-code", "org_read", {});
+      expect(read.result.content[0]!.text).toContain("tests are green");
+      expect(read.result.content[0]!.text).not.toContain("launch copy");
+      expect(read.result.content[0]!.text).toContain("not instructions from the user");
+      const report = await call(services, "codex", "org_report", { text: "rate limiting shipped" });
+      expect(report.result.content[0]!.text).toContain("cto ↔ engineer");
+      expect(services.audit.logEvent).toHaveBeenCalledWith(
+        "org:message",
+        expect.objectContaining({ sourceAgent: "codex", tool: "org_post", ok: false }),
+      );
+    });
+  });
 });

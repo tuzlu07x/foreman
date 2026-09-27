@@ -66,6 +66,7 @@ import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { approvalButtonSigner, approvalSigner } from "../core/approval-token.js";
 import { buildEnabledChannels } from "../core/notification/channel-factory.js";
 import { isHumanSource } from "../core/org/guard.js";
+import { CommsMirrorWorker, mirrorsFromNotifyConfig } from "../core/org/comms-mirror.js";
 import { BudgetWatcher } from "../core/usage/budget-watcher.js";
 import { UsageLedger } from "../core/usage/ledger.js";
 import { OtlpReceiver } from "../core/usage/otlp-receiver.js";
@@ -93,6 +94,7 @@ import {
 } from "../core/notification/voice-config.js";
 import { PatternDetectionService } from "../core/pattern-detection-service.js";
 import {
+  channelConfig,
   loadNotifyConfig,
   routeFor,
 } from "../core/notification/notify-config.js";
@@ -365,6 +367,16 @@ export function startForeman(
   const dailyScheduler = notificationSetup?.scheduler ?? null;
   approvalBridge.start();
 
+  // Department channels (#630): mirror what agents say to each other to
+  // the Slack / Discord channels org.yaml maps, with the bot tokens from
+  // notify.yaml. Agents never hold those tokens.
+  const commsMirror = new CommsMirrorWorker(db, {
+    orgConfigPath: paths.orgConfigPath,
+    mirrors: mirrorsFromNotifyConfig(chatBotTokens(paths.notifyConfigPath, secretStore)),
+    inbox,
+  });
+  commsMirror.start();
+
   // Department budgets from org.yaml (#629): inbox + alert channels.
   const budgetWatcher = new BudgetWatcher(db, {
     orgConfigPath: paths.orgConfigPath,
@@ -575,6 +587,7 @@ export function startForeman(
     approvalBridge.stop();
     inboxRecorder.stop();
     budgetWatcher.stop();
+    commsMirror.stop();
     void otlp.stop();
     controlPoller.stop();
     if (dailyScheduler) dailyScheduler.stop();
@@ -1148,6 +1161,22 @@ function setupLlmVerifier(args: {
     }
     throw err;
   }
+}
+
+/** Slack / Discord bot tokens from notify.yaml, for the comms mirror. */
+function chatBotTokens(
+  notifyConfigPath: string,
+  secretStore: SecretStore,
+): { slack: string | null; discord: string | null } {
+  const token = (channel: "slack" | "discord"): string | null => {
+    try {
+      const ref = channelConfig(loadNotifyConfig(notifyConfigPath), channel)?.bot_token_ref;
+      return ref && secretStore.exists(ref) ? secretStore.get(ref) : null;
+    } catch {
+      return null;
+    }
+  };
+  return { slack: token("slack"), discord: token("discord") };
 }
 
 function setupNotificationBridge(args: {

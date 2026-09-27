@@ -188,6 +188,7 @@ export function CommandBar({
               ["write <agent> <task>", "hand a task to an agent"],
               ["assign <department> <task>", "route through your org chart"],
               ["report <department> month", "what it did, and what it cost"],
+              ["comms / tell <department> …", "read and join your agents' conversations"],
               ["open inbox", "everything that needs your attention"],
               ["approve / deny", "decide the approval on screen"],
               ["help", "every command"],

@@ -1246,10 +1246,35 @@ export function checkOrg(): CheckResult {
       remediation: "Register them with `foreman agent add <id>` or change the role's agent in org.yaml.",
     };
   }
+  // Department channels mirrored to a platform need that platform's bot.
+  const mapped = new Set<string>();
+  for (const d of Object.values(org.departments)) for (const p of Object.keys(d.channels ?? {})) mapped.add(p);
+  for (const m of Object.values(org.channels ?? {})) for (const p of Object.keys(m ?? {})) mapped.add(p);
+  let notify: ReturnType<typeof loadNotifyConfig> | null = null;
+  try {
+    notify = existsSync(paths.notifyConfigPath) ? loadNotifyConfig(paths.notifyConfigPath) : null;
+  } catch {
+    notify = null; // notify_config reports parse errors
+  }
+  const noBot = [...mapped].filter((p) => {
+    if (p !== "slack" && p !== "discord") return true; // no mirror adapter for it
+    return !(notify ? channelConfig(notify, p)?.bot_token_ref : undefined);
+  });
+  if (noBot.length > 0) {
+    return {
+      name: "org",
+      status: "warn",
+      message: `${org.company}: channels are mirrored to ${noBot.join(", ")}, which has no bot token`,
+      remediation:
+        "Mirroring needs a bot (not a webhook): set bot_token_ref for that channel in notify.yaml — see docs/org.md#department-channels.",
+    };
+  }
   return {
     name: "org",
     status: "ok",
-    message: `${org.company}: ${Object.keys(org.roles).length} roles, ${Object.keys(org.departments).length} departments`,
+    message:
+      `${org.company}: ${Object.keys(org.roles).length} roles, ${Object.keys(org.departments).length} departments` +
+      (mapped.size > 0 ? ` · channels mirrored to ${[...mapped].join(", ")}` : ""),
   };
 }
 

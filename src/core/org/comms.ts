@@ -1,0 +1,293 @@
+import { existsSync, statSync } from "node:fs";
+import { and, desc, gt, inArray, or, eq, sql } from "drizzle-orm";
+import { monotonicFactory } from "ulid";
+import type { ForemanDb } from "../../db/client.js";
+import { orgMessages, type OrgMessage } from "../../db/schema.js";
+import type { EventBus, ForemanEventMap } from "../event-bus.js";
+import { stripControl } from "../inbox.js";
+import { redactSecretShapes } from "../risk-rules/secret-patterns.js";
+import { checkRolePair, HUMAN, isHead, loadOrg, rolesForAgent, type OrgDoc } from "./org.js";
+
+// =============================================================================
+// Department channels (#630) — agents talk to each other through Foreman
+// =============================================================================
+//
+// Channels:
+//   dept:<id>      a department's room
+//   leadership     department heads and the roles that report to you
+//   all            all-hands
+//   boss           messages to you (reports, questions)
+//   dm:<a>|<b>     a thread between two roles (or a role and you)
+//
+// Posting follows org.yaml, like delegation: an agent can reach its own
+// department, its manager and its reports; other departments only through
+// the heads (per `delegation.cross_department`); anyone in the org can
+// post to all-hands and to you. You can post anywhere and read everything.
+//
+// Every message is stored locally (secrets redacted, control characters
+// stripped, clipped) and mirrored to Slack / Discord by `foreman start`
+// when org.yaml maps the channel (comms-mirror.ts). Message text is data:
+// nothing in it is ever executed.
+
+export const BOSS = "boss";
+export const MAX_MESSAGE = 4_000;
+
+export type MessageKind = OrgMessage["kind"];
+export const MESSAGE_KINDS: readonly MessageKind[] = ["message", "report", "question", "handoff", "announcement"];
+
+export interface PostInput {
+  /** Agent id, or `boss` for you. */
+  from: string;
+  /** all · leadership · boss · a department · a role · an agent. */
+  to: string;
+  text: string;
+  kind?: MessageKind;
+  replyTo?: string | null;
+}
+
+export type PostResult =
+  | { ok: true; message: OrgMessage; label: string }
+  | { ok: false; reason: string };
+
+const nextId = monotonicFactory();
+
+export class OrgComms {
+  private org: { doc: OrgDoc | null; mtimeMs: number } | null = null;
+
+  constructor(
+    private readonly db: ForemanDb,
+    private readonly opts: { orgConfigPath: string; bus?: EventBus<ForemanEventMap>; now?: () => number },
+  ) {}
+
+  post(input: PostInput): PostResult {
+    const text = clean(input.text);
+    if (!text) return { ok: false, reason: "the message is empty" };
+    const org = this.orgDoc();
+    const sender = senderOf(org, input.from);
+    const target = resolveTarget(org, sender, input.to);
+    if ("error" in target) return { ok: false, reason: target.error };
+    const verdict = canPost(org, sender, target.channel);
+    if (!verdict.allowed) return { ok: false, reason: verdict.reason };
+    const ts = (this.opts.now ?? Date.now)();
+    const message: OrgMessage = {
+      id: nextId(ts),
+      ts,
+      channel: target.channel,
+      fromAgent: sender.agent,
+      fromRole: sender.roles[0] ?? null,
+      kind: input.kind && MESSAGE_KINDS.includes(input.kind) ? input.kind : "message",
+      text,
+      replyTo: input.replyTo?.slice(0, 32) ?? null,
+      mirroredAt: null,
+    };
+    this.db.insert(orgMessages).values(message).run();
+    this.opts.bus?.emit("org:message", { message });
+    return { ok: true, message, label: channelLabel(target.channel) };
+  }
+
+  /** Report up the chain: to the sender's manager, or to you when the
+   *  sender reports to you (or isn't in the org). */
+  report(from: string, text: string): PostResult {
+    const org = this.orgDoc();
+    const sender = senderOf(org, from);
+    const role = sender.roles[0];
+    const manager = role && org ? org.roles[role]?.reports_to : undefined;
+    const to = !manager || manager === HUMAN ? BOSS : manager;
+    return this.post({ from, to, text, kind: "report" });
+  }
+
+  /** Messages `viewer` may see, newest last. `channel` narrows to one
+   *  channel (same words as `to`). */
+  read(opts: { viewer: string; channel?: string; since?: number; limit?: number }): OrgMessage[] {
+    const org = this.orgDoc();
+    const viewer = senderOf(org, opts.viewer);
+    const limit = Math.min(Math.max(opts.limit ?? 30, 1), 200);
+    let scope;
+    if (opts.channel) {
+      const target = resolveTarget(org, viewer, opts.channel);
+      if ("error" in target) return [];
+      if (!canRead(org, viewer, target.channel)) return [];
+      scope = eq(orgMessages.channel, target.channel);
+    } else if (!viewer.isBoss) {
+      const own = eq(orgMessages.fromAgent, viewer.agent);
+      const visible = visibleChannels(org, viewer);
+      const dms = viewer.roles.map((r) => sql`${orgMessages.channel} LIKE ${`dm:%${r}%`}`);
+      scope = or(own, visible.length > 0 ? inArray(orgMessages.channel, visible) : undefined, ...dms);
+    }
+    const rows = this.db
+      .select()
+      .from(orgMessages)
+      .where(and(scope, opts.since ? gt(orgMessages.ts, opts.since) : undefined))
+      .orderBy(desc(orgMessages.ts), desc(orgMessages.id))
+      .limit(limit)
+      .all();
+    // The LIKE above is coarse (role ids can be substrings of others).
+    const exact = viewer.isBoss ? rows : rows.filter((m) => m.fromAgent === viewer.agent || canRead(org, viewer, m.channel));
+    return exact.reverse();
+  }
+
+  orgDoc(): OrgDoc | null {
+    const path = this.opts.orgConfigPath;
+    if (!existsSync(path)) return null;
+    try {
+      const mtimeMs = statSync(path).mtimeMs;
+      if (!this.org || this.org.mtimeMs !== mtimeMs) this.org = { doc: loadOrg(path), mtimeMs };
+      return this.org.doc;
+    } catch {
+      return null;
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Rules
+// -----------------------------------------------------------------------------
+
+export interface Sender {
+  agent: string;
+  roles: string[];
+  isBoss: boolean;
+}
+
+export function senderOf(org: OrgDoc | null, from: string): Sender {
+  const id = from.trim().toLowerCase();
+  if (id === BOSS || id === HUMAN) return { agent: BOSS, roles: [], isBoss: true };
+  return { agent: id, roles: org ? rolesForAgent(org, id) : [], isBoss: false };
+}
+
+const ALIASES: Record<string, string> = {
+  all: "all",
+  "all-hands": "all",
+  allhands: "all",
+  everyone: "all",
+  company: "all",
+  leadership: "leadership",
+  heads: "leadership",
+  boss: BOSS,
+  human: BOSS,
+  owner: BOSS,
+  you: BOSS,
+  me: BOSS,
+};
+
+/** What the sender typed as `to` → a channel key. */
+export function resolveTarget(org: OrgDoc | null, sender: Sender, to: string): { channel: string } | { error: string } {
+  const word = to.trim().toLowerCase().replace(/^[#@]/, "");
+  if (!word) return { error: "say who the message is for (a department, a role, all, leadership or boss)" };
+  if (word.startsWith("dept:") || word.startsWith("dm:")) return { channel: word };
+  const alias = ALIASES[word];
+  if (alias) return { channel: alias === BOSS && sender.isBoss ? "all" : alias };
+  if (!org) return { error: "department and role channels need an org chart — run `foreman org init`" };
+  if (Object.hasOwn(org.departments, word)) return { channel: `dept:${word}` };
+  const role = Object.hasOwn(org.roles, word) ? word : rolesForAgent(org, word)[0];
+  if (role) {
+    const me = sender.isBoss ? BOSS : sender.roles[0];
+    if (!me) return { error: "you are not in the org chart, so you can only write to boss" };
+    if (me === role) return { error: "that's you" };
+    return { channel: dmChannel(me, role) };
+  }
+  const known = [...Object.keys(org.departments), ...Object.keys(org.roles)].slice(0, 12).join(", ");
+  return { error: `no department, role or agent called '${to}' (try: all, leadership, boss, ${known})` };
+}
+
+export function dmChannel(a: string, b: string): string {
+  return `dm:${[a, b].sort().join("|")}`;
+}
+
+function dmMembers(channel: string): string[] {
+  return channel.startsWith("dm:") ? channel.slice(3).split("|") : [];
+}
+
+export function canPost(org: OrgDoc | null, sender: Sender, channel: string): { allowed: boolean; reason: string } {
+  if (sender.isBoss) return { allowed: true, reason: "you" };
+  if (channel === BOSS) return { allowed: true, reason: "anyone can report to you" };
+  if (!org || sender.roles.length === 0) {
+    return { allowed: false, reason: `${sender.agent} is not in the org chart, so it can only write to boss` };
+  }
+  if (channel === "all") return { allowed: true, reason: "all-hands" };
+  if (channel === "leadership") {
+    const ok = sender.roles.some((r) => isHead(org, r) || org.roles[r]?.reports_to === HUMAN);
+    return ok
+      ? { allowed: true, reason: "leadership" }
+      : { allowed: false, reason: "only department heads and the roles that report to you post in leadership" };
+  }
+  if (channel.startsWith("dept:")) {
+    const dept = channel.slice(5);
+    if (!Object.hasOwn(org.departments, dept)) return { allowed: false, reason: `no department '${dept}'` };
+    if (sender.roles.some((r) => org.roles[r]?.department === dept)) return { allowed: true, reason: "own department" };
+    switch (org.delegation.cross_department) {
+      case "allow":
+        return { allowed: true, reason: "cross-department allowed by org.yaml" };
+      case "via_heads":
+        return sender.roles.some((r) => isHead(org, r))
+          ? { allowed: true, reason: "department heads talk across departments" }
+          : { allowed: false, reason: `write to your department head, who can take it to ${dept}` };
+      case "deny":
+        return { allowed: false, reason: "departments are isolated in org.yaml" };
+    }
+  }
+  const members = dmMembers(channel);
+  if (members.length === 2) {
+    const mine = sender.roles.find((r) => members.includes(r));
+    if (!mine) return { allowed: false, reason: "you are not part of that thread" };
+    const other = members.find((m) => m !== mine)!;
+    if (other === BOSS) return { allowed: true, reason: "to you" };
+    if (!Object.hasOwn(org.roles, other)) return { allowed: false, reason: `no role '${other}'` };
+    const verdict = checkRolePair(org, mine, other);
+    return verdict.allowed
+      ? verdict
+      : { allowed: false, reason: `${verdict.reason}; write to your manager or a department head instead` };
+  }
+  return { allowed: false, reason: `unknown channel '${channel}'` };
+}
+
+function visibleChannels(org: OrgDoc | null, viewer: Sender): string[] {
+  if (!org || viewer.roles.length === 0) return [];
+  const channels = new Set<string>(["all"]);
+  for (const r of viewer.roles) {
+    const dept = org.roles[r]?.department;
+    if (dept) channels.add(`dept:${dept}`);
+    if (isHead(org, r) || org.roles[r]?.reports_to === HUMAN) channels.add("leadership");
+  }
+  return [...channels];
+}
+
+export function canRead(org: OrgDoc | null, viewer: Sender, channel: string): boolean {
+  if (viewer.isBoss) return true;
+  if (visibleChannels(org, viewer).includes(channel)) return true;
+  const members = dmMembers(channel);
+  return members.length === 2 && viewer.roles.some((r) => members.includes(r));
+}
+
+export function channelLabel(channel: string): string {
+  if (channel === "all") return "#all-hands";
+  if (channel === "leadership") return "#leadership";
+  if (channel === BOSS) return "→ you";
+  if (channel.startsWith("dept:")) return `#${channel.slice(5)}`;
+  const members = dmMembers(channel).map((m) => (m === BOSS ? "you" : m));
+  return members.length === 2 ? `${members[0]} ↔ ${members[1]}` : channel;
+}
+
+function clean(text: string): string {
+  const redacted = redactSecretShapes(stripControl(text.replace(/\r\n?/g, "\n"))).text.trim();
+  return redacted.length > MAX_MESSAGE ? `${redacted.slice(0, MAX_MESSAGE - 1)}…` : redacted;
+}
+
+/** One line per message, for the console, chat replies and `org_read`. */
+export function renderMessages(messages: OrgMessage[], now: number = Date.now()): string {
+  if (messages.length === 0) return "No messages yet.";
+  return messages
+    .map((m) => {
+      const who = m.fromAgent === BOSS ? "you" : m.fromRole ? `${m.fromRole} (${m.fromAgent})` : m.fromAgent;
+      const kind = m.kind === "message" ? "" : ` [${m.kind}]`;
+      return `${ago(now - m.ts)} · ${channelLabel(m.channel)} · ${who}${kind}: ${m.text}`;
+    })
+    .join("\n");
+}
+
+function ago(ms: number): string {
+  if (ms < 60_000) return "just now";
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`;
+  if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h ago`;
+  return `${Math.floor(ms / 86_400_000)}d ago`;
+}

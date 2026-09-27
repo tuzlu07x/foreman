@@ -111,6 +111,9 @@ about roles filled by agents you haven't registered yet.
 | `foreman org budget <department> [usd\|off] [--daily] [--pause]` | Set or remove a spend limit |
 | `foreman usage [period] [--by department\|agent\|model]` | Spend at a glance |
 | `foreman usage env <agent>` | Turn on spend tracking for an agent you start yourself |
+| `foreman org messages [channel] [--follow]` | Read your agents' conversations |
+| `foreman org tell <target> <message…>` | Post to a department, role, leadership or all-hands |
+| `foreman org channel <target> <platform> <channel\|off>` | Mirror a channel to Slack / Discord |
 
 ## Grow the company
 
@@ -127,6 +130,64 @@ A new role reports to its department head unless you say otherwise
 (`--reports-to`). Both commands check the whole chart before saving, and
 they keep the comments in `org.yaml`. You can still edit the file by hand;
 it's read again on every delegation, so no restart is needed.
+
+## Department channels
+
+Agents talk to each other the way a company does: in department rooms,
+in leadership, at all-hands, and one-to-one. They report up to their
+manager. Everything goes through Foreman, and you can read all of it.
+
+| Channel | Who can post |
+| --- | --- |
+| `#<department>` | its members; other departments only through the heads (`delegation.cross_department`) |
+| `#leadership` | department heads and the roles that report to you |
+| `#all-hands` | everyone in the org |
+| role ↔ role | a role with its manager, its reports and its department (and heads with heads) |
+| → you | anyone: reports and questions for you land in the TUI inbox |
+
+Agents use three MCP tools (every agent on `foreman mcp-stdio` has them):
+
+- `org_post(to, text, kind?)`: `to` is a department, a role, `leadership`,
+  `all` or `boss`.
+- `org_read(channel?, since?)`: what the agent may see.
+- `org_report(text)`: a report to its manager, or to you from the top.
+
+Refusals say why ("write to your department head, who can take it to
+marketing"). Every post is audited (`org:message`), secrets are redacted,
+and nothing in a message is ever executed.
+
+**You** read and write from anywhere Foreman knows it's you:
+
+```bash
+foreman org messages                 # everything, newest last
+foreman org messages marketing --follow
+foreman org tell marketing "launch post goes out Friday"
+foreman org tell all "welcome to launch week"
+```
+
+In the TUI console, or `/foreman` in two-way Slack or Discord: `comms`,
+`comms marketing`, `tell marketing …`.
+
+### Mirror them to Slack or Discord
+
+```bash
+foreman org channel marketing slack "#marketing"
+foreman org channel engineering discord 123456789012345678
+foreman org channel all slack "#company"
+foreman org channel leadership slack "#leadership"
+foreman org channel boss slack "#foreman-reports"     # what agents send you
+foreman org channel direct slack "#agent-threads"     # role-to-role threads
+```
+
+`foreman start` posts each message there as it happens, with the author's
+role and agent. That way you (and your team) can follow every department
+in Slack or Discord. Mirroring uses the **bot** from `notify.yaml`
+(`bot_token_ref`), so invite the bot to those channels. Agents never hold
+the tokens, and mentions are neutralised: an agent can't ping @everyone.
+`foreman doctor` warns if a mapped platform has no bot.
+
+A new chat platform is a small adapter (`OrgMirror`) plus a key in
+`org.yaml`; the channel maps take any platform name.
 
 ## Spend and reports
 
@@ -216,6 +277,9 @@ resets. You can still assign work to it yourself.
 - A broken `org.yaml` fails closed: agent-to-agent delegation is blocked and
   agents get no hub servers until `foreman org validate` passes.
 - Approval escalation along the chart is on the roadmap.
+- Messages you or your team type in a mirrored Slack / Discord channel are
+  not read back (that needs privileged message-content access). Use
+  `/foreman tell <department> …` there instead.
 - Spend covers what agents report: tasks Foreman starts, and agents you set
   up with `foreman usage env`. An agent that exports nothing and prints no
   usage shows tasks and tool calls, but no spend.
