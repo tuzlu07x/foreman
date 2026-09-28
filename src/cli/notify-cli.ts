@@ -18,6 +18,12 @@ import { buildChannel } from '../core/notification/channel-factory.js'
 import { outboundUrlProblem } from '../core/notification/channels/http-post.js'
 import { planChannelEnable } from '../core/notification/channel-setup.js'
 import {
+  checkDiscordBot,
+  checkSlackAppToken,
+  checkTelegramBot,
+  describeFailedTokenCheck,
+} from '../core/notification/token-checks.js'
+import {
   defaultNotifyState,
   isAgentMuted,
   isSilenced,
@@ -602,10 +608,9 @@ notifyCommand
         fail('the approval bot must be a different bot from the chat bot (its token is shared with your agent)')
       }
       if (opts.verify) {
-        const res = await fetch(`https://api.telegram.org/bot${token}/getMe`).catch(() => null)
-        const body = (await res?.json().catch(() => null)) as { ok?: boolean; result?: { username?: string } } | null
-        if (!body?.ok) fail('Telegram rejected that token (re-run with --no-verify to skip this check)')
-        username = body.result?.username ?? null
+        const check = await checkTelegramBot(token)
+        if (check.status !== 'ok') fail(describeFailedTokenCheck('Telegram', 'approval bot token', check))
+        username = check.value.username
       }
       setChannel(config, 'telegram', { ...telegram, approval_bot_token_ref: opts.tokenRef })
       saveNotifyConfig(paths.notifyConfigPath, config)
@@ -659,14 +664,8 @@ notifyCommand
         )
       }
       if (opts.verify) {
-        const res = await fetch('https://slack.com/api/apps.connections.open', {
-          method: 'POST',
-          headers: { authorization: `Bearer ${store.get(opts.appTokenRef)}` },
-        }).catch(() => null)
-        const body = (await res?.json().catch(() => null)) as { ok?: boolean; error?: string } | null
-        if (!body?.ok) {
-          fail(`Slack rejected the app token (${body?.error ?? 'no answer'}). Re-run with --no-verify to skip this check.`)
-        }
+        const check = await checkSlackAppToken(store.get(opts.appTokenRef))
+        if (check.status !== 'ok') fail(describeFailedTokenCheck('Slack', 'app token', check))
       }
       setChannel(config, 'slack', { ...slack, app_token_ref: opts.appTokenRef, allowed_user_ids: users })
       saveNotifyConfig(paths.notifyConfigPath, config)
@@ -716,10 +715,8 @@ notifyCommand
       const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
       try {
         if (!store.exists(discord.bot_token_ref)) fail(`no secret '${discord.bot_token_ref}'`)
-        const res = await fetch('https://discord.com/api/v10/users/@me', {
-          headers: { authorization: `Bot ${store.get(discord.bot_token_ref)}` },
-        }).catch(() => null)
-        if (!res?.ok) fail('Discord rejected the bot token. Re-run with --no-verify to skip this check.')
+        const check = await checkDiscordBot(store.get(discord.bot_token_ref))
+        if (check.status !== 'ok') fail(describeFailedTokenCheck('Discord', 'bot token', check))
       } finally {
         closeDb()
       }
