@@ -348,6 +348,8 @@ export function renderAgentConfigStep(ctx: WizardContext): JSX.Element {
         // Remount per agent prompt so the previous agent's note doesn't bleed in (#219).
         key={`agent-note:${prompt.agentId}`}
         placeholder=""
+        // Coming back to this screen keeps the note you typed (#657).
+        defaultValue={agentConfigs[prompt.agentId]?.responsibilityNote ?? ""}
         onSubmit={(value) => {
           setAgentConfigs((prev) => {
             const existing = prev[prompt.agentId] ?? {};

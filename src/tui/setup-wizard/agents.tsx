@@ -13,7 +13,7 @@ import {
 } from "./agents-logic.js";
 import type { WizardContext } from "./context.js";
 import { stepProgress } from "./progress.js";
-import { configuredProviderIds, DEFAULT_AGENTS } from "./shared.js";
+import { configuredProviderIds } from "./shared.js";
 
 // Step 3 — Agents: picker → per-agent config (agent-config.tsx) → confirm.
 // Returns null when no agents phase renders (e.g. "running"), so the root
@@ -73,13 +73,12 @@ export function renderAgentsStep(ctx: WizardContext): JSX.Element | null {
         label: `${a.name}${installedSuffix} — ${a.tagline}`,
       };
     });
-    const compatibleDefaults = (
-      initialRegistered.length > 0 ? initialRegistered : DEFAULT_AGENTS
-    ).filter((id) => {
-      const status = gatingStatuses.get(id);
-      return status?.state !== "needs-llm";
-    });
-    const defaults = compatibleDefaults;
+    // Pre-checked: your last pick (#657), so Esc back from the per-agent
+    // screens or the confirm screen keeps what you checked instead of
+    // re-ticking the defaults. On the first visit that is the resumed
+    // session's pick, the registered agents, or the default set.
+    const visibleIds = new Set(visibleAgents.map((a) => a.id));
+    const defaults = agentsSelected.filter((id) => visibleIds.has(id));
     // Mirrors the MultiSelect's live toggles, not just the pre-checked
     // defaults ("Pre-checked: hermes" stayed up after Hermes was unticked).
     const checked = agentsPickerChecked ?? defaults;

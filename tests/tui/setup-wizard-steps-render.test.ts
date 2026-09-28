@@ -542,7 +542,7 @@ describe('agents confirm: removing keeps binaries unless asked', () => {
 })
 
 describe('agents picker header', () => {
-  it('follows what is currently checked, and resets when the picker is left', async () => {
+  it('follows what is currently checked, and keeps it when you come back', async () => {
     const w = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
     await w.until('Checked: hermes')
     // Untick Hermes: the header used to keep saying "Pre-checked: hermes".
@@ -552,10 +552,49 @@ describe('agents picker header', () => {
     // The toggles themselves survive the re-render (check glyph varies: ✔ / √).
     expect(w.frame()).toMatch(/OpenClaw — Multi-channel assistant with a lobster-themed TUI [✔√]/)
     expect(w.frame()).not.toMatch(/Hermes — Personal AI assistant on Telegram and Discord [✔√]/)
-    // Leave the picker; it remounts with its defaults, and so does the header.
+    // QA #657 M11 — Esc back to the picker used to re-tick the defaults
+    // (and Enter then installed Hermes). It keeps your pick now.
     await w.press(ENTER, 'OpenClaw (1/4)')
     await w.press(ESC, 'Agents ▸ pick which to install')
-    expect(w.frame()).toContain('Checked: hermes')
+    expect(w.frame()).toContain('Checked: openclaw')
+    expect(w.frame()).toMatch(/OpenClaw — Multi-channel assistant with a lobster-themed TUI [✔√]/)
+    expect(w.frame()).not.toMatch(/Hermes — Personal AI assistant on Telegram and Discord [✔√]/)
+  })
+
+  it('keeps the responsibility note you typed when you come back to it', async () => {
+    const w = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
+    await w.press(ENTER, 'Hermes (1/4)')
+    await w.press(ENTER, 'how to reach OpenAI')
+    await w.press(ENTER, 'pick a OpenAI model')
+    await w.press(ENTER, 'responsibility note')
+    await w.type('Nightly diff triage')
+    await w.press(ENTER, 'Agents ▸ confirm')
+    await w.press(ESC, 'Agents ▸ pick which to install')
+    await w.press(ENTER, 'Hermes (1/4)')
+    await w.press(ENTER, 'how to reach OpenAI')
+    await w.press(ENTER, 'pick a OpenAI model')
+    await w.press(ENTER, 'responsibility note')
+    expect(w.frame()).toContain('Nightly diff triage')
+  })
+
+  it('keeps your pick after Esc from the confirm screen', async () => {
+    const w = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
+    await w.until('Checked: hermes')
+    await w.press(SPACE, 'Checked: (none)')
+    await w.press(DOWN)
+    await w.press(DOWN)
+    await w.press(DOWN)
+    await w.press(DOWN)
+    await w.press(SPACE, 'Checked: generic-mcp')
+    await w.press(ENTER)
+    while (!w.frame().includes('Agents ▸ confirm')) await w.press(ENTER)
+    expect(w.frame()).toContain('▸ Will install: generic-mcp')
+    await w.press(ESC, 'Agents ▸ pick which to install')
+    expect(w.frame()).toContain('Checked: generic-mcp')
+    await w.press(ENTER)
+    while (!w.frame().includes('Agents ▸ confirm')) await w.press(ENTER)
+    expect(w.frame()).toContain('▸ Will install: generic-mcp')
+    expect(w.frame()).not.toContain('hermes')
   })
 })
 
@@ -703,9 +742,8 @@ describe('required-setup cursor', () => {
     await w.press(ESC, 'Services ▸ pick which to configure')
     await w.press(ESC, 'Agents ▸ confirm')
     await w.press('n', 'Agents ▸ pick which to install')
-    await w.press(SPACE)
-    await w.press(DOWN)
-    await w.press(SPACE)
+    // The picker keeps Hermes + OpenClaw checked (#657): untick Hermes.
+    await w.press(SPACE, 'Checked: openclaw')
     await w.press(ENTER, 'OpenClaw (1/4)')
     await w.press(ENTER, 'pick a OpenAI model')
     await w.press(ENTER, 'OpenClaw — responsibility note')
