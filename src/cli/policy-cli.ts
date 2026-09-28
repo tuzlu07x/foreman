@@ -13,6 +13,8 @@ import { getForemanPaths } from "../utils/config.js";
 import { dim, green, orange, red } from "./colors.js";
 import { DEFAULT_POLICY_YAML } from "./policy-template.js";
 import { launchEditor } from "../tui/launch-editor.js";
+import { toPolicyLoadError } from "../core/policy-load.js";
+import { printPolicyLoadError } from "./policy-error.js";
 import { renderPolicyJson, renderPolicyLine } from "./render.js";
 import { requireConfirm, requireTty } from "./require-confirm.js";
 
@@ -39,7 +41,7 @@ policyCommand
       try {
         engine.loadFromYaml(paths.policyPath);
       } catch (err) {
-        printPolicyLoadError(paths.policyPath, err);
+        printPolicyLoadError(toPolicyLoadError(paths.policyPath, err));
         closeDb();
         process.exit(1);
       }
@@ -124,7 +126,7 @@ policyCommand
         `reloaded ${result.rulesAdded} rule${result.rulesAdded === 1 ? "" : "s"} from ${paths.policyPath}`,
       );
     } catch (err) {
-      printPolicyLoadError(paths.policyPath, err);
+      printPolicyLoadError(toPolicyLoadError(paths.policyPath, err));
       closeDb();
       process.exit(1);
     }
@@ -234,36 +236,5 @@ export function describeScope(raw: string | null): string {
   if (cond.argContains) parts.push(`an argument contains ${JSON.stringify(cond.argContains)}`);
   if (cond.pathNotMatch) parts.push(`path doesn't match ${cond.pathNotMatch}`);
   return parts.length > 0 ? `only when ${parts.join(" and ")}` : "every call to the tool";
-}
-
-function printPolicyLoadError(path: string, err: unknown): void {
-  // ZodError serialises message as a JSON array (\`[\n  { code: ... }\n]\`);
-  // the old split('\\n')[0] reduced it to a useless '['. Detect Zod issues
-  // and render the first one's path + message instead. YAML library errors
-  // (multi-line with a caret pointer) stay first-line-only.
-  let oneLine: string;
-  if (
-    err !== null &&
-    typeof err === "object" &&
-    "issues" in err &&
-    Array.isArray((err as { issues: unknown }).issues)
-  ) {
-    const issues = (err as {
-      issues: { path: (string | number)[]; message: string }[];
-    }).issues;
-    const first = issues[0];
-    oneLine = first
-      ? first.path.length > 0
-        ? `${first.path.join(".")}: ${first.message}`
-        : first.message
-      : String(err);
-  } else {
-    const detail = err instanceof Error ? err.message : String(err);
-    oneLine = detail.split("\n")[0] ?? detail;
-  }
-  console.error(red("error: ") + `${path} failed to parse: ${oneLine}`);
-  console.error(
-    dim(`  → Open ${path} and fix the syntax (YAML validators online help).`),
-  );
 }
 

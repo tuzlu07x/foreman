@@ -5,6 +5,8 @@ import { AuditLogger } from "../core/audit.js";
 import { bus } from "../core/event-bus.js";
 import { deriveApprovalKey } from "../core/approval-token.js";
 import { createMediatorStack } from "../core/mediator-stack.js";
+import { PolicyLoadError } from "../core/policy-load.js";
+import { printPolicyLoadError } from "./policy-error.js";
 import { SecretStore } from "../core/secret-store.js";
 import { runWrap } from "../core/wrap-runner.js";
 import { closeDb, getDb } from "../db/client.js";
@@ -76,14 +78,24 @@ export const wrapCommand = new Command("wrap")
       ...(process.env.FOREMAN_APPROVAL_TIMEOUT ? {} : { timeoutMs: 60_000 }),
       approvalKey: deriveApprovalKey(masterKey),
     });
-    const { registry, mediator } = createMediatorStack({
-      db,
-      bus,
-      approval,
-      policyPath: options.policy ?? paths.policyPath,
-      onPolicyError: (message) => process.stderr.write(`foreman wrap: ${message}\n`),
-      secretStore: new SecretStore(db, masterKey),
-    });
+    let stack: ReturnType<typeof createMediatorStack>;
+    try {
+      stack = createMediatorStack({
+        db,
+        bus,
+        approval,
+        policyPath: options.policy ?? paths.policyPath,
+        onPolicyError: (message) => process.stderr.write(`foreman wrap: ${message}\n`),
+        secretStore: new SecretStore(db, masterKey),
+      });
+    } catch (err) {
+      if (!(err instanceof PolicyLoadError)) throw err;
+      printPolicyLoadError(err);
+      audit.dispose();
+      closeDb();
+      process.exit(1);
+    }
+    const { registry, mediator } = stack;
 
     const session = runWrap({
       agentId: options.name,

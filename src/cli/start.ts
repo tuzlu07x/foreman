@@ -18,6 +18,8 @@ import {
 } from "../core/delegation-tracker.js";
 import { MediatorService } from "../core/mediator.js";
 import { PolicyEngine } from "../core/policy-engine.js";
+import { followPolicyFile, PolicyLoadError } from "../core/policy-load.js";
+import { printPolicyLoadError } from "./policy-error.js";
 import { buildAgentActivityDigest } from "../core/agent-activity-summary.js";
 import { buildActivityPrompt } from "../core/agent-activity-prompt.js";
 import { deliverWriteDirective } from "../core/agent-write.js";
@@ -156,13 +158,24 @@ export function startForeman(
   if (!existsSync(paths.root) || !existsSync(paths.identityPath)) {
     throw new NotInitialisedError(paths.root);
   }
+  const { publicKey } = loadOrCreateMasterKey();
+  const db = getDb();
+  const sqlite = getSqlite();
+  const policy = new PolicyEngine(db, bus);
+  // A broken policy.yaml stops here, before anything starts (#657): the
+  // caller prints file, line and reason instead of a stack trace. From
+  // then on the file is followed (#656): edits apply on the next call, and
+  // a broken edit keeps the last good policy. Those errors wait for the
+  // inbox, which is set up below.
+  const earlyPolicyErrors: string[] = [];
+  let reportPolicyError = (message: string): void => {
+    earlyPolicyErrors.push(message);
+  };
+  followPolicyFile(policy, paths.policyPath, (message) => reportPolicyError(message));
   // #431 — Write the start.ts PID to a pidfile so `foreman mcp-stdio`
   // can signal us when a user types `/foreman stop` into an agent's
   // Telegram chat. Cleanup happens in shutdown().
   writeForemanPidfile(paths.configDir);
-  const { publicKey } = loadOrCreateMasterKey();
-  const db = getDb();
-  const sqlite = getSqlite();
   const registry = new RegistryService(db, bus);
   const audit = new AuditLogger(db, bus);
   const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
@@ -170,15 +183,6 @@ export function startForeman(
   const approval: ApprovalService = withTui
     ? new BusApprovalService({ bus })
     : new ReadlineApprovalService({ bus });
-  const policy = new PolicyEngine(db, bus);
-  // Followed for the life of the process (#656): edits apply on the next
-  // call, and a broken edit keeps the last good policy. Errors wait for
-  // the inbox, which is set up below.
-  const earlyPolicyErrors: string[] = [];
-  let reportPolicyError = (message: string): void => {
-    earlyPolicyErrors.push(message);
-  };
-  policy.watchFile(paths.policyPath, (message) => reportPolicyError(message));
   const daemonManager = new AgentDaemonManager({
     paths,
     registry,
@@ -1769,6 +1773,11 @@ export const startCommand = new Command("start")
           red("error: ") +
             `${err.message} Tip: run 'foreman setup' to configure interactively, or 'foreman init' to seed the home and use defaults.`,
         );
+        process.exit(1);
+      }
+      if (err instanceof PolicyLoadError) {
+        printPolicyLoadError(err);
+        closeDb();
         process.exit(1);
       }
       throw err;

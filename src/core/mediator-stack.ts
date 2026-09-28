@@ -5,6 +5,7 @@ import type { EventBus, ForemanEventMap } from "./event-bus.js";
 import type { LlmVerifier } from "./llm/verifier.js";
 import { MediatorService } from "./mediator.js";
 import { PolicyEngine } from "./policy-engine.js";
+import { followPolicyFile } from "./policy-load.js";
 import { RegistryService } from "./registry.js";
 import { RiskScorer } from "./risk-scorer.js";
 import type { SecretStore } from "./secret-store.js";
@@ -26,8 +27,9 @@ export interface MediatorStackOptions {
   bus: EventBus<ForemanEventMap>;
   approval: ApprovalService;
   /** policy.yaml to follow: loaded now and re-read when it changes
-   *  (#656). A version that doesn't parse leaves the last good policy in
-   *  force and is reported once through `onPolicyError`. */
+   *  (#656). A file that doesn't load at startup throws a PolicyLoadError
+   *  (#657); a later version that doesn't parse leaves the last good
+   *  policy in force and is reported once through `onPolicyError`. */
   policyPath?: string | null;
   onPolicyError?: (message: string) => void;
   secretStore?: SecretStore;
@@ -56,7 +58,10 @@ export function createMediatorStack(opts: MediatorStackOptions): MediatorStack {
   const { db, bus } = opts;
   const registry = new RegistryService(db, bus);
   const policy = new PolicyEngine(db, bus);
-  if (opts.policyPath) policy.watchFile(opts.policyPath, opts.onPolicyError);
+  // A file broken at startup throws a PolicyLoadError (file, line,
+  // reason): the caller reports it and stops (#657). After that, edits are
+  // followed and a broken one keeps the last good policy (#656).
+  if (opts.policyPath) followPolicyFile(policy, opts.policyPath, opts.onPolicyError);
   const risk = new RiskScorer(db, undefined, {
     bucketOverrides: () => policy.getBucketOverrides(),
     getAgentResponsibility: responsibilityLookup(registry),
