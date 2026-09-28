@@ -27,6 +27,11 @@ export interface IntegrationChatContext {
 }
 
 const MUTATING = new Set(["enable", "disable", "remove"]);
+
+/** `integration enable|disable|remove …`: a change, owners only. */
+export function isIntegrationChange(args: readonly string[]): boolean {
+  return MUTATING.has((args[0] ?? "").toLowerCase());
+}
 const HOST_ONLY = new Set(["add", "update", "login", "logout", "review", "test", "adopt", "rotate"]);
 
 export async function integrationChat(args: readonly string[], ctx: IntegrationChatContext): Promise<string> {
