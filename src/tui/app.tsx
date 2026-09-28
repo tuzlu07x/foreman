@@ -1665,6 +1665,8 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "i") setInspectOpen(true);
       else if (input === "t") setTechnicalExpanded(!technicalExpanded);
       else if (input === "k") onHaltSessionFromApproval();
+      // Help decides nothing; Esc closes it and the call is still here.
+      else if (input === "?" || input === "h") setHelpOpen(true);
       return;
     }
     // [y/N]: only `y` goes ahead; any other key keeps things as they are.
@@ -1679,6 +1681,12 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       }
       if (key.tab) {
         setPage(nextTab(page, key.shift ? -1 : 1));
+        return;
+      }
+      // Every status bar says `? help`: it opens on every page, not just
+      // Home (the page branches below used to return first).
+      if (input === "?" || input === "h") {
+        setHelpOpen(true);
         return;
       }
       // Secrets, Providers and Services use `n` for "new".
