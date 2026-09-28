@@ -5,6 +5,7 @@ import {
   buildNotifyConfigFromWizard,
   type SecretReader,
 } from '../../src/tui/setup-wizard-notify-persist.js'
+import { notifyWiringNames } from '../../src/tui/setup-wizard/services-logic.js'
 
 // =============================================================================
 // Pure-logic tests for #290 — wizard → notify.yaml persistence
@@ -261,5 +262,30 @@ describe('buildNotifyConfigFromWizard — no-op + merge semantics', () => {
       existing,
     })
     expect(result.next.channels.telegram?.enabled).toBe(false)
+  })
+})
+
+// QA #657 M10 — a chat id entered for a bot token stored in an earlier run
+// (or a resumed run, which starts with nothing saved) never reached
+// notify.yaml.
+describe('notifyWiringNames', () => {
+  const catalog = [
+    {
+      id: 'telegram',
+      secret_name: 'telegram-bot-token',
+      extra_secrets: [{ name: 'telegram-chat-id' }],
+    },
+    { id: 'github', secret_name: 'github-pat' },
+  ] as never
+  const vault = (names: string[]) => ({ exists: (n: string) => names.includes(n) })
+
+  it('adds the selected services’ secrets already in the vault', () => {
+    expect(
+      notifyWiringNames(['telegram'], ['telegram-chat-id'], catalog, vault(['telegram-bot-token', 'telegram-chat-id'])).sort(),
+    ).toEqual(['telegram-bot-token', 'telegram-chat-id'])
+  })
+
+  it('leaves unselected services alone', () => {
+    expect(notifyWiringNames([], [], catalog, vault(['telegram-bot-token', 'telegram-chat-id']))).toEqual([])
   })
 })

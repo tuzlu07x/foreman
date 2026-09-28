@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
+import { createInterface } from 'node:readline'
 import { Command } from 'commander'
 import { ulid } from 'ulid'
 import { NotificationService } from '../core/notification/notification-service.js'
@@ -15,6 +16,7 @@ import {
 import { approvalButtonSigner, approvalSigner } from '../core/approval-token.js'
 import { buildChannel } from '../core/notification/channel-factory.js'
 import { outboundUrlProblem } from '../core/notification/channels/http-post.js'
+import { planChannelEnable } from '../core/notification/channel-setup.js'
 import {
   defaultNotifyState,
   isAgentMuted,
@@ -39,7 +41,7 @@ import {
 } from '../core/notification/types.js'
 import { SecretStore } from '../core/secret-store.js'
 import { closeDb, getDb } from '../db/client.js'
-import { loadOrCreateSecretsMasterKey } from '../identity/master-key.js'
+import { loadOrCreateSecretsMasterKey, loadSecretsMasterKey } from '../identity/master-key.js'
 import { getForemanPaths } from '../utils/config.js'
 import { dim, green, orange, red } from './colors.js'
 import { safeLoadConfig } from './safe-load.js'
@@ -117,8 +119,12 @@ notifyCommand
 
 notifyCommand
   .command('enable <channel>')
-  .description('Enable a channel — channel must already have credentials configured')
-  .action((channel: string) => {
+  .description(
+    'Enable a channel and point it at its credentials (the documented secret names, e.g. telegram-bot-token)',
+  )
+  .option('--chat-id <id>', 'Telegram: the chat to send to (your DM or group with the bot)')
+  .option('--channel <name>', 'Slack: the channel a bot token posts to; Discord: the channel id')
+  .action(async (channel: string, opts: { chatId?: string; channel?: string }) => {
     requireInitialised()
     // Reject typo'd channel names BEFORE writing anything (#264) — otherwise
     // the garbage entry ends up in the user's notify.yaml and `status` quietly
@@ -134,17 +140,39 @@ notifyCommand
     const config = existsSync(paths.notifyConfigPath)
       ? safeLoadConfig(paths.notifyConfigPath, loadNotifyConfig, { label: 'notify.yaml' })
       : defaultNotifyConfig()
-    const existing = channelConfig(config, channel)
-    const next: ChannelToggle = { ...(existing ?? {}), enabled: true }
-    setChannel(config, channel, next)
+    // Read-only: enabling a channel never creates secrets.key (#657).
+    const key = loadSecretsMasterKey()
+    const store = key ? new SecretStore(getDb(), key) : null
+    const readSecret = (name: string): string | null => {
+      try {
+        return store?.exists(name) ? store.get(name, { touch: false }) : null
+      } catch {
+        return null
+      }
+    }
+    const input = {
+      channel,
+      existing: channelConfig(config, channel),
+      hasSecret: (name: string) => store?.exists(name) ?? false,
+      readSecret,
+      ...(opts.chatId !== undefined ? { chatId: opts.chatId } : {}),
+      ...(opts.channel !== undefined ? { target: opts.channel } : {}),
+    }
+    let plan = planChannelEnable(input)
+    // Ask for the one value only you know, when there's someone to ask.
+    if (channel === 'telegram' && !plan.toggle.chat_id && process.stdin.isTTY) {
+      const answer = (await promptLine('Telegram chat id (your DM or group with the bot; Enter to skip): ')).trim()
+      if (answer) plan = planChannelEnable({ ...input, chatId: answer })
+    }
+    setChannel(config, channel, plan.toggle)
     saveNotifyConfig(paths.notifyConfigPath, config)
-    console.log(`${green('✓')} ${channel} enabled in ${dim(paths.notifyConfigPath)}`)
-    if (!existing?.bot_token_ref && channel === 'telegram') {
-      console.log(
-        dim(
-          '  → set credentials: `foreman secrets add telegram-bot-token` then edit notify.yaml',
-        ),
-      )
+    closeDb()
+    console.log(`${green('✓')} ${channel} enabled in ${dim(paths.notifyConfigPath)}  ${describeChannel(channel, plan.toggle)}`)
+    if (plan.missing.length > 0) {
+      console.log(orange(`  ${channel} can't send yet — still to do:`))
+      for (const step of plan.missing) console.log(`  → ${step}`)
+    } else if (channel !== 'system') {
+      console.log(dim(`  → try it: foreman notify test ${channel}`))
     }
   })
 
@@ -713,6 +741,16 @@ function normaliseUserIds(raw: string[], pattern: RegExp): string[] {
   const bad = ids.filter((id) => !pattern.test(id))
   if (bad.length > 0) fail(`not a user id: ${bad.join(', ')}`)
   return [...new Set(ids)]
+}
+
+function promptLine(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr })
+  return new Promise((resolveAnswer) => {
+    rl.question(question, (answer) => {
+      rl.close()
+      resolveAnswer(answer)
+    })
+  })
 }
 
 function fail(message: string): never {

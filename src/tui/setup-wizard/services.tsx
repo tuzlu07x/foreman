@@ -12,6 +12,7 @@ import {
   applyServiceValueSubmit,
   buildServicePromptList,
   consumingAgentsFor,
+  notifyWiringNames,
   persistNotifyConfigFromWizardState,
 } from "./services-logic.js";
 
@@ -202,6 +203,12 @@ if (servicesPhase === "summary") {
   const telegramSkippedWithoutSave =
     servicesSelected.includes("telegram") &&
     !servicesSaved.some((n) => n.startsWith("telegram-"));
+  const wiringNames = notifyWiringNames(
+    servicesSelected,
+    servicesSaved,
+    serviceCatalog,
+    services.secretStore,
+  );
   return (
     <Box flexDirection="column" gap={1} paddingY={1}>
       <WizardProgress {...stepProgress("services")} label="Services" phase="summary" />
@@ -251,14 +258,14 @@ if (servicesPhase === "summary") {
       <Text>Continue to install? (y/n)</Text>
       <ConfirmInput
         onConfirm={() => {
-          persistNotifyConfigFromWizardState(services, serviceCatalog, servicesSaved);
+          persistNotifyConfigFromWizardState(services, serviceCatalog, wiringNames);
           // #305 — seed voice.yaml alongside notify.yaml so ForemanVoice
           // + pattern detection have a config to read on first boot.
           persistVoiceConfig(services.voiceConfigPath, servicesSaved);
           advance("services");
         }}
         onCancel={() => {
-          persistNotifyConfigFromWizardState(services, serviceCatalog, servicesSaved);
+          persistNotifyConfigFromWizardState(services, serviceCatalog, wiringNames);
           persistVoiceConfig(services.voiceConfigPath, servicesSaved);
           advance("services");
         }}

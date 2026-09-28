@@ -120,6 +120,27 @@ export function consumingAgentsFor(
   return service.used_by_agents.filter((id) => agentsSelected.includes(id));
 }
 
+/** The secrets notify.yaml is wired from: the ones saved in this run, plus
+ *  the selected services' secrets already in the vault (#657). Without the
+ *  vault, a chat id entered now for a bot token stored in an earlier run
+ *  (or a resumed run, which starts with nothing saved) never reached
+ *  notify.yaml. */
+export function notifyWiringNames(
+  servicesSelected: readonly string[],
+  servicesSaved: readonly string[],
+  catalog: readonly ServiceEntry[],
+  store: { exists(name: string): boolean },
+): string[] {
+  const names = new Set(servicesSaved);
+  for (const svc of catalog) {
+    if (!servicesSelected.includes(svc.id)) continue;
+    for (const name of [svc.secret_name, ...(svc.extra_secrets ?? []).map((e) => e.name)]) {
+      if (store.exists(name)) names.add(name);
+    }
+  }
+  return [...names];
+}
+
 // Sibling of persistLlmConfigFromWizardState (#289) — writes notify.yaml
 // after the services step so the wizard's "✓ wired N services" claim
 // actually translates to enabled channels. Same best-effort semantics:
