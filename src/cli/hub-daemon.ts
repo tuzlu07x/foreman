@@ -101,6 +101,19 @@ interface Conn {
   socket: Socket;
   /** Stops whatever the connection is doing (a session, a hook). */
   teardown: () => Promise<void>;
+  /** Set by endConn: the one run of teardown. */
+  ended?: Promise<void>;
+}
+
+/** Run a connection's teardown once, however many times it is asked for
+ *  (the socket's close event and the daemon's close both do), and never
+ *  let it fail unhandled: a second run after `foreman start` closed the
+ *  database threw from a close handler and took the process down. */
+function endConn(conn: Conn, log: (message: string) => void): Promise<void> {
+  conn.ended ??= conn.teardown().catch((err: unknown) => {
+    log(`closing a daemon connection failed: ${err instanceof Error ? err.message : String(err)}`);
+  });
+  return conn.ended;
 }
 
 /** Start the daemon. Throws DaemonUnavailableError when it can't (Windows,
@@ -151,7 +164,7 @@ export async function startHubDaemon(opts: HubDaemonOptions): Promise<HubDaemon>
     conns.add(conn);
     socket.on("close", () => {
       conns.delete(conn);
-      void conn.teardown();
+      void endConn(conn, opts.log);
     });
     serveConnection(conn, { token, base, hub, paths: opts.paths, log: opts.log });
   });
@@ -189,7 +202,7 @@ export async function startHubDaemon(opts: HubDaemonOptions): Promise<HubDaemon>
       // cancelled, never left to be allowed later.
       const all = [...conns];
       for (const conn of all) conn.socket.destroy();
-      await Promise.allSettled(all.map((c) => c.teardown()));
+      await Promise.allSettled(all.map((c) => endConn(c, opts.log)));
       await hub.close().catch(() => undefined);
       audit.dispose();
       removeOwnToken(tokenPath, token);

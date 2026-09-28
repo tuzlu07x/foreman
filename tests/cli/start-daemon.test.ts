@@ -30,9 +30,12 @@ describe("foreman start hosts the daemon", () => {
   });
 
   // Async: the daemon answers from this very process.
-  const hook = (): Promise<{ exit: number | null; stderr: string }> =>
+  const hook = (
+    command = "ls",
+    timeoutMs = 300,
+  ): Promise<{ exit: number | null; stderr: string }> =>
     new Promise((done) => {
-      const child = spawn("node", [HOOK_BIN, "claude-code", "--timeout-ms", "300"], {
+      const child = spawn("node", [HOOK_BIN, "claude-code", "--timeout-ms", String(timeoutMs)], {
         env: { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: "" },
       });
       let stderr = "";
@@ -40,7 +43,7 @@ describe("foreman start hosts the daemon", () => {
         stderr += d.toString();
       });
       child.on("exit", (exit) => done({ exit, stderr }));
-      child.stdin.end(JSON.stringify({ session_id: "s", tool_name: "Bash", tool_input: { command: "ls" } }));
+      child.stdin.end(JSON.stringify({ session_id: "s", tool_name: "Bash", tool_input: { command } }));
     });
 
   it("listens while Foreman runs and cleans up on shutdown", async () => {
@@ -63,5 +66,36 @@ describe("foreman start hosts the daemon", () => {
     // Without Foreman running, the hook decides on its own again.
     const after = await hook();
     expect(after.exit).toBe(0);
+  }, 60_000);
+
+  it("quits cleanly while a hook call waits for approval, and blocks that call", async () => {
+    // QA 2026-09-28: quitting the TUI with a hook approval open threw from
+    // the daemon's socket close handler (the connection's teardown ran a
+    // second time, after the database was closed) and start exited 7.
+    runInit();
+    const rejections: unknown[] = [];
+    const onRejection = (err: unknown): void => {
+      rejections.push(err);
+    };
+    process.on("unhandledRejection", onRejection);
+    const started = startForeman({ withTui: false });
+    try {
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(join(home, "foreman.sock")) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      // High risk: waits on a human for up to a minute.
+      const waiting = hook("rm -rf ./build", 60_000);
+      // Let the approval open before quitting.
+      await new Promise((r) => setTimeout(r, 2_000));
+      await started.shutdown();
+      const r = await waiting;
+      expect(r.exit).toBe(2);
+      // The socket's own close event runs after shutdown returned.
+      await new Promise((r) => setTimeout(r, 200));
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
   }, 60_000);
 });
