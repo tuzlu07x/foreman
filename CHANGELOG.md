@@ -6,6 +6,14 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-09-28
+
+Integrations, a local daemon that makes the Claude Code hook fast, a model
+picker in the TUI, and fixes from end-to-end QA. There are no breaking
+changes. While `foreman start` runs, agents and the hook use its daemon
+(`FOREMAN_NO_DAEMON=1` keeps the old in-process path); without it
+everything works as before.
+
 ### Added
 - **One daemon for every agent** ([docs/mcp-hub.md](docs/mcp-hub.md#one-daemon-for-every-agent)).
   While `foreman start` runs, agents' `foreman mcp-stdio` and Claude
@@ -109,7 +117,9 @@ All notable changes to Foreman are documented here. The format follows
   is now kept, in order, and retried with a bounded backoff, each failure
   reported on stderr. A failed control-channel drain in `foreman start` is
   reported and retried on the next tick, and a command whose status could
-  not be written is not run a second time.
+  not be written is not run a second time. Loading `policy.yaml` at start
+  waits for another writer instead of failing with "policy.yaml failed to
+  parse: database is locked".
 - **`foreman agent remove` takes Foreman out of the agent's config.** It
   revoked the agent's token but left the `foreman` MCP server entry (e.g.
   `mcpServers.foreman` in `~/.claude.json`, `mcp_servers.foreman` for Codex
@@ -157,6 +167,20 @@ All notable changes to Foreman are documented here. The format follows
   current models' list prices, and an unknown model is billed at the
   provider's most expensive current rate, so a budget never runs over.
   Claude Opus 4.5 to 4.8 are billed at $5 / $25, not $15 / $75.
+
+- **Ctrl-C quits with exit code 130** in `foreman setup` and at `foreman
+  start`'s first-run prompt, like any interrupted command, so scripts can
+  tell an aborted setup from a finished one. The prompt used to exit 13.
+- **`foreman secrets list` hides agent identity tokens**, as the TUI Keys
+  page already did, and `foreman secrets remove` refuses them. Removing one
+  silently cut an agent off; `foreman agent token rotate` and `foreman
+  agent remove` are the ways to change them.
+- **An allowed call's security report no longer says policy asked for
+  approval.** `foreman log show` said "policy asked for explicit approval"
+  for every call without risk factors. It now says so only when
+  `policy.yaml` (or a confirm rule) asked.
+- **The help overlay explains the `y` confirmation** that allowing a high-
+  or critical-risk call takes.
 
 ## [2.0.0] - 2026-09-28
 
