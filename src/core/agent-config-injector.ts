@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs
 import { dirname, extname } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+import { ZEROCLAW_BUNDLE } from "./agent-mcp-snippet.js";
 import { AGENT_TOKEN_ENV } from "./agent-token.js";
 import { checkTokenPath, createTokenFile, tightenTokenFile } from "./token-file-safety.js";
 
@@ -201,13 +202,14 @@ export function applyInjection(configPath: string, plan: InjectionPlan): string 
 /** Replace the file in one step (temp file + rename), so the agent never
  *  reads a half-written config — Claude Code rewrites ~/.claude.json
  *  itself. The temp file is created exclusively and written through one
- *  descriptor, owner-only from its first byte; the rename replaces the
- *  path itself, never a symlink's target. */
-export function writeConfigAtomically(configPath: string, text: string): void {
+ *  descriptor, owner-only from its first byte (or `mode`, for a file that
+ *  no longer carries a token); the rename replaces the path itself, never
+ *  a symlink's target. */
+export function writeConfigAtomically(configPath: string, text: string, mode?: number): void {
   mkdirSync(dirname(configPath), { recursive: true });
   const tmp = `${configPath}.foreman-${process.pid}-${randomBytes(6).toString("hex")}.tmp`;
   try {
-    createTokenFile(tmp, text);
+    createTokenFile(tmp, text, mode);
     renameSync(tmp, configPath);
   } catch (err) {
     rmSync(tmp, { force: true });
@@ -242,6 +244,90 @@ export function readWiredAgentToken(
   if (!isPlainObject(env)) return null;
   const token = env[AGENT_TOKEN_ENV];
   return typeof token === "string" && token.length > 0 ? token : null;
+}
+
+export interface UnwirePlan {
+  format: ConfigFormat;
+  before: string;
+  /** `before` when nothing is removed. */
+  after: string;
+  /** What goes, one short label each (e.g. `mcpServers.foreman`). */
+  removed: string[];
+  /** `foreman` entries left in place because they aren't this agent's. */
+  kept: string[];
+}
+
+/**
+ * The inverse of `planInjection` / `planZeroclawInjection` for one agent:
+ * `text` (the agent's config) without the `foreman` MCP entries that run
+ * `foreman mcp-stdio --source <agentId>`. A `foreman` entry for another
+ * agent, or one without `--source` (not Foreman's wiring), stays, as does
+ * every other key. For ZeroClaw the `foreman` bundle goes too once it
+ * lists no other server, and with it the agents' grants of it.
+ */
+export function planUnwire(configPath: string, text: string, agentId: string): UnwirePlan {
+  const format = detectConfigFormat(configPath);
+  const doc = text.trim().length === 0 ? {} : parseDoc(text, format, configPath);
+  const removed: string[] = [];
+  const kept: string[] = [];
+  let next = doc;
+  for (const location of FOREMAN_LOCATIONS) {
+    const entry = getAt(next, location);
+    if (entry === undefined) continue;
+    if (isWiringFor(entry, agentId)) {
+      next = removeAt(next, location);
+      removed.push(location.join("."));
+    } else {
+      kept.push(location.join("."));
+    }
+  }
+  // ZeroClaw: named `[[mcp.servers]]` entries.
+  const servers = getAt(next, ["mcp", "servers"]);
+  if (Array.isArray(servers)) {
+    const ours = (s: unknown): boolean => isPlainObject(s) && s.name === "foreman";
+    const left = servers.filter((s) => !(ours(s) && isWiringFor(s, agentId)));
+    if (left.some(ours)) kept.push("[[mcp.servers]] foreman");
+    if (left.length < servers.length) {
+      removed.push("[[mcp.servers]] foreman");
+      next = left.length === 0 ? removeAt(next, ["mcp", "servers"]) : setAt(next, ["mcp", "servers"], left);
+      if (!left.some(ours)) next = dropZeroclawBundle(next, removed);
+    }
+  }
+  const changed = removed.length > 0;
+  return { format, before: text, after: changed ? serialize(next, format) : text, removed, kept };
+}
+
+/** Remove "foreman" from the `foreman` bundle; a bundle left with no
+ *  server (and nothing else) goes, and so do the agents' grants of it. */
+function dropZeroclawBundle(doc: Record<string, unknown>, removed: string[]): Record<string, unknown> {
+  const path = ["mcp_bundles", ZEROCLAW_BUNDLE];
+  const bundle = getAt(doc, path);
+  if (!isPlainObject(bundle) || !Array.isArray(bundle.servers)) return doc;
+  const servers = bundle.servers.filter((s) => s !== "foreman");
+  const otherKeys = Object.keys(bundle).filter((k) => k !== "servers");
+  if (servers.length > 0 || otherKeys.length > 0) {
+    return servers.length === bundle.servers.length ? doc : setAt(doc, path, { ...bundle, servers });
+  }
+  let next = removeAt(doc, path);
+  removed.push(`mcp_bundles.${ZEROCLAW_BUNDLE}`);
+  const agents = getAt(next, ["agents"]);
+  if (isPlainObject(agents)) {
+    for (const [alias, agent] of Object.entries(agents)) {
+      if (!isPlainObject(agent) || !Array.isArray(agent.mcp_bundles)) continue;
+      if (!agent.mcp_bundles.includes(ZEROCLAW_BUNDLE)) continue;
+      next = setAt(next, ["agents", alias, "mcp_bundles"], agent.mcp_bundles.filter((b) => b !== ZEROCLAW_BUNDLE));
+      removed.push(`agents.${alias}.mcp_bundles "${ZEROCLAW_BUNDLE}"`);
+    }
+  }
+  return next;
+}
+
+/** An MCP server entry Foreman wrote for `agentId`: its args run
+ *  `mcp-stdio --source <agentId>`. */
+function isWiringFor(entry: unknown, agentId: string): boolean {
+  if (!isPlainObject(entry) || !Array.isArray(entry.args)) return false;
+  const args = entry.args;
+  return args.some((a, i) => a === `--source=${agentId}` || (a === "--source" && args[i + 1] === agentId));
 }
 
 function parseDoc(text: string, format: ConfigFormat, path: string): Record<string, unknown> {
