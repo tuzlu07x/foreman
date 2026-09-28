@@ -25,6 +25,10 @@ const ChannelToggleSchema = z
     /** Slack / Discord two-way mode: the only user ids that may decide
      *  approvals or run commands. */
     allowed_user_ids: z.array(z.string().regex(/^[A-Za-z0-9]{1,40}$/)).optional(),
+    /** Slack / Discord: of those, the ids that may change integrations
+     *  from chat (enable, disable, remove). Unset: every allowed id may,
+     *  and `foreman doctor` warns when there is more than one. */
+    owner_user_ids: z.array(z.string().regex(/^[A-Za-z0-9]{1,40}$/)).optional(),
     /** Telegram chat_id (string to preserve large numeric ids). */
     chat_id: z.string().optional(),
     /** Webhook destination URL — stored as a secret ref so the URL itself is

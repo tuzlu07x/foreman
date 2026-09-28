@@ -26,6 +26,12 @@ All notable changes to Foreman are documented here. The format follows
   - The TUI has an Integrations page (`i`): add with a token or browser
     sign-in, review, enable / disable, edit the access level and who may
     use it, per-tool rules (`t`, `←→`), remove (asks first).
+  - From chat: `/foreman integrations`, `/foreman integration status |
+    enable | disable | remove <name>` in Slack and Discord, and
+    `/integrations` / `/integration …` to the Telegram approval bot from your
+    private chat. Removing asks for a one-time code; changes need an owner
+    (`owner_user_ids` for Slack / Discord), land in the inbox, and a
+    relaying agent can only read. Credentials never go through chat.
   - `foreman doctor` reports enabled integrations that can't work;
     `foreman secrets remove` / `rotate` say when an integration uses the
     secret.

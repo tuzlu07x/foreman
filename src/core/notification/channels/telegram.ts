@@ -76,7 +76,19 @@ export interface TelegramChannelOptions {
   /** Minimum time between polls, in case long polling isn't honoured
    *  (a proxy answering at once) — never a hot loop. */
   minPollIntervalMs?: number
+  /** `/integrations`, `/integration …` and `/foreman …` sent to the
+   *  approval bot from your own private chat. Returns the reply text. */
+  onCommand?: (text: string, userId: string) => Promise<string>
 }
+
+/** Commands the approval bot takes (Telegram lists them in the chat menu). */
+const APPROVAL_BOT_COMMANDS = [
+  { command: 'integrations', description: 'List integrations' },
+  { command: 'integration', description: 'status | enable | disable | remove <name>' },
+  { command: 'foreman', description: 'Foreman commands (help, status, report, …)' },
+]
+const APPROVAL_BOT_COMMAND_RE = /^\/(integrations|integration|foreman)(@[A-Za-z0-9_]{1,64})?(?=\s|$)/i
+const TELEGRAM_TEXT_MAX = 3900
 
 /** Button actions the approval bot resolves itself. */
 const APPROVAL_BOT_ACTIONS: ReadonlySet<string> = new Set(APPROVAL_BUTTON_ACTIONS)
@@ -92,7 +104,11 @@ interface TelegramUpdate {
     data?: string
     message?: { message_id: number; chat?: { id?: number | string } }
   }
-  message?: { text?: string; chat?: { id?: number | string } }
+  message?: {
+    text?: string
+    chat?: { id?: number | string; type?: string }
+    from?: { id?: number | string; is_bot?: boolean }
+  }
 }
 
 interface TelegramSendResponse {
@@ -114,6 +130,7 @@ export class TelegramChannel implements NotificationChannel {
   private readonly approvalBotToken?: string
   private readonly signButton?: (approvalId: string, actionId: string) => string
   private readonly onWarning: (message: string) => void
+  private readonly onCommand?: (text: string, userId: string) => Promise<string>
   private readonly pollTimeoutSeconds: number
   private readonly pollBackoffMs: number
   private readonly minPollIntervalMs: number
@@ -129,6 +146,7 @@ export class TelegramChannel implements NotificationChannel {
     this.approvalBotToken = opts.approvalBotToken
     this.signButton = opts.signButton
     this.onWarning = opts.onWarning ?? (() => {})
+    if (opts.onCommand) this.onCommand = opts.onCommand
     this.pollTimeoutSeconds = opts.pollTimeoutSeconds ?? 25
     this.pollBackoffMs = opts.pollBackoffMs ?? 5_000
     this.minPollIntervalMs = opts.minPollIntervalMs ?? 1_000
@@ -217,6 +235,10 @@ export class TelegramChannel implements NotificationChannel {
     const state = { stop: false, abort: new AbortController(), done: Promise.resolve() }
     state.done = this.pollApprovalBot(state, onDecision)
     this.polling = state
+    if (this.onCommand) {
+      // Best-effort: the chat menu lists the commands.
+      void this.call('setMyCommands', { commands: APPROVAL_BOT_COMMANDS }, this.approvalBotToken).catch(() => undefined)
+    }
   }
 
   async shutdown(): Promise<void> {
@@ -335,6 +357,28 @@ export class TelegramChannel implements NotificationChannel {
     }
   }
 
+  /** A command from your own private chat only: the sender, the chat and
+   *  the configured chat_id are the same id, the chat is private and the
+   *  sender isn't a bot. Anything else is ignored without a reply. */
+  private async handleApprovalBotCommand(msg: NonNullable<TelegramUpdate['message']>): Promise<void> {
+    const fromId = String(msg.from?.id ?? '')
+    const chatId = String(msg.chat?.id ?? '')
+    if (msg.chat?.type !== 'private' || msg.from?.is_bot === true) return
+    if (fromId !== this.chatId || chatId !== this.chatId) return
+    const text = msg.text!.trim().replace(APPROVAL_BOT_COMMAND_RE, (_m, verb: string) => `/${verb.toLowerCase()}`)
+    let reply: string
+    try {
+      reply = await this.onCommand!(text, fromId)
+    } catch (err) {
+      reply = `That didn't work: ${err instanceof Error ? err.message : String(err)}`
+    }
+    await this.call(
+      'sendMessage',
+      { chat_id: this.chatId, text: reply.length > TELEGRAM_TEXT_MAX ? `${reply.slice(0, TELEGRAM_TEXT_MAX - 1)}…` : reply },
+      this.approvalBotToken,
+    )
+  }
+
   private async handleApprovalBotUpdate(
     update: TelegramUpdate,
     onDecision: (d: UserDecision) => Promise<void>,
@@ -342,6 +386,10 @@ export class TelegramChannel implements NotificationChannel {
     const tap = update.callback_query
     if (!tap) {
       const msg = update.message
+      if (msg && this.onCommand && msg.text && APPROVAL_BOT_COMMAND_RE.test(msg.text.trim())) {
+        await this.handleApprovalBotCommand(msg)
+        return
+      }
       if (msg && String(msg.chat?.id) === this.chatId && msg.text?.startsWith('/start')) {
         await this.call(
           'sendMessage',

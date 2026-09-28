@@ -51,6 +51,11 @@ and it fails closed:
   through `secrets/get`, whatever the policy says, and they are never
   written into agent config files. `tools.confirm` tools (merges, pushes)
   need a person for every call.
+- Integrations change from chat only on an owner surface (the TUI, the
+  Telegram approval bot in your private chat, Slack / Discord from
+  `owner_user_ids`); a relaying agent can only read them. Removing needs a
+  single-use code bound to you and the integration; credentials are never
+  taken in chat.
 
 Known limits, which we track as roadmap items rather than hide:
 

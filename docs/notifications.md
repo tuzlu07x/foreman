@@ -234,6 +234,30 @@ inbox. Undo with `--off`.
 
 ---
 
+### Integrations from chat
+
+`/foreman integrations` lists your [integrations](integrations.md);
+`/foreman integration status <name>` shows one (credential names and
+presence only, never values). From Slack or Discord, and from the Telegram
+approval bot in your private chat (`/integrations`, `/integration …`), you
+can also change them:
+
+| Command | |
+| --- | --- |
+| `/integration enable <name>` | refused while it still needs a credential, a sign-in or a review |
+| `/integration disable <name>` | connected agents lose it at once |
+| `/integration remove <name>` | replies with a code; send `/integration remove <name> confirm <CODE>` within 2 minutes (the code works once, for you, for that integration) |
+
+Adding, updating and signing in stay on the Foreman host (TUI `i` or
+`foreman integrations`): credentials are never accepted in chat. Every
+change made from chat is audited and lands in your inbox ("jira disabled
+from Slack by U0123").
+
+With several people in `allowed_user_ids`, set `owner_user_ids` (a subset)
+on the Slack or Discord channel in `notify.yaml` to decide who may change
+integrations; `foreman doctor` warns while it's unset. An agent relaying
+`/foreman integration disable …` is refused: it can only read.
+
 ## 3b. Webhook + System channels
 
 Two **outbound-only** channels for deployments that want delivery without bidirectional callbacks. They send alerts but can't capture user decisions — pair them with Telegram (or the TUI) for the actual deciding.

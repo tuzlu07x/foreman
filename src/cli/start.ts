@@ -81,6 +81,7 @@ import { runLoginWithSuspendedTui } from "../tui/run-login-in-tui.js";
 import { SecretStore } from "../core/secret-store.js";
 import type { IntegrationAuditSink } from "../core/integrations/service.js";
 import { createIntegrationWiring, type IntegrationWiring } from "../core/integrations/wiring.js";
+import { ConfirmationStore } from "../core/integrations/confirmations.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import {
   approvalButtonSigner,
@@ -395,6 +396,10 @@ export function startForeman(
   // (notify.yaml malformed, secret missing, etc.) is logged but does NOT
   // block start — the TUI modal still works on its own.
   // Shared by the TUI console and by `/foreman` in Slack / Discord.
+  // Integrations for the TUI page and `/integration …` from chat; changes
+  // made from chat land in the inbox too.
+  const integrationWiring = integrationsForTui(secretStore, audit).integrations;
+  const integrationConfirmations = new ConfirmationStore();
   const commandContext = {
     db,
     registry,
@@ -404,18 +409,31 @@ export function startForeman(
     ownerStore: secretStore,
     secretStore,
     ...(orchestratorChat ? { orchestratorChat } : {}),
+    ...(integrationWiring
+      ? {
+          integrations: {
+            service: integrationWiring.service,
+            confirmations: integrationConfirmations,
+            notice: (title: string) =>
+              inbox.add({ level: "info", kind: "system", title, dedupeKey: `integration:${Date.now()}:${title}` }),
+          },
+        }
+      : {}),
   };
   // `/foreman …` typed in Slack or Discord. The channel already checked the
   // sender against its allowed_user_ids over a connection only Foreman
   // holds, so it runs as the owner, like the TUI. Audited either way.
   const runChatCommand = async (
-    channel: "slack" | "discord",
+    channel: "slack" | "discord" | "telegram",
     text: string,
     userId: string,
   ): Promise<string> => {
+    // `/integrations` and `/integration …` are verbs of their own; a
+    // Telegram `@bot` suffix never reaches here (the channel strips it).
     const [verb = "help", ...args] = text
       .trim()
       .replace(/^\/?foreman\b\s*/i, "")
+      .replace(/^\//, "")
       .split(/\s+/)
       .filter(Boolean);
     const sourceUser = `${channel}:${userId}`;
@@ -424,6 +442,7 @@ export function startForeman(
       sourceAgent: channel,
       sourceUser,
       trustedOwner: true,
+      integrationOwner: isIntegrationOwner(paths.notifyConfigPath, channel, userId),
     });
     audit.logEvent("foreman:command", {
       command: verb,
@@ -664,7 +683,7 @@ export function startForeman(
           commandContext,
           audit,
           orgConfigPath: paths.orgConfigPath,
-          ...integrationsForTui(secretStore, audit),
+          ...(integrationWiring ? { integrations: integrationWiring } : {}),
         },
       }),
       { exitOnCtrlC: false },
@@ -1338,7 +1357,7 @@ function setupNotificationBridge(args: {
   llmConfigPath: string;
   onChannelWarning?: (message: string) => void;
   onChatCommand?: (
-    channel: "slack" | "discord",
+    channel: "slack" | "discord" | "telegram",
     text: string,
     userId: string,
   ) => Promise<string>;
@@ -1668,6 +1687,22 @@ async function runOnboardingWizard(): Promise<boolean> {
 export function rememberSetupSkipped(): void {
   const state = loadSetupState();
   if (!hasUserOptedOut(state)) saveSetupState(markSetupSkipped(state));
+}
+
+/** Slack / Discord: may this sender change integrations from chat? The
+ *  channel's owner_user_ids when set, else its allowed_user_ids (already
+ *  checked by the channel). The Telegram approval bot only takes commands
+ *  from your own private chat, so it always may. A notify.yaml that can't
+ *  be read closes it. */
+export function isIntegrationOwner(notifyConfigPath: string, channel: string, userId: string): boolean {
+  if (channel === "telegram") return true;
+  try {
+    const toggle = channelConfig(loadNotifyConfig(notifyConfigPath), channel as "slack" | "discord");
+    const owners = toggle?.owner_user_ids;
+    return owners ? owners.includes(userId) : (toggle?.allowed_user_ids ?? []).includes(userId);
+  } catch {
+    return false;
+  }
 }
 
 /** The Integrations page's service; the TUI still starts when the bundled
