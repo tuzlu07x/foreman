@@ -47,9 +47,14 @@ export interface SetupWizardProps {
   afterExit?: "exit" | "launch-tui";
   /** Called when the user quits (Ctrl-C, or [q] on Welcome) rather than
    *  finishing. The host must not carry on as if setup completed —
-   *  `foreman start` uses it to exit instead of launching the TUI. */
-  onQuit?: () => void;
+   *  `foreman start` uses it to exit instead of launching the TUI.
+   *  `reason` is `"interrupt"` for Ctrl-C, so the host can exit with 130
+   *  like any interrupted Unix command. */
+  onQuit?: (reason: QuitReason) => void;
 }
+
+/** Why the wizard quit: Ctrl-C (`interrupt`) or a quit key (`quit`). */
+export type QuitReason = "interrupt" | "quit";
 
 export interface AgentConfig {
   llmProvider?: string;
