@@ -490,6 +490,99 @@ export class IntegrationService {
   }
 
   // ---------------------------------------------------------------------------
+  // Adopt / record
+  // ---------------------------------------------------------------------------
+
+  /** Turn a server added with `foreman mcp add` into an integration. Its
+   *  block is re-rendered from the catalog; when that changes what the hub
+   *  launches, the pins are forgotten and the server is disabled until it
+   *  is reviewed again. */
+  async adopt(
+    serverName: string,
+    input: { id: string; variant?: string; accessLevel?: AccessLevelId; access: AccessChoice },
+    actor: IntegrationActor,
+  ): Promise<IntegrationChangeResult> {
+    const entry = this.entry(input.id);
+    const name = serverName.trim().toLowerCase();
+    let result: IntegrationChangeResult | null = null;
+    await updateHubConfig(this.deps.paths, (current) => {
+      const existing = current.servers[name];
+      if (!existing) throw new IntegrationError(`no server named '${name}' in mcp.yaml`);
+      if (existing.integration) throw new IntegrationError(`${name} is already an integration`);
+      const variant = input.variant
+        ? this.variant(entry, input.variant)
+        : entry.variants.find((v) => v.server === existing.catalog_id);
+      if (!variant) {
+        throw new IntegrationError(
+          `${name} was not added from a ${entry.name} catalog server — pass --variant (${entry.variants.map((v) => v.id).join(", ")})`,
+        );
+      }
+      const server = this.catalogServer(variant);
+      const accessLevel = input.accessLevel ?? variant.default_access_level;
+      // A one-credential server keeps the secret name it already uses
+      // (e.g. github-pat-work); otherwise the catalog's names apply.
+      const used = referencedSecrets(existing);
+      const slot = server.secrets.length === 1 ? server.secrets[0]!.name : null;
+      const secretNames: Record<string, string> =
+        slot && used.length === 1 && used[0] !== slot ? { [slot]: used[0]! } : {};
+      const rendered = this.render(entry, variant, server, {
+        accessLevel,
+        products: undefined,
+        params: undefined,
+        secretNames,
+        toolOverrides: undefined,
+      });
+      const now = this.now();
+      const next: ServerConfigInput = {
+        ...rendered.server,
+        enabled: existing.enabled,
+        ...accessBlock(input.access),
+        integration: {
+          id: entry.id,
+          variant: variant.id,
+          access_level: accessLevel,
+          params: rendered.params,
+          secrets: rendered.secrets,
+          tool_overrides: {},
+          created_at: now,
+          updated_at: now,
+        },
+      };
+      const relaunch = launchFingerprint(next as ServerConfig) !== launchFingerprint(existing) || next.auth !== existing.auth;
+      if (relaunch) next.enabled = false;
+      result = { name, server: next as ServerConfig, ignoredOverrides: [], needsReview: relaunch };
+      return { ...current, servers: { ...current.servers, [name]: next as ServerConfig } };
+    });
+    const done = result as unknown as IntegrationChangeResult;
+    if (done.needsReview) this.deps.pins.forget(done.name);
+    const meta = done.server.integration!;
+    this.audit("integration:added", actor, {
+      integration: meta.id,
+      server: done.name,
+      variant: meta.variant,
+      adopted: true,
+      access_level: meta.access_level,
+      access: describeAccessChoice(input.access),
+      ...(done.needsReview ? { disabled_for_review: true } : {}),
+      secrets: Object.values(meta.secrets),
+    });
+    return done;
+  }
+
+  /** Audit a user action on an integration that isn't a config change
+   *  (review, test, login, logout). */
+  record(
+    eventType: "integration:reviewed" | "integration:tested" | "integration:login" | "integration:logout",
+    query: string,
+    actor: IntegrationActor,
+    extra: Record<string, unknown> = {},
+  ): void {
+    const { name, server } = this.require(this.config(), query);
+    const meta = server.integration!;
+    this.audit(eventType, actor, { integration: meta.id, server: name, variant: meta.variant, ...extra });
+  }
+
+  // ---------------------------------------------------------------------------
   // helpers
   // ---------------------------------------------------------------------------
 

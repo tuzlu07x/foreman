@@ -10,6 +10,7 @@ import { identityCommand } from "./identity-cli.js";
 import { initCommand } from "./init.js";
 import { logCommand } from "./log.js";
 import { mcpCommand } from "./mcp-cli.js";
+import { integrationsCommand } from "./integrations-cli.js";
 import { mcpStdioCommand } from "./mcp-stdio.js";
 import { migrateCommand } from "./migrate.js";
 import { llmCommand } from "./llm-cli.js";
@@ -48,6 +49,7 @@ export function buildProgram(): Command {
   program.addCommand(startCommand);
   program.addCommand(mcpStdioCommand);
   program.addCommand(mcpCommand);
+  program.addCommand(integrationsCommand);
   program.addCommand(orgCommand);
   program.addCommand(inboxCommand);
   program.addCommand(usageCommand);

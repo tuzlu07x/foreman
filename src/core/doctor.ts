@@ -24,6 +24,8 @@ import { buildEnabledChannels } from "./notification/channel-factory.js";
 import { channelConfig, loadNotifyConfig } from "./notification/notify-config.js";
 import { enabledServers, loadHubConfig } from "./mcp-hub/config.js";
 import { missingSecrets } from "./mcp-hub/manage.js";
+import { ToolPinStore } from "./mcp-hub/pins.js";
+import { blockingProblems, integrationStatus } from "./integrations/status.js";
 import { describeMcpOAuthStatus, mcpOAuthStatus } from "./mcp-hub/oauth-store.js";
 import { loadOrg, OrgValidationError } from "./org/org.js";
 import { findDuplicateSlots } from "./secret-slot-migration.js";
@@ -1567,6 +1569,58 @@ export function checkMcpHub(): CheckResult {
   };
 }
 
+// Integrations (`foreman integrations`): an enabled one that needs a
+// credential, a sign-in or a review can't work; a disabled one is only noted.
+export function checkIntegrations(): CheckResult {
+  const paths = getForemanPaths();
+  let config;
+  try {
+    config = existsSync(paths.mcpConfigPath) ? loadHubConfig(paths.mcpConfigPath) : null;
+  } catch {
+    return { name: "integrations", status: "ok", message: "skipped — mcp.yaml is invalid (see mcp_hub)" };
+  }
+  const servers = config ? Object.entries(config.servers).filter(([, s]) => s.integration) : [];
+  if (!config || servers.length === 0) {
+    return {
+      name: "integrations",
+      status: "ok",
+      message: "none configured (try `foreman integrations catalog`)",
+    };
+  }
+  const broken: string[] = [];
+  const fixes: string[] = [];
+  try {
+    withDoctorSecretStore((store) => {
+      const pins = new ToolPinStore(config.security.pin_tool_definitions ? paths.mcpPinsPath : null);
+      for (const [name, server] of servers) {
+        if (!server.enabled) continue;
+        const status = integrationStatus(name, server, { pins, secrets: store, security: config.security });
+        const blocking = blockingProblems(status);
+        if (blocking.length === 0) continue;
+        broken.push(`${name}: ${blocking.map((p) => p.kind).join(", ")}`);
+        if (blocking.some((p) => p.kind === "needs-login")) fixes.push(`foreman integrations login ${name}`);
+        else fixes.push(`foreman integrations review ${name}`);
+      }
+    });
+  } catch {
+    // secret store unavailable — the database / secrets_key checks report it
+  }
+  const enabled = servers.filter(([, s]) => s.enabled).length;
+  if (broken.length > 0) {
+    return {
+      name: "integrations",
+      status: "warn",
+      message: `${broken.length} enabled integration(s) can't work — ${broken.join("; ")}`,
+      remediation: fixes.join(" · "),
+    };
+  }
+  return {
+    name: "integrations",
+    status: "ok",
+    message: `${servers.length} integration(s), ${enabled} enabled`,
+  };
+}
+
 // Foreman Org — org.yaml loads and every role's agent is registered.
 export function checkOrg(): CheckResult {
   const paths = getForemanPaths();
@@ -1672,6 +1726,7 @@ const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkProviderMapping,
   checkMcpGateway,
   checkMcpHub,
+  checkIntegrations,
   checkOrg,
   checkLegacyHome,
   checkUpdate,
