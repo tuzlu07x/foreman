@@ -34,6 +34,23 @@ describe('Policy page conditions', () => {
     expect(frame).toMatch(/tool:read_file ALLOW(?! if)/)
   })
 
+  it('shows hidden characters in a rule\'s agent and target as stand-ins', async () => {
+    // A remembered rule's target is built from an agent's tool name, so it
+    // can carry escape sequences; they must not reach the terminal (#656).
+    m = await mountApp(({ db, bus }) => {
+      const policy = new PolicyEngine(db, bus)
+      policy.loadYamlText(
+        ['rules:', '  - source: "*"', '    target: "tool:x\\e[2K\\rsafe_tool"', '    effect: deny', ''].join('\n'),
+      )
+      return { policy }
+    })
+    await m.press('p')
+    const frame = m.frame()
+    expect(frame).toContain('tool:x␛[2K␍safe_tool')
+    expect(frame).not.toContain('\u001b[2K')
+    expect(frame).not.toContain('\r')
+  })
+
   it('describes every kind of condition', () => {
     expect(describeConditions(null)).toBe('none')
     expect(

@@ -140,9 +140,9 @@ function RuleRow({
         <Text color={selected ? theme.accent.primary : theme.fg.muted}>
           {selected ? "▸ " : "  "}
         </Text>
-        <Text color={theme.accent.primary}>{row.sourceAgent}</Text>
+        <Text color={theme.accent.primary}>{safe(row.sourceAgent)}</Text>
         <Text color={theme.fg.muted}>{"  →  "}</Text>
-        <Text bold={selected}>{row.target}</Text>{" "}
+        <Text bold={selected}>{safe(row.target)}</Text>{" "}
         <Text color={effectColor} bold>
           {row.effect.toUpperCase()}
         </Text>
