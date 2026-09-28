@@ -59,6 +59,7 @@ const FOREMAN_RECS: Record<'low' | 'medium' | 'high' | 'critical', 'allow' | 'as
 export function templateNarrative(
   assessment: RiskAssessment,
   reason: FallbackReason,
+  opts: { policyAsked?: boolean } = {},
 ): Narrative {
   const categories = groupCategories(assessment.factors)
   const topFactors = topFactorsByPoints(assessment.factors, 3)
@@ -66,9 +67,12 @@ export function templateNarrative(
   // Build the "what's happening" paragraph from factor categories.
   let whatHappening: string
   if (categories.length === 0) {
+    // Only say policy asked when it did: an allowed call used to read
+    // "policy asked for explicit approval" too.
     whatHappening =
-      'No specific risk factors fired — policy asked for explicit approval. ' +
-      FOOTERS[reason]
+      (opts.policyAsked
+        ? 'No specific risk factors fired — policy asked for explicit approval. '
+        : 'No specific risk factors fired. ') + FOOTERS[reason]
   } else {
     const flagged = categories
       .slice(0, 3)

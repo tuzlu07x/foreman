@@ -75,6 +75,9 @@ export interface ReportInput {
   args: unknown
   /** Heuristic-derived assessment; .llmVerification populated if C8 ran. */
   assessment: RiskAssessment
+  /** policy.yaml (or a requireHuman caller) asked for an approval, as
+   *  opposed to an allowed or refused call. */
+  policyAsked?: boolean
   /** Optional override; mostly for tests. Defaults to Date.now(). */
   now?: () => number
 }
@@ -114,6 +117,7 @@ export function generateReport(input: ReportInput): SecurityReport {
     narrative: templateNarrative(
       input.assessment,
       sourceToFallbackReason(source),
+      { policyAsked: input.policyAsked === true },
     ),
     technical: technicalFromAssessment(input.assessment, null),
     source,
