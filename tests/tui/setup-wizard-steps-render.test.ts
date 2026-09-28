@@ -404,6 +404,21 @@ describe('welcome step', () => {
     expect(w.frame()).toContain('[Enter] Start setup')
     await w.press(ENTER, 'LLM Providers ▸ pick which to configure')
   })
+
+  // QA #657 L3 — below 120 columns the mascot squeezed the text past the
+  // edge and the screen outgrew 24 rows (its top then stayed on screen
+  // under the next step); the copy said a Telegram bot is needed.
+  it('fits a 100-column, 24-row terminal and says chat apps are optional', async () => {
+    const w = await mount('welcome')
+    await w.until('Welcome to Foreman')
+    const lines = w.frame().split('\n')
+    expect(lines.length).toBeLessThanOrEqual(24)
+    for (const l of lines) expect(l.length).toBeLessThanOrEqual(100)
+    expect(w.frame()).not.toContain('▄▄▄▄')
+    expect(w.frame()).not.toContain('Telegram bot you control')
+    expect(w.frame().replace(/\s+/g, ' ')).toContain('Chat apps like Telegram are optional')
+    expect(w.frame()).not.toContain('…')
+  })
 })
 
 describe('step numbering', () => {
@@ -993,6 +1008,40 @@ describe('done step identity summary', () => {
     expect(w.frame()).toContain('No Foreman identity file for generic-mcp')
     expect(w.frame()).not.toContain('Identity push failed')
     expect(w.frame()).not.toContain('pushed to 0 of 1')
+  })
+})
+
+// QA #657 L3 / L9 — at 80x24 the Done screen's top scrolled away (every
+// block was spaced twice, and doctor put a blank line between rows), and
+// it offered "[q] Exit (skip OAuth)" with no OAuth anywhere.
+describe('done step fits 24 rows', () => {
+  it('after installing an agent with a token to wire by hand', async () => {
+    const w = await mount('install', {
+      initialState: {
+        version: 1,
+        completed: ALL_BEFORE.install,
+        startedAt: 1,
+        lastUpdatedAt: 1,
+        session: {
+          providersSelected: [],
+          providersSignedIn: [],
+          agentsSelected: ['generic-mcp'],
+          agentConfigs: {},
+          servicesSelected: [],
+          registeredAtSnapshot: [],
+        },
+      },
+    })
+    await w.startInstall()
+    await w.until('What next?')
+    const frame = w.frame().replace(/\n+$/, '')
+    expect(frame).toContain('Setup complete')
+    expect(frame).toContain('foreman agent rewire generic-mcp')
+    expect(frame.split('\n').length).toBeLessThanOrEqual(24)
+    expect(frame).toMatch(/\[q\]\s+Exit\s*$/m)
+    expect(frame).not.toContain('skip OAuth')
+    await w.press('d', 'foreman doctor')
+    expect(w.frame()).toContain('✓ 1 ok: fake-check')
   })
 })
 

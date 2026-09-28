@@ -174,22 +174,30 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
         <Text bold color={theme.accent.primary}>
           foreman doctor
         </Text>
-        {doctorReport.checks.map((c) => {
-          const icon =
-            c.status === "ok" ? "✓" : c.status === "warn" ? "⚠" : "✗";
-          const color =
-            c.status === "ok"
-              ? theme.accent.success
-              : c.status === "warn"
-                ? theme.accent.warning
-                : theme.accent.danger;
-          return (
-            <Text key={c.name} color={color}>
-              {"  "}
-              {icon} {c.name.padEnd(20)} {c.message}
-            </Text>
-          );
-        })}
+        {/* Problems in full, passing checks on one line: the whole list
+            (27+ rows, one blank line between each) scrolled off a 24-row
+            terminal (#657). `foreman doctor` prints every row. */}
+        <Box flexDirection="column">
+          {(() => {
+            const passed = doctorReport.checks.filter((c) => c.status === "ok");
+            return passed.length > 0 ? (
+              <Text color={theme.accent.success} wrap="truncate-end">
+                {"  "}✓ {passed.length} ok: {passed.map((c) => c.name).join(", ")}
+              </Text>
+            ) : null;
+          })()}
+          {doctorReport.checks
+            .filter((c) => c.status !== "ok")
+            .map((c) => (
+              <Text
+                key={c.name}
+                color={c.status === "warn" ? theme.accent.warning : theme.accent.danger}
+              >
+                {"  "}
+                {c.status === "warn" ? "⚠" : "✗"} {c.name}: {c.message}
+              </Text>
+            ))}
+        </Box>
         <Text color={theme.fg.muted}>
           (exit code {doctorReport.exitCode}) — [Esc] / [Enter] / [b] back
         </Text>
@@ -203,6 +211,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
         <Text bold color={theme.accent.primary}>
           Install log
         </Text>
+        <Box flexDirection="column">
         {installLog.map((line, i) => {
           const trimmed = line.trimStart();
           const color = trimmed.startsWith("✗")
@@ -216,6 +225,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
             </Text>
           );
         })}
+        </Box>
         <Text color={theme.fg.muted}>[Esc] / [Enter] / [b] back</Text>
       </Box>
     );
@@ -226,7 +236,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
       <StatusMessage variant="success">
         Setup complete — Foreman is ready to guard your agents.
       </StatusMessage>
-      <Box flexDirection="column" marginTop={1}>
+      <Box flexDirection="column">
         <Text bold>Summary</Text>
         <Text color={theme.fg.muted}>
           {"  "}
@@ -253,7 +263,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
         </Text>
       </Box>
       {installSummary && (
-        <Box flexDirection="column" marginTop={1}>
+        <Box flexDirection="column">
           {identityTargets > 0 ? (
             <Text color={theme.fg.muted}>
               Foreman identity pushed to{" "}
@@ -304,7 +314,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
           assumes everything's wired and only sees the gap when an agent
           tries (and fails) to invoke a Foreman MCP tool. */}
       {installSummary && installSummary.mcpRegisterFailed.length > 0 && (
-        <Box flexDirection="column" marginTop={1}>
+        <Box flexDirection="column">
           <Text bold color={theme.accent.warning}>
             ⚠ Foreman MCP registration failed for these agents:
           </Text>
@@ -325,7 +335,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
           config in the registry) run untrusted until it is wired by hand.
           Name the command that fetches it; never the token. */}
       {installSummary && installSummary.tokenToWire.length > 0 && (
-        <Box flexDirection="column" marginTop={1}>
+        <Box flexDirection="column">
           <Text bold color={theme.accent.warning}>
             ⚠ Wire these agents' identity tokens by hand:
           </Text>
@@ -349,7 +359,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
           a log the user never saw. Repeat the requirement and the
           upstream installer command here. */}
       {installSummary && installSummary.nodeEngineSkipped.length > 0 && (
-        <Box flexDirection="column" marginTop={1}>
+        <Box flexDirection="column">
           <Text bold color={theme.accent.warning}>
             ⚠ Not installed: these agents need a newer Node.js
           </Text>
@@ -377,7 +387,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
           skipping those leaves the agent unable to talk to its provider
           (silent failure on first message). */}
       {requiredSetupResolution.oauthSteps.filter((o) => o.mandatory).length > 0 && (
-        <Box flexDirection="column" marginTop={1}>
+        <Box flexDirection="column">
           <Text bold color={theme.accent.warning}>
             ⚠ Mandatory — these MUST run before the agent can reach its
             provider
@@ -405,7 +415,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
         </Box>
       )}
       {requiredSetupResolution.oauthSteps.filter((o) => !o.mandatory).length > 0 && (
-        <Box flexDirection="column" marginTop={1}>
+        <Box flexDirection="column">
           <Text bold>Run these to finish OAuth setup</Text>
           {requiredSetupResolution.oauthSteps
             .filter((o) => !o.mandatory)
@@ -425,7 +435,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
         </Box>
       )}
       {providersSignedIn.length > 0 && (
-        <Box flexDirection="column" marginTop={1}>
+        <Box flexDirection="column">
           <Text bold color={theme.accent.warning}>
             ⚿ Foreman LLM sign-in — opens your browser
           </Text>
@@ -445,7 +455,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
           ))}
         </Box>
       )}
-      <Box flexDirection="column" marginTop={1}>
+      <Box flexDirection="column">
         <Text bold>What next?</Text>
         {(() => {
           const mandatoryCount =
@@ -485,7 +495,12 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
           {"  "}[p]     Review policy file
         </Text>
         <Text color={theme.fg.muted}>{"  "}[l]     Show install log</Text>
-        <Text color={theme.fg.muted}>{"  "}[q]     Exit (skip OAuth)</Text>
+        <Text color={theme.fg.muted}>
+          {"  "}[q]     Exit
+          {requiredSetupResolution.oauthSteps.length > 0 || providersSignedIn.length > 0
+            ? " (skip OAuth)"
+            : ""}
+        </Text>
       </Box>
     </Box>
   );
@@ -533,7 +548,7 @@ function LaunchCommands({ agentIds }: { agentIds: string[] }): JSX.Element | nul
     .filter((e) => e.secret_projection?.launch !== undefined);
   if (rows.length === 0) return null;
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="column">
       <Text bold>Launch your agents</Text>
       {rows.map((entry) => {
         const launch = entry.secret_projection!.launch!;

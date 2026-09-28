@@ -32,9 +32,12 @@ export function totalEstimatedMinutes(
 // Welcome-screen mascot. Reuses the boot-time block-character frame
 // (#365) so the wizard's first impression matches the post-boot
 // dashboard the user sees seconds later. Static — no morph/blink — to
-// keep the welcome screen quiet. Rendered only on terminals wide enough
-// for the side-by-side layout (>= 80 cols).
+// keep the welcome screen quiet. Only on wide terminals (>= 120 cols):
+// at 80 columns it squeezed the text past the edge, and the screen grew
+// taller than 24 rows, so its top stayed on screen under later steps.
 const WELCOME_MASCOT = blockFallbackFrame(false).lines;
+/** Long lines are hard to read on a very wide terminal. */
+const WELCOME_TEXT_MAX = 90;
 
 // ---------------- Welcome ----------------
 export function renderWelcomeStep(ctx: WizardContext): JSX.Element {
@@ -46,10 +49,10 @@ export function renderWelcomeStep(ctx: WizardContext): JSX.Element {
         Welcome to Foreman
       </Text>
       <Text color={theme.fg.muted}>
-        Foreman wires multiple AI agents (Hermes, Codex, Claude Code…)
-        into a Telegram bot you control. It routes messages between
-        agents, guards their tool calls, and gives you a single audit
-        trail.
+        Foreman guards the AI agents on this machine (Claude Code, Codex,
+        Hermes and others): every tool call is checked against your
+        policy, risky ones wait for your OK, and everything lands in one
+        audit trail. Chat apps like Telegram are optional.
       </Text>
       <Text color={theme.fg.muted}>
         You'll paste LLM provider keys, pick agents to install, and
@@ -81,19 +84,25 @@ export function renderWelcomeStep(ctx: WizardContext): JSX.Element {
       </Box>
     </Box>
   );
-  if (welcomeLayout === "narrow") {
-    return <Box paddingY={1}>{stepList}</Box>;
+  if (welcomeLayout !== "wide") {
+    return (
+      <Box paddingY={1} flexDirection="column">
+        {stepList}
+      </Box>
+    );
   }
   return (
     <Box paddingY={1}>
-      <Box flexDirection="column" marginRight={2}>
+      <Box flexDirection="column" marginRight={2} flexShrink={0}>
         {WELCOME_MASCOT.map((row, i) => (
           <Text key={i} color={theme.accent.primary}>
             {row}
           </Text>
         ))}
       </Box>
-      {stepList}
+      <Box flexDirection="column" flexShrink={1} width={WELCOME_TEXT_MAX}>
+        {stepList}
+      </Box>
     </Box>
   );
 }
