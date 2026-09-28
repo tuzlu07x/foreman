@@ -31,6 +31,7 @@ An unverified connection that claims a blocked or disabled id is refused too (se
 
 ## CLI surface
 
+<!-- pending: #656/#657 (the `agent add <registry-id>` and `agent remove --uninstall` rows) -->
 | Command | Purpose |
 |---|---|
 | `foreman agent list` | registered agents (including disabled and blocked) and their status |
