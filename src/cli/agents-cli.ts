@@ -69,7 +69,7 @@ import {
   pickMcpConfigPath,
 } from "../core/agent-add-flow.js";
 import { bold, dim, green, orange, red } from "./colors.js";
-import { renderAgentJson, renderAgentLine } from "./render.js";
+import { renderAgentJson, renderAgentLine, renderPublicKeyJson } from "./render.js";
 import { requireConfirm } from "./require-confirm.js";
 
 function getRegistry(): RegistryService {
@@ -366,12 +366,14 @@ agentsCommand
           : null;
       const registryEntry = registryId ? safeFindAgent(doc, registryId) : null;
       const identityToken = tokenStatus(agent.id);
+      const publicKey = registry.getPublicKey(agent.id);
       if (options.json) {
         const payload = renderAgentJson(agent) as Record<string, unknown>;
         process.stdout.write(
           JSON.stringify(
             {
               ...payload,
+              ...(publicKey ? renderPublicKeyJson(publicKey) : {}),
               identityToken,
               mcpSnippet: registryEntry
                 ? buildMcpSnippet(agent.id, registryEntry).json
@@ -404,6 +406,9 @@ agentsCommand
         console.log(
           `  ${dim("transport:")}   ${formatTransportLine(registryEntry)}`,
         );
+      }
+      if (publicKey) {
+        console.log(`  ${dim("key:")}         ${renderPublicKeyJson(publicKey).publicKeyFingerprint}…`);
       }
       console.log(
         `  ${dim("token:")}       ` +

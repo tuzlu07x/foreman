@@ -83,6 +83,10 @@ All notable changes to Foreman are documented here. The format follows
   preset. `/foreman model`'s tap-to-copy list follows the tiers and covers
   Gemini. The wizard's live model list now includes GPT-6 models and sorts
   newest first by version (Claude Fable no longer sank below Haiku).
+- **`foreman agent show` shows the agent's public key.** Text output adds a
+  `key:` line with the `ed25519:xxxxxxxx…` fingerprint (the style
+  `foreman init` uses for Foreman's own key); `--json` adds `publicKey`
+  (hex) and `publicKeyFingerprint`. No private material is printed.
 - **`foreman doctor` before `init`.** The `fts5` row said `requests_fts ready`
   before any database existed. It now reports ``FTS5 available (no database
   yet — run `foreman init`)`` until `foreman.db` exists, and only says
