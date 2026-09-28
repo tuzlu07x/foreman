@@ -131,6 +131,8 @@ interface ServerState {
   source: ServerStatus["source"];
   /** Live definitions were compared against the pins this session. */
   verified: boolean;
+  /** A new session began (daemon): list again before the next use. */
+  stale: boolean;
   error: string | null;
   /** Secret values resolved into this server's launch config; scrubbed
    *  from upstream error text before it reaches an agent or the audit log. */
@@ -160,6 +162,7 @@ export class McpHub {
         tools: null,
         source: "unavailable",
         verified: false,
+        stale: false,
         error: null,
         secretValues: [],
         oauth: null,
@@ -385,6 +388,18 @@ export class McpHub {
     return state.tools;
   }
 
+  /** Start over as a new session would (the daemon, #616): re-read the
+   *  pins, list every server again (from the pins, or live) and re-verify
+   *  it against the live server before its next call. Running upstream
+   *  connections are kept. */
+  resetSession(): void {
+    this.opts.pins.reload();
+    for (const state of this.servers.values()) {
+      state.stale = true;
+      state.verified = false;
+    }
+  }
+
   async close(): Promise<void> {
     await Promise.all(
       [...this.servers.values()].map(async (s) => {
@@ -410,7 +425,8 @@ export class McpHub {
     state: ServerState,
     refresh: boolean,
   ): Promise<void> {
-    if (state.tools && !refresh) return;
+    if (state.tools && !refresh && !state.stale) return;
+    state.stale = false;
     const pinning = this.opts.config.security.pin_tool_definitions;
     const pinned = pinning
       ? this.opts.pins.get(state.name, state.fingerprint)

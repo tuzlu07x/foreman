@@ -143,6 +143,12 @@ import { generateSmartSummaryPayload } from "../core/notification/summary-genera
 import { launchEditor } from "../tui/launch-editor.js";
 import { getForemanPaths } from "../utils/config.js";
 import { runInit } from "./init.js";
+import {
+  DaemonUnavailableError,
+  startHubDaemon,
+  type HubDaemon,
+} from "./hub-daemon.js";
+import { daemonSupported } from "../core/daemon/protocol.js";
 import { bold, dim, green, orange, red } from "./colors.js";
 import { FOREMAN_VERSION } from "../version.js";
 
@@ -334,6 +340,42 @@ export function startForeman(
   for (const message of earlyPolicyErrors.splice(0)) reportPolicyError(message);
   inboxRecorder.start();
   warnAboutAgentTokens(registry, secretStore, inbox, withTui);
+
+  // The daemon (#616): agents' `foreman mcp-stdio` and the PreToolUse hook
+  // connect to it instead of each booting the mediation stack (and every
+  // MCP hub server) themselves. They fall back to doing that when it isn't
+  // there, with the same decisions.
+  let hubDaemon: HubDaemon | null = null;
+  let hubDaemonStopping = false;
+  const hubDaemonReady: Promise<void> = daemonSupported()
+    ? startHubDaemon({
+        paths,
+        log: (message) =>
+          inbox.add({
+            level: "warning",
+            kind: "system",
+            title: "Foreman daemon",
+            body: message,
+            dedupeKey: `daemon:${message}`,
+          }),
+      })
+        .then(async (daemon) => {
+          if (hubDaemonStopping) await daemon.close();
+          else hubDaemon = daemon;
+        })
+        .catch((err: unknown) => {
+          const reason = err instanceof Error ? err.message : String(err);
+          inbox.add({
+            level: err instanceof DaemonUnavailableError ? "info" : "warning",
+            kind: "system",
+            title: "Agents run without the Foreman daemon",
+            body:
+              `${reason}. Each agent's foreman mcp-stdio and every hook call start Foreman on their own: ` +
+              "the same decisions, only slower, and each agent runs its own copy of the MCP hub servers.",
+            dedupeKey: `daemon-unavailable:${reason}`,
+          });
+        })
+    : Promise.resolve();
 
   // Spend ledger (#629): agents report their token usage over
   // OpenTelemetry to a receiver on 127.0.0.1; spawned tasks get the
@@ -718,6 +760,14 @@ export function startForeman(
       exitResolve = null;
       r();
     }
+    // First, so new hook calls and agent sessions fall back to their own
+    // process while the rest shuts down; calls still waiting on the daemon
+    // are refused (fail closed), never left to be allowed later.
+    hubDaemonStopping = true;
+    await hubDaemonReady;
+    const daemon = hubDaemon as HubDaemon | null;
+    hubDaemon = null;
+    if (daemon) await daemon.close().catch(() => undefined);
     approvalBridge.stop();
     reviewWorker.stop();
     inboxRecorder.stop();

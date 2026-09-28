@@ -4,7 +4,11 @@ import { ulid } from "ulid";
 import { DbApprovalService, type ApprovalService } from "../core/approval.js";
 import { AuditLogger } from "../core/audit.js";
 import { ControlChannel } from "../core/control-channel.js";
-import { bus } from "../core/event-bus.js";
+import {
+  bus,
+  type EventBus,
+  type ForemanEventMap,
+} from "../core/event-bus.js";
 import {
   DELEGATION_TOOL,
   ForemanCommandRouter,
@@ -46,7 +50,7 @@ import type { RegistryService } from "../core/registry.js";
 import type { RiskScorer } from "../core/risk-scorer.js";
 import { SecretStore } from "../core/secret-store.js";
 import type { SessionManager } from "../core/session.js";
-import { closeDb, getDb } from "../db/client.js";
+import { closeDb, getDb, type ForemanDb } from "../db/client.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { redactSecretShapes } from "../core/risk-rules/secret-patterns.js";
 import { isHumanSource } from "../core/org/guard.js";
@@ -76,6 +80,7 @@ import { createDecoder, encodeMessage } from "../mcp/framing.js";
 import type { JSONRPCMessage } from "../mcp/types.js";
 import { getForemanPaths } from "../utils/config.js";
 import { red } from "./colors.js";
+import { relayThroughDaemon } from "./mcp-daemon-relay.js";
 import { FOREMAN_VERSION } from "../version.js";
 
 const PROTOCOL_VERSION = "2024-11-05";
@@ -108,56 +113,159 @@ export const mcpStdioCommand = new Command("mcp-stdio")
     // Human surfaces skip org delegation rules; an agent must not be able
     // to pass itself off as one.
     // The id lands in audit rows, the inbox and stderr: one plain charset.
-    if (options.source !== undefined && !isValidAgentId(options.source)) {
-      process.stderr.write(
-        red("error: ") +
-          `--source '${displayAgentId(options.source)}' is not a valid agent id (letters, digits, '.', '_', '-'; at most 64).\n`,
-      );
+    const sourceProblem = invalidSourceReason(options.source);
+    if (sourceProblem) {
+      process.stderr.write(red("error: ") + `${sourceProblem}\n`);
       process.exit(1);
     }
-    if (options.source !== undefined && isHumanSource(options.source)) {
-      process.stderr.write(
-        red("error: ") +
-          `'${options.source}' is reserved for you (the CLI, TUI and chat commands). Give the agent its own id with --source.\n`,
-      );
-      process.exit(1);
-    }
-    const services = bootServices();
-    // `--source QA-BOT` claims the registered `qa-bot` (#656): one spelling
-    // per agent, so its block, pause and deny rules can't be dodged by case.
-    const identity = resolveAgentIdentity({
-      claimed:
-        options.source === undefined
-          ? undefined
-          : services.registry.canonicalId(options.source),
+    const stdin = new StdinFeed();
+    // With `foreman start` running, the daemon (#616) serves this agent:
+    // one copy of every hub server for all agents, and no mediation stack
+    // to boot here. It proves the agent's identity from the same token.
+    const viaDaemon = await relayThroughDaemon({
+      source: options.source,
       token,
-      store: services.secretStore,
-      isRegistered: (id) => services.registry.get(id) !== null,
+      stateDir: paths.stateDir,
+      stdin,
+      approvalTimeoutMs: mcpApprovalTimeoutMs(),
+      onLost: (state) =>
+        serveInProcess(options.source, token, stdin, state),
     });
-    announceIdentity(services, identity);
-    // The hub follows mcp.yaml and org.yaml while the agent stays
-    // connected: a disabled integration or a narrowed access list takes
-    // effect on the agent's next listing or call, not its next session.
-    services.hubRuntime = new HubRuntime({
-      paths: {
-        mcpConfigPath: paths.mcpConfigPath,
-        mcpPinsPath: paths.mcpPinsPath,
-        orgConfigPath: paths.orgConfigPath,
-      },
-      secretStore: services.secretStore,
-      agentId: identity.source,
-      onError: warn,
-      onToolsChanged: () => {
-        if (services.clientInitialized)
-          writeFrame(encodeMessage(TOOLS_LIST_CHANGED));
-      },
-    });
-    syncHub(services);
-    // No connection creates a registry row (#656): agents are added with
-    // `foreman agent add`, and a removed agent stays removed when its
-    // client reconnects.
-    runMcpLoop(services, identity, token ?? "");
+    if (!viaDaemon) {
+      serveInProcess(options.source, token, stdin, {
+        initialized: false,
+        rest: "",
+      });
+    }
   });
+
+/** Why `--source` can't be used, or null. Shared with the daemon, which
+ *  checks the same for a client. */
+export function invalidSourceReason(source: string | undefined): string | null {
+  if (source === undefined) return null;
+  if (!isValidAgentId(source)) {
+    return `--source '${displayAgentId(source)}' is not a valid agent id (letters, digits, '.', '_', '-'; at most 64).`;
+  }
+  if (isHumanSource(source)) {
+    return `'${source}' is reserved for you (the CLI, TUI and chat commands). Give the agent its own id with --source.`;
+  }
+  return null;
+}
+
+/** Serve the agent from this process: boot the mediation stack and the
+ *  hub here (no daemon, or the daemon went away). `state` carries what a
+ *  relay already did: the client initialized, and a partial frame. */
+function serveInProcess(
+  source: string | undefined,
+  token: string | undefined,
+  stdin: StdinFeed,
+  state: { initialized: boolean; rest: string },
+): void {
+  const paths = getForemanPaths();
+  const services = bootServices();
+  services.clientInitialized = state.initialized;
+  // `--source QA-BOT` claims the registered `qa-bot` (#656): one spelling
+  // per agent, so its block, pause and deny rules can't be dodged by case.
+  const identity = resolveAgentIdentity({
+    claimed:
+      source === undefined ? undefined : services.registry.canonicalId(source),
+    token,
+    store: services.secretStore,
+    isRegistered: (id) => services.registry.get(id) !== null,
+  });
+  announceIdentity(services, identity);
+  // The hub follows mcp.yaml and org.yaml while the agent stays
+  // connected: a disabled integration or a narrowed access list takes
+  // effect on the agent's next listing or call, not its next session.
+  services.hubRuntime = new HubRuntime({
+    paths: {
+      mcpConfigPath: paths.mcpConfigPath,
+      mcpPinsPath: paths.mcpPinsPath,
+      orgConfigPath: paths.orgConfigPath,
+    },
+    secretStore: services.secretStore,
+    agentId: identity.source,
+    onError: warn,
+    onToolsChanged: () => {
+      if (services.clientInitialized)
+        writeFrame(encodeMessage(TOOLS_LIST_CHANGED));
+    },
+  });
+  syncHub(services);
+  // No connection creates a registry row (#656): agents are added with
+  // `foreman agent add`, and a removed agent stays removed when its
+  // client reconnects.
+  const session = new McpSession(services, identity, token ?? "", {
+    write: writeFrame,
+    warn,
+  });
+  // An idle agent learns about a newly enabled (or disabled) server
+  // without having to call anything first.
+  const hubWatch = setInterval(() => syncHub(services), HUB_WATCH_MS);
+  hubWatch.unref();
+  let shuttingDown = false;
+  const shutdown = (): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    clearInterval(hubWatch);
+    stdin.detach();
+    void session
+      .drain()
+      .finally(async () => {
+        await services.hubRuntime?.close().catch(() => undefined);
+        let code = 0;
+        try {
+          cleanup(services);
+        } catch (err) {
+          // The final audit write lost to a lock (#594): say so and exit 1,
+          // rather than an unhandled rejection that skips the exit.
+          code = 1;
+          warn(`closing the audit log failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        process.exit(code);
+      });
+  };
+  if (state.rest) session.feed(state.rest);
+  stdin.attach((chunk) => session.feed(chunk), shutdown);
+  // A client that closes its end first makes our next write fail (EPIPE);
+  // unhandled, that crashes the process before the audit queue flushes.
+  process.stdout.on("error", shutdown);
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+}
+
+/** stdin, handed from the daemon relay to the in-process session without
+ *  losing a chunk in between. */
+class StdinFeed {
+  private sink: ((chunk: string) => void) | null = null;
+  private onEnd: (() => void) | null = null;
+  private queued: string[] = [];
+  private ended = false;
+
+  constructor() {
+    process.stdin.setEncoding("utf-8");
+    process.stdin.on("data", (chunk: string) => {
+      if (this.sink) this.sink(chunk);
+      else this.queued.push(chunk);
+    });
+    process.stdin.on("end", () => {
+      this.ended = true;
+      this.onEnd?.();
+    });
+  }
+
+  attach(sink: (chunk: string) => void, onEnd: () => void): void {
+    this.sink = sink;
+    this.onEnd = onEnd;
+    for (const chunk of this.queued.splice(0)) sink(chunk);
+    if (this.ended) onEnd();
+  }
+
+  detach(): void {
+    this.sink = null;
+    this.onEnd = null;
+  }
+}
 
 interface Services {
   registry: RegistryService;
@@ -192,23 +300,55 @@ interface Services {
   comms?: OrgComms;
   /** Manager reviews of approvals (#623). */
   reviews?: ApprovalReviews;
+  /** The bus this session's services emit on: the process's own, or the
+   *  daemon's private one (#616). */
+  bus?: EventBus<ForemanEventMap>;
+  /** Diagnostics for the agent's stderr (the daemon forwards them). */
+  warn?: (message: string) => void;
 }
 
-function bootServices(): Services {
-  const db = getDb();
+/** What the daemon shares with every session it serves (#616); without
+ *  it, this process opens its own. */
+export interface ServiceBase {
+  db: ForemanDb;
+  bus: EventBus<ForemanEventMap>;
+  audit: AuditLogger;
+  masterKey: Buffer;
+  secretStore: SecretStore;
+}
+
+/** The approval window `foreman mcp-stdio` uses: FOREMAN_APPROVAL_TIMEOUT
+ *  (seconds) when set, else 60 s. The daemon is told the client's. */
+export function mcpApprovalTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.FOREMAN_APPROVAL_TIMEOUT;
+  if (raw === undefined) return 60_000;
+  const n = Number.parseInt(raw, 10);
+  // What DbApprovalService does with a value it can't use: its default.
+  return Number.isFinite(n) && n >= 0 ? n * 1000 : 600_000;
+}
+
+export function bootServices(
+  opts: {
+    base?: ServiceBase;
+    approvalTimeoutMs?: number;
+    warn?: (message: string) => void;
+  } = {},
+): Services {
+  const say = opts.warn ?? warn;
+  const db = opts.base?.db ?? getDb();
+  const eventBus = opts.base?.bus ?? bus;
   // A write that loses a lock to another process is kept and retried;
   // the agent's MCP connection stays up (#594).
-  const audit = new AuditLogger(db, bus, { onError: warn });
-  const masterKey = loadOrCreateSecretsMasterKey();
-  // FOREMAN_APPROVAL_TIMEOUT wins over the 60 s interactive default (the
-  // approval service reads it when no explicit timeout is passed).
+  const audit = opts.base?.audit ?? new AuditLogger(db, eventBus, { onError: say });
+  const masterKey = opts.base?.masterKey ?? loadOrCreateSecretsMasterKey();
   const paths = getForemanPaths();
   // Built below; the approval service needs it only when a relayed
   // `block_*` tap arrives, long after boot.
   let policyEngine: PolicyEngine | null = null;
   const approval = new DbApprovalService(db, {
-    bus,
-    ...(process.env.FOREMAN_APPROVAL_TIMEOUT ? {} : { timeoutMs: 60_000 }),
+    bus: eventBus,
+    // FOREMAN_APPROVAL_TIMEOUT wins over the 60 s interactive default.
+    timeoutMs: opts.approvalTimeoutMs ?? mcpApprovalTimeoutMs(),
     approvalKey: deriveApprovalKey(masterKey),
     injectPredicateRule: (input) => {
       if (!policyEngine) throw new Error("policy engine not ready");
@@ -218,14 +358,14 @@ function bootServices(): Services {
       });
     },
   });
-  const secretStore = new SecretStore(db, masterKey);
+  const secretStore = opts.base?.secretStore ?? new SecretStore(db, masterKey);
   const { registry, policy, risk, sessionManager, mediator } =
     createMediatorStack({
       db,
-      bus,
+      bus: eventBus,
       approval,
       policyPath: paths.policyPath,
-      onPolicyError: warn,
+      onPolicyError: say,
       secretStore,
       mcpConfigPath: paths.mcpConfigPath,
     });
@@ -242,13 +382,13 @@ function bootServices(): Services {
       config: llmConfig,
       secretStore,
       registry,
-      bus,
+      bus: eventBus,
     });
   } catch {
     orchestratorChat = null;
   }
-  const controlChannel = new ControlChannel(db, bus);
-  const pendingQuestions = new PendingQuestionsService(db, { bus });
+  const controlChannel = new ControlChannel(db, eventBus);
+  const pendingQuestions = new PendingQuestionsService(db, { bus: eventBus });
   const comms = new OrgComms(db, { orgConfigPath: paths.orgConfigPath });
   return {
     registry,
@@ -269,6 +409,8 @@ function bootServices(): Services {
     hub: null,
     comms,
     reviews: new ApprovalReviews(db, comms, { registry }),
+    bus: eventBus,
+    warn: say,
   };
 }
 
@@ -293,7 +435,7 @@ function warn(message: string): void {
 
 /** Record who connected; tell the user loudly when it isn't proven. The
  *  token itself never reaches stderr, the inbox or the audit log. */
-function announceIdentity(
+export function announceIdentity(
   services: Services,
   identity: ResolvedIdentity,
 ): void {
@@ -305,11 +447,11 @@ function announceIdentity(
   });
   if (identity.trusted) return;
   const message = describeUntrustedIdentity(identity);
-  warn(message);
+  (services.warn ?? warn)(message);
   try {
     // One item a day for all untrusted connections, so cycling claimed ids
     // can't flood the inbox; every connection is still audited above.
-    new InboxService(getDb(), bus).add({
+    new InboxService(getDb(), services.bus ?? bus).add({
       level: "warning",
       kind: "system",
       title: `${displayAgentId(identity.claimed)} is connected without a valid agent token`,
@@ -323,74 +465,105 @@ function announceIdentity(
 
 /** How long a closing client may keep in-flight calls alive before we
  *  cancel their pending approvals and exit. */
-const SHUTDOWN_GRACE_MS = 5_000;
+export const SHUTDOWN_GRACE_MS = 5_000;
 
-function runMcpLoop(
-  services: Services,
-  initial: ResolvedIdentity,
-  token: string,
-): void {
-  const paths = getForemanPaths();
-  let identity = initial;
-  // Re-checked before every message, so `foreman agent token rotate` (or
-  // removing the agent) takes a running session down to untrusted at once.
-  const currentSource = (): string => {
-    const next = recheckAgentIdentity(
-      identity,
-      token,
-      services.secretStore,
-      (id) => services.registry.get(id) !== null,
-    );
-    if (next !== identity) {
-      identity = next;
-      if (services.hubRuntime) {
-        services.hubRuntime.setAgent(identity.source);
-        syncHub(services);
-      } else {
-        services.hubScope = scopeForAgent(
-          paths.orgConfigPath,
-          identity.source,
-          warn,
-        );
-      }
-      announceIdentity(services, identity);
-    }
-    return identity.source;
-  };
-  const decoder = createDecoder();
-  const inFlight = new Set<Promise<void>>();
-  let shuttingDown = false;
-  process.stdin.setEncoding("utf-8");
-  process.stdin.on("data", (chunk) => {
-    const { messages, parseErrors } = decoder.push(chunk);
+export interface McpSessionIo {
+  /** One encoded JSON-RPC frame for the agent. */
+  write(frame: string): void;
+  warn(message: string): void;
+}
+
+/**
+ * One agent's MCP session: frames in, replies out. The same code serves an
+ * agent from its own `foreman mcp-stdio` and from the daemon (#616), so
+ * identity checks, mediation and the hub behave the same either way.
+ */
+export class McpSession {
+  private identity: ResolvedIdentity;
+  private readonly decoder = createDecoder();
+  private readonly inFlight = new Set<Promise<void>>();
+  private closed = false;
+
+  constructor(
+    readonly services: Services,
+    initial: ResolvedIdentity,
+    private readonly token: string,
+    private readonly io: McpSessionIo,
+  ) {
+    this.identity = initial;
+  }
+
+  get source(): string {
+    return this.identity.source;
+  }
+
+  /** Raw bytes from the agent. */
+  feed(chunk: string): void {
+    if (this.closed) return;
+    const { messages, parseErrors } = this.decoder.push(chunk);
     // Not JSON at all: JSON-RPC's parse error, id null, without echoing the
     // input (it may hold a secret). The connection stays up.
-    for (let i = 0; i < parseErrors; i++) writeFrame(PARSE_ERROR_FRAME);
+    for (let i = 0; i < parseErrors; i++) this.io.write(PARSE_ERROR_FRAME);
     // Each message is handled independently: a `tools/call` waiting on a
     // human approval must not hold up a `ping` or a second call behind it.
     for (const message of messages) {
-      const task = respond(services, currentSource(), message).finally(() => {
-        inFlight.delete(task);
+      const task = respond(
+        this.services,
+        this.currentSource(),
+        message,
+        this.io.write,
+      ).finally(() => {
+        this.inFlight.delete(task);
       });
-      inFlight.add(task);
+      this.inFlight.add(task);
     }
-  });
-  // An idle agent learns about a newly enabled (or disabled) server
-  // without having to call anything first.
-  const hubWatch = setInterval(() => syncHub(services), HUB_WATCH_MS);
-  hubWatch.unref();
-  const shutdown = (): void => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    clearInterval(hubWatch);
-    void drainAndExit(services, inFlight);
-  };
-  process.stdin.on("end", shutdown);
-  // A client that closes its end first makes our next write fail (EPIPE);
-  // unhandled, that crashes the process before the audit queue flushes.
-  process.stdout.on("error", shutdown);
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
+  }
+
+  /** The client went away. Calls still waiting on a human can never be
+   *  answered, so their approvals are cancelled (denied) — which lets the
+   *  mediator finish and write the audit row. */
+  async drain(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    const services = this.services;
+    // Calls still in policy / LLM evaluation would otherwise open fresh
+    // approvals for a requester that is already gone.
+    services.approval.close?.();
+    if (services.pendingRequestIds && services.pendingRequestIds.size > 0) {
+      services.approval.cancelPending?.([...services.pendingRequestIds]);
+    }
+    await Promise.race([
+      Promise.allSettled([...this.inFlight]),
+      new Promise((resolve) => setTimeout(resolve, SHUTDOWN_GRACE_MS).unref()),
+    ]);
+  }
+
+  // Re-checked before every message, so `foreman agent token rotate` (or
+  // removing the agent) takes a running session down to untrusted at once.
+  private currentSource(): string {
+    const services = this.services;
+    const next = recheckAgentIdentity(
+      this.identity,
+      this.token,
+      services.secretStore,
+      (id) => services.registry.get(id) !== null,
+    );
+    if (next !== this.identity) {
+      this.identity = next;
+      if (services.hubRuntime) {
+        services.hubRuntime.setAgent(next.source);
+        syncHub(services);
+      } else {
+        services.hubScope = scopeForAgent(
+          getForemanPaths().orgConfigPath,
+          next.source,
+          this.io.warn,
+        );
+      }
+      announceIdentity(services, next);
+    }
+    return this.identity.source;
+  }
 }
 
 /** Handle one message and write its reply. Never throws: any failure turns
@@ -400,6 +573,7 @@ async function respond(
   services: Services,
   sourceAgent: string,
   message: JSONRPCMessage,
+  write: (frame: string) => void,
 ): Promise<void> {
   let response: JSONRPCMessage | null;
   try {
@@ -413,20 +587,23 @@ async function respond(
     );
   }
   if (!response) return;
-  writeFrame(encodeMessage(response));
+  write(encodeMessage(response));
 }
 
-const TOOLS_LIST_CHANGED = {
+export const TOOLS_LIST_CHANGED = {
   jsonrpc: "2.0",
   method: "notifications/tools/list_changed",
 } as JSONRPCMessage;
 
 /** How often an idle session re-checks mcp.yaml / org.yaml. */
-const HUB_WATCH_MS = 2_000;
+export const HUB_WATCH_MS = 2_000;
 
 /** Pick up mcp.yaml / org.yaml changes (throttled; `force` right before a
  *  hub call runs). Without a runtime (tests), services.hub stays as set. */
-function syncHub(services: Services, opts: { force?: boolean } = {}): void {
+export function syncHub(
+  services: Services,
+  opts: { force?: boolean } = {},
+): void {
   const runtime = services.hubRuntime;
   if (!runtime) return;
   runtime.sync(opts);
@@ -434,47 +611,13 @@ function syncHub(services: Services, opts: { force?: boolean } = {}): void {
   services.hubScope = runtime.scope;
 }
 
-const PARSE_ERROR_FRAME = `${JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } })}\n`;
+export const PARSE_ERROR_FRAME = `${JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } })}\n`;
 
 function writeFrame(frame: string): void {
   try {
     process.stdout.write(frame);
   } catch {
     // The client is gone; the stdout "error" handler drives the shutdown.
-  }
-}
-
-/** The client went away. Calls still waiting on a human can never be
- *  answered, so their approvals are cancelled (denied) — which lets the
- *  mediator finish and write the audit row — before the process exits. */
-async function drainAndExit(
-  services: Services,
-  inFlight: Set<Promise<void>>,
-): Promise<void> {
-  try {
-    // Calls still in policy / LLM evaluation would otherwise open fresh
-    // approvals for a requester that is already gone.
-    services.approval.close?.();
-    if (services.pendingRequestIds && services.pendingRequestIds.size > 0) {
-      services.approval.cancelPending?.([...services.pendingRequestIds]);
-    }
-    await Promise.race([
-      Promise.allSettled([...inFlight]),
-      new Promise((resolve) => setTimeout(resolve, SHUTDOWN_GRACE_MS).unref()),
-    ]);
-  } finally {
-    await services.hub?.close().catch(() => undefined);
-    let code = 0;
-    try {
-      cleanup(services);
-    } catch (err) {
-      // Unhandled here, the rejection would skip the exit below.
-      code = 1;
-      warn(
-        `closing the audit log failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-    process.exit(code);
   }
 }
 
@@ -1667,7 +1810,7 @@ async function hubToolsFor(services: Services): Promise<AgentTool[]> {
       ? await services.hubRuntime.run((hub) => hub.listForAgent(scope))
       : await services.hub.listForAgent(scope);
   } catch (err) {
-    warn(
+    (services.warn ?? warn)(
       `MCP hub listing failed: ${err instanceof Error ? err.message : String(err)}`,
     );
     return [];

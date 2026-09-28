@@ -6,6 +6,7 @@ import { flowCommand } from "./flow-cli.js";
 import { createCompletionCommand } from "./completion.js";
 import { doctorCommand } from "./doctor.js";
 import { hookCommand } from "./hook-cli.js";
+import { daemonCommand } from "./hub-daemon.js";
 import { identityCommand } from "./identity-cli.js";
 import { initCommand } from "./init.js";
 import { logCommand } from "./log.js";
@@ -47,6 +48,7 @@ export function buildProgram(): Command {
   program.addCommand(initCommand);
   program.addCommand(setupCommand);
   program.addCommand(startCommand);
+  program.addCommand(daemonCommand);
   program.addCommand(mcpStdioCommand);
   program.addCommand(mcpCommand);
   program.addCommand(integrationsCommand);
