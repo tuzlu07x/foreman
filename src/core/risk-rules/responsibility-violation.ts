@@ -100,6 +100,34 @@ export const responsibilityViolationRule: RiskRule = {
         }
       }
 
+      // -- can_call_agents_with_responsibility (allowlist) ------------------
+      // Only when both notes are known: a hand-off to an agent whose role
+      // isn't on the list adds points (it never denies on its own). A
+      // cannot_call match above already covers an explicitly banned role.
+      if (
+        req.targetAgent &&
+        policy.can_call_agents_with_responsibility &&
+        ctx.getAgentResponsibility
+      ) {
+        const targetResp = ctx.getAgentResponsibility(req.targetAgent)
+        const banned = policy.cannot_call_agents_with_responsibility?.some(
+          (r) => targetResp && r.toLowerCase() === targetResp.toLowerCase(),
+        )
+        if (
+          targetResp &&
+          !banned &&
+          !policy.can_call_agents_with_responsibility.some((r) => r.toLowerCase() === targetResp.toLowerCase())
+        ) {
+          factors.push({
+            rule: 'responsibility_outside_delegation_list',
+            category: 'structural',
+            points: 40,
+            reason: `${req.sourceAgent}'s role ("${sourceResponsibility}") hands work to ${policy.can_call_agents_with_responsibility.join(', ')}; ${req.targetAgent} is "${targetResp}"`,
+            evidence: `${req.sourceAgent} → ${req.targetAgent}`,
+          })
+        }
+      }
+
       // -- can_use_services (allowlist) -------------------------------------
       if (req.targetAgent && policy.can_use_services) {
         const target = req.targetAgent.toLowerCase()

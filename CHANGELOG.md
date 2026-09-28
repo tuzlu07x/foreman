@@ -83,6 +83,11 @@ All notable changes to Foreman are documented here. The format follows
   preset. `/foreman model`'s tap-to-copy list follows the tiers and covers
   Gemini. The wizard's live model list now includes GPT-6 models and sorts
   newest first by version (Claude Fable no longer sank below Haiku).
+- **`can_call_agents_with_responsibility` is checked.** The starter
+  `policy.yaml` uses it, but it was accepted and ignored. A hand-off to an
+  agent whose responsibility note is known and isn't on the list now adds
+  40 risk points (like the other responsibility rules, it never denies on
+  its own; an agent without a note adds nothing).
 - **LLM budget pricing.** A model missing from Foreman's price table was
   billed at the provider's cheapest rate: Claude Opus 5 or Fable at Haiku
   prices, gpt-5.x at gpt-4o-mini, Gemini 2.5 and 3.x at 2.0 Flash, so the

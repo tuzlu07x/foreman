@@ -221,12 +221,12 @@ responsibility_policies:
   - responsibility: "code writing"
     cannot_access:                      # regexes; a matching path adds 60 points
       - "/\\.ssh/"
-    can_call_agents_with_responsibility: ["code review", "testing"]   # not checked yet
+    can_call_agents_with_responsibility: ["code review", "testing"]   # another known role adds 40
     cannot_call_agents_with_responsibility: ["payment processing"]   # adds 50
     can_use_services: [github]          # other known services add 40
 ```
 
-`cannot_call_agents_with_responsibility` is checked on [hand-offs](#hand-offs-between-agents), against the receiving agent's note. `can_call_agents_with_responsibility` is accepted but not checked yet. `can_use_services` only applies when the target is a service id (`telegram`, `github`, …), which no current call has.
+`cannot_call_agents_with_responsibility` is checked on [hand-offs](#hand-offs-between-agents), against the receiving agent's note. `can_call_agents_with_responsibility` is the allowlist form: a hand-off to an agent whose note is known and isn't on the list adds 40 (an agent without a note adds nothing). `can_use_services` only applies when the target is a service id (`telegram`, `github`, …), which no current call has.
 
 ## Session limits (`session_limits:`)
 
