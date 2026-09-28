@@ -109,7 +109,7 @@ describe('q and Ctrl-C', () => {
   it('the help says what the keys do', async () => {
     m = await mountApp()
     await m.press('?')
-    expect(m.frame()).toContain('quit (asks first)')
+    expect(m.frame()).toMatch(/q \/ Ctrl-C\s+quit\s/)
     expect(m.frame()).not.toContain('with confirm')
   })
 })

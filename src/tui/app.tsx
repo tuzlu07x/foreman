@@ -1103,7 +1103,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
         </Box>
       ) : null}
       {helpOpen ? (
-        <HelpOverlay />
+        <HelpOverlay width={terminal.cols} height={pageHeight + 1} />
       ) : commandOpen ? (
         <Box flexDirection="column">
           {pendingApproval ? (

@@ -1,7 +1,7 @@
 import React from 'react'
 import { render } from 'ink-testing-library'
 import { describe, expect, it } from 'vitest'
-import { HelpOverlay } from '../../src/tui/components/help-overlay.js'
+import { HelpOverlay, helpLines } from '../../src/tui/components/help-overlay.js'
 
 // =============================================================================
 // Help overlay 3-column grid (#234 UX-7)
@@ -52,7 +52,49 @@ describe('HelpOverlay — new 3-column grid layout', () => {
     expect(out).toContain('detail')
   })
 
+  it('says q / Ctrl-C ask first while an approval is open', () => {
+    expect(out).toContain('quit (asks first)')
+  })
+
   it('shows the close hint at the bottom', () => {
     expect(out).toContain('press h / ? / Esc to close')
+  })
+})
+
+// QA #657 L4 — at 80x24 the top half of the help was cut off and could
+// not scroll; at 200 columns labels wrapped in fixed 32-column cells.
+describe('HelpOverlay — fits the terminal', () => {
+  const text = (line: Array<{ text: string }>): string => line.map((s) => s.text).join('')
+
+  it('uses two columns at 80 and keeps every line inside the frame', () => {
+    const lines = helpLines(80).map(text)
+    for (const l of lines) expect(l.length).toBeLessThanOrEqual(74)
+    expect(lines.find((l) => l.includes('Everywhere'))).toContain('Pages')
+    expect(lines.find((l) => l.includes('Everywhere'))).not.toContain('Approval modal')
+  })
+
+  it('uses wide columns at 200, so labels stay on one line', () => {
+    const wide = helpLines(200).map(text)
+    expect(wide.find((l) => l.includes('Everywhere'))).toContain('Approval modal')
+    expect(wide.some((l) => /n\s+inbox \(notifications\)/.test(l))).toBe(true)
+    expect(wide.some((l) => /o\s+login \(OAuth \/ interactive\)/.test(l))).toBe(true)
+    expect(wide.length).toBeLessThan(helpLines(80).length)
+  })
+
+  it('scrolls when the terminal is too short', async () => {
+    const app = render(React.createElement(HelpOverlay, { width: 80, height: 18 }))
+    const first = stripAnsi(app.lastFrame() ?? '')
+    expect(first.split('\n').length).toBeLessThanOrEqual(18)
+    expect(first).toContain('Everywhere')
+    expect(first).toMatch(/scroll \(1–12 of \d+\)/)
+    expect(first).not.toContain('Secrets page')
+    for (let i = 0; i < 4; i++) {
+      app.stdin.write('\u001B[6~')
+      await new Promise((r) => setTimeout(r, 30))
+    }
+    const later = stripAnsi(app.lastFrame() ?? '')
+    expect(later).toContain('Secrets page')
+    expect(later).not.toContain('Everywhere')
+    app.unmount()
   })
 })
