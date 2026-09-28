@@ -103,7 +103,11 @@ export function planChannelEnable(input: ChannelEnableInput): ChannelEnablePlan 
       if (!toggle.smtp_host || !toggle.email_from || !toggle.email_to?.length) {
         missing.push("set smtp_host, email_from and email_to under channels.email in notify.yaml (docs/notifications.md)");
       }
-      if (toggle.password_ref) needSecret(toggle.password_ref, "SMTP password");
+      // Name the setting, not its value: the ref is only a secret's name,
+      // but nothing read from a password field is ever printed.
+      if (toggle.password_ref && !input.hasSecret(toggle.password_ref)) {
+        missing.push("store the SMTP password under the secret name in channels.email.password_ref: foreman secrets add <that name>");
+      }
       break;
     case "system":
       break;

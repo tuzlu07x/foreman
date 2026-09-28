@@ -66,4 +66,19 @@ describe('planChannelEnable', () => {
     expect(p.toggle).toMatchObject({ webhook_url_ref: 'webhook-url', signing_secret_ref: 'webhook-secret' })
     expect(p.missing).toEqual([])
   })
+
+  it('email: a missing SMTP password points at the setting, never prints its value', () => {
+    const existing = {
+      enabled: false,
+      smtp_host: 'smtp.example.com',
+      email_from: 'a@example.com',
+      email_to: ['b@example.com'],
+      password_ref: 'my-smtp-pass-name',
+    }
+    const p = plan('email', {}, { existing })
+    expect(p.missing).toHaveLength(1)
+    expect(p.missing[0]).toContain('channels.email.password_ref')
+    expect(p.missing.join('\n')).not.toContain('my-smtp-pass-name')
+    expect(plan('email', { 'my-smtp-pass-name': 'x' }, { existing }).missing).toEqual([])
+  })
 })
