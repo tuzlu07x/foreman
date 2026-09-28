@@ -6,6 +6,15 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- **The Gemini API key no longer appears in the setup wizard's error
+  text.** Listing Gemini models sent the key as a `?key=` URL parameter,
+  and a failed request's message quoted that URL, so an unexpected HTTP
+  status (e.g. 400) could show the key on screen. The key now goes in the
+  `x-goog-api-key` header, as the Gemini client already did, and model
+  discovery errors never include a URL's query string.
+
 ### Added
 
 - **Foreman's brain can run on Ollama or any OpenAI-compatible

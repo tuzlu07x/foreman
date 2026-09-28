@@ -186,15 +186,16 @@ export async function listAnthropicModels(
 export async function listGeminiModels(
   options: DiscoverOptions,
 ): Promise<DiscoveredModel[]> {
+  // The key goes in a header, like the Gemini client: never in the URL,
+  // where it would land in logs and in this module's error messages.
   const url = new URL('https://generativelanguage.googleapis.com/v1beta/models')
-  url.searchParams.set('key', options.apiKey)
   const body = await getJson<{
     models?: {
       name?: string
       displayName?: string
       supportedGenerationMethods?: string[]
     }[]
-  }>(url.toString(), {}, options)
+  }>(url.toString(), { headers: { 'x-goog-api-key': options.apiKey } }, options)
   const entries = (body.models ?? []).filter((m) =>
     (m.supportedGenerationMethods ?? []).includes('generateContent'),
   )
@@ -304,7 +305,7 @@ async function getJson<T>(
     if (!res.ok) {
       const body = await res.text().catch(() => '')
       throw new ModelDiscoveryError(
-        `HTTP ${res.status} from ${url}${body ? `: ${body.slice(0, 200)}` : ''}`,
+        `HTTP ${res.status} from ${withoutQuery(url)}${body ? `: ${body.slice(0, 200)}` : ''}`,
       )
     }
     try {
@@ -317,6 +318,17 @@ async function getJson<T>(
     }
   } finally {
     clearTimeout(timeout)
+  }
+}
+
+/** The URL without its query string or fragment, for messages the user
+ *  sees: a credential in a query parameter must never be shown. */
+function withoutQuery(url: string): string {
+  try {
+    const u = new URL(url)
+    return `${u.origin}${u.pathname}`
+  } catch {
+    return url.split(/[?#]/)[0] ?? ''
   }
 }
 
