@@ -1056,6 +1056,10 @@ function writeDotPath(
   value: unknown,
 ): void {
   const segs = dotPath.split(".");
+  // Registry paths only ever name plain keys; never walk into a prototype.
+  if (segs.some((s) => s === "__proto__" || s === "constructor" || s === "prototype")) {
+    throw new Error(`refusing to write config path '${dotPath}'`);
+  }
   let cur: Record<string, unknown> = root;
   for (let i = 0; i < segs.length - 1; i++) {
     const seg = segs[i]!;
