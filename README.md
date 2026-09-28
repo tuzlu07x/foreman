@@ -83,7 +83,7 @@ npm install -g foreman-agent                              # Node >= 22.12
 
 | Variable / flag          | Effect                                                     |
 | ------------------------ | ---------------------------------------------------------- |
-| `FOREMAN_VERSION=2.1.1`  | Pin a specific release                                     |
+| `FOREMAN_VERSION=2.2.0`  | Pin a specific release                                     |
 | `FOREMAN_INSTALL_PREFIX` | Use a non-default npm prefix                               |
 | `FOREMAN_SKIP_NVM=1`     | Refuse the nvm bootstrap path                              |
 | `--uninstall`            | Remove the global package (Foreman's data is left in place) |
@@ -251,10 +251,9 @@ effects afterwards. See [`docs/architecture.md`](docs/architecture.md).
   identity tokens · Foreman Org with department channels, cost reports, budgets and approval
   escalation along the org chart · TUI control surface (approval queue, command console,
   inbox, model picker) · approvals and `/foreman` from Telegram, Slack and Discord · email /
-  ntfy alerts · lazy tool discovery.
-- 🔜 **Next:** the daemon as a login service (`foreman service`) · Ollama and
-  OpenAI-compatible endpoints as Foreman's own model · the setup wizard adding Claude Code's
-  PreToolUse hook by default.
+  ntfy alerts · lazy tool discovery · the daemon as a login service (`foreman service`) ·
+  Ollama and OpenAI-compatible endpoints as Foreman's own model · Claude Code's PreToolUse
+  hook added by the setup wizard.
 - 🧭 **Later:** a desktop / menu-bar app · cross-machine mesh · a local classifier model
   (Prompt Guard) for borderline calls.
 
