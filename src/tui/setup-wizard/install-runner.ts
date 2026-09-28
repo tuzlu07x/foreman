@@ -41,6 +41,8 @@ import {
 import { applyForemanSoul } from "../../core/foreman-soul.js";
 import { getForemanPaths } from "../../utils/config.js";
 import { wireAgentConfig } from "./install-config.js";
+import { defaultHookCommand, installPreToolUseHook, supportsPreToolUseHook } from "../../core/agent-hook.js";
+import { resolveAgentSettingsPath } from "../../core/agent-permissions.js";
 import { safeFind } from "./shared.js";
 import type {
   AgentConfigsMap,
@@ -259,6 +261,27 @@ export async function runInstallStep(
     // The agent's config file: seed it from the bundled template when
     // missing, then write Foreman's MCP entry (install-config.ts).
     const configRefused = wireAgentConfig(id, entry, services.secretStore, log);
+
+    // Claude Code's own tools (Bash, Edit, Read…) go through Foreman too,
+    // unless the user said no in the agents step. Best effort: a settings
+    // file we can't write is a note, not an install failure.
+    if (supportsPreToolUseHook(id) && agentConfigs[id]?.preToolUseHook !== false) {
+      try {
+        const hook = installPreToolUseHook({
+          settingsPath: resolveAgentSettingsPath(entry.config_paths ?? []),
+          hookCommand: defaultHookCommand(id),
+        });
+        log(
+          hook.alreadyInstalled
+            ? `  ✓ ${id}: Foreman's PreToolUse hook already in ${hook.settingsPath}`
+            : `  ✓ ${id}: PreToolUse hook added to ${hook.settingsPath} — its own tools are checked too`,
+        );
+      } catch (err) {
+        log(
+          `  ⚠ ${id}: couldn't add the PreToolUse hook (${err instanceof Error ? err.message : String(err)}) — run \`foreman agent hook install ${id}\``,
+        );
+      }
+    }
 
     // Secret projection (#222 / #223) — write Foreman-stored keys to the
     // agent's own env/config files so it launches without a separate setup

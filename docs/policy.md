@@ -39,7 +39,7 @@ For every tool call an agent makes, and every hand-off from one agent to another
 2. **Rate limits** (`agents.<id>.rate_limits`): denied when the agent is over its calls per minute or tokens per hour.
 3. **Policy rules**: the matching rules pick `allow`, `ask` or `deny` (see [Which rule wins](#which-rule-wins)). `deny` refuses the call here (`policy:<rule id>`).
 4. **Risk engine**: scores the call and puts it in a bucket: low (0–29), medium (30–59), high (60–84) or critical (85–100). By default low is allowed and the rest ask; [`buckets:`](#risk-buckets-buckets) can change that. A bucket set to `deny` refuses the call (`risk:<bucket>`), even when a rule allows it.
-5. **Your approval**: if the policy said `ask` *or* the risk engine did, the call waits for you (`user:tui`, `user:telegram`, …, or `approval-timeout` when nobody answered). See [How approvals work](tui.md#how-approvals-work).
+5. **Your approval**: if the policy said `ask` *or* the risk engine did, the call waits for you (`user:tui`, `user:telegram`, `user:slack:<member id>`, …, or `approval-timeout` when nobody answered). See [How approvals work](tui.md#how-approvals-work).
 6. Otherwise the call is allowed. The label names the rule that allowed it (`policy:<rule id>`), or the fallback when no rule matched (`policy:hook:risk-based`, `policy:mcp.yaml:<server>`, `policy:org.yaml` for a hand-off).
 
 So:

@@ -1,3 +1,4 @@
+import { chatDeciderId } from '../approval.js'
 import { bus as defaultBus, type EventBus, type ForemanEventMap } from '../event-bus.js'
 import { CountdownTicker } from './countdown-ticker.js'
 import { NotificationService } from './notification-service.js'
@@ -447,14 +448,18 @@ export class NotificationBridge {
         : d.decision === 'deny_always'
           ? 'deny'
           : undefined
+    // #302 — tag the channel so the mediator's decidedBy carries
+    // "user:telegram" instead of bare "user"; on Slack / Discord, where
+    // several allowed people can decide, also who it was.
+    const via = channelToVia(row?.channel ?? d.channel ?? '')
+    const userId = chatDeciderId(via, d.userId)
     this.bus.emit('approval:resolved', {
       requestId,
       decision,
       remember,
       resolvedBy: 'user',
-      // #302 — tag the channel so the mediator's decidedBy carries
-      // "user:telegram" instead of bare "user".
-      via: channelToVia(row?.channel ?? d.channel ?? ''),
+      via,
+      ...(userId ? { userId } : {}),
     })
   }
 }

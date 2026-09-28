@@ -89,6 +89,10 @@ import {
   approvalSigner,
 } from "../core/approval-token.js";
 import { buildEnabledChannels } from "../core/notification/channel-factory.js";
+import {
+  RefusalAuditLimiter,
+  type InteractionRefusalSink,
+} from "../core/notification/interaction-refusals.js";
 import { isHumanSource, orgBudgetBlock } from "../core/org/guard.js";
 import {
   CommsMirrorWorker,
@@ -514,12 +518,21 @@ export function startForeman(
     return result.text;
   };
 
+  // Slack / Discord taps and commands from people who are not allowed:
+  // audited, at most once per user per minute (interaction-refusals.ts).
+  const refusals = new RefusalAuditLimiter(
+    (event) => audit.logEvent("notify:interaction-refused", event),
+    { isKnownCommand: (verb) => commandRouter.has(verb) },
+  );
   const notificationSetup = setupNotificationBridge({
     db,
     secretStore,
     onChatCommand: runChatCommand,
     onChannelDecision: (info) =>
       audit.logEvent("approval:channel-decision", info),
+    onInteractionRefused: (refusal) => {
+      refusals.record(refusal);
+    },
     notifyConfigPath: paths.notifyConfigPath,
     notifyStatePath: paths.notifyStatePath,
     llmConfigPath: paths.llmConfigPath,
@@ -1434,6 +1447,7 @@ function setupNotificationBridge(args: {
     userId: string,
   ) => Promise<string>;
   onChannelDecision?: NotificationBridgeOptions["onChannelDecision"];
+  onInteractionRefused?: InteractionRefusalSink;
 }): {
   bridge: NotificationBridge;
   scheduler: DailyScheduler | null;
@@ -1460,6 +1474,9 @@ function setupNotificationBridge(args: {
       ? { onChannelWarning: args.onChannelWarning }
       : {}),
     ...(args.onChatCommand ? { onChatCommand: args.onChatCommand } : {}),
+    ...(args.onInteractionRefused
+      ? { onInteractionRefused: args.onInteractionRefused }
+      : {}),
   });
 
   if (channels.size === 0) return null;

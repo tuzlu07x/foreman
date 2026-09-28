@@ -47,9 +47,14 @@ describe('two-way Slack and Discord setup (#615)', () => {
     const doctor = run('doctor', '--json')
     expect(doctor.stdout).toContain('two-way: slack (2 user(s))')
 
+    // An owner narrowed by hand must not outlive two-way mode.
+    writeFileSync(join(home, 'notify.yaml'), notifyYaml().replace('allowed_user_ids:', 'owner_user_ids: [U0OWNER1]\n    allowed_user_ids:'))
+    expect(notifyYaml()).toContain('owner_user_ids')
     expect(run('notify', 'slack-interactive', '--off').status).toBe(0)
     expect(notifyYaml()).not.toContain('app_token_ref')
     expect(notifyYaml()).not.toContain('allowed_user_ids')
+    expect(notifyYaml()).not.toContain('owner_user_ids')
+    expect(notifyYaml()).toContain('bot_token_ref: slack-bot-token')
   }, 30_000)
 
   it('discord-interactive needs a bot, not a webhook', () => {
@@ -64,11 +69,16 @@ describe('two-way Slack and Discord setup (#615)', () => {
       join(home, 'notify.yaml'),
       'channels:\n  discord:\n    enabled: true\n    bot_token_ref: discord-bot-token\n    channel: "777777777777777777"\n',
     )
-    const on = run('notify', 'discord-interactive', '--user', '111111111111111111', '--no-verify')
+    const on = run('notify', 'discord-interactive', '--user', '111111111111111111,222222222222222222', '--no-verify')
     expect(on.status).toBe(0)
     expect(notifyYaml()).toContain('interactive: true')
+    writeFileSync(join(home, 'notify.yaml'), notifyYaml().replace('allowed_user_ids:', 'owner_user_ids: ["111111111111111111"]\n    allowed_user_ids:'))
+    expect(notifyYaml()).toContain('owner_user_ids')
     expect(run('notify', 'discord-interactive', '--off').status).toBe(0)
     expect(notifyYaml()).not.toContain('interactive: true')
+    expect(notifyYaml()).not.toContain('allowed_user_ids')
+    expect(notifyYaml()).not.toContain('owner_user_ids')
+    expect(notifyYaml()).toContain('bot_token_ref: discord-bot-token')
   })
 
   it('an agent cannot claim a human source id', () => {

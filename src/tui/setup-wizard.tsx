@@ -27,6 +27,7 @@ import {
 import {
   handleAgentLlmChoiceInput,
   handleAgentModelPickInput,
+  handleAgentHookChoiceInput,
   handleAgentVariantPickInput,
 } from "./setup-wizard/agent-config-input.js";
 import {
@@ -257,6 +258,7 @@ export function SetupWizard({
     if (handleForemanLlmInput(ctx, input, key)) return;
     if (handleAgentVariantPickInput(ctx, input, key)) return;
     if (handleAgentModelPickInput(ctx, input, key)) return;
+    if (handleAgentHookChoiceInput(ctx, input, key)) return;
     if (handleAgentLlmChoiceInput(ctx, input, key)) return;
     if (handleRequiredSetupInput(ctx, input, key)) return;
     if (handleChatPrimaryInput(ctx, input, key)) return;

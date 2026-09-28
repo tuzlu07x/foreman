@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ApprovalBridge,
   DbApprovalService,
+  userDecidedBy,
   type ApprovalRequest,
 } from "../../src/core/approval.js";
 import {
@@ -89,6 +90,43 @@ describe("DbApprovalService", () => {
       await new Promise((r) => setTimeout(r, 60));
       bus.emit("approval:resolved", { requestId: "via-slack", decision: "allowed", resolvedBy: "user", via: "slack" });
       expect(await slack).toMatchObject({ decision: "allowed", via: "slack" });
+    } finally {
+      bridge.stop();
+    }
+  });
+
+  it("tells the requester which Slack / Discord user decided, across processes", async () => {
+    const requesterBus = new EventBus<ForemanEventMap>();
+    const service = new DbApprovalService(db, { bus: requesterBus, timeoutMs: 5000, pollIntervalMs: 20 });
+    const bridge = new ApprovalBridge(db, { bus, pollIntervalMs: 20 });
+    bridge.start();
+    try {
+      const slack = service.request(req({ requestId: "by-boss" }));
+      await new Promise((r) => setTimeout(r, 60));
+      bus.emit("approval:resolved", { requestId: "by-boss", decision: "allowed", resolvedBy: "user", via: "slack", userId: "U0BOSS" });
+      const decision = await slack;
+      expect(decision).toMatchObject({ decision: "allowed", via: "slack", userId: "U0BOSS" });
+      expect(userDecidedBy(decision)).toBe("user:slack:U0BOSS");
+      const row = db.select().from(pendingApprovals).where(eq(pendingApprovals.requestId, "by-boss")).get();
+      expect(row?.resolvedUser).toBe("U0BOSS");
+
+      // Single-decider surfaces never carry a person, and an id that is not
+      // a plain platform id is dropped rather than written.
+      const tui = service.request(req({ requestId: "tui-user" }));
+      await new Promise((r) => setTimeout(r, 60));
+      bus.emit("approval:resolved", { requestId: "tui-user", decision: "denied", resolvedBy: "user", via: "tui", userId: "U0BOSS" });
+      const tuiDecision = await tui;
+      expect(tuiDecision.userId).toBeUndefined();
+      expect(userDecidedBy(tuiDecision)).toBe("user:tui");
+
+      const odd = service.request(req({ requestId: "odd-id" }));
+      await new Promise((r) => setTimeout(r, 60));
+      bus.emit("approval:resolved", { requestId: "odd-id", decision: "denied", resolvedBy: "user", via: "discord", userId: "1:x\u001b[31m" });
+      const oddDecision = await odd;
+      expect(oddDecision.userId).toBeUndefined();
+      expect(userDecidedBy(oddDecision)).toBe("user:discord");
+      const oddRow = db.select().from(pendingApprovals).where(eq(pendingApprovals.requestId, "odd-id")).get();
+      expect(oddRow?.resolvedUser).toBeNull();
     } finally {
       bridge.stop();
     }

@@ -61,6 +61,7 @@ export function decisionFromButton(
     decidedBy: `${who.channel}:${who.userId}`,
     decidedAt: Date.now(),
     channel: who.channel,
+    userId: who.userId,
   };
 }
 
