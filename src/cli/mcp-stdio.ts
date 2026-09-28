@@ -110,16 +110,19 @@ export const mcpStdioCommand = new Command("mcp-stdio")
       process.exit(1);
     }
     const services = bootServices();
+    // `--source QA-BOT` claims the registered `qa-bot` (#656): one spelling
+    // per agent, so its block, pause and deny rules can't be dodged by case.
     const identity = resolveAgentIdentity({
-      claimed: options.source,
+      claimed: options.source === undefined ? undefined : services.registry.canonicalId(options.source),
       token,
       store: services.secretStore,
+      isRegistered: (id) => services.registry.get(id) !== null,
     });
     announceIdentity(services, identity);
     services.hubScope = scopeForAgent(paths.orgConfigPath, identity.source, warn);
-    // Only a verified agent gets a registry row; an unverified connection
-    // must not be able to create identities.
-    if (identity.trusted) autoRegisterSource(services.registry, identity.source);
+    // No connection creates a registry row (#656): agents are added with
+    // `foreman agent add`, and a removed agent stays removed when its
+    // client reconnects.
     runMcpLoop(services, identity, token ?? "");
   });
 
@@ -254,18 +257,6 @@ function announceIdentity(services: Services, identity: ResolvedIdentity): void 
   }
 }
 
-function autoRegisterSource(
-  registry: RegistryService,
-  sourceAgent: string,
-): void {
-  if (registry.get(sourceAgent)) return;
-  registry.register({
-    id: sourceAgent,
-    displayName: sourceAgent,
-    transport: "stdio",
-  });
-}
-
 /** How long a closing client may keep in-flight calls alive before we
  *  cancel their pending approvals and exit. */
 const SHUTDOWN_GRACE_MS = 5_000;
@@ -276,7 +267,7 @@ function runMcpLoop(services: Services, initial: ResolvedIdentity, token: string
   // Re-checked before every message, so `foreman agent token rotate` (or
   // removing the agent) takes a running session down to untrusted at once.
   const currentSource = (): string => {
-    const next = recheckAgentIdentity(identity, token, services.secretStore);
+    const next = recheckAgentIdentity(identity, token, services.secretStore, (id) => services.registry.get(id) !== null);
     if (next !== identity) {
       identity = next;
       services.hubScope = scopeForAgent(paths.orgConfigPath, identity.source, warn);

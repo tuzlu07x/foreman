@@ -1,4 +1,4 @@
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import type { ForemanDb } from "../db/client.js";
 import { agents } from "../db/schema.js";
 import { generateKeypair } from "../identity/keypair.js";
@@ -207,6 +207,30 @@ export class RegistryService {
       .where(eq(agents.id, agentId))
       .get();
     return row ? toRegisteredAgent(row) : null;
+  }
+
+  /** Every registered agent whose id matches `agentId` ignoring case and
+   *  surrounding space (#656). Checks that must not be dodged by spelling
+   *  an id differently (block, pause, "is this agent registered?") use
+   *  this; ordinary lookups stay exact. */
+  findByIdLoose(agentId: string): RegisteredAgent[] {
+    const needle = agentId.trim().toLowerCase();
+    if (needle.length === 0) return [];
+    const rows = this.db
+      .select()
+      .from(agents)
+      .where(sql`lower(trim(${agents.id})) = ${needle}`)
+      .all();
+    return rows.map(toRegisteredAgent);
+  }
+
+  /** The registered id `claimed` names: the exact match, else the only
+   *  case-insensitive one, else `claimed` itself (trimmed). */
+  canonicalId(claimed: string): string {
+    const id = claimed.trim();
+    const matches = this.findByIdLoose(id);
+    if (matches.some((a) => a.id === id)) return id;
+    return matches.length === 1 ? matches[0]!.id : id;
   }
 
   heartbeat(agentId: string): void {

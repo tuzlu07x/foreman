@@ -170,6 +170,30 @@ describe('agent tokens', () => {
       revokeAgentToken(store, 'codex')
       expect(recheckAgentIdentity(identity, codex, store).trusted).toBe(false)
     })
+
+    it('a token left behind by a removed agent proves nothing (#656)', () => {
+      const registered = new Set(['claude-code'])
+      const isRegistered = (id: string): boolean => registered.has(id)
+      expect(resolveAgentIdentity({ claimed: 'codex', token: codex, store, isRegistered })).toEqual({
+        source: 'untrusted:codex',
+        claimed: 'codex',
+        trusted: false,
+        reason: 'unregistered',
+      })
+      // A registry that fails is untrusted, never trusted.
+      const broken = (): boolean => {
+        throw new Error('database is locked')
+      }
+      expect(resolveAgentIdentity({ claimed: 'codex', token: codex, store, isRegistered: broken }).trusted).toBe(false)
+      // Removed while connected: the next message runs untrusted.
+      const live = resolveAgentIdentity({ token: claude, store, isRegistered })
+      expect(live.trusted).toBe(true)
+      registered.delete('claude-code')
+      expect(recheckAgentIdentity(live, claude, store, isRegistered)).toMatchObject({
+        source: 'untrusted:claude-code',
+        reason: 'unregistered',
+      })
+    })
   })
 
   it('a leaked token is flagged in call args and redacted from text', () => {

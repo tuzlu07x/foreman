@@ -85,6 +85,42 @@ describe('MediatorService — unit', () => {
     expect(approval.request).not.toHaveBeenCalled()
   })
 
+  it.each([['QA-BOT'], ['Qa-Bot'], ['untrusted:QA-BOT'], ['untrusted:qa-bot']])(
+    'a block on qa-bot holds for %s: ids are compared ignoring case (#656)',
+    async (sourceAgent) => {
+      registry.register({ id: 'qa-bot', displayName: 'Q', transport: 'stdio' })
+      registry.block('qa-bot')
+      const mediator = new MediatorService({ registry, policy, risk, approval, bus })
+      const result = await mediator.handleRequest({
+        sourceAgent,
+        targetTool: 'list_files',
+        message: callMessage(1, 'list_files', { path: '.' }),
+      })
+      expect(result.decidedBy).toBe('agent:blocked')
+      expect(approval.request).not.toHaveBeenCalled()
+    },
+  )
+
+  it('a pause holds whatever the case, and a block on any spelling wins (#656)', async () => {
+    registry.register({ id: 'Codex', displayName: 'C', transport: 'stdio' })
+    registry.disable('Codex')
+    const mediator = new MediatorService({ registry, policy, risk, approval, bus })
+    const paused = await mediator.handleRequest({
+      sourceAgent: 'codex',
+      targetTool: 'list_files',
+      message: callMessage(1, 'list_files', { path: '.' }),
+    })
+    expect(paused.decidedBy).toBe('agent:disabled')
+    registry.register({ id: 'CODEX', displayName: 'C2', transport: 'stdio' })
+    registry.block('CODEX')
+    const blocked = await mediator.handleRequest({
+      sourceAgent: 'codex',
+      targetTool: 'list_files',
+      message: callMessage(2, 'list_files', { path: '.' }),
+    })
+    expect(blocked.decidedBy).toBe('agent:blocked')
+  })
+
   it('denies calls from a paused (disabled) agent', async () => {
     registry.register({ id: 'codex', displayName: 'C', transport: 'stdio' })
     registry.disable('codex')

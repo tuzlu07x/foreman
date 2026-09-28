@@ -27,6 +27,25 @@ describe('RegistryService', () => {
     sqlite.close()
   })
 
+  describe('loose id lookup (#656)', () => {
+    it('finds every spelling of an id, ignoring case and surrounding space', () => {
+      registry.register({ id: 'qa-bot', displayName: 'Q', transport: 'stdio' })
+      expect(registry.findByIdLoose('QA-BOT').map((a) => a.id)).toEqual(['qa-bot'])
+      expect(registry.findByIdLoose(' Qa-Bot ').map((a) => a.id)).toEqual(['qa-bot'])
+      expect(registry.findByIdLoose('qa-bo')).toEqual([])
+      expect(registry.findByIdLoose('   ')).toEqual([])
+    })
+
+    it('canonicalId prefers the exact id, then the only loose match, else the claim', () => {
+      registry.register({ id: 'qa-bot', displayName: 'Q', transport: 'stdio' })
+      expect(registry.canonicalId('QA-BOT')).toBe('qa-bot')
+      expect(registry.canonicalId('nobody')).toBe('nobody')
+      registry.register({ id: 'QA-BOT', displayName: 'Q2', transport: 'stdio' })
+      expect(registry.canonicalId('QA-BOT')).toBe('QA-BOT')
+      expect(registry.canonicalId('Qa-Bot')).toBe('Qa-Bot')
+    })
+  })
+
   describe('register', () => {
     it('generates a keypair when none is provided and emits agent:registered', () => {
       const handler = vi.fn()

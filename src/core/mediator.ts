@@ -466,12 +466,18 @@ export class MediatorService {
     });
   }
 
+  /** Ids are compared ignoring case and surrounding space (#656), so
+   *  `--source QA-BOT` can't dodge a block on `qa-bot`. Blocked wins over
+   *  disabled when several spellings are registered. */
   private quarantineStatus(sourceAgent: string): "blocked" | "disabled" | null {
+    let found: "blocked" | "disabled" | null = null;
     for (const id of new Set([sourceAgent, claimedAgentOf(sourceAgent)])) {
-      const status = this.deps.registry.get(id)?.status;
-      if (status === "blocked" || status === "disabled") return status;
+      for (const agent of this.deps.registry.findByIdLoose(id)) {
+        if (agent.status === "blocked") return "blocked";
+        if (agent.status === "disabled") found = "disabled";
+      }
     }
-    return null;
+    return found;
   }
 
   private authenticate(input: MediatorInput): boolean {
