@@ -244,7 +244,10 @@ presses.
 
 `foreman doctor` lists two-way channels (`two-way: slack (1 user(s))`). If a
 token is rejected or the connection keeps failing, a warning lands in the TUI
-inbox. Undo with `--off`.
+inbox. Undo with `--off`: it removes the token reference (Slack),
+`allowed_user_ids` and `owner_user_ids`, so nobody keeps any power over the
+channel. Turning it back on starts from the `--user` list you give; set
+`owner_user_ids` again if you narrowed it.
 
 ---
 

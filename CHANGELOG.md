@@ -18,6 +18,11 @@ All notable changes to Foreman are documented here. The format follows
   (`user:tui`, `user:telegram`); readers that match the `user` prefix
   (log filters, the previously-denied risk rule, the inbox) need no change
   ([docs/notifications.md](docs/notifications.md#3a-two-way-slack-and-discord)).
+- **`foreman notify slack-interactive --off` and `discord-interactive
+  --off` also remove `owner_user_ids`.** They removed the token reference
+  and `allowed_user_ids` but left the owners behind, so turning two-way
+  mode back on later quietly brought back an old owner list and, with it,
+  who may change integrations from chat.
 
 ### Security
 
