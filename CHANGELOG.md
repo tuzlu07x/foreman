@@ -6,6 +6,11 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-09-28
+
+A security fix for the shell risk rules. Upgrade if you run 2.1.0: some
+reworded destructive commands ran without asking.
+
 ### Security
 
 - **Reworded destructive shell commands no longer slip past the risk
