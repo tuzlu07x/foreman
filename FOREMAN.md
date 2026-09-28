@@ -187,7 +187,8 @@ multi-device için kullanılacak).
 geçeriz. YAML'dan Cedar'a migrate kolay.
 
 ```yaml
-# ~/.foreman/policy.yaml
+# policy.yaml — Linux: ~/.config/foreman/, macOS: ~/Library/Application Support/foreman/,
+# FOREMAN_HOME ayarlıysa: $FOREMAN_HOME/ (bkz. docs/policy.md)
 agents:
   hermes:
     can_call:
@@ -564,10 +565,13 @@ Loop ve budget guard.
 ```bash
 npm install -g foreman-agent
 foreman init
-# ~/.foreman/ klasörü oluşur
-# - identity.key (Ed25519 master keypair)
-# - policy.yaml (boş template)
-# - foreman.db (SQLite, schema migrate)
+# Foreman'ın dizinleri oluşur (bkz. docs/install.md):
+#   Linux (XDG): config ~/.config/foreman/, state ~/.local/state/foreman/
+#   macOS:       config + state ~/Library/Application Support/foreman/
+#   FOREMAN_HOME ayarlıysa config, state ve cache o tek dizinde toplanır
+# - identity.key (Ed25519 master keypair)   → config
+# - policy.yaml (boş template)              → config
+# - foreman.db (SQLite, schema migrate)     → state
 foreman start
 ```
 
@@ -773,7 +777,7 @@ foreman/
 │   │   └── signing.ts
 │   │
 │   └── utils/
-│       ├── config.ts          # ~/.foreman/ paths
+│       ├── config.ts          # config / state / cache dizinleri (XDG, macOS, FOREMAN_HOME)
 │       └── logger.ts          # internal debug logger
 │
 ├── tests/
@@ -848,7 +852,7 @@ npm install
 ### Adım 4: Hello world
 
 - `src/cli/index.ts` — commander ile `foreman init` ve `foreman start`
-- `foreman init` → `~/.foreman/` oluştursun, schema migrate etsin
+- `foreman init` → Foreman'ın config ve state dizinlerini oluştursun, schema migrate etsin
 - `foreman start` → "Foreman v0.1.0 started" yazsın, exit
 
 Buradan sonrası Phase 1'in geri kalanına devam.

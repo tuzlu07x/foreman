@@ -47,9 +47,19 @@ Every subcommand lives in its own file under `src/cli/`. The root `src/cli/index
 | `foreman registry list / info / update / validate` | Curated catalogue lookup. `update` refreshes from the upstream URL (24 h TTL). |
 | `foreman identity show / edit / reset / push` | Foreman's canonical SOUL.md propagated into each partner runtime's identity hook (`~/.hermes/SOUL.md`, etc.). |
 | `foreman doctor` | Checks paths, identity, db, fts5, policy, agents and their tokens, optional configs (notify, llm, voice, mcp hub, org), legacy home, updates, chafa. Exit codes 0 / 1 / 2. See [`doctor.md`](doctor.md). |
-| `foreman migrate-config` | Migrates a legacy `~/.foreman/` install into the platform-native XDG / macOS / Windows dirs. |
+| `foreman migrate-config` | Migrates a legacy `~/.foreman/` install (the layout before platform-native dirs) into the XDG / macOS / Windows dirs. |
 | `foreman migrate --check / --apply` | DB schema migration runner. |
 | `foreman completion bash / zsh / fish` | Prints a shell-completion script. |
+
+**The Foreman home** is where Foreman keeps its files, resolved in `src/utils/config.ts`:
+
+| | Config (`identity.key`, `secrets.key`, `policy.yaml`, `SOUL.md`, the other YAML configs) | State (`foreman.db`, runtime state) | Cache |
+| --- | --- | --- | --- |
+| Linux (XDG) | `~/.config/foreman/` | `~/.local/state/foreman/` | `~/.cache/foreman/` |
+| macOS | `~/Library/Application Support/foreman/` | same as config | `~/Library/Caches/foreman/` |
+| `FOREMAN_HOME` set | `$FOREMAN_HOME/` | `$FOREMAN_HOME/` | `$FOREMAN_HOME/cache/` |
+
+On Linux, `$XDG_CONFIG_HOME`, `$XDG_STATE_HOME` and `$XDG_CACHE_HOME` are honoured. `<foreman_home>` below means the config directory. `foreman doctor` prints the paths in use (see also [`install.md`](install.md#platform-notes)).
 
 Each command:
 1. Verifies the foreman home exists (or prompts to run `init`).

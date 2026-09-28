@@ -1,5 +1,6 @@
 # Foreman policy tuned for Hermes (Nous Research) routed through 'foreman mcp-stdio'.
-# Drop into ~/.foreman/policy.yaml; see examples/hermes-integration/README.md.
+# Drop into your policy.yaml (Linux ~/.config/foreman/, macOS ~/Library/Application Support/foreman/,
+# or $FOREMAN_HOME/ if set); see examples/hermes-integration/README.md.
 #
 # This policy is the v0.1.1 smart defaults narrowed to Hermes specifically, plus
 # a rate limit on the Hermes side of the bus.

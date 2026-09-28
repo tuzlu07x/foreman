@@ -14,7 +14,9 @@ Foreman keeps this **opt-in** because (a) it costs money, (b) it adds latency, (
 
 ---
 
-## 2. `~/.foreman/llm.yaml` config
+## 2. `llm.yaml` config
+
+`llm.yaml` lives in Foreman's config directory, next to `policy.yaml`: `~/.config/foreman/` on Linux (`$XDG_CONFIG_HOME/foreman/` if set), `~/Library/Application Support/foreman/` on macOS, or `$FOREMAN_HOME` if you set it. See [install.md](install.md#platform-notes).
 
 ```yaml
 enabled: false                  # global kill-switch

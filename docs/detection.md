@@ -330,7 +330,7 @@ interface LlmVerification {
 }
 ```
 
-When `~/.foreman/llm.yaml` is configured (C7, #230), the mediator will optionally route high-bucket assessments through the LLM for second-opinion verification before opening the modal. The DB column already exists (`requests.llm_verification`); writes are gated on `~/.foreman/llm.yaml` being present.
+When `llm.yaml` (in Foreman's config directory, see [`llm.md`](llm.md#2-llmyaml-config)) is configured (C7, #230), the mediator will optionally route high-bucket assessments through the LLM for second-opinion verification before opening the modal. The DB column already exists (`requests.llm_verification`); writes are gated on `llm.yaml` being present.
 
 Until C8 lands, the field is always `null`.
 

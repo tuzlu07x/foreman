@@ -27,7 +27,7 @@ On a clean machine (or a fresh Docker container — `docker run --rm -it node:22
 ```bash
 npm install -g foreman-agent
 foreman --version          # should print 0.1.0
-foreman init               # should populate ~/.foreman/
+foreman init               # Linux: populates ~/.config/foreman/ + ~/.local/state/foreman/ (macOS: ~/Library/Application Support/foreman/)
 foreman start              # TUI boots, identity loaded, MCP gateway up
 ```
 
