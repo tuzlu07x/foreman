@@ -169,8 +169,9 @@ Once you're signed in, the hub keeps the session working by itself:
   server rejects a token with 401, the hub refreshes it once and retries
   the request.
 - When the server rotates refresh tokens, the new access and refresh
-  tokens are saved together in one write before they are used. Agents
-  each run their own `foreman mcp-stdio`, so these processes take turns
+  tokens are saved together in one write before they are used. Several
+  processes can hold the session (the daemon, an agent's own
+  `foreman mcp-stdio`, the `foreman mcp` commands), so they take turns
   (a lock file in the state directory). A refresh token is never sent
   twice.
 - `login`, `logout` and `mcp remove` take the same lock. A refresh only
@@ -232,6 +233,76 @@ Stdio servers run as your user, like any `npx` tool. Prefer official
 servers, pin versions in `args` when you can, and consider a container
 image (`command: docker`) for servers you don't fully trust.
 
+## One daemon for every agent
+
+While `foreman start` runs, it also runs Foreman's daemon. Every agent's
+`foreman mcp-stdio` and Claude Code's PreToolUse hook (`foreman-hook`)
+connect to it instead of starting Foreman on their own:
+
+- **Each stdio server starts once**, for all agents, instead of once per
+  agent. Scope stays per agent: each agent sees and calls only the servers
+  its access list and `org.yaml` allow.
+- **The hook answers in tens of milliseconds** instead of a few hundred:
+  the daemon already has the policy, risk and approval stack loaded
+  (`node scripts/hook-latency.mjs` measures it on your machine).
+
+Nothing changes in what gets decided. The daemon runs the same code the
+agent's own process would, on the same `policy.yaml`, `mcp.yaml`,
+`org.yaml` and database. Approvals appear in the TUI and on your channels
+as before, and `mcp.yaml` edits still reach connected agents live.
+
+When the daemon isn't running (no `foreman start`, or you quit it), each
+`foreman mcp-stdio` and hook call runs Foreman in its own process, as
+before: slower, with the same decisions. `foreman daemon` runs the daemon
+without the TUI, for machines where you don't keep the TUI open. Set
+`FOREMAN_NO_DAEMON=1` in an agent's environment to keep it off the daemon.
+
+How it stays safe:
+
+- **A Unix socket, never the network.** The socket is
+  `<state dir>/foreman.sock`, readable and writable only by you (0600).
+  There is no TCP listener. The daemon doesn't start if the state
+  directory is writable by other users.
+- **A token for every boot.** The daemon writes a random token to
+  `<state dir>/foreman.sock.token` (0600) when it starts. The client and
+  the daemon each prove they know it (an HMAC challenge), and the token
+  itself never crosses the socket. The client checks the daemon's proof
+  before it sends anything, so a stale or foreign socket gets neither a
+  hook payload nor an agent token. A client that can't prove the token is
+  refused.
+- **The client checks before it trusts.** A socket or token file that
+  isn't owned by you, is open to other users, or is a symlink is ignored,
+  and the client decides in its own process.
+- **The token doesn't say which agent you are.** It only proves "a
+  Foreman client of this user". An agent still proves its id with its own
+  [identity token](./agent-lifecycle.md#agent-identity-tokens): its
+  `foreman mcp-stdio` passes `FOREMAN_AGENT_TOKEN` and `--source` to the
+  daemon, which checks them exactly as the agent's own process would and
+  re-checks them before every message. An agent without a valid token is
+  `untrusted:<id>` there too, and gets no hub servers.
+- **Fail closed.** Once a call has been handed to the daemon, a daemon
+  that stops or crashes never lets it through. The hook exits 2 (Claude
+  Code blocks the tool), and an MCP call gets an error. The call is not
+  sent again; the agent's `foreman mcp-stdio` serves later calls in its
+  own process. The daemon cancels (denies) a pending approval when the
+  hook or agent waiting for it goes away. Whether to use the daemon at all
+  is only decided before a call starts.
+- **New session, fresh checks.** When an agent connects, the daemon
+  re-reads the tool pins and checks each server's live tool definitions
+  against them before the next call, as a freshly started
+  `foreman mcp-stdio` would. `foreman mcp trust` is picked up the same
+  way.
+
+Differences to know about:
+
+- Stdio servers started by the daemon get the proxy and CA variables
+  (`HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS`, …) from the environment
+  `foreman start` runs in, not from the agent's.
+- A broken `mcp.yaml` is reported in the Foreman inbox rather than on the
+  agent's stderr.
+- **Windows:** the daemon needs Unix-socket permissions, so native Windows
+  keeps the in-process path. Under WSL2 the daemon works as on Linux.
+
 ## Tokens
 
 Tool definitions are sent to the model on every turn. The hub cuts that
@@ -266,8 +337,9 @@ cost three ways:
 
 - OAuth servers must support dynamic client registration. Servers that
   only accept pre-registered clients aren't supported yet.
-- Each agent's `foreman mcp-stdio` runs its own copy of stdio servers
-  (started lazily, reusing the pinned listing). A shared daemon is planned.
+- Without the daemon (no `foreman start` or `foreman daemon` running),
+  each agent's `foreman mcp-stdio` runs its own copy of stdio servers
+  (started lazily, reusing the pinned listing).
 - Resources and prompts from upstream servers are not proxied yet — tools only.
 
 ## Troubleshooting

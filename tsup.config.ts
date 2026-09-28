@@ -4,11 +4,14 @@ export default defineConfig({
   entry: {
     "cli/index": "src/cli/index.ts",
     "cli/hook": "src/cli/hook-main.ts",
+    "cli/hook-inproc": "src/cli/hook-inproc.ts",
     "cli/env-preflight": "src/cli/env-preflight.ts",
   },
   // Kept as a separate file so its import stays first in index.js and runs
   // before chalk / Ink read the environment (see env-preflight.ts).
-  external: ["./env-preflight.js"],
+  // hook-inproc.js: the hook's mediation stack, loaded by dist/cli/hook.js
+  // only when no daemon answers (#616).
+  external: ["./env-preflight.js", "./hook-inproc.js"],
   outDir: "dist",
   format: ["esm"],
   target: "node22",

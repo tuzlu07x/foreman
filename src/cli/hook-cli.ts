@@ -1,17 +1,34 @@
 import { Command } from "commander";
+import { ulid } from "ulid";
 import {
   AdapterDecodeError,
   getAdapter,
 } from "../core/adapters/index.js";
 import { DbApprovalService } from "../core/approval.js";
 import { AuditLogger } from "../core/audit.js";
-import { bus } from "../core/event-bus.js";
-import { FOREMAN_MCP_PREFIX, isForemanServedTool } from "../core/foreman-mcp-trust.js";
+import { bus as processBus, type EventBus, type ForemanEventMap } from "../core/event-bus.js";
+import {
+  FOREMAN_MCP_PREFIX,
+  isForemanServedTool,
+  type ForemanSelf,
+} from "../core/foreman-mcp-trust.js";
 import { createMediatorStack } from "../core/mediator-stack.js";
-import { closeDb, getDb } from "../db/client.js";
+import { closeDb, getDb, type ForemanDb } from "../db/client.js";
 import type { JSONRPCMessage } from "../mcp/types.js";
 import { getForemanPaths } from "../utils/config.js";
-import { dim, red } from "./colors.js";
+import {
+  blockHook,
+  DEFAULT_HOOK_TIMEOUT_MS,
+  HOOK_ALLOW,
+  HOOK_BLOCK,
+  hookTimeoutMs,
+  hookViaDaemon,
+  readHookStdin,
+  writeHookLines,
+  type HookLine,
+} from "./hook-client.js";
+
+export { hookTimeoutMs } from "./hook-client.js";
 
 // =============================================================================
 // foreman hook <agent-id> — PreToolUse hook script (#517 Faz 4)
@@ -37,11 +54,16 @@ import { dim, red } from "./colors.js";
 //      modal + Telegram) and the audit log.
 //   3. Exits 0 (allow) or 2 (block) per Claude Code's hook contract.
 //
+// With `foreman start` running, steps 1–2 happen in its daemon (#616):
+// evaluateHookPayload below runs there, on the same payload, with the
+// same stack, so the decision is the same either way; only the start-up
+// cost is gone.
+//
 // FAIL CLOSED. Claude Code treats any exit code other than 2 as a
 // non-blocking error and runs the tool anyway, so every failure path here —
 // unreadable stdin, bad JSON, a locked or corrupt database, an unexpected
-// exception — must end in exit 2. An agent that can make Foreman crash
-// must not thereby get its tool call through.
+// exception, a daemon that dies mid-call — must end in exit 2. An agent
+// that can make Foreman crash must not thereby get its tool call through.
 //
 // Default posture: when policy.yaml has no rule for a call, the hook falls
 // back to "allow unless the risk engine objects" — the same risk-based
@@ -49,43 +71,142 @@ import { dim, red } from "./colors.js";
 // prompted, while explicit policy rules (secret paths, `rm -rf`, per-agent
 // denies) now apply to Claude Code too.
 
-const BLOCK = 2;
-const ALLOW = 0;
-const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
 const ADAPTER_ID = "claude-code-pretooluse-v1";
-/** Claude Code waits on the hook; with nobody at the TUI this is how long. */
-const DEFAULT_HOOK_TIMEOUT_MS = 600_000;
 
-/** `--timeout-ms` wins, then FOREMAN_APPROVAL_TIMEOUT (seconds, like every
- *  other transport), then the 10-minute default. */
-export function hookTimeoutMs(flag: number | undefined, env: NodeJS.ProcessEnv = process.env): number {
-  if (flag !== undefined) return flag;
-  const fromEnv = Number.parseInt(env.FOREMAN_APPROVAL_TIMEOUT ?? "", 10);
-  return Number.isFinite(fromEnv) && fromEnv >= 0 ? fromEnv * 1000 : DEFAULT_HOOK_TIMEOUT_MS;
+export interface HookVerdict {
+  exit: 0 | 2;
+  lines: HookLine[];
 }
 
+export interface HookEvaluation {
+  /** The database, bus and audit flush to mediate with; opened only once
+   *  the payload decodes. */
+  open(): { db: ForemanDb; bus: EventBus<ForemanEventMap>; flushAudit(): void };
+  policyPath: string;
+  mcpConfigPath: string;
+  timeoutMs: number;
+  /** The hook process: its working directory (when the payload has none),
+   *  and for the daemon its home, env and install (#619). */
+  process: {
+    cwd: string;
+    home?: string;
+    env?: NodeJS.ProcessEnv;
+    self?: ForemanSelf;
+  };
+  requestId?: string;
+  /** Gets the approval service, so the daemon can cancel a pending
+   *  approval when the hook process goes away. */
+  onApproval?: (approval: DbApprovalService) => void;
+}
 
-/** Read the whole stdin into a single string, bounded so a hostile payload
- *  cannot exhaust memory. */
-async function readStdin(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let buf = "";
-    process.stdin.setEncoding("utf-8");
-    process.stdin.on("data", (chunk: string) => {
-      buf += chunk;
-      if (buf.length > MAX_PAYLOAD_BYTES) {
-        reject(new Error(`payload exceeds ${MAX_PAYLOAD_BYTES} bytes`));
-        process.stdin.destroy();
-      }
-    });
-    process.stdin.on("end", () => resolve(buf));
-    process.stdin.on("error", reject);
+const blocked = (text: string): HookVerdict => ({
+  exit: HOOK_BLOCK,
+  lines: [{ level: "error", text }],
+});
+
+/** Decide one PreToolUse payload. Never throws: every failure blocks. */
+export async function evaluateHookPayload(
+  raw: string,
+  agentId: string,
+  ev: HookEvaluation,
+): Promise<HookVerdict> {
+  try {
+    return await evaluate(raw, agentId, ev);
+  } catch (err) {
+    return blocked(
+      `could not evaluate the call (${err instanceof Error ? err.message : String(err)}) — blocking it. ` +
+        "Run `foreman doctor` to diagnose.",
+    );
+  }
+}
+
+async function evaluate(raw: string, agentId: string, ev: HookEvaluation): Promise<HookVerdict> {
+  if (!raw.trim()) return blocked("empty PreToolUse payload — blocking the call.");
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw);
+  } catch (err) {
+    return blocked(
+      `could not parse the PreToolUse payload (${
+        err instanceof Error ? err.message : String(err)
+      }) — blocking the call.`,
+    );
+  }
+
+  const adapter = getAdapter(ADAPTER_ID);
+  if (!adapter) return blocked(`adapter ${ADAPTER_ID} is missing from this build — blocking the call.`);
+  const toolName =
+    typeof payload === "object" && payload !== null
+      ? (payload as { tool_name?: unknown }).tool_name
+      : undefined;
+  // Foreman's own MCP tools are mediated inside `foreman mcp-stdio`; gating
+  // them here too would double-prompt. Only when the tool really is ours
+  // and no project config swapped in another `foreman` server (#619).
+  if (typeof toolName === "string" && toolName.startsWith(FOREMAN_MCP_PREFIX)) {
+    const cwdField =
+      typeof payload === "object" && payload !== null ? (payload as { cwd?: unknown }).cwd : undefined;
+    const cwd = typeof cwdField === "string" && cwdField.length > 0 ? cwdField : ev.process.cwd;
+    if (
+      isForemanServedTool(toolName, {
+        cwd,
+        hubConfigPath: ev.mcpConfigPath,
+        ...(ev.process.home !== undefined ? { home: ev.process.home } : {}),
+        ...(ev.process.env !== undefined ? { env: ev.process.env } : {}),
+        ...(ev.process.self !== undefined ? { self: ev.process.self } : {}),
+      })
+    ) {
+      return { exit: HOOK_ALLOW, lines: [] };
+    }
+  }
+  let normalised;
+  try {
+    normalised = adapter.decodeRequest(payload, agentId);
+  } catch (err) {
+    const reason =
+      err instanceof AdapterDecodeError || err instanceof Error ? err.message : String(err);
+    return blocked(`malformed PreToolUse payload (${reason}) — blocking the call.`);
+  }
+
+  const { db, bus, flushAudit } = ev.open();
+  const lines: HookLine[] = [];
+  const approval = new DbApprovalService(db, { bus, timeoutMs: ev.timeoutMs });
+  ev.onApproval?.(approval);
+  const { mediator } = createMediatorStack({
+    db,
+    bus,
+    approval,
+    policyPath: ev.policyPath,
+    onPolicyError: (message) => lines.push({ level: "info", text: message }),
   });
-}
-
-function block(reason: string): never {
-  process.stderr.write(`${red("foreman hook:")} ${reason}\n`);
-  process.exit(BLOCK);
+  const result = await mediator.handleRequest({
+    ...(ev.requestId ? { requestId: ev.requestId } : {}),
+    sourceAgent: normalised.sourceAgent,
+    targetTool: normalised.targetTool,
+    ...(normalised.sessionId ? { sessionId: normalised.sessionId } : {}),
+    message: {
+      jsonrpc: "2.0",
+      method: "tools/call",
+      params: { name: normalised.targetTool, arguments: normalised.args },
+    } as JSONRPCMessage,
+    policyFallback: { effect: "allow", source: "hook:risk-based" },
+  });
+  // The audit row lands before the agent learns the answer.
+  flushAudit();
+  if (result.decision === "allowed") {
+    lines.push({
+      level: "info",
+      text: `${String(toolName)} allowed (${result.decidedBy}, risk ${result.riskScore}/100).`,
+    });
+    return { exit: HOOK_ALLOW, lines };
+  }
+  const reasons = result.riskReasons.length > 0 ? `; ${result.riskReasons.join(", ")}` : "";
+  lines.push({
+    level: "error",
+    text:
+      `${String(toolName)} blocked by Foreman (${result.decidedBy}${reasons}, ` +
+      `score ${result.riskScore}/100). Review with \`foreman log tail\`; adjust policy.yaml if this was expected.`,
+  });
+  return { exit: HOOK_BLOCK, lines };
 }
 
 export const hookCommand = new Command("hook")
@@ -110,123 +231,79 @@ export const hookCommand = new Command("hook")
   // exits 1 by default, which Claude Code treats as "run the tool".
   .exitOverride((err) => {
     if (err.exitCode === 0) process.exit(0); // --help
-    process.exit(BLOCK);
+    process.exit(HOOK_BLOCK);
   })
   .action(async (agentId: string, opts: { timeoutMs?: number }) => {
-    // Anything that escapes the try/catch below (a rejected promise inside
-    // a library callback, a synchronous throw from a listener) still blocks.
-    // The main CLI installs a handler that rethrows (exit 7, which Claude
-    // Code would treat as "run the tool"), so ours must be the only one.
-    process.removeAllListeners("uncaughtException");
-    process.removeAllListeners("unhandledRejection");
-    process.on("uncaughtException", (err) =>
-      block(`internal error (${err.message}) — blocking the call`),
-    );
-    process.on("unhandledRejection", (err) =>
-      block(
-        `internal error (${err instanceof Error ? err.message : String(err)}) — blocking the call`,
-      ),
-    );
+    installFailClosedHandlers();
     if (opts.timeoutMs !== undefined && !(Number.isFinite(opts.timeoutMs) && opts.timeoutMs >= 0)) {
-      block("--timeout-ms must be a whole number of milliseconds — blocking the call.");
+      blockHook("--timeout-ms must be a whole number of milliseconds — blocking the call.");
     }
+    const timeoutMs = hookTimeoutMs(opts.timeoutMs);
     try {
-      const exit = await runHook(agentId, hookTimeoutMs(opts.timeoutMs));
-      process.exit(exit);
+      const raw = await readPayloadOrBlock();
+      const viaDaemon = await hookViaDaemon(agentId, timeoutMs, raw);
+      process.exit(viaDaemon ?? (await runHook(agentId, timeoutMs, raw)));
     } catch (err) {
-      block(
+      blockHook(
         `could not evaluate the call (${err instanceof Error ? err.message : String(err)}) — blocking it. ` +
           "Run `foreman doctor` to diagnose.",
       );
     }
   });
 
-export async function runHook(agentId: string, timeoutMs: number): Promise<0 | 2> {
-  let raw: string;
+/** Anything that escapes a try/catch (a rejected promise inside a library
+ *  callback, a synchronous throw from a listener) still blocks. The main
+ *  CLI installs a handler that rethrows (exit 7, which Claude Code would
+ *  treat as "run the tool"), so ours must be the only one. */
+export function installFailClosedHandlers(): void {
+  process.removeAllListeners("uncaughtException");
+  process.removeAllListeners("unhandledRejection");
+  process.on("uncaughtException", (err) =>
+    blockHook(`internal error (${err.message}) — blocking the call`),
+  );
+  process.on("unhandledRejection", (err) =>
+    blockHook(
+      `internal error (${err instanceof Error ? err.message : String(err)}) — blocking the call`,
+    ),
+  );
+}
+
+export async function readPayloadOrBlock(): Promise<string> {
   try {
-    raw = await readStdin();
+    return await readHookStdin();
   } catch (err) {
-    block(
+    blockHook(
       `could not read the PreToolUse payload (${
         err instanceof Error ? err.message : String(err)
       }) — blocking the call.`,
     );
   }
-  if (!raw.trim()) block("empty PreToolUse payload — blocking the call.");
-  let payload: unknown;
-  try {
-    payload = JSON.parse(raw);
-  } catch (err) {
-    block(
-      `could not parse the PreToolUse payload (${
-        err instanceof Error ? err.message : String(err)
-      }) — blocking the call.`,
-    );
-  }
+}
 
-  const adapter = getAdapter(ADAPTER_ID);
-  if (!adapter) block(`adapter ${ADAPTER_ID} is missing from this build — blocking the call.`);
-  const toolName =
-    typeof payload === "object" && payload !== null
-      ? (payload as { tool_name?: unknown }).tool_name
-      : undefined;
-  // Foreman's own MCP tools are mediated inside `foreman mcp-stdio`; gating
-  // them here too would double-prompt. Only when the tool really is ours
-  // and no project config swapped in another `foreman` server (#619).
-  if (typeof toolName === "string" && toolName.startsWith(FOREMAN_MCP_PREFIX)) {
-    const cwdField =
-      typeof payload === "object" && payload !== null ? (payload as { cwd?: unknown }).cwd : undefined;
-    const cwd = typeof cwdField === "string" && cwdField.length > 0 ? cwdField : process.cwd();
-    if (isForemanServedTool(toolName, { cwd, hubConfigPath: getForemanPaths().mcpConfigPath })) {
-      return ALLOW;
-    }
-  }
-  let normalised;
-  try {
-    normalised = adapter.decodeRequest(payload, agentId);
-  } catch (err) {
-    const reason =
-      err instanceof AdapterDecodeError || err instanceof Error ? err.message : String(err);
-    block(`malformed PreToolUse payload (${reason}) — blocking the call.`);
-  }
-
+/** The in-process path: open the database, mediate here, close it. */
+export async function runHook(agentId: string, timeoutMs: number, raw?: string): Promise<0 | 2> {
+  const payload = raw ?? (await readPayloadOrBlock());
   const paths = getForemanPaths();
-  const db = getDb();
-  const audit = new AuditLogger(db, bus);
+  let audit: AuditLogger | null = null;
   try {
-    const approval = new DbApprovalService(db, { bus, timeoutMs });
-    const { mediator } = createMediatorStack({
-      db,
-      bus,
-      approval,
+    const verdict = await evaluateHookPayload(payload, agentId, {
+      open: () => {
+        const db = getDb();
+        const logger = new AuditLogger(db, processBus);
+        audit = logger;
+        return { db, bus: processBus, flushAudit: () => logger.flush() };
+      },
       policyPath: paths.policyPath,
-      onPolicyError: (message) => process.stderr.write(`${dim("foreman hook:")} ${message}\n`),
+      mcpConfigPath: paths.mcpConfigPath,
+      timeoutMs,
+      process: { cwd: process.cwd() },
     });
-    const result = await mediator.handleRequest({
-      sourceAgent: normalised.sourceAgent,
-      targetTool: normalised.targetTool,
-      ...(normalised.sessionId ? { sessionId: normalised.sessionId } : {}),
-      message: {
-        jsonrpc: "2.0",
-        method: "tools/call",
-        params: { name: normalised.targetTool, arguments: normalised.args },
-      } as JSONRPCMessage,
-      policyFallback: { effect: "allow", source: "hook:risk-based" },
-    });
-    if (result.decision === "allowed") {
-      process.stderr.write(
-        `${dim("foreman hook:")} ${String(toolName)} allowed (${result.decidedBy}, risk ${result.riskScore}/100).\n`,
-      );
-      return ALLOW;
-    }
-    const reasons = result.riskReasons.length > 0 ? `; ${result.riskReasons.join(", ")}` : "";
-    process.stderr.write(
-      `${red("foreman hook:")} ${String(toolName)} blocked by Foreman (${result.decidedBy}${reasons}, ` +
-        `score ${result.riskScore}/100). Review with \`foreman log tail\`; adjust policy.yaml if this was expected.\n`,
-    );
-    return BLOCK;
+    writeHookLines(verdict.lines);
+    return verdict.exit;
   } finally {
-    audit.dispose();
-    closeDb();
+    if (audit) {
+      (audit as AuditLogger).dispose();
+      closeDb();
+    }
   }
 }

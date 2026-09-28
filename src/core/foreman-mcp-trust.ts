@@ -76,8 +76,14 @@ function realOrNull(path: string): string | null {
 }
 
 export function currentForemanSelf(env: NodeJS.ProcessEnv = process.env): ForemanSelf {
+  return foremanSelfOf({ argv1: process.argv[1], execPath: process.execPath, path: env.PATH ?? "" });
+}
+
+/** The same, for a hook process described by its script path, Node binary
+ *  and PATH: the daemon decides for a hook client (#616). */
+export function foremanSelfOf(proc: { argv1: string | undefined; execPath: string; path: string }): ForemanSelf {
   const entries = new Set<string>();
-  const script = process.argv[1] ? realOrNull(process.argv[1]) : null;
+  const script = proc.argv1 ? realOrNull(proc.argv1) : null;
   if (script) {
     entries.add(script);
     // The fast hook (`foreman-hook`, dist/cli/hook.js) sits next to the CLI.
@@ -86,10 +92,10 @@ export function currentForemanSelf(env: NodeJS.ProcessEnv = process.env): Forema
       if (cli) entries.add(cli);
     }
   }
-  const exec = realOrNull(process.execPath);
+  const exec = realOrNull(proc.execPath);
   // A single-file build runs as the `foreman` binary itself.
   if (exec && /^foreman(\.exe)?$/i.test(basename(exec))) entries.add(exec);
-  return { entries, node: exec, path: env.PATH ?? "" };
+  return { entries, node: exec, path: proc.path };
 }
 
 /** A bare name on PATH, or an absolute path; anything relative (which

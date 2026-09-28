@@ -153,6 +153,26 @@ describe('McpHub against a real stdio MCP server', () => {
     expect(JSON.parse(readFileSync(pinsPath, 'utf-8')).servers.demo.drift).toBeUndefined()
   })
 
+  it('a long-lived hub starts each session like a fresh one: new pins, verified again (#616)', async () => {
+    await hub(config()).listForAgent() // pins the clean definitions
+    const changed = config({}, 'changed')
+    changed.servers.demo!.env = { DEMO_VARIANT: 'changed' }
+    const daemonHub = hub(changed)
+    const first = await daemonHub.resolveCall('demo__echo', { text: 'x' })
+    if (first?.kind !== 'tool') throw new Error('expected tool')
+    await expect(daemonHub.call(first.tool, first.args)).rejects.toBeInstanceOf(HubToolUnavailableError)
+    // `foreman mcp trust demo`, run in another process.
+    await hub(changed).trust('demo')
+    // The running hub still holds the old pins until a session begins…
+    expect((await daemonHub.resolveCall('demo__echo', { text: 'x' }))?.kind).toBe('unavailable')
+    // …then it reads them again and re-verifies the live server.
+    daemonHub.resetSession()
+    const next = await daemonHub.resolveCall('demo__echo', { text: 'x' })
+    if (next?.kind !== 'tool') throw new Error('expected tool')
+    const { result } = await daemonHub.call(next.tool, next.args)
+    expect(result.content.map((c) => ('text' in c ? c.text : '')).join('')).toBe('x')
+  })
+
   it('lists tools that appeared since pinning even from the cache (#634)', async () => {
     await hub(config()).listForAgent()
     await hub(config({}, 'extra')).inventory({ refresh: true })

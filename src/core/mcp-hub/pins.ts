@@ -103,6 +103,11 @@ export class ToolPinStore {
     this.data = path ? readPinFile(path) : { version: 1, servers: {} };
   }
 
+  /** Read the file again (another process may have trusted or re-pinned). */
+  reload(): void {
+    if (this.path) this.data = readPinFile(this.path);
+  }
+
   /** Pins for `server` — `null` when absent or pinned for a different
    *  launch configuration. */
   get(server: string, fingerprint: string): ServerPins | null {

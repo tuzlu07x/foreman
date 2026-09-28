@@ -46,6 +46,7 @@ Every item below was hit on the Windows 11 + WSL2 (Ubuntu 22.04) verification ru
 
 ### Filesystem
 
+- **The daemon runs inside WSL2, not on native Windows.** `foreman start` listens on a Unix socket in the state directory, which works on WSL2's ext4 root like on Linux. Native Windows has no daemon: agents' `foreman mcp-stdio` and hook calls run Foreman in their own process there.
 - **Keep Foreman's state inside the WSL2 filesystem, not `/mnt/c/...`.** Foreman's SQLite write path is fsync-heavy; the WSL2 ↔ NTFS bridge multiplies every commit by ~5–10×. The default install lands in `~/.config/foreman/` + `~/.local/state/foreman/` — both live on the Linux-native ext4 root, so this is automatic. Only override `FOREMAN_HOME` if you point at another Linux path, never `/mnt/c/`.
 - **Linux permissions are advisory on `/mnt/c/`.** `chmod 0600` on a Windows mount is a no-op; if you accidentally store the identity key there it isn't actually protected. `foreman doctor` warns you about world-readable identity files.
 
