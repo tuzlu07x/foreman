@@ -12,7 +12,7 @@ import {
   type HubConfig,
 } from "../../../src/core/mcp-hub/config.js";
 import type { McpHub } from "../../../src/core/mcp-hub/hub.js";
-import { HubRuntime } from "../../../src/core/mcp-hub/runtime.js";
+import { HubRuntime, SharedHub } from "../../../src/core/mcp-hub/runtime.js";
 
 const ORG = [
   "version: 1",
@@ -185,6 +185,70 @@ describe("HubRuntime", () => {
     expect([...rt.scope.allowedServers!]).toEqual(["a"]);
     rt.setAgent("untrusted:codex");
     expect([...rt.scope.allowedServers!]).toEqual([]);
+  });
+});
+
+describe("SharedHub (the daemon's hub, #616)", () => {
+  let dir: string;
+  let built: Array<{ close: Mock<[], Promise<undefined>>; resetSession: Mock<[], void> }>;
+  const paths = () => ({
+    mcpConfigPath: join(dir, "mcp.yaml"),
+    mcpPinsPath: join(dir, "pins.json"),
+    orgConfigPath: join(dir, "org.yaml"),
+  });
+  const shared = () =>
+    new SharedHub({
+      paths: paths(),
+      secretStore: { exists: () => false, get: () => "" } as never,
+      build: () => {
+        const hub = { close: vi.fn(async () => undefined), resetSession: vi.fn() };
+        built.push(hub);
+        return hub as unknown as McpHub;
+      },
+    });
+  const view = (hub: SharedHub, agentId: string) =>
+    new HubRuntime({
+      paths: paths(),
+      secretStore: { exists: () => false, get: () => "" } as never,
+      agentId,
+      shared: hub,
+    });
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "foreman-shared-hub-"));
+    built = [];
+    writeFileSync(join(dir, "mcp.yaml"), HUB);
+    writeFileSync(join(dir, "org.yaml"), ORG);
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("builds one hub for every agent, with each agent's own scope", async () => {
+    const hub = shared();
+    const cto = view(hub, "claude-code");
+    const sales = view(hub, "hermes");
+    const stranger = view(hub, "untrusted:claude-code");
+    expect(built).toHaveLength(1);
+    expect(cto.hub).toBe(sales.hub);
+    expect([...cto.scope.allowedServers!].sort()).toEqual(["github"]);
+    expect([...sales.scope.allowedServers!].sort()).toEqual(["linear", "open"]);
+    expect([...stranger.scope.allowedServers!]).toEqual([]);
+    // A session ending doesn't take the shared hub down.
+    await cto.close();
+    expect(built[0]!.close).not.toHaveBeenCalled();
+    await hub.close();
+    expect(built[0]!.close).toHaveBeenCalled();
+  });
+
+  it("starts a new session from fresh pins, and picks up pins another process wrote", () => {
+    const hub = shared();
+    const agent = view(hub, "claude-code");
+    hub.beginSession();
+    expect(built[0]!.resetSession).toHaveBeenCalledTimes(1);
+    agent.sync({ force: true });
+    expect(built[0]!.resetSession).toHaveBeenCalledTimes(1); // pins unchanged
+    writeFileSync(join(dir, "pins.json"), '{"version":1,"servers":{}}');
+    agent.sync({ force: true });
+    expect(built[0]!.resetSession).toHaveBeenCalledTimes(2);
   });
 });
 

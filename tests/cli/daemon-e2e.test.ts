@@ -262,6 +262,22 @@ describe("the Foreman daemon (#616)", () => {
     expect(r.stderr).toMatch(/Foreman daemon went away before deciding — blocking the call/);
   }, 60_000);
 
+  it("cancels (denies) a hook's pending approval when the hook process goes away", async () => {
+    await startDaemon();
+    const child = spawn("node", [HOOK_BIN, "claude-code", "--timeout-ms", "60000"], { env });
+    child.stdin.end(JSON.stringify(bash("rm -rf /")));
+    await until(() => pendingApprovals() > 0);
+    child.kill("SIGKILL");
+    await until(() => pendingApprovals() === 0);
+    const db = new Database(join(home, "foreman.db"), { readonly: true });
+    const row = db.prepare("SELECT decision, resolved_by AS resolvedBy FROM pending_approvals").get() as {
+      decision: string;
+      resolvedBy: string;
+    };
+    db.close();
+    expect(row).toEqual({ decision: "denied", resolvedBy: "cancelled" });
+  }, 60_000);
+
   it("errors an MCP call the daemon dies during, never re-runs it, and serves the session in-process after", async () => {
     writeFileSync(
       join(home, "mcp.yaml"),
