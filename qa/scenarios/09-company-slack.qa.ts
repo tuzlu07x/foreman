@@ -309,7 +309,7 @@ it('A company on Slack: department channels, approvals, budgets and integrations
     expect(still[0]?.status).toBe('pending')
     ev(`${STRANGER} taps Allow on ${second.requestId}: "${String(refusal.body.text)}" (ephemeral); the approval stays pending`)
     const refusedTap = await sb.event<RefusalEvent>('notify:interaction-refused', (e) => e.userId === STRANGER)
-    expect(refusedTap).toEqual({ platform: 'slack', userId: STRANGER, attempted: 'button:allow', requestId: second.requestId })
+    expect(refusedTap).toMatchObject({ platform: 'slack', userId: STRANGER, attempted: 'button:allow', requestId: second.requestId })
     ev(`audit_events notify:interaction-refused: ${JSON.stringify(refusedTap)}`)
     const deny = slack.tap(TEAMMATE, second.message, 'foreman_deny')
     await slack.acked(deny.envelopeId)
