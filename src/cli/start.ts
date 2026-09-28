@@ -35,8 +35,11 @@ import {
   type ControlHandler,
 } from "../core/control-channel.js";
 import {
+  acquireForemanPidfile,
   deleteForemanPidfile,
-  writeForemanPidfile,
+  ForemanAlreadyRunningError,
+  getForemanPidfilePath,
+  otherForemanPid,
 } from "../core/foreman-pidfile.js";
 import { defaultLlmConfig, saveLlmConfig } from "../core/llm/config.js";
 import { ForemanCommandRouter, registerBuiltinCommands } from "../core/foreman-command.js";
@@ -158,6 +161,11 @@ export function startForeman(
   if (!existsSync(paths.root) || !existsSync(paths.identityPath)) {
     throw new NotInitialisedError(paths.root);
   }
+  // One `foreman start` per home (#657): refuse before touching anything.
+  const running = otherForemanPid(paths.configDir);
+  if (running !== null) {
+    throw new ForemanAlreadyRunningError(running, getForemanPidfilePath(paths.configDir));
+  }
   const { publicKey } = loadOrCreateMasterKey();
   const db = getDb();
   const sqlite = getSqlite();
@@ -174,8 +182,9 @@ export function startForeman(
   followPolicyFile(policy, paths.policyPath, (message) => reportPolicyError(message));
   // #431 — Write the start.ts PID to a pidfile so `foreman mcp-stdio`
   // can signal us when a user types `/foreman stop` into an agent's
-  // Telegram chat. Cleanup happens in shutdown().
-  writeForemanPidfile(paths.configDir);
+  // Telegram chat. Cleanup happens in shutdown(). Taking it is also the
+  // single-instance lock (a start that raced the check above loses here).
+  acquireForemanPidfile(paths.configDir);
   const registry = new RegistryService(db, bus);
   const audit = new AuditLogger(db, bus);
   const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
@@ -1786,6 +1795,11 @@ export const startCommand = new Command("start")
       }
       if (err instanceof PolicyLoadError) {
         printPolicyLoadError(err);
+        closeDb();
+        process.exit(1);
+      }
+      if (err instanceof ForemanAlreadyRunningError) {
+        console.error(red("error: ") + err.message);
         closeDb();
         process.exit(1);
       }

@@ -39,6 +39,58 @@ export function writeForemanPidfile(configDir: string): void {
   }
 }
 
+/** Another `foreman start` owns this home (#657). */
+export class ForemanAlreadyRunningError extends Error {
+  constructor(
+    readonly pid: number,
+    readonly pidfile: string,
+  ) {
+    super(
+      `Foreman is already running on this home (pid ${pid}). Use that window, or stop it first ` +
+        `(Ctrl-C there, or /foreman stop). If pid ${pid} isn't Foreman, remove ${pidfile} and try again.`,
+    );
+    this.name = "ForemanAlreadyRunningError";
+  }
+}
+
+/** The pid of another live `foreman start` on this home, or null. A
+ *  pidfile left by a crash (dead or malformed pid) doesn't count. */
+export function otherForemanPid(configDir: string): number | null {
+  const pid = readForemanPid(configDir);
+  return pid !== null && pid !== process.pid ? pid : null;
+}
+
+/**
+ * Take the home for this `foreman start`: two on one home would both
+ * answer approvals, poll the same bots and fight over the OTLP port
+ * (#657). The pidfile is created exclusively; one left by a process that
+ * is gone is stale and replaced. Throws ForemanAlreadyRunningError when
+ * another live process holds it.
+ */
+export function acquireForemanPidfile(configDir: string): void {
+  const path = getForemanPidfilePath(configDir);
+  mkdirSync(dirname(path), { recursive: true });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      writeFileSync(path, String(process.pid), { encoding: "utf-8", flag: "wx", mode: 0o600 });
+      return;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+        // No lock without a pidfile, as before: best-effort.
+        return;
+      }
+    }
+    const holder = otherForemanPid(configDir);
+    if (holder !== null) throw new ForemanAlreadyRunningError(holder, path);
+    // Stale (dead, malformed, or our own): replace it.
+    try {
+      rmSync(path, { force: true });
+    } catch {
+      return;
+    }
+  }
+}
+
 export function deleteForemanPidfile(configDir: string): void {
   const path = getForemanPidfilePath(configDir);
   try {
