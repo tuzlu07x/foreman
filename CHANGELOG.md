@@ -7,6 +7,24 @@ All notable changes to Foreman are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **One daemon for every agent** ([docs/mcp-hub.md](docs/mcp-hub.md#one-daemon-for-every-agent)).
+  While `foreman start` runs, agents' `foreman mcp-stdio` and Claude
+  Code's PreToolUse hook connect to its daemon instead of starting Foreman
+  themselves. `foreman daemon` runs it without the TUI.
+  - Each MCP hub stdio server starts once for all agents; each agent still
+    sees only the servers its access list and `org.yaml` allow.
+  - The hook answers in about 30 ms instead of about 200 ms (p50 on an
+    Apple-silicon Mac; `node scripts/hook-latency.mjs`).
+  - Same decisions as before, with the same code. The socket is a 0600
+    Unix socket in the state directory (never TCP) with a per-boot token
+    in a 0600 file. Agents still prove who they are with their own
+    identity token, checked by the daemon.
+  - Fail closed: if the daemon stops during a call, the hook blocks it
+    (exit 2) and an MCP call gets an error; neither is retried. Without a
+    daemon, or with a socket or token file that isn't safe to trust,
+    everything runs in the agent's own process as before
+    (`FOREMAN_NO_DAEMON=1` forces that). Native Windows keeps the
+    in-process path.
 - **Integrations** (`foreman integrations`,
   [docs/integrations.md](docs/integrations.md)): GitHub, GitLab, Jira and
   Confluence, Trello, Linear and Notion as managed MCP hub servers.

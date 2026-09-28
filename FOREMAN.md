@@ -291,6 +291,26 @@ foreman log search "hermes AND claude-code"
   basit pub/sub).
 - Persistance sadece SQLite.
 - Agent'lar Foreman'a **MCP protokolü** üzerinden bağlanır.
+- **Daemon (#616):** `foreman start` (veya TUI'siz `foreman daemon`) state
+  dizininde bir Unix socket dinler (`foreman.sock`, 0600, TCP yok). Her
+  agent'ın `foreman mcp-stdio`'su ve PreToolUse hook'u (`foreman-hook`)
+  önce ona bağlanır: MCP hub'ın her upstream server'ı tüm agent'lar için
+  bir kez çalışır, hook mediation stack'i her çağrıda yeniden kurmaz.
+  Kararlar aynı kodla verilir (`McpSession`, `evaluateHookPayload`).
+  - Her boot'ta rastgele bir token 0600 bir dosyaya yazılır; client ve
+    daemon onu bildiklerini HMAC challenge ile kanıtlar, token socket'ten
+    geçmez. Bu token sadece "bu kullanıcının bir Foreman client'ı"
+    demektir; hangi agent olduğu yine agent'ın kendi token'ı
+    (`FOREMAN_AGENT_TOKEN` + `--source`) ile, daemon içinde
+    `resolveAgentIdentity` ile kanıtlanır ve her mesajda yeniden kontrol
+    edilir.
+  - Fail closed: çağrı daemon'a gittikten sonra daemon ölürse hook exit 2
+    verir, MCP çağrısı hata döner ve tekrar gönderilmez. Daemon yoksa
+    (veya socket/token dosyası sahiplik, izin, symlink kontrolünden
+    geçmezse, ya da daemon token'ı kanıtlayamazsa) karar çağrı
+    başlamadan verilir ve eski in-process yol kullanılır. Eksik ya da
+    erişilemeyen bir daemon hiçbir zaman "allow" olmaz.
+  - Windows'ta (native) daemon yok; in-process yol kullanılır.
 
 ---
 

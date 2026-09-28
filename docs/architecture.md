@@ -38,6 +38,7 @@ Every subcommand lives in its own file under `src/cli/`. The root `src/cli/index
 | `foreman init` | Seeds the Foreman home: `identity.key` (Ed25519), `policy.yaml` (smart-default rules), `SOUL.md` (Foreman identity persona), `foreman.db` (SQLite). Idempotent. |
 | `foreman setup` | Interactive Ink wizard — LLM providers → Foreman's brain → agents → services (optional) → install + verify; policy review is offered on the Done screen. Re-runnable with `--resume` / `--reset`. |
 | `foreman start` | Detects fresh installs and runs the wizard inline, then mounts the gateway + TUI dashboard. `--no-onboarding` skips the wizard. |
+| `foreman daemon` | Runs the local daemon (below) without the TUI. `foreman start` runs it too. |
 | `foreman mcp-stdio --source <agent>` | Acts as an MCP server over stdio for the partner runtime. JSON-RPC `tools/list` + `tools/call` go through the mediator. The agent proves its id with `FOREMAN_AGENT_TOKEN`; without it the connection is `untrusted:<agent>`. |
 | `foreman wrap --name <id> -- <cmd>` | Spawns a child process under Foreman; intercepts its MCP-framed stdout, signs responses, audits every call. |
 | `foreman log tail / search / show` | Reads the audit log. FTS5-indexed; `search` queries the index, `tail` paginates, `show <id>` expands one row. |
@@ -145,6 +146,18 @@ When the partner runtime calls `tools/call` with `name = read_file`, `arguments 
 5. mcp-stdio replies to the partner with `result.content` (allowed) or `error.code = -32603` (denied).
 
 The partner runtime sees a normal MCP server. The audit log + policy are invisible from its perspective.
+
+### The daemon (`src/cli/hub-daemon.ts`, `src/core/daemon/`)
+
+While `foreman start` (or `foreman daemon`) runs, it listens on `<state dir>/foreman.sock` (a Unix socket, 0600, no TCP). `foreman mcp-stdio` and the PreToolUse hook connect to it before doing any work:
+
+- The client and the daemon prove to each other that they know the per-boot token in `<state dir>/foreman.sock.token` (0600, HMAC challenge; the token never crosses the socket). The client first checks that the socket and token file are owned by the user, closed to others and not symlinks. Anything less and it runs in-process, as before.
+- `foreman mcp-stdio` becomes a relay: it forwards frames to an `McpSession` in the daemon, the same class that serves an in-process session. The daemon resolves the agent from the `FOREMAN_AGENT_TOKEN` and `--source` the client passes on, with `resolveAgentIdentity`, and re-checks it before every message. The per-boot token proves nothing about which agent is calling.
+- All sessions share one `SharedHub` (`src/core/mcp-hub/runtime.ts`), so each upstream server runs once. Each session has its own `HubRuntime` view (the agent's scope, list_changed) and its own `DbApprovalService`, so closing one session cancels only its approvals.
+- The hook sends its payload; the daemon runs `evaluateHookPayload` (`src/cli/hook-cli.ts`), the code the in-process hook runs, and returns the exit code.
+- The daemon's services emit on a private event bus, as a separate process's would: the TUI sees their approvals through `ApprovalBridge`, once.
+
+Fail closed: after a call has been sent, a daemon that disappears makes the hook exit 2 and the MCP call error (never re-sent). The in-process fallback is only chosen before anything is sent. Native Windows keeps the in-process path.
 
 ---
 
