@@ -105,7 +105,7 @@ it('Org: chart, delegation, department channels and per-department MCP servers',
     const across = await write('codex', 'openclaw', 'post the release notes')
     expect(across.result?.isError).toBe(true)
     expect(replyText(across)).toContain('Blocked by the org chart')
-    expect(replyText(across)).toContain('cross-department work goes through department heads')
+    expect(replyText(across)).toContain('must go through department heads')
     const sdr = await write('sdr-agent', 'qa-agent', 'test the pricing page')
     expect(sdr.result?.isError).toBe(true)
     expect(replyText(sdr)).toContain('Blocked by the org chart')
