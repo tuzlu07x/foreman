@@ -1056,14 +1056,18 @@ function writeDotPath(
   value: unknown,
 ): void {
   const segs = dotPath.split(".");
-  // Registry paths only ever name plain keys; never walk into a prototype.
-  if (segs.some((s) => s === "__proto__" || s === "constructor" || s === "prototype")) {
-    throw new Error(`refusing to write config path '${dotPath}'`);
-  }
   let cur: Record<string, unknown> = root;
-  for (let i = 0; i < segs.length - 1; i++) {
+  for (let i = 0; i < segs.length; i++) {
     const seg = segs[i]!;
-    const existing = cur[seg];
+    // Registry paths only ever name plain keys; never walk into a prototype.
+    if (seg === "__proto__" || seg === "constructor" || seg === "prototype") {
+      throw new Error(`refusing to write config path '${dotPath}'`);
+    }
+    if (i === segs.length - 1) {
+      cur[seg] = value;
+      return;
+    }
+    const existing = Object.hasOwn(cur, seg) ? cur[seg] : undefined;
     if (
       existing === null ||
       existing === undefined ||
@@ -1077,5 +1081,4 @@ function writeDotPath(
       cur = existing as Record<string, unknown>;
     }
   }
-  cur[segs[segs.length - 1]!] = value;
 }
