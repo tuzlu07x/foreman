@@ -259,6 +259,62 @@ without the TUI, for machines where you don't keep the TUI open. Set
 `foreman doctor` shows whether agents can use it (the `daemon` row), and
 the Inbox says why when `foreman start` couldn't start it.
 
+### Run the daemon at login (`foreman service`)
+
+To have the daemon without a terminal open, install it as a background
+service of your own user:
+
+```bash
+foreman service install     # start it now and at every login
+foreman service status      # installed? running? what it runs, where it logs
+foreman service uninstall   # stop it and remove the service file
+```
+
+- **macOS:** a LaunchAgent, `~/Library/LaunchAgents/dev.foreman.daemon.plist`,
+  loaded with `launchctl bootstrap gui/<uid>` (`launchctl load -w` on older
+  systems). launchd restarts it if it crashes. Its log is
+  `<state dir>/daemon.log`.
+- **Linux and WSL2:** a systemd user unit,
+  `~/.config/systemd/user/foreman-daemon.service`, enabled and started with
+  `systemctl --user enable --now`. It restarts on a crash and logs to the
+  journal (`journalctl --user -u foreman-daemon.service`). It runs while you
+  are logged in; `loginctl enable-linger` keeps it running without a
+  session. Without systemd (common on WSL), `install` says so and changes
+  nothing: run `foreman daemon` yourself, or turn systemd on in WSL
+  (`[boot] systemd=true` in `/etc/wsl.conf`).
+- **Native Windows:** not supported (there is no daemon there).
+
+The service runs `foreman daemon --service` with the absolute paths of the
+Node binary and the Foreman CLI you ran `install` with, never a PATH
+lookup. It gets your `FOREMAN_HOME` when that is set, and your PATH (the
+MCP hub's stdio servers are found on it); nothing else from your shell, so
+proxy and CA variables set only in your shell don't reach the servers it
+starts. **Run `foreman service install` again after upgrading Node or
+Foreman, or moving either**: `status` warns when a path it runs is gone.
+There is one service per user; installing again replaces it.
+
+The files are yours: the service file is 0644 in your own directory, never
+written through a symlink or outside your home directory, and the macOS log
+is 0600. The daemon's socket, token and checks are the same as when
+`foreman start` hosts it.
+
+**With `foreman start`.** Only one daemon serves a Foreman home. When the
+service is already running, `foreman start` leaves agents on it (the Inbox
+says so) and runs everything else as usual. Approvals from calls the
+service decides still appear in the TUI and on your channels: they are kept
+in the database, which `foreman start` watches, the same way it shows
+approvals from an agent's own `foreman mcp-stdio`. When `foreman start` got
+there first, the service waits and takes over within a few seconds of
+`foreman start` quitting. Without `foreman start` running, nothing shows an
+approval: a call that needs one waits until it times out and is denied
+(`foreman inbox` lists what was missed).
+
+If the daemon can't start for a reason a restart won't fix (Foreman isn't
+initialised, the state directory is open to other users), the service logs
+why and stops instead of restarting in a loop. Fix it, then run
+`foreman service install` again. `foreman doctor` warns when the service is
+installed but the daemon isn't running.
+
 How it stays safe:
 
 - **A Unix socket, never the network.** The socket is

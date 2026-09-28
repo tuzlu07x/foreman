@@ -9,3 +9,13 @@ import { join } from 'node:path'
 if (!process.env.FOREMAN_HOME) {
   process.env.FOREMAN_HOME = mkdtempSync(join(tmpdir(), 'foreman-test-home-'))
 }
+
+// …and a throwaway HOME. Agent config paths resolve against it
+// (~/.claude.json, ~/.claude/settings.json, ~/.codex, ~/.hermes): a test
+// that installs or removes an agent must never edit the developer's real
+// Claude Code or Codex settings. A test that needs its own HOME sets it.
+{
+  const home = mkdtempSync(join(tmpdir(), 'foreman-test-user-'))
+  process.env.HOME = home
+  process.env.USERPROFILE = home
+}

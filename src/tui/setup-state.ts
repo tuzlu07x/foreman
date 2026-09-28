@@ -34,6 +34,7 @@ export interface SessionAgentConfig {
   providerVariant?: string;
   modelVersion?: string;
   responsibilityNote?: string;
+  preToolUseHook?: boolean;
 }
 
 /**
@@ -282,6 +283,7 @@ export function pickSessionAgentConfig(
   if (providerVariant !== undefined) cfg.providerVariant = providerVariant;
   if (modelVersion !== undefined) cfg.modelVersion = modelVersion;
   if (responsibilityNote !== undefined) cfg.responsibilityNote = responsibilityNote;
+  if (typeof c.preToolUseHook === "boolean") cfg.preToolUseHook = c.preToolUseHook;
   return cfg;
 }
 

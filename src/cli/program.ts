@@ -26,6 +26,7 @@ import { policyCommand } from "./policy-cli.js";
 import { providerCommand } from "./provider-cli.js";
 import { registryCommand } from "./registry-cli.js";
 import { secretsCommand } from "./secrets-cli.js";
+import { serviceCommand } from "./service-cli.js";
 import { setupCommand } from "./setup.js";
 import { startCommand } from "./start.js";
 import { agentWrapCommand } from "./agent-wrap-cli.js";
@@ -49,6 +50,7 @@ export function buildProgram(): Command {
   program.addCommand(setupCommand);
   program.addCommand(startCommand);
   program.addCommand(daemonCommand);
+  program.addCommand(serviceCommand);
   program.addCommand(mcpStdioCommand);
   program.addCommand(mcpCommand);
   program.addCommand(integrationsCommand);

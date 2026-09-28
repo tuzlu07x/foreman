@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, lstatSync } from 'node:fs'
 import { afterEach, expect, it } from 'vitest'
 import { Journey } from '../support/journey.js'
 import { McpAgent, replyText } from '../support/mcp-agent.js'
@@ -43,8 +43,22 @@ it('Approve and deny from the TUI across processes', async (context) => {
     const env = t.pid === null ? {} : processEnv(t.pid)
     expect(env.NODE_OPTIONS).toContain('no-network.cjs')
     expect(env.FOREMAN_HOME).toBe(sb.home)
-    ev('the running foreman start has FOREMAN_HOME = the sandbox and the network guard preloaded (/proc/<pid>/environ)')
+    ev(
+      `the running foreman start has FOREMAN_HOME = the sandbox and the network guard preloaded (${process.platform === 'linux' ? '/proc/<pid>/environ' : '`ps eww`'})`,
+    )
     return t
+  })
+
+  await j.step('the daemon listens, so the agent goes through it', (ev) => {
+    const socket = sb.path('foreman.sock')
+    expect(lstatSync(socket).isSocket()).toBe(true)
+    expect(lstatSync(socket).mode & 0o777).toBe(0o600)
+    const report = sb.json<{ checks: Array<{ name: string; status: string; message: string }> }>(['doctor', '--json'], {
+      allowExit: [0, 1],
+    })
+    const daemon = report.checks.find((c) => c.name === 'daemon')
+    expect(daemon).toMatchObject({ status: 'ok', message: `listening at ${socket}` })
+    ev(`${socket} (${socket.length} chars) is a 0600 socket; foreman doctor --json: daemon ok, "${daemon?.message}"`)
   })
 
   const agent = await McpAgent.connect(sb, 'claude-code', { FOREMAN_APPROVAL_TIMEOUT: '90' })
@@ -124,8 +138,10 @@ it('Approve and deny from the TUI across processes', async (context) => {
     const code = await tui.stop()
     expect(code).toBe(0)
     expect(existsSync(sb.path('foreman.pid'))).toBe(false)
+    expect(existsSync(sb.path('foreman.sock'))).toBe(false)
+    expect(existsSync(sb.path('foreman.sock.token'))).toBe(false)
     expect(pid !== null && isAlive(pid)).toBe(false)
-    ev(`SIGTERM → foreman start exited ${code}, pidfile removed, pid ${pid} gone`)
+    ev(`SIGTERM → foreman start exited ${code}, pidfile, daemon socket and token removed, pid ${pid} gone`)
   })
 
   await j.step('nothing tried to reach the network', (ev) => {

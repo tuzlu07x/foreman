@@ -37,6 +37,7 @@ describe("buildAgentConfigPromptList", () => {
     const prompts = buildAgentConfigPromptList(catalog, ["claude-code"]);
     expect(prompts).toEqual([
       { agentId: "claude-code", kind: "model-pick" },
+      { agentId: "claude-code", kind: "hook-choice" },
       { agentId: "claude-code", kind: "responsibility-note" },
     ]);
   });
@@ -72,6 +73,7 @@ describe("buildAgentConfigPromptList", () => {
     ]);
     expect(prompts).toEqual([
       { agentId: "claude-code", kind: "model-pick" },
+      { agentId: "claude-code", kind: "hook-choice" },
       { agentId: "claude-code", kind: "responsibility-note" },
       { agentId: "hermes", kind: "llm-choice" },
       { agentId: "hermes", kind: "model-pick" },
@@ -88,6 +90,7 @@ describe("buildAgentConfigPromptList", () => {
     ]);
     expect(prompts).toEqual([
       { agentId: "claude-code", kind: "model-pick" },
+      { agentId: "claude-code", kind: "hook-choice" },
       { agentId: "claude-code", kind: "responsibility-note" },
     ]);
   });
@@ -169,6 +172,7 @@ describe("buildAgentConfigPromptList", () => {
       );
       expect(prompts).toEqual([
         { agentId: "claude-code", kind: "model-pick" },
+        { agentId: "claude-code", kind: "hook-choice" },
         { agentId: "claude-code", kind: "responsibility-note" },
       ]);
     });

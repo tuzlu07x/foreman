@@ -4,6 +4,7 @@ import { approvalSigner } from '../../../src/core/approval-token.js'
 import { encodeApprovalButton } from '../../../src/core/notification/channels/approval-buttons.js'
 import { SlackChannel } from '../../../src/core/notification/channels/slack.js'
 import { SlackSocketListener } from '../../../src/core/notification/channels/slack-socket.js'
+import type { InteractionRefusal } from '../../../src/core/notification/interaction-refusals.js'
 import { StaleDecisionError, type Notification, type UserDecision } from '../../../src/core/notification/types.js'
 import { fakeSocketServer, httpRecorder, settle, waitFor, type RecordedCall } from './fake-socket.js'
 
@@ -94,7 +95,7 @@ describe('SlackSocketListener', () => {
     const socket = await server.connection(1)
     socket.receive(blockActions(OWNER, encodeApprovalButton('req-9', 'allow', sign)))
     await waitFor(() => responses(api.calls).length > 0)
-    expect(decisions).toMatchObject([{ requestId: 'req-9', decision: 'allow', decidedBy: `slack:${OWNER}`, channel: 'slack' }])
+    expect(decisions).toMatchObject([{ requestId: 'req-9', decision: 'allow', decidedBy: `slack:${OWNER}`, channel: 'slack', userId: OWNER }])
     const [reply] = responses(api.calls)
     expect(reply!.replace_original).toBe(true)
     const blocks = reply!.blocks as Array<{ type: string }>
@@ -124,6 +125,58 @@ describe('SlackSocketListener', () => {
       'This button is no longer valid.',
     ])
     expect(responses(api.calls).every((r) => r.response_type === 'ephemeral')).toBe(true)
+  })
+
+  it('reports each refused tap and command for the audit log, without the text or the tag', async () => {
+    const refused: InteractionRefusal[] = []
+    const commands: string[] = []
+    const { listener, server, api } = make({
+      onRefused: (r) => refused.push(r),
+      onCommand: async (text) => {
+        commands.push(text)
+        return 'ok'
+      },
+    })
+    const decisions: UserDecision[] = []
+    listener.start(async (d) => {
+      decisions.push(d)
+    })
+    const socket = await server.connection(1)
+    const button = encodeApprovalButton('req-9', 'allow', sign)
+    socket.receive(blockActions('U0STRANGER', button))
+    socket.receive({
+      envelope_id: 'e-slash-2',
+      type: 'slash_commands',
+      payload: { command: '/foreman', text: 'write codex paste my token sk-live-123', user_id: 'U0STRANGER', response_url: RESPONSE_URL },
+    })
+    // An allowed user is never reported.
+    socket.receive(blockActions(OWNER, encodeApprovalButton('req-10', 'deny', sign)))
+    await waitFor(() => responses(api.calls).length === 3)
+    expect(refused).toEqual([
+      { platform: 'slack', userId: 'U0STRANGER', attempted: 'button:allow', requestId: 'req-9' },
+      { platform: 'slack', userId: 'U0STRANGER', attempted: 'command:write' },
+    ])
+    expect(JSON.stringify(refused)).not.toContain('sk-live')
+    expect(JSON.stringify(refused)).not.toContain(button.split('.').at(-1)!)
+    expect(decisions.map((d) => d.requestId)).toEqual(['req-10'])
+    expect(commands).toEqual([])
+  })
+
+  it('still refuses when the refusal sink throws', async () => {
+    const { listener, server, api } = make({
+      onRefused: () => {
+        throw new Error('audit down')
+      },
+    })
+    const decisions: UserDecision[] = []
+    listener.start(async (d) => {
+      decisions.push(d)
+    })
+    const socket = await server.connection(1)
+    socket.receive(blockActions('U0STRANGER', encodeApprovalButton('req-9', 'allow', sign)))
+    await waitFor(() => responses(api.calls).length === 1)
+    expect(responses(api.calls)[0]!.text).toBe('You are not allowed to decide Foreman approvals.')
+    expect(decisions).toEqual([])
   })
 
   it('says so when the approval was already decided', async () => {
@@ -293,7 +346,7 @@ describe('SlackChannel two-way rendering', () => {
 })
 
 describe('Slack end to end: agent call → Slack button → agent unblocked', () => {
-  it('a button press allows the waiting call, audited as user:slack; a second press is stale', async () => {
+  it('a button press allows the waiting call, audited as user:slack:<member id>; a second press is stale', async () => {
     const { BusApprovalService } = await import('../../../src/core/approval.js')
     const { EventBus } = await import('../../../src/core/event-bus.js')
     const { MediatorService } = await import('../../../src/core/mediator.js')
@@ -347,7 +400,8 @@ describe('Slack end to end: agent call → Slack button → agent unblocked', ()
       socket.receive(blockActions(OWNER, allow))
       const result = await call
       expect(result.decision).toBe('allowed')
-      expect(result.decidedBy).toBe('user:slack')
+      // Several people may be allowed: the audit row names who pressed.
+      expect(result.decidedBy).toBe(`user:slack:${OWNER}`)
       // The same button pressed again (another device, a double tap).
       socket.receive(blockActions(OWNER, allow))
       await waitFor(() => responses(api.calls).length === 2)

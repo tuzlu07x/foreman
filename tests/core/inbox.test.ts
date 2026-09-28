@@ -232,6 +232,22 @@ describe('InboxRecorder', () => {
     expect(items.map((i) => [i.title, i.readAt])).toEqual([['Denied read_file for claude-code', null]])
   })
 
+  it('names the teammate who decided in Slack or Discord, and says "you" elsewhere', () => {
+    bus.emit('approval:requested', approvalRequested('r13'))
+    bus.emit('approval:resolved', { requestId: 'r13', decision: 'allowed', resolvedBy: 'user', via: 'slack', userId: 'U0BOSS' })
+    bus.emit('approval:requested', approvalRequested('r14'))
+    bus.emit('approval:resolved', { requestId: 'r14', decision: 'denied', resolvedBy: 'user', via: 'discord', userId: '111111111111111111' })
+    bus.emit('approval:requested', approvalRequested('r15'))
+    bus.emit('approval:resolved', { requestId: 'r15', decision: 'denied', resolvedBy: 'user', via: 'telegram', userId: '42' })
+    bus.emit('approval:requested', approvalRequested('r16'))
+    bus.emit('approval:resolved', { requestId: 'r16', decision: 'denied', resolvedBy: 'user', via: 'slack' })
+    const body = (id: string) => inbox.list().find((i) => i.dedupeKey === `approval:${id}:resolved`)!.body
+    expect(body('r13')).toBe('by U0BOSS via Slack')
+    expect(body('r14')).toBe('by 111111111111111111 via Discord')
+    expect(body('r15')).toBe('by you via Telegram')
+    expect(body('r16')).toBe('by you via Slack')
+  })
+
   it('files a withdrawn request quietly', () => {
     bus.emit('approval:requested', approvalRequested('r11'))
     bus.emit('approval:resolved', { requestId: 'r11', decision: 'denied', resolvedBy: 'cancelled' })

@@ -282,6 +282,17 @@ foreman completion bash > /etc/bash_completion.d/foreman
 
 See [`completion.md`](completion.md).
 
+### Keep the daemon running at login (optional)
+
+Agents and Claude Code's hook are fastest through Foreman's daemon, which otherwise runs only while `foreman start` (or `foreman daemon`) is open. To run it in the background at every login (a LaunchAgent on macOS, a systemd user unit on Linux and WSL2 with systemd):
+
+```bash
+foreman service install
+foreman service status
+```
+
+Run `foreman service install` again after upgrading Node or Foreman. `foreman start` keeps working alongside it, and approvals still show up in the TUI. See [One daemon for every agent](mcp-hub.md#run-the-daemon-at-login-foreman-service).
+
 ### Run the doctor whenever something feels off
 
 ```bash
@@ -296,8 +307,10 @@ foreman doctor --json    # the same checks, for scripts
 Do it in this order: the first steps need the `foreman` command, which step 5 removes.
 
 ```bash
-# 1. Remove the PreToolUse hook Foreman added to Claude Code (if you installed it).
+# 1. Remove the PreToolUse hook Foreman added to Claude Code (if you installed it),
+#    and the background daemon service (if you installed that).
 foreman agent hook uninstall claude-code
+foreman service uninstall
 
 # 2. Note where Foreman keeps its files (the foreman_home and paths lines).
 foreman doctor
