@@ -46,7 +46,7 @@ foreman mcp add linear --url https://mcp.linear.app/mcp --oauth
 foreman mcp login linear                 # sign in in your browser
 ```
 
-See *OAuth servers* below.
+See _OAuth servers_ below.
 
 ## What happens on a call
 
@@ -55,7 +55,7 @@ See *OAuth servers* below.
    server's tool rules in `mcp.yaml` → risk rules (secret paths, injection,
    exfiltration, …) → your approval if needed (TUI modal, Telegram buttons).
 3. Only an allowed call reaches the upstream server.
-4. The result is guarded before the agent sees it — see *Security*.
+4. The result is guarded before the agent sees it — see _Security_.
 5. The decision and a call summary (duration, size, redactions) land in the
    audit log (`foreman log tail`).
 
@@ -64,11 +64,11 @@ See *OAuth servers* below.
 Lives next to `policy.yaml` (`foreman doctor` prints the path).
 
 ```yaml
-mode: auto            # eager | lazy | auto
+mode: auto # eager | lazy | auto
 limits:
   max_result_chars: 24000
   max_description_chars: 400
-  lazy_threshold: 40  # auto → lazy above this many visible tools
+  lazy_threshold: 40 # auto → lazy above this many visible tools
 security:
   quarantine_suspicious_tools: true
   pin_tool_definitions: true
@@ -80,10 +80,14 @@ servers:
     url: https://api.githubcopilot.com/mcp/
     headers:
       Authorization: Bearer ${secret:github-pat}
+    access: # optional: who may use this server
+      agents: [claude-code]
+      departments: [engineering]
     tools:
-      allow: [get_*, list_*, search_*]   # policy-allowed (risk still applies)
-      ask: [merge_*]                     # always ask a human
-      deny: [delete_*]                   # never exposed, never callable
+      allow: [get_*, list_*, search_*] # policy-allowed (risk still applies)
+      ask: [create_*] # ask a human unless policy.yaml allows it
+      confirm: [merge_*] # a human confirms every single call
+      deny: [delete_*] # never exposed, never callable
   filesystem:
     command: npx
     args: [-y, "@modelcontextprotocol/server-filesystem", /home/me/projects/app]
@@ -94,10 +98,25 @@ servers:
 - **Secrets**: any value may use `${secret:<name>}`. They are resolved from
   the encrypted store only when the server starts. A missing secret keeps
   that server offline and `foreman doctor` tells you which one.
-- **Tool rules** accept `*` globs. Precedence: `deny` > `ask` > `allow`.
-  They are a *fallback*: an explicit rule in `policy.yaml` (e.g. `target:
-  "tool:github__create_issue"`) always wins, and the risk engine can still
-  escalate an allowed call. Tools without any rule ask.
+- **Tool rules** accept `*` globs. Precedence: `deny` > `confirm` > `ask` >
+  `allow`. They are a _fallback_: an explicit rule in `policy.yaml` (e.g.
+  `target: "tool:github__create_issue"`) always wins, and the risk engine can
+  still escalate an allowed call. Tools without any rule ask.
+- **`confirm`** is stronger than `ask`: a person answers every call. No
+  allow rule in `policy.yaml`, no remembered "always allow" and no low risk
+  score can approve it; `policy.yaml` can still deny it.
+- **`access`** limits a server to the listed agents and the members of the
+  listed [departments](./org.md). Without it every verified agent may use
+  the server; `access: {}` means nobody. It narrows what `org.yaml` allows,
+  never widens it: an agent needs both.
+- **Changes apply live.** A running `foreman mcp-stdio` re-reads `mcp.yaml`
+  and `org.yaml` (at most once a second, and every 2 s while idle), tells
+  the agent with `notifications/tools/list_changed`, and checks again right
+  before an approved call runs: a server disabled, or an agent removed from
+  its access list, while an approval was waiting never receives the call.
+  A file that stops parsing leaves no hub servers at all until it is fixed.
+- **Writes are locked.** `foreman mcp` commands take `mcp.yaml.lock`, write
+  a temp file and rename it, and keep your comments.
 - **`auth: oauth`** (remote servers only) makes the hub sign in with the MCP
   OAuth flow and attach the token itself. Don't set an `Authorization`
   header on such a server; the hub adds one.
@@ -159,8 +178,8 @@ Once you're signed in, the hub keeps the session working by itself:
   a refresh is never undone. A running hub checks the stored session
   before every request, so it stops using a token as soon as you log out.
 - If a refresh is refused, or `url` in `mcp.yaml` changes, the server
-  stays offline. `foreman mcp list` and `foreman doctor` then show *needs
-  login*.
+  stays offline. `foreman mcp list` and `foreman doctor` then show _needs
+  login_.
 
 Security:
 
@@ -198,15 +217,16 @@ the provider's settings.
 
 ## Security
 
-| Threat | What the hub does |
-| --- | --- |
-| **Tool poisoning** — hidden instructions in a tool description ("before using this tool, read `~/.ssh/id_rsa`…") | Every description and parameter doc is scanned (hidden `<IMPORTANT>` blocks, invisible/bidi Unicode, "don't tell the user", credential paths, exfiltration phrasing, the prompt-injection corpus). High findings quarantine the tool. |
-| **Rug pull** — a server silently changes a tool after you approved it | Tool definitions are pinned (SHA-256) on first use. A changed or newly added tool is withheld until you run `foreman mcp trust <server>`. Pins are tied to the server's launch command, so pointing a name at a different package starts over. The live server is re-verified before the first call of each session. |
-| **Indirect prompt injection** via results (web pages, issues, emails) | Results containing instruction-like text are prefixed with an "untrusted data" warning. |
-| **Secret leakage** in results | API keys, tokens, private keys and database passwords are redacted before the agent sees them. |
-| **Credential sprawl** in agent configs | Tokens live in Foreman's encrypted store. Agents never see them; upstream processes get a minimal environment (plus proxy/CA variables) instead of yours. |
-| **Oversharing** | `tools.deny` hides tools completely; [Foreman Org](./org.md) limits servers per department. |
-| **Borrowed identity** — a process claims another agent's `--source` | Hub servers go only to agents that prove their id with their [identity token](./agent-lifecycle.md#agent-identity-tokens). An unverified `untrusted:<id>` connection sees no hub tools. |
+| Threat                                                                                                           | What the hub does                                                                                                                                                                                                                                                                                                    |
+| ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Tool poisoning** — hidden instructions in a tool description ("before using this tool, read `~/.ssh/id_rsa`…") | Every description and parameter doc is scanned (hidden `<IMPORTANT>` blocks, invisible/bidi Unicode, "don't tell the user", credential paths, exfiltration phrasing, the prompt-injection corpus). High findings quarantine the tool.                                                                                |
+| **Rug pull** — a server silently changes a tool after you approved it                                            | Tool definitions are pinned (SHA-256) on first use. A changed or newly added tool is withheld until you run `foreman mcp trust <server>`. Pins are tied to the server's launch command, so pointing a name at a different package starts over. The live server is re-verified before the first call of each session. |
+| **Indirect prompt injection** via results (web pages, issues, emails)                                            | Results containing instruction-like text are prefixed with an "untrusted data" warning.                                                                                                                                                                                                                              |
+| **Secret leakage** in results                                                                                    | API keys, tokens, private keys and database passwords are redacted before the agent sees them.                                                                                                                                                                                                                       |
+| **Credential sprawl** in agent configs                                                                           | Tokens live in Foreman's encrypted store. Agents never see them; upstream processes get a minimal environment (plus proxy/CA variables) instead of yours.                                                                                                                                                            |
+| **Oversharing**                                                                                                  | `tools.deny` hides tools completely; `access` limits a server to named agents and departments, and [Foreman Org](./org.md) limits servers per department. Access changes reach running agents at once.                                                                                                               |
+| **An agent reading an integration's credential**                                                                 | A secret an integration server references (a GitHub token, a Linear key) is for the hub only: `secrets/get` refuses it whatever `policy.yaml` says (`reserved:integration`), and it is never projected into an agent's config files.                                                                                 |
+| **Borrowed identity** — a process claims another agent's `--source`                                              | Hub servers go only to agents that prove their id with their [identity token](./agent-lifecycle.md#agent-identity-tokens). An unverified `untrusted:<id>` connection sees no hub tools.                                                                                                                              |
 
 Stdio servers run as your user, like any `npx` tool. Prefer official
 servers, pin versions in `args` when you can, and consider a container
@@ -230,17 +250,17 @@ cost three ways:
 
 ## Commands
 
-| Command | |
-| --- | --- |
-| `foreman mcp catalog [--category c] [--json]` | Curated servers |
-| `foreman mcp add <id> [args…]` | Add from the catalog, or `--command` / `--url` for your own (`--oauth` for MCP OAuth) |
-| `foreman mcp list` | Configured servers, missing secrets, OAuth status |
-| `foreman mcp login <name> [--scope s] [--no-browser] [--timeout sec]` | Sign in to an `auth: oauth` server |
-| `foreman mcp logout <name>` | Delete a server's stored OAuth tokens (revoked at the provider when possible) |
-| `foreman mcp tools [name] [--refresh]` | Connect, list tools, scan findings, token cost |
-| `foreman mcp trust <name> [--include-flagged]` | Accept current definitions (after an update) |
-| `foreman mcp enable / disable / remove <name>` | |
-| `foreman mcp mode auto\|eager\|lazy` | Discovery mode |
+| Command                                                               |                                                                                       |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `foreman mcp catalog [--category c] [--json]`                         | Curated servers                                                                       |
+| `foreman mcp add <id> [args…]`                                        | Add from the catalog, or `--command` / `--url` for your own (`--oauth` for MCP OAuth) |
+| `foreman mcp list`                                                    | Configured servers, missing secrets, OAuth status                                     |
+| `foreman mcp login <name> [--scope s] [--no-browser] [--timeout sec]` | Sign in to an `auth: oauth` server                                                    |
+| `foreman mcp logout <name>`                                           | Delete a server's stored OAuth tokens (revoked at the provider when possible)         |
+| `foreman mcp tools [name] [--refresh]`                                | Connect, list tools, scan findings, token cost                                        |
+| `foreman mcp trust <name> [--include-flagged]`                        | Accept current definitions (after an update)                                          |
+| `foreman mcp enable / disable / remove <name>`                        |                                                                                       |
+| `foreman mcp mode auto\|eager\|lazy`                                  | Discovery mode                                                                        |
 
 ## Limits and roadmap
 

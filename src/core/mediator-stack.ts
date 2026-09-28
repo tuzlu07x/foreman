@@ -9,6 +9,7 @@ import { followPolicyFile } from "./policy-load.js";
 import { RegistryService } from "./registry.js";
 import { RiskScorer } from "./risk-scorer.js";
 import type { SecretStore } from "./secret-store.js";
+import { followHubOnlySecrets } from "./integrations/hub-only-secrets.js";
 import { SessionManager } from "./session.js";
 
 // =============================================================================
@@ -34,6 +35,8 @@ export interface MediatorStackOptions {
   onPolicyError?: (message: string) => void;
   secretStore?: SecretStore;
   verifier?: LlmVerifier;
+  /** mcp.yaml to follow for hub-only (integration) secrets. */
+  mcpConfigPath?: string | null;
 }
 
 export interface MediatorStack {
@@ -78,6 +81,7 @@ export function createMediatorStack(opts: MediatorStackOptions): MediatorStack {
     bus,
     ...(opts.secretStore ? { secretStore: opts.secretStore } : {}),
     ...(opts.verifier ? { verifier: opts.verifier } : {}),
+    ...(opts.mcpConfigPath ? { hubOnlySecrets: followHubOnlySecrets(opts.mcpConfigPath) } : {}),
   });
   return { registry, policy, risk, sessionManager, mediator };
 }

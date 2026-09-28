@@ -70,7 +70,10 @@ const RoleSchema = z
 
 /** Where a channel is mirrored: platform → channel (`slack: "#marketing"`,
  *  `discord: "123456789012345678"`). Any platform with a mirror adapter. */
-const ChannelMapSchema = z.record(z.string().regex(/^[a-z][a-z0-9-]{0,31}$/), z.string().min(1).max(120));
+const ChannelMapSchema = z.record(
+  z.string().regex(/^[a-z][a-z0-9-]{0,31}$/),
+  z.string().min(1).max(120),
+);
 
 const BudgetSchema = z
   .object({
@@ -102,7 +105,10 @@ export const OrgDocSchema = z
     company: z.string().min(1).max(120),
     mission: z.string().max(500).optional(),
     human: z
-      .object({ name: z.string().max(80).optional(), title: z.string().max(80).optional() })
+      .object({
+        name: z.string().max(80).optional(),
+        title: z.string().max(80).optional(),
+      })
       .strict()
       .default({}),
     delegation: z
@@ -110,7 +116,9 @@ export const OrgDocSchema = z
         /** via_heads: only department heads talk across departments.
          *  allow: anyone may delegate across departments (still audited).
          *  deny: departments are isolated; only the human bridges them. */
-        cross_department: z.enum(["via_heads", "allow", "deny"]).default("via_heads"),
+        cross_department: z
+          .enum(["via_heads", "allow", "deny"])
+          .default("via_heads"),
         /** Let managers assign to anyone below them, not just direct reports. */
         skip_levels: z.boolean().default(false),
       })
@@ -154,7 +162,9 @@ export interface OrgIssue {
 
 export class OrgValidationError extends Error {
   constructor(public readonly issues: OrgIssue[]) {
-    super(`org.yaml is invalid:\n${issues.map((i) => `  - ${i.message}`).join("\n")}`);
+    super(
+      `org.yaml is invalid:\n${issues.map((i) => `  - ${i.message}`).join("\n")}`,
+    );
     this.name = "OrgValidationError";
   }
 }
@@ -195,27 +205,50 @@ export function serializeOrg(doc: OrgDoc): string {
 }
 
 /** Structural checks the schema cannot express. */
-export function validateOrg(doc: OrgDoc, knownAgents?: ReadonlySet<string>): OrgIssue[] {
+export function validateOrg(
+  doc: OrgDoc,
+  knownAgents?: ReadonlySet<string>,
+): OrgIssue[] {
   const issues: OrgIssue[] = [];
   const roleIds = Object.keys(doc.roles);
   for (const id of roleIds) {
-    if (!ID_RE.test(id)) issues.push({ level: "error", message: `role id '${id}' must be lowercase kebab-case` });
-    if (RESERVED_ORG_IDS.has(id)) issues.push({ level: "error", message: `'${id}' is reserved (it names you or a channel)` });
+    if (!ID_RE.test(id))
+      issues.push({
+        level: "error",
+        message: `role id '${id}' must be lowercase kebab-case`,
+      });
+    if (RESERVED_ORG_IDS.has(id))
+      issues.push({
+        level: "error",
+        message: `'${id}' is reserved (it names you or a channel)`,
+      });
   }
   for (const id of Object.keys(doc.departments)) {
     if (RESERVED_ORG_IDS.has(id)) {
-      issues.push({ level: "error", message: `department id '${id}' is reserved (it names you or a channel)` });
+      issues.push({
+        level: "error",
+        message: `department id '${id}' is reserved (it names you or a channel)`,
+      });
     }
   }
   for (const [id, role] of Object.entries(doc.roles)) {
     if (role.reports_to !== HUMAN && !doc.roles[role.reports_to]) {
-      issues.push({ level: "error", message: `role '${id}' reports to unknown role '${role.reports_to}'` });
+      issues.push({
+        level: "error",
+        message: `role '${id}' reports to unknown role '${role.reports_to}'`,
+      });
     }
     if (role.reports_to === id) {
-      issues.push({ level: "error", message: `role '${id}' reports to itself` });
+      issues.push({
+        level: "error",
+        message: `role '${id}' reports to itself`,
+      });
     }
     if (role.department && !doc.departments[role.department]) {
-      issues.push({ level: "error", message: `role '${id}' is in unknown department '${role.department}'` });
+      issues.push({
+        level: "error",
+        message: `role '${id}' is in unknown department '${role.department}'`,
+      });
     }
     if (knownAgents && !knownAgents.has(role.agent)) {
       issues.push({
@@ -227,23 +260,38 @@ export function validateOrg(doc: OrgDoc, knownAgents?: ReadonlySet<string>): Org
   for (const [id, dept] of Object.entries(doc.departments)) {
     const head = doc.roles[dept.head];
     if (!head) {
-      issues.push({ level: "error", message: `department '${id}' has unknown head '${dept.head}'` });
+      issues.push({
+        level: "error",
+        message: `department '${id}' has unknown head '${dept.head}'`,
+      });
     } else if (head.department !== id) {
-      issues.push({ level: "error", message: `department '${id}' head '${dept.head}' must belong to that department` });
+      issues.push({
+        level: "error",
+        message: `department '${id}' head '${dept.head}' must belong to that department`,
+      });
     }
   }
   for (const id of roleIds) {
     if (chainOf(doc, id).cycle) {
-      issues.push({ level: "error", message: `reporting cycle detected at role '${id}'` });
+      issues.push({
+        level: "error",
+        message: `reporting cycle detected at role '${id}'`,
+      });
       break;
     }
   }
   if (!roleIds.some((id) => doc.roles[id]!.reports_to === HUMAN)) {
-    issues.push({ level: "error", message: "at least one role must report to `human`" });
+    issues.push({
+      level: "error",
+      message: "at least one role must report to `human`",
+    });
   }
   const agentsToRoles = new Map<string, string[]>();
   for (const [id, role] of Object.entries(doc.roles)) {
-    agentsToRoles.set(role.agent, [...(agentsToRoles.get(role.agent) ?? []), id]);
+    agentsToRoles.set(role.agent, [
+      ...(agentsToRoles.get(role.agent) ?? []),
+      id,
+    ]);
   }
   for (const [agent, roles] of agentsToRoles) {
     if (roles.length > 1) {
@@ -257,7 +305,10 @@ export function validateOrg(doc: OrgDoc, knownAgents?: ReadonlySet<string>): Org
 }
 
 /** Walk up the reporting chain: [role, manager, …]. */
-export function chainOf(doc: OrgDoc, roleId: string): { chain: string[]; cycle: boolean } {
+export function chainOf(
+  doc: OrgDoc,
+  roleId: string,
+): { chain: string[]; cycle: boolean } {
   const chain: string[] = [];
   const seen = new Set<string>();
   let current: string | undefined = roleId;
@@ -305,7 +356,10 @@ export interface ReviewLine {
 /** Who reviews an approval `requesterAgent` asked for: the manager of each
  *  of its roles, when that manager is an agent. Never you (you decide
  *  anyway), and never the requesting agent itself. */
-export function reviewLinesFor(doc: OrgDoc, requesterAgent: string): ReviewLine[] {
+export function reviewLinesFor(
+  doc: OrgDoc,
+  requesterAgent: string,
+): ReviewLine[] {
   const requester = requesterAgent.trim().toLowerCase();
   if (HUMAN_SOURCES.has(requester)) return [];
   const lines: ReviewLine[] = [];
@@ -354,7 +408,8 @@ export const HUMAN_SOURCES: ReadonlySet<string> = new Set([
  *  anyone: outside the chart it would otherwise keep pre-org freedom. */
 export const UNTRUSTED_DELEGATION: DelegationVerdict = {
   allowed: false,
-  reason: "the sender's identity is unverified (no valid agent token) — run `foreman agent rewire <agent>`",
+  reason:
+    "the sender's identity is unverified (no valid agent token) — run `foreman agent rewire <agent>`",
 };
 
 /**
@@ -367,7 +422,8 @@ export function checkDelegation(
   fromAgent: string,
   toAgent: string,
 ): DelegationVerdict | null {
-  if (HUMAN_SOURCES.has(fromAgent.trim().toLowerCase())) return { allowed: true, reason: "assigned by the human" };
+  if (HUMAN_SOURCES.has(fromAgent.trim().toLowerCase()))
+    return { allowed: true, reason: "assigned by the human" };
   if (isUntrustedSource(fromAgent)) return UNTRUSTED_DELEGATION;
   const fromRoles = rolesForAgent(doc, fromAgent);
   const toRoles = rolesForAgent(doc, toAgent);
@@ -388,24 +444,44 @@ export function checkDelegation(
   };
 }
 
-export function checkRolePair(doc: OrgDoc, from: string, to: string): DelegationVerdict {
+export function checkRolePair(
+  doc: OrgDoc,
+  from: string,
+  to: string,
+): DelegationVerdict {
   const fromRole = doc.roles[from]!;
   const toRole = doc.roles[to]!;
-  if (toRole.reports_to === from) return { allowed: true, reason: `${from} manages ${to}` };
-  if (fromRole.reports_to === to) return { allowed: true, reason: `${from} reports to ${to}` };
+  if (toRole.reports_to === from)
+    return { allowed: true, reason: `${from} manages ${to}` };
+  if (fromRole.reports_to === to)
+    return { allowed: true, reason: `${from} reports to ${to}` };
   if (doc.delegation.skip_levels && chainOf(doc, to).chain.includes(from)) {
     return { allowed: true, reason: `${to} is in ${from}'s organisation` };
   }
-  const sameDept = Boolean(fromRole.department) && fromRole.department === toRole.department;
-  if (sameDept) return { allowed: true, reason: `same department (${fromRole.department})` };
+  const sameDept =
+    Boolean(fromRole.department) && fromRole.department === toRole.department;
+  if (sameDept)
+    return {
+      allowed: true,
+      reason: `same department (${fromRole.department})`,
+    };
   switch (doc.delegation.cross_department) {
     case "allow":
-      return { allowed: true, reason: "cross-department delegation allowed by org.yaml" };
+      return {
+        allowed: true,
+        reason: "cross-department delegation allowed by org.yaml",
+      };
     case "via_heads":
       if (isHead(doc, from) && isHead(doc, to)) {
-        return { allowed: true, reason: "department heads coordinate directly" };
+        return {
+          allowed: true,
+          reason: "department heads coordinate directly",
+        };
       }
-      return { allowed: false, reason: "cross-department work must go through department heads" };
+      return {
+        allowed: false,
+        reason: "cross-department work must go through department heads",
+      };
     case "deny":
       return { allowed: false, reason: "departments are isolated" };
   }
@@ -426,7 +502,10 @@ function describeCrossPolicy(doc: OrgDoc): string {
  * MCP hub servers `agentId` may use, or `null` for "no org restriction"
  * (agent outside the org, or no role/department declares a list).
  */
-export function allowedMcpServers(doc: OrgDoc, agentId: string): Set<string> | null {
+export function allowedMcpServers(
+  doc: OrgDoc,
+  agentId: string,
+): Set<string> | null {
   if (isUntrustedSource(agentId)) return new Set();
   const roles = rolesForAgent(doc, agentId);
   if (roles.length === 0) return null;
@@ -434,17 +513,33 @@ export function allowedMcpServers(doc: OrgDoc, agentId: string): Set<string> | n
   for (const id of roles) {
     const role = doc.roles[id]!;
     const list =
-      role.mcp_servers ?? (role.department ? doc.departments[role.department]?.mcp_servers : undefined);
+      role.mcp_servers ??
+      (role.department
+        ? doc.departments[role.department]?.mcp_servers
+        : undefined);
     if (!list) return null; // any unrestricted role lifts the limit
     for (const s of list) allowed.add(s);
   }
   return allowed;
 }
 
+/** Departments `agentId` belongs to through its roles (no department for
+ *  an unverified connection). Used for mcp.yaml `access.departments`. */
+export function departmentsForAgent(doc: OrgDoc, agentId: string): Set<string> {
+  const out = new Set<string>();
+  for (const id of rolesForAgent(doc, agentId)) {
+    const department = doc.roles[id]!.department;
+    if (department) out.add(department);
+  }
+  return out;
+}
+
 /** Resolve an assignment target (role id, department id or agent id) to a role. */
 export function resolveAssignee(doc: OrgDoc, target: string): string | null {
   if (Object.hasOwn(doc.roles, target)) return target;
-  const dept = Object.hasOwn(doc.departments, target) ? doc.departments[target] : undefined;
+  const dept = Object.hasOwn(doc.departments, target)
+    ? doc.departments[target]
+    : undefined;
   if (dept) return dept.head;
   const byAgent = rolesForAgent(doc, target);
   return byAgent[0] ?? null;
@@ -462,20 +557,37 @@ export function buildTree(doc: OrgDoc): OrgTreeNode[] {
       ? []
       : Object.entries(doc.roles)
           .filter(([, r]) => r.reports_to === parent)
-          .map(([roleId, role]) => ({ roleId, role, children: build(roleId, depth + 1) }));
+          .map(([roleId, role]) => ({
+            roleId,
+            role,
+            children: build(roleId, depth + 1),
+          }));
   return build(HUMAN, 0);
 }
 
 /** Plain-text org chart, one line per role (chat replies, the TUI). */
-export function renderOrgLines(doc: OrgDoc, registered: ReadonlySet<string> = new Set()): string[] {
-  const lines = [`${doc.company}${doc.mission ? ` — ${doc.mission}` : ""}`, `you${doc.human.title ? ` (${doc.human.title})` : ""}`];
+export function renderOrgLines(
+  doc: OrgDoc,
+  registered: ReadonlySet<string> = new Set(),
+): string[] {
+  const lines = [
+    `${doc.company}${doc.mission ? ` — ${doc.mission}` : ""}`,
+    `you${doc.human.title ? ` (${doc.human.title})` : ""}`,
+  ];
   const walk = (nodes: OrgTreeNode[], prefix: string): void => {
     nodes.forEach((node, i) => {
       const last = i === nodes.length - 1;
       const { role } = node;
-      const dot = registered.size === 0 || registered.has(role.agent.toLowerCase()) ? "●" : "○";
-      const dept = role.department ? ` [${doc.departments[role.department]?.name ?? role.department}]` : "";
-      lines.push(`${prefix}${last ? "└─" : "├─"} ${node.roleId} · ${role.title} · ${dot} ${role.agent}${dept}`);
+      const dot =
+        registered.size === 0 || registered.has(role.agent.toLowerCase())
+          ? "●"
+          : "○";
+      const dept = role.department
+        ? ` [${doc.departments[role.department]?.name ?? role.department}]`
+        : "";
+      lines.push(
+        `${prefix}${last ? "└─" : "├─"} ${node.roleId} · ${role.title} · ${dot} ${role.agent}${dept}`,
+      );
       walk(node.children, `${prefix}${last ? "   " : "│  "}`);
     });
   };

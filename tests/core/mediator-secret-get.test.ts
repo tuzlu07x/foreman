@@ -132,7 +132,10 @@ agents:
   });
 
   it("never hands an MCP hub OAuth session to an agent, even when policy allows it", async () => {
-    store.add("mcp-oauth-linear", JSON.stringify({ tokens: { access_token: "at-secret" } }));
+    store.add(
+      "mcp-oauth-linear",
+      JSON.stringify({ tokens: { access_token: "at-secret" } }),
+    );
     const { mediator, policy } = buildMediator(db, bus, store);
     policy.loadYamlText(`
 agents:
@@ -147,6 +150,44 @@ agents:
     expect(out.decision).toBe("denied");
     expect(out.decidedBy).toBe("reserved:mcp-oauth");
     expect(out.value).toBeUndefined();
+  });
+
+  it("never hands an integration's credential to an agent, even when policy allows it", async () => {
+    store.add("github-pat", "ghp_" + "a".repeat(36));
+    store.add("my-own-key", "value");
+    const policy = new PolicyEngine(db, bus);
+    const mediator = new MediatorService({
+      registry: new RegistryService(db, bus),
+      policy,
+      risk: new RiskScorer(db),
+      approval: new BusApprovalService({ bus, timeoutMs: 100 }),
+      db,
+      bus,
+      secretStore: store,
+      hubOnlySecrets: () => new Set(["github-pat"]),
+    });
+    policy.loadYamlText(`
+agents:
+  hermes:
+    can_access_secrets:
+      - github-pat
+      - my-own-key
+`);
+    const denied = await mediator.handleSecretGet({
+      sourceAgent: "hermes",
+      secretName: "github-pat",
+    });
+    expect(denied).toMatchObject({
+      decision: "denied",
+      decidedBy: "reserved:integration",
+    });
+    expect(denied.value).toBeUndefined();
+    // Other secrets still follow the policy.
+    const allowed = await mediator.handleSecretGet({
+      sourceAgent: "hermes",
+      secretName: "my-own-key",
+    });
+    expect(allowed).toMatchObject({ decision: "allowed", value: "value" });
   });
 
   it("returns denied with secret-store:not-found when policy allows but the secret is missing", async () => {

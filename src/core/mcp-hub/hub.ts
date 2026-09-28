@@ -5,7 +5,7 @@ import {
   MissingSecretError,
   resolveSecretRefs,
   TOOL_SEPARATOR,
-  toolRuleEffect,
+  toolRuleLevel,
   type HubConfig,
   type ServerConfig,
   type ToolRuleEffect,
@@ -13,7 +13,11 @@ import {
 import { redactSecretShapes } from "../risk-rules/secret-patterns.js";
 import { serverFingerprint, ToolPinStore, type PinnedTool } from "./pins.js";
 import { guardToolResult, type ResultGuardStats } from "./result-guard.js";
-import { hasBlockingFinding, scanToolDefinition, type ToolScanFinding } from "./tool-scan.js";
+import {
+  hasBlockingFinding,
+  scanToolDefinition,
+  type ToolScanFinding,
+} from "./tool-scan.js";
 import {
   sdkUpstreamClientFactory,
   type ResolvedHttpServer,
@@ -50,6 +54,9 @@ export interface HubTool {
   inputSchema: Record<string, unknown>;
   annotations?: unknown;
   rule: ToolRuleEffect | null;
+  /** A `tools.confirm` rule: only a person may allow each call (the
+   *  mediator's requireHuman). `rule` is then `ask`. */
+  requiresHuman: boolean;
   status: HubToolStatus;
   reasons: string[];
   findings: ToolScanFinding[];
@@ -170,11 +177,15 @@ export class McpHub {
 
   /** Every tool of every enabled server, hidden ones included (for the CLI).
    *  Uses pinned definitions when available unless `refresh` is set. */
-  async inventory(opts: { refresh?: boolean; servers?: readonly string[] } = {}): Promise<HubTool[]> {
+  async inventory(
+    opts: { refresh?: boolean; servers?: readonly string[] } = {},
+  ): Promise<HubTool[]> {
     const states = [...this.servers.values()].filter(
       (s) => !opts.servers || opts.servers.includes(s.name),
     );
-    await Promise.all(states.map((s) => this.loadServerTools(s, opts.refresh === true)));
+    await Promise.all(
+      states.map((s) => this.loadServerTools(s, opts.refresh === true)),
+    );
     return states.flatMap((s) => s.tools ?? []);
   }
 
@@ -185,9 +196,11 @@ export class McpHub {
       source: s.source,
       error: s.error,
       tools: (s.tools ?? []).filter((t) => t.status === "available").length,
-      quarantined: (s.tools ?? []).filter((t) => t.status === "quarantined").length,
+      quarantined: (s.tools ?? []).filter((t) => t.status === "quarantined")
+        .length,
       newSincePinning:
-        s.source === "pinned-cache" && this.opts.config.security.pin_tool_definitions
+        s.source === "pinned-cache" &&
+        this.opts.config.security.pin_tool_definitions
           ? (this.opts.pins.get(s.name, s.fingerprint)?.drift?.added ?? [])
           : [],
     }));
@@ -197,14 +210,16 @@ export class McpHub {
   async listForAgent(scope: AgentScope = {}): Promise<AgentTool[]> {
     const visible = this.visible(await this.inventory(), scope);
     if (visible.length === 0) return [];
-    if (this.effectiveMode(visible.length) === "lazy") return this.metaTools(visible);
+    if (this.effectiveMode(visible.length) === "lazy")
+      return this.metaTools(visible);
     const maxDesc = this.opts.config.limits.max_description_chars;
     return visible.map((t) => compactForAgent(t, maxDesc));
   }
 
   effectiveMode(visibleCount: number): "eager" | "lazy" {
     const { mode, limits } = this.opts.config;
-    if (mode === "auto") return visibleCount > limits.lazy_threshold ? "lazy" : "eager";
+    if (mode === "auto")
+      return visibleCount > limits.lazy_threshold ? "lazy" : "eager";
     return mode;
   }
 
@@ -228,7 +243,10 @@ export class McpHub {
     let callArgs = args;
     if (name === CALL_TOOL) {
       if (typeof args.name !== "string" || args.name.length === 0) {
-        return { kind: "unavailable", message: `${CALL_TOOL} requires args.name` };
+        return {
+          kind: "unavailable",
+          message: `${CALL_TOOL} requires args.name`,
+        };
       }
       target = args.name;
       callArgs = isRecord(args.arguments) ? args.arguments : {};
@@ -238,19 +256,25 @@ export class McpHub {
     const state = this.servers.get(serverName);
     if (!state) {
       return name === CALL_TOOL
-        ? { kind: "unavailable", message: `Unknown tool '${target}' — use ${SEARCH_TOOL} to find one` }
+        ? {
+            kind: "unavailable",
+            message: `Unknown tool '${target}' — use ${SEARCH_TOOL} to find one`,
+          }
         : null;
     }
     if (!serverAllowed(serverName, scope)) {
       return {
         kind: "unavailable",
-        message: `Your role in org.yaml does not include the '${serverName}' MCP server. Ask your manager or the user.`,
+        message: `You don't have access to the '${serverName}' MCP server (your role in org.yaml, or the server's access list in mcp.yaml). Ask your manager or the user.`,
       };
     }
     await this.loadServerTools(state, false);
     const tool = (state.tools ?? []).find((t) => t.exposedName === target);
     if (!tool) {
-      return { kind: "unavailable", message: `Server '${serverName}' has no tool '${target}'` };
+      return {
+        kind: "unavailable",
+        message: `Server '${serverName}' has no tool '${target}'`,
+      };
     }
     if (tool.status !== "available") {
       return { kind: "unavailable", message: unavailableMessage(tool) };
@@ -259,7 +283,11 @@ export class McpHub {
   }
 
   /** Lazy-mode discovery: best matches for a free-text query. */
-  async search(query: string, limit: number, scope: AgentScope = {}): Promise<AgentTool[]> {
+  async search(
+    query: string,
+    limit: number,
+    scope: AgentScope = {},
+  ): Promise<AgentTool[]> {
     const visible = this.visible(await this.inventory(), scope);
     const terms = query
       .toLowerCase()
@@ -269,7 +297,10 @@ export class McpHub {
     return visible
       .map((t) => ({ t, score: scoreTool(t, terms) }))
       .filter((x) => terms.length === 0 || x.score > 0)
-      .sort((a, b) => b.score - a.score || a.t.exposedName.localeCompare(b.t.exposedName))
+      .sort(
+        (a, b) =>
+          b.score - a.score || a.t.exposedName.localeCompare(b.t.exposedName),
+      )
       .slice(0, limit)
       .map(({ t }) => compactForAgent(t, maxDesc));
   }
@@ -278,9 +309,16 @@ export class McpHub {
   async call(
     tool: HubTool,
     args: Record<string, unknown>,
-  ): Promise<{ result: CallToolResult; stats: ResultGuardStats; durationMs: number }> {
+  ): Promise<{
+    result: CallToolResult;
+    stats: ResultGuardStats;
+    durationMs: number;
+  }> {
     const state = this.servers.get(tool.server);
-    if (!state) throw new HubToolUnavailableError(`No MCP server '${tool.server}' is enabled`);
+    if (!state)
+      throw new HubToolUnavailableError(
+        `No MCP server '${tool.server}' is enabled`,
+      );
     const client = await this.connect(state);
     // Cached (pinned) listings are re-verified against the live server
     // before the first call, so a rug pull is caught before it runs.
@@ -289,10 +327,14 @@ export class McpHub {
         throw this.scrubbed(state, err);
       });
     }
-    const live = (state.tools ?? []).find((t) => t.exposedName === tool.exposedName);
+    const live = (state.tools ?? []).find(
+      (t) => t.exposedName === tool.exposedName,
+    );
     if (!live || live.status !== "available") {
       throw new HubToolUnavailableError(
-        live ? unavailableMessage(live) : `Server '${tool.server}' no longer offers '${tool.name}'`,
+        live
+          ? unavailableMessage(live)
+          : `Server '${tool.server}' no longer offers '${tool.name}'`,
       );
     }
     const started = this.now();
@@ -316,14 +358,21 @@ export class McpHub {
   }
 
   /** Re-pin a server's current live definitions (accepts drift). */
-  async trust(serverName: string, opts: { includeFlagged?: boolean } = {}): Promise<HubTool[]> {
+  async trust(
+    serverName: string,
+    opts: { includeFlagged?: boolean } = {},
+  ): Promise<HubTool[]> {
     const state = this.servers.get(serverName);
-    if (!state) throw new HubToolUnavailableError(`No MCP server '${serverName}' is enabled`);
+    if (!state)
+      throw new HubToolUnavailableError(
+        `No MCP server '${serverName}' is enabled`,
+      );
     const client = await this.connect(state);
     const live = await client.listTools();
     const flagged = new Set<string>();
     if (opts.includeFlagged) {
-      for (const t of live) if (hasBlockingFinding(scanToolDefinition(t))) flagged.add(t.name);
+      for (const t of live)
+        if (hasBlockingFinding(scanToolDefinition(t))) flagged.add(t.name);
     }
     this.opts.pins.pin(serverName, state.fingerprint, live, {
       now: this.now(),
@@ -352,13 +401,20 @@ export class McpHub {
   // ---------------------------------------------------------------------------
 
   private visible(tools: HubTool[], scope: AgentScope): HubTool[] {
-    return tools.filter((t) => t.status === "available" && serverAllowed(t.server, scope));
+    return tools.filter(
+      (t) => t.status === "available" && serverAllowed(t.server, scope),
+    );
   }
 
-  private async loadServerTools(state: ServerState, refresh: boolean): Promise<void> {
+  private async loadServerTools(
+    state: ServerState,
+    refresh: boolean,
+  ): Promise<void> {
     if (state.tools && !refresh) return;
     const pinning = this.opts.config.security.pin_tool_definitions;
-    const pinned = pinning ? this.opts.pins.get(state.name, state.fingerprint) : null;
+    const pinned = pinning
+      ? this.opts.pins.get(state.name, state.fingerprint)
+      : null;
     if (pinned && !refresh) {
       state.tools = this.evaluate(
         state,
@@ -378,19 +434,29 @@ export class McpHub {
     }
   }
 
-  private async verifyLive(state: ServerState, client: UpstreamClient): Promise<void> {
+  private async verifyLive(
+    state: ServerState,
+    client: UpstreamClient,
+  ): Promise<void> {
     const live = await client.listTools();
     const pinning = this.opts.config.security.pin_tool_definitions;
     let justPinned = false;
     if (pinning && !this.opts.pins.get(state.name, state.fingerprint)) {
       // Trust on first use: the definitions the user first connected to
       // become the baseline every later session is compared against.
-      this.opts.pins.pin(state.name, state.fingerprint, live, { now: this.now() });
+      this.opts.pins.pin(state.name, state.fingerprint, live, {
+        now: this.now(),
+      });
       justPinned = true;
     }
     if (pinning && !justPinned) {
       const diff = this.opts.pins.diff(state.name, state.fingerprint, live);
-      this.opts.pins.recordDrift(state.name, state.fingerprint, { changed: diff.changed, added: diff.added }, this.now());
+      this.opts.pins.recordDrift(
+        state.name,
+        state.fingerprint,
+        { changed: diff.changed, added: diff.added },
+        this.now(),
+      );
     }
     state.tools = this.evaluate(state, live, { justPinned });
     state.source = "live";
@@ -412,7 +478,8 @@ export class McpHub {
         ? this.opts.pins.diff(state.name, state.fingerprint, tools)
         : null;
     return tools.map((t) => {
-      const rule = toolRuleEffect(state.config.tools, t.name);
+      const level = toolRuleLevel(state.config.tools, t.name);
+      const rule = level === "confirm" ? "ask" : level;
       const findings = scanToolDefinition(t);
       const reasons: string[] = [];
       let status: HubToolStatus = "available";
@@ -434,10 +501,15 @@ export class McpHub {
               .join("; ")}`,
           );
         }
-        const driftSeen = ctx.fromCache && pins?.drift?.changed.includes(t.name) ? pins.drift.seenAt : null;
+        const driftSeen =
+          ctx.fromCache && pins?.drift?.changed.includes(t.name)
+            ? pins.drift.seenAt
+            : null;
         if (diff?.changed.includes(t.name)) {
           status = "quarantined";
-          reasons.push("definition changed since it was pinned (possible rug pull)");
+          reasons.push(
+            "definition changed since it was pinned (possible rug pull)",
+          );
         } else if (driftSeen !== null) {
           // From the cache: the live server was last seen with a different
           // definition, so keep it withheld until you review it (#634).
@@ -458,6 +530,7 @@ export class McpHub {
         inputSchema: normaliseSchema(t.inputSchema),
         ...(t.annotations !== undefined ? { annotations: t.annotations } : {}),
         rule,
+        requiresHuman: level === "confirm",
         status,
         reasons,
         findings,
@@ -500,7 +573,11 @@ export class McpHub {
   }
 
   private scrubbed(state: ServerState, err: unknown): Error {
-    if (err instanceof HubToolUnavailableError || err instanceof MissingSecretError) return err;
+    if (
+      err instanceof HubToolUnavailableError ||
+      err instanceof MissingSecretError
+    )
+      return err;
     return new Error(this.scrub(state, describeError(err)));
   }
 
@@ -512,7 +589,8 @@ export class McpHub {
       return value;
     };
     state.secretValues = secrets;
-    const resolve = (v: string): string => resolveSecretRefs(state.name, v, lookup);
+    const resolve = (v: string): string =>
+      resolveSecretRefs(state.name, v, lookup);
     const c = state.config;
     if (c.url) {
       const server: ResolvedHttpServer = {
@@ -523,7 +601,9 @@ export class McpHub {
       };
       if (c.auth === "oauth") {
         if (!this.opts.oauth) {
-          throw new HubToolUnavailableError(`MCP server '${state.name}' uses OAuth, which this process cannot provide`);
+          throw new HubToolUnavailableError(
+            `MCP server '${state.name}' uses OAuth, which this process cannot provide`,
+          );
         }
         state.oauth ??= this.opts.oauth(state.name, c.url);
         // Fail fast, with a clear message, when there is no usable session.
@@ -544,8 +624,11 @@ export class McpHub {
 
   private metaTools(visible: HubTool[]): AgentTool[] {
     const perServer = new Map<string, number>();
-    for (const t of visible) perServer.set(t.server, (perServer.get(t.server) ?? 0) + 1);
-    const summary = [...perServer.entries()].map(([s, n]) => `${s} (${n})`).join(", ");
+    for (const t of visible)
+      perServer.set(t.server, (perServer.get(t.server) ?? 0) + 1);
+    const summary = [...perServer.entries()]
+      .map(([s, n]) => `${s} (${n})`)
+      .join(", ");
     return [
       {
         name: SEARCH_TOOL,
@@ -555,8 +638,16 @@ export class McpHub {
         inputSchema: {
           type: "object",
           properties: {
-            query: { type: "string", description: "What you want to do, e.g. 'create github issue'." },
-            limit: { type: "integer", minimum: 1, maximum: 10, description: "Max results (default 5)." },
+            query: {
+              type: "string",
+              description: "What you want to do, e.g. 'create github issue'.",
+            },
+            limit: {
+              type: "integer",
+              minimum: 1,
+              maximum: 10,
+              description: "Max results (default 5).",
+            },
           },
           required: ["query"],
         },
@@ -567,8 +658,14 @@ export class McpHub {
         inputSchema: {
           type: "object",
           properties: {
-            name: { type: "string", description: "Exact tool name from the search results." },
-            arguments: { type: "object", description: "Arguments matching the tool's input schema." },
+            name: {
+              type: "string",
+              description: "Exact tool name from the search results.",
+            },
+            arguments: {
+              type: "object",
+              description: "Arguments matching the tool's input schema.",
+            },
           },
           required: ["name"],
         },
@@ -590,11 +687,14 @@ export function compactForAgent(tool: HubTool, maxDesc: number): AgentTool {
   return {
     name: tool.exposedName,
     description: clip(tool.description ?? "", maxDesc),
-    inputSchema: clipSchemaDescriptions(tool.inputSchema, Math.max(80, Math.floor(maxDesc / 2)), 0) as Record<
-      string,
-      unknown
-    >,
-    ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
+    inputSchema: clipSchemaDescriptions(
+      tool.inputSchema,
+      Math.max(80, Math.floor(maxDesc / 2)),
+      0,
+    ) as Record<string, unknown>,
+    ...(tool.annotations !== undefined
+      ? { annotations: tool.annotations }
+      : {}),
   };
 }
 
@@ -604,12 +704,19 @@ function serverAllowed(server: string, scope: AgentScope): boolean {
 
 function clip(text: string, max: number): string {
   const collapsed = text.replace(/\s+/g, " ").trim();
-  return collapsed.length <= max ? collapsed : `${collapsed.slice(0, max - 1)}…`;
+  return collapsed.length <= max
+    ? collapsed
+    : `${collapsed.slice(0, max - 1)}…`;
 }
 
-function clipSchemaDescriptions(node: unknown, max: number, depth: number): unknown {
+function clipSchemaDescriptions(
+  node: unknown,
+  max: number,
+  depth: number,
+): unknown {
   if (depth > 12 || node === null || typeof node !== "object") return node;
-  if (Array.isArray(node)) return node.map((n) => clipSchemaDescriptions(n, max, depth + 1));
+  if (Array.isArray(node))
+    return node.map((n) => clipSchemaDescriptions(n, max, depth + 1));
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
     if (key === "$schema") continue;
@@ -636,7 +743,9 @@ function unavailableMessage(tool: HubTool): string {
   const why = tool.reasons.join("; ") || tool.status;
   // A plain `trust` accepts a changed definition but keeps a tool the
   // scanner flagged withheld; that needs --include-flagged (#657).
-  const flagged = tool.reasons.some((r) => r.startsWith("suspicious definition"));
+  const flagged = tool.reasons.some((r) =>
+    r.startsWith("suspicious definition"),
+  );
   const trust = `foreman mcp trust ${tool.server}${flagged ? " --include-flagged" : ""}`;
   const hint =
     tool.status === "denied"
@@ -649,7 +758,10 @@ function normaliseSchema(schema: unknown): Record<string, unknown> {
   return isRecord(schema) ? schema : { type: "object", properties: {} };
 }
 
-function mapValues(input: Record<string, string>, fn: (v: string) => string): Record<string, string> {
+function mapValues(
+  input: Record<string, string>,
+  fn: (v: string) => string,
+): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(input)) out[k] = fn(v);
   return out;
@@ -661,8 +773,13 @@ const MIN_SCRUB_CHARS = 8;
 
 /** Replace every occurrence of a known secret value in any string of a
  *  tool result (text, resources, structured content, error results). */
-export function scrubKnownValues<T>(value: T, secrets: readonly string[]): { value: T; count: number } {
-  const needles = [...new Set(secrets)].filter((s) => s.length >= MIN_SCRUB_CHARS).sort((a, b) => b.length - a.length);
+export function scrubKnownValues<T>(
+  value: T,
+  secrets: readonly string[],
+): { value: T; count: number } {
+  const needles = [...new Set(secrets)]
+    .filter((s) => s.length >= MIN_SCRUB_CHARS)
+    .sort((a, b) => b.length - a.length);
   let count = 0;
   if (needles.length === 0) return { value, count };
   const walk = (node: unknown, depth: number): unknown => {
@@ -680,7 +797,8 @@ export function scrubKnownValues<T>(value: T, secrets: readonly string[]): { val
     if (depth > 32 || node === null || typeof node !== "object") return node;
     if (Array.isArray(node)) return node.map((n) => walk(n, depth + 1));
     const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(node as Record<string, unknown>)) out[k] = walk(v, depth + 1);
+    for (const [k, v] of Object.entries(node as Record<string, unknown>))
+      out[k] = walk(v, depth + 1);
     return out;
   };
   return { value: walk(value, 0) as T, count };

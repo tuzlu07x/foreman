@@ -84,6 +84,9 @@ export interface MediatorDeps {
   /** Optional LLM verifier (#231 / C8). When set + enabled in llm.yaml,
    *  flagged calls get a second-opinion before the modal opens. */
   verifier?: LlmVerifier;
+  /** Secret names only the MCP hub may read (integration credentials).
+   *  `secrets/get` refuses them whatever the policy says. */
+  hubOnlySecrets?: () => ReadonlySet<string>;
 }
 
 export interface SecretGetInput {
@@ -409,9 +412,13 @@ export class MediatorService {
 
     // Hub OAuth sessions are attached upstream by the hub itself; no policy
     // rule can hand them to an agent.
+    // Nor can one read the credentials of an integration: the hub attaches
+    // them, and an agent holding one would bypass every mediated call.
     const evaluation = isMcpOAuthSecretName(input.secretName)
       ? { decision: "deny" as const, decidedBy: "reserved:mcp-oauth" }
-      : this.deps.policy.evaluateSecretAccess(input.sourceAgent, input.secretName);
+      : this.deps.hubOnlySecrets?.().has(input.secretName)
+        ? { decision: "deny" as const, decidedBy: "reserved:integration" }
+        : this.deps.policy.evaluateSecretAccess(input.sourceAgent, input.secretName);
 
     if (evaluation.decision !== "allow") {
       this.emitSecretDecision({
