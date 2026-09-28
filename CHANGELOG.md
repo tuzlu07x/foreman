@@ -104,6 +104,9 @@ everything works as before.
     now says it couldn't reach the provider, as the agent step does.
   - The Done summary counted a stored GitHub token as "1 service github".
     Integrations are listed in their own block, not as services.
+  - The Done screen suggests `foreman agent hook install claude-code`
+    while Claude Code's PreToolUse hook (checks its Bash, Edit and Read
+    calls before they run) isn't installed; it is a separate opt-in.
 - **`?` opens help on every page.** Every status bar says `? help`, but
   only Home opened it; on Agents, Settings, Logs, Policy, Sessions,
   Delegations, Inbox and the other pages the key did nothing. It now works

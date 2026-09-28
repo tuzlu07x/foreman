@@ -19,6 +19,8 @@ import {
   safeFind,
 } from "./shared.js";
 import { wizardServiceChoices } from "./services-logic.js";
+import { hasForemanHook, type ClaudeSettings } from "../../core/agent-hook.js";
+import { resolveAgentSettingsPath } from "../../core/agent-permissions.js";
 import type { WizardOauthRunStep } from "./types.js";
 
 export function handleDoneInput(
@@ -550,6 +552,19 @@ export function countPolicyRules(policyPath: string): number {
   }
 }
 
+/** Whether Claude Code's settings carry Foreman's PreToolUse hook: false
+ *  when they don't (the Done screen suggests installing it), null when the
+ *  file can't be read (say nothing). */
+export function claudeHookInstalled(configPaths: string[]): boolean | null {
+  try {
+    const path = resolveAgentSettingsPath(configPaths);
+    if (!existsSync(path)) return false;
+    return hasForemanHook(JSON.parse(readFileSync(path, "utf-8")) as ClaudeSettings, "claude-code");
+  } catch {
+    return null;
+  }
+}
+
 // Done-screen tile that lists how to start each newly-installed agent. Driven
 // by `secret_projection.launch` in the registry — single string OR array of
 // {command, label} (Hermes chat vs gateway, OpenClaw chat vs gateway).
@@ -582,6 +597,13 @@ function LaunchCommands({ agentIds }: { agentIds: string[] }): JSX.Element | nul
                 ) : null}
               </Text>
             ))}
+            {entry.id === "claude-code" && claudeHookInstalled(entry.config_paths ?? []) === false ? (
+              <Text>
+                {"    "}
+                <Text color={theme.accent.primary}>foreman agent hook install claude-code</Text>
+                <Text color={theme.fg.muted}>  (also check its Bash, Edit and Read calls before they run)</Text>
+              </Text>
+            ) : null}
           </Box>
         );
       })}
