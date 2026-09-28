@@ -11,5 +11,8 @@ export default defineConfig({
     // copy of the native SQLite binding, which tears down more reliably
     // across Node versions than a shared worker thread.
     pool: 'forks',
+    // Many CLI tests run the built `foreman` several times; on a busy CI
+    // runner under Vitest 5 a test like that can pass 5 s (#679).
+    testTimeout: 20_000,
   },
 })
