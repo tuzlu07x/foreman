@@ -505,6 +505,10 @@ default davranışı belirlemek için.
 - `logEvent(type, payload)` → `audit_events`
 - Async batch write (her request için ayrı transaction değil, 100ms
   buffer ile batch)
+- Başka bir süreç veritabanı kilidini busy timeout'tan (5 sn) uzun
+  tutarsa (`SQLITE_BUSY`) batch atılmaz: sırasını koruyarak kuyrukta
+  kalır, sınırlı backoff ile yeniden denenir, her hata stderr'e yazılır.
+  Arka plan yazımı süreci düşürmez (#594).
 
 **Nerede kullanır:** Her servis tarafından (event bus aracılığıyla).
 

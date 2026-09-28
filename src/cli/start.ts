@@ -723,9 +723,14 @@ export function startForeman(
     await daemonManager.stopAll().catch(() => {
       /* best-effort cleanup */
     });
-    audit.dispose();
-    deleteForemanPidfile(paths.configDir);
-    closeDb();
+    try {
+      // May throw if another process holds the database past its busy
+      // timeout (#594); the pidfile and the handle still go.
+      audit.dispose();
+    } finally {
+      deleteForemanPidfile(paths.configDir);
+      closeDb();
+    }
   };
 
   // SIGINT (Ctrl-C in TUI) AND SIGTERM (delivered by `/foreman stop`

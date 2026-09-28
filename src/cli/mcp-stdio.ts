@@ -192,7 +192,9 @@ interface Services {
 
 function bootServices(): Services {
   const db = getDb();
-  const audit = new AuditLogger(db, bus);
+  // A write that loses a lock to another process is kept and retried;
+  // the agent's MCP connection stays up (#594).
+  const audit = new AuditLogger(db, bus, { onError: warn });
   const masterKey = loadOrCreateSecretsMasterKey();
   // FOREMAN_APPROVAL_TIMEOUT wins over the 60 s interactive default (the
   // approval service reads it when no explicit timeout is passed).
@@ -444,14 +446,28 @@ async function drainAndExit(
     ]);
   } finally {
     await services.hub?.close().catch(() => undefined);
-    cleanup(services);
-    process.exit(0);
+    let code = 0;
+    try {
+      cleanup(services);
+    } catch (err) {
+      // Unhandled here, the rejection would skip the exit below.
+      code = 1;
+      warn(
+        `closing the audit log failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    process.exit(code);
   }
 }
 
 function cleanup(services: Services): void {
-  services.audit.dispose();
-  closeDb();
+  try {
+    // The last write can still lose a lock to another process (#594):
+    // close the database either way; the caller reports the error.
+    services.audit.dispose();
+  } finally {
+    closeDb();
+  }
 }
 
 export async function handleMessage(
