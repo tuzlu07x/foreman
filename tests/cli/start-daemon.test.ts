@@ -91,6 +91,8 @@ describe("foreman start hosts the daemon", () => {
       await started.shutdown();
       const r = await waiting;
       expect(r.exit).toBe(2);
+      // Said plainly, not "the daemon went away" (#691).
+      expect(r.stderr).toMatch(/Foreman is shutting down — blocking the call/);
       // The socket's own close event runs after shutdown returned.
       await new Promise((r) => setTimeout(r, 200));
       expect(rejections).toEqual([]);

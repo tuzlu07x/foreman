@@ -690,3 +690,91 @@ describe("ApprovalBridge", () => {
     });
   });
 });
+
+// #691 — An approval whose requester died (killed, crashed, terminal
+// closed) stayed pending until its deadline, up to 10 minutes: the next
+// TUI session offered it, and "allowing" it recorded a decision for a call
+// that could no longer run. The waiting requester now refreshes a
+// heartbeat; the bridge cancels a pending row whose heartbeat went quiet.
+describe("approval heartbeat (#691)", () => {
+  let db: ForemanDb;
+  let sqlite: Database.Database;
+  let bus: EventBus<ForemanEventMap>;
+
+  beforeEach(() => {
+    const handle = createInMemoryDb();
+    db = handle.db;
+    sqlite = handle.sqlite;
+    bus = new EventBus<ForemanEventMap>();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  const row = (id: string) =>
+    db.select().from(pendingApprovals).where(eq(pendingApprovals.requestId, id)).get();
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it("a waiting request keeps its heartbeat fresh", async () => {
+    const svc = new DbApprovalService(db, { bus, timeoutMs: 2_000, pollIntervalMs: 10, heartbeatIntervalMs: 40 });
+    const waiting = svc.request(req({ requestId: "hb-1" }));
+    await sleep(20);
+    const first = row("hb-1")?.heartbeatMs;
+    expect(first).toBeTypeOf("number");
+    await sleep(150);
+    expect(row("hb-1")!.heartbeatMs!).toBeGreaterThan(first!);
+    db.update(pendingApprovals)
+      .set({ status: "resolved", decision: "denied", resolvedBy: "user" })
+      .where(eq(pendingApprovals.requestId, "hb-1"))
+      .run();
+    expect((await waiting).decision).toBe("denied");
+  });
+
+  const insert = (id: string, heartbeatMs: number | null) =>
+    db.insert(pendingApprovals)
+      .values({
+        requestId: id,
+        sourceAgent: "claude-code",
+        targetTool: "shell_exec",
+        args: JSON.stringify({ cmd: "rm -rf ./build" }),
+        riskScore: 60,
+        riskReasons: "[]",
+        status: "pending",
+        requestedAt: Date.now() - 60_000,
+        deadlineMs: Date.now() + 9 * 60_000,
+        heartbeatMs,
+      })
+      .run();
+
+  it("cancels a row whose requester stopped beating, and tells the TUI", async () => {
+    const resolved: ForemanEventMap["approval:resolved"][] = [];
+    bus.on("approval:resolved", (e) => resolved.push(e));
+    insert("gone-1", Date.now());
+    const bridge = new ApprovalBridge(db, { bus, pollIntervalMs: 20 });
+    bridge.start();
+    await sleep(60);
+    expect(bridge.pending().map((p) => p.requestId)).toEqual(["gone-1"]);
+    // The requester dies: no beat for longer than the orphan window.
+    db.update(pendingApprovals)
+      .set({ heartbeatMs: Date.now() - 31_000 })
+      .where(eq(pendingApprovals.requestId, "gone-1"))
+      .run();
+    await sleep(100);
+    bridge.stop();
+    expect(row("gone-1")).toMatchObject({ status: "resolved", decision: "denied", resolvedBy: "cancelled" });
+    expect(resolved).toEqual([expect.objectContaining({ requestId: "gone-1", decision: "denied", resolvedBy: "cancelled" })]);
+    expect(bridge.pending()).toEqual([]);
+  });
+
+  it("leaves a live requester's row and a legacy row without a heartbeat alone", async () => {
+    insert("live-1", Date.now());
+    insert("legacy-1", null);
+    const bridge = new ApprovalBridge(db, { bus, pollIntervalMs: 20 });
+    bridge.start();
+    await sleep(80);
+    bridge.stop();
+    expect(row("live-1")?.status).toBe("pending");
+    expect(row("legacy-1")?.status).toBe("pending");
+  });
+});
