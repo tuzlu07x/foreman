@@ -127,7 +127,7 @@ export function AgentsPage({
         <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>
       </Box>
       <Text color={theme.fg.muted}>
-        [↑↓] move · [Enter] expand · [o] login · [N] edit note · [L] change LLM
+        [↑↓] move · [Enter] expand · [o] login · [N] edit note · [L] change LLM · [m] model
         · [d] disable · [e] enable · [b] block/unblock · [r] regen key · [x]
         remove · [Esc] back
       </Text>

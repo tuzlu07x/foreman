@@ -55,6 +55,11 @@ import { AgentsPage } from "./pages/agents-page.js";
 import { ProvidersPage } from "./pages/providers-page.js";
 import { ServicesPage } from "./pages/services-page.js";
 import { IntegrationsPage } from "./pages/integrations-page.js";
+import { ModelPicker, type ModelOption } from "./components/model-picker.js";
+import { providerModelTiers } from "../core/provider-resolver.js";
+import { discoverModels, type DiscoveryProvider } from "../core/llm/models-discovery.js";
+import { loadLlmConfig } from "../core/llm/config.js";
+import { getForemanPaths } from "../utils/config.js";
 import { DelegationsPage } from "./pages/delegations-page.js";
 import { SessionsPage } from "./pages/sessions-page.js";
 import { buildSettingsItems, SettingsPage } from "./pages/settings-page.js";
@@ -232,6 +237,12 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const [agentsSelectedIdx, setAgentsSelectedIdx] = useState(0);
   const [agentsExpanded, setAgentsExpanded] = useState(false);
   const [agentsNotice, setAgentsNotice] = useState<string | null>(null);
+  // Model picker (Settings `m`: Foreman's model; Agents `m`: the agent's).
+  const [modelPicker, setModelPicker] = useState<
+    | { target: "brain"; provider: string; current: string | null }
+    | { target: "agent"; agentId: string; provider: string; current: string | null }
+    | null
+  >(null);
   const [agentsEditMode, setAgentsEditMode] = useState<"none" | "note" | "llm">(
     "none",
   );
@@ -906,6 +917,35 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     setAgentsLlmDraft(null);
   }, []);
 
+  const openBrainModelPicker = useCallback((): void => {
+    try {
+      const config = loadLlmConfig(getForemanPaths().llmConfigPath);
+      setModelPicker({ target: "brain", provider: config.provider, current: config.model });
+    } catch (err) {
+      setSettingsNotice(`can't read llm.yaml: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, []);
+  const openAgentModelPicker = useCallback((): void => {
+    const agent = registry.listAll()[agentsSelectedIdx];
+    if (!agent) return;
+    setModelPicker({
+      target: "agent",
+      agentId: agent.id,
+      provider: agent.llmProvider ?? (agent.id === "codex" ? "openai" : "anthropic"),
+      current: agent.modelVersion,
+    });
+  }, [registry, agentsSelectedIdx]);
+  const loadLiveModels = useCallback(
+    (provider: string) => async (): Promise<string[]> => {
+      if (!secretStore || !["anthropic", "openai", "gemini"].includes(provider)) return [];
+      const keyName = `${provider}-key`;
+      if (!secretStore.exists(keyName)) return [];
+      const models = await discoverModels(provider as DiscoveryProvider, { apiKey: secretStore.get(keyName) });
+      return models.map((m) => m.id);
+    },
+    [secretStore],
+  );
+
   const queueCount = queue.state.items.length;
   const queueCountRef = useRef(queueCount);
   queueCountRef.current = queueCount;
@@ -1061,6 +1101,9 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           onAgentLogin={onAgentLogin}
           agentsEditMode={agentsEditMode}
           pageEditing={pageEditing}
+          modelPickerOpen={modelPicker !== null}
+          onOpenBrainModelPicker={openBrainModelPicker}
+          onOpenAgentModelPicker={openAgentModelPicker}
           onAgentStartNoteEdit={onAgentStartNoteEdit}
           onAgentStartLlmEdit={onAgentStartLlmEdit}
           onAgentSaveLlm={onAgentSaveLlm}
@@ -1254,6 +1297,30 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
       ) : (
         <Box height={pageHeight}>{renderPanels(layout)}</Box>
       )}
+      {modelPicker && (
+        <ModelPicker
+          title={
+            modelPicker.target === "brain"
+              ? `Foreman's model (${modelPicker.provider})`
+              : `${modelPicker.agentId}'s model (${modelPicker.provider})`
+          }
+          current={modelPicker.current}
+          tiers={modelTierOptions(modelPicker.provider)}
+          loadMore={loadLiveModels(modelPicker.provider)}
+          allowClear={modelPicker.target === "agent"}
+          onCancel={() => setModelPicker(null)}
+          onPick={(model) => {
+            const picker = modelPicker;
+            setModelPicker(null);
+            const args =
+              picker.target === "brain" ? [model ?? ""] : [picker.agentId, model ?? "clear"];
+            void commandEnv.dispatch("model", args).then((result) => {
+              const say = picker.target === "brain" ? setSettingsNotice : setAgentsNotice;
+              say(result.text.split("\n")[0] ?? "");
+            });
+          }}
+        />
+      )}
       {commandOpen ? null : pendingConfirm && !pendingApproval && !helpOpen ? (
         <ConfirmBar confirm={pendingConfirm} />
       ) : (
@@ -1348,6 +1415,10 @@ interface KeyboardHandlerProps {
   onAgentLogin: () => void;
   agentsEditMode: "none" | "note" | "llm";
   pageEditing: boolean;
+  /** The model picker owns the keyboard while open. */
+  modelPickerOpen: boolean;
+  onOpenBrainModelPicker: () => void;
+  onOpenAgentModelPicker: () => void;
   onAgentStartNoteEdit: () => void;
   onAgentStartLlmEdit: () => void;
   onAgentSaveLlm: () => void;
@@ -1362,6 +1433,18 @@ interface KeyboardHandlerProps {
   /** True when a letter key should be ignored because the approval on
    *  screen just changed. */
   swallowUnsettledKey: () => boolean;
+}
+
+/** The registry's fast / balanced / strongest models for a provider. */
+function modelTierOptions(provider: string): ModelOption[] {
+  const tiers = providerModelTiers(provider);
+  return tiers
+    ? [
+        { id: tiers.fast, hint: "fast, cheapest" },
+        { id: tiers.balanced, hint: "balanced" },
+        { id: tiers.strongest, hint: "most capable" },
+      ]
+    : [];
 }
 
 function KeyboardHandler(props: KeyboardHandlerProps): null {
@@ -1488,6 +1571,8 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     }
     // The command bar owns the keyboard while it is open.
     if (commandOpen) return;
+    // So does the model picker (it handles Esc itself).
+    if (props.modelPickerOpen) return;
     // Help overlay takes priority — when open, Esc / `?` / `h` close it.
     if (helpOpen) {
       if (key.escape || input === "?" || input === "h") setHelpOpen(false);
@@ -1755,6 +1840,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       if (input === "e") void onEditSoul();
       else if (input === "p") void onEditPolicyFromSettings();
       else if (input === "P") setPage("policy");
+      else if (input === "m") props.onOpenBrainModelPicker();
       else if (input === "w") onWizardInstruction();
       else if (key.return) {
         if (settingsSelectedIdx === 0) void onEditSoul();
@@ -1826,6 +1912,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "N") onAgentStartNoteEdit();
       else if (input === "L") onAgentStartLlmEdit();
       else if (input === "o") onAgentLogin();
+      else if (input === "m") props.onOpenAgentModelPicker();
       return;
     }
     // ProvidersPage / ServicesPage run their own useInput; short-circuit

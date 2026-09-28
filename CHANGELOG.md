@@ -50,6 +50,11 @@ All notable changes to Foreman are documented here. The format follows
   - `foreman mcp add <id> --param host=…` for catalog servers with a
     configurable host (self-managed GitLab). `mcp.yaml` writes are locked
     and atomic and keep your comments.
+- **Model picker in the TUI.** `m` on Settings picks Foreman's own model;
+  `m` on Agents picks the selected agent's model (or puts it back on the
+  default). The list shows the provider's fast / balanced / most capable
+  models first, then its live list when a key is stored. A pick runs the
+  same `model` command as the console.
 - **Integration credentials stay with the hub.** A secret an integration
   server references can't be read by any agent through `secrets/get`,
   whatever `policy.yaml` says, and is never projected into agent files.
