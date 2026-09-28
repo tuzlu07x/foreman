@@ -398,17 +398,14 @@ Do this immediately on every such message:
 3. Call the Foreman MCP tool \`submit_command\` with:
    - \`command\`: the verb (lower-case is fine, Foreman normalizes)
    - \`args\`: remaining tokens as a string array
-   - \`source_user\`: **ALWAYS include** — the Telegram \`from.id\`
-     (numeric) for the person who typed the command (Discord
-     snowflake, Slack user id, etc. for other channels). Foreman
-     owner-gates mutating verbs (\`write\`, \`stop\`, …) against this
-     value; omitting it WILL cause those commands to fail with
-     NOT_AUTHORIZED. The user id is in the Telegram update under
-     \`message.from.id\` — relay it as a string. For 1:1 private
-     chats it's equal to the chat id, but always use \`from.id\`
-     for correctness in groups. Never omit just because you didn't
-     "see it explicitly" — it's always present on the message you
-     just received.
+   - \`source_user\`: the Telegram \`from.id\` (numeric) of the
+     person who typed the command (Discord snowflake, Slack user id,
+     etc. for other channels), relayed as a string. Foreman records it
+     in the audit log; it does not authorize anything. \`write\` and
+     \`assign\` hand out work as your own delegation (the org chart
+     decides). Other commands that change Foreman (\`stop\`,
+     \`model <x>\`, \`llm switch\`, …) wait until the user allows them
+     on Foreman's own approval prompt, and are refused otherwise.
 4. Take Foreman's response text and post it back to the user
    **verbatim** as a chat reply. Do not paraphrase, summarize, or
    pre-process. If \`isError\` is true the same rule applies —

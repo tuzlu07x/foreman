@@ -43,6 +43,7 @@ function makeServices(
     },
     commandRouter: {
       dispatch: vi.fn(async () => commandResult),
+      has: vi.fn((verb: string) => ["help", "status", "llm", "model", "stop", "write", "assign"].includes(verb)),
     },
     audit: {
       logEvent: vi.fn(),
@@ -53,6 +54,11 @@ function makeServices(
     // to assert on heartbeat behavior swap this for a tracking fake.
     registry: {
       heartbeat: vi.fn(),
+      findByCommandToken: vi.fn((token: string) =>
+        token.toLowerCase() === "openclaw"
+          ? { kind: "match", agent: { id: "openclaw" } }
+          : { kind: "none" },
+      ),
     },
     llmConfigPath: "/tmp/test-llm.yaml",
     configDir: "/tmp/test-config",
@@ -709,6 +715,120 @@ describe("mcp-stdio handleMessage", () => {
   // #431 — Agent-routed orchestrator command. User types `/foreman <verb>`
   // in the agent's chat; agent calls submit_command; Foreman dispatches
   // via the command router; agent posts the response back.
+  describe("submit_command from an agent is read-only unless the user allows it (#656)", () => {
+    const call = (command: string, args: string[] = [], extra: Record<string, unknown> = {}) =>
+      ({
+        jsonrpc: "2.0",
+        id: 90,
+        method: "tools/call",
+        params: { name: "submit_command", arguments: { command, args, ...extra } },
+      }) as JSONRPCMessage;
+
+    it.each([
+      ["status", []],
+      ["help", []],
+      ["llm", ["status"]],
+      ["model", []],
+      ["what is codex doing?", []],
+    ])("runs a read-only command (%s %j) without asking", async (command, args) => {
+      const services = makeServices("denied", "approval-timeout");
+      await handleMessage(services, "hermes", call(command, args));
+      expect(services.mediator.handleRequest).not.toHaveBeenCalled();
+      expect(services.commandRouter.dispatch).toHaveBeenCalledWith(
+        command,
+        args,
+        expect.not.objectContaining({ ownerConfirmed: true }),
+      );
+    });
+
+    it.each([
+      ["stop", []],
+      ["model", ["claude-opus-4"]],
+      ["llm", ["switch", "openai", "gpt-5"]],
+      ["llm", ["callback", "http://localhost/?code=x"]],
+    ])("never runs %s %j unless a person allows it, and audits the refusal", async (command, args) => {
+      const services = makeServices("denied", "approval-timeout");
+      // An agent-supplied source_user proves nothing.
+      const out = (await handleMessage(services, "hermes", call(command, args, { source_user: "12345" }))) as unknown as {
+        result: { content: { text: string }[]; isError: boolean };
+      };
+      expect(services.commandRouter.dispatch).not.toHaveBeenCalled();
+      expect(out.result.isError).toBe(true);
+      expect(out.result.content[0]?.text).toMatch(/needs the user's OK in Foreman, and nobody allowed it in time/);
+      expect(services.mediator.handleRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceAgent: "hermes",
+          targetTool: "foreman_command",
+          requireHuman: expect.objectContaining({
+            factor: expect.objectContaining({ rule: "relayed_command" }),
+          }),
+        }),
+      );
+      expect(services.audit.logEvent).toHaveBeenCalledWith(
+        "foreman:command-refused",
+        expect.objectContaining({ command, args, sourceAgent: "hermes", decidedBy: "approval-timeout" }),
+      );
+    });
+
+    it.each([
+      ["write", ["codex", "review", "the", "parser"]],
+      ["assign", ["engineering", "fix", "the", "build"]],
+      ["openclaw", ["build", "a", "todo", "app"]],
+    ])("hands out work (%s %j) as the agent's own delegation, never as the owner", async (command, args) => {
+      const services = makeServices("denied", "approval-timeout");
+      await handleMessage(services, "hermes", call(command, args, { source_user: "12345" }));
+      expect(services.mediator.handleRequest).not.toHaveBeenCalled();
+      expect(services.commandRouter.dispatch).toHaveBeenCalledWith(
+        command,
+        args,
+        expect.objectContaining({ sourceAgent: "hermes", agentDelegation: true }),
+      );
+      expect(services.commandRouter.dispatch).toHaveBeenCalledWith(
+        command,
+        args,
+        expect.not.objectContaining({ ownerConfirmed: true }),
+      );
+    });
+
+    it("runs a relayed change as confirmed by the owner once a person allows it", async () => {
+      const services = makeServices("allowed", "user:telegram");
+      const out = (await handleMessage(services, "hermes", call("stop"))) as unknown as {
+        result: { isError?: boolean };
+      };
+      expect(out.result.isError).toBeFalsy();
+      expect(services.commandRouter.dispatch).toHaveBeenCalledWith(
+        "stop",
+        [],
+        expect.objectContaining({ sourceAgent: "hermes", ownerConfirmed: true }),
+      );
+      expect(services.audit.logEvent).toHaveBeenCalledWith(
+        "foreman:command",
+        expect.objectContaining({ command: "stop", ok: true, confirmedBy: "user:telegram" }),
+      );
+    });
+
+    it("says why when the approval was denied", async () => {
+      const services = makeServices("denied", "user:tui");
+      const out = (await handleMessage(services, "hermes", call("stop"))) as unknown as {
+        result: { content: { text: string }[] };
+      };
+      expect(out.result.content[0]?.text).toMatch(/and it was denied/);
+    });
+
+    it("tells agents in the tool description that source_user authorizes nothing", async () => {
+      const out = (await handleMessage(makeServices("allowed"), "hermes", {
+        jsonrpc: "2.0",
+        id: 91,
+        method: "tools/list",
+      } as JSONRPCMessage)) as unknown as {
+        result: { tools: Array<{ name: string; description: string; inputSchema: { properties: Record<string, { description: string }> } }> };
+      };
+      const tool = out.result.tools.find((t) => t.name === "submit_command")!;
+      expect(tool.description).toMatch(/waits until the user allows it/);
+      expect(tool.inputSchema.properties.source_user!.description).toMatch(/does not authorize anything/);
+    });
+  });
+
   describe("submit_command tool (#431)", () => {
     it("advertises submit_command on tools/list", async () => {
       const out = (await handleMessage(makeServices("allowed"), "hermes", {

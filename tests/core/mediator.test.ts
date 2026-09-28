@@ -121,6 +121,43 @@ describe('MediatorService — unit', () => {
     expect(blocked.decidedBy).toBe('agent:blocked')
   })
 
+  describe('requireHuman (#656)', () => {
+    const factor = { rule: 'relayed_command', category: 'structural' as const, points: 60, reason: 'relays /foreman stop' }
+
+    it('asks even when policy allows and the score is low, and never remembers the answer', async () => {
+      policy.remember({ sourceAgent: 'hermes', target: 'tool:foreman_command', effect: 'allow' })
+      const allow = vi.fn(async (): Promise<ApprovalDecision> => ({ decision: 'allowed', remember: 'allow', via: 'tui' }))
+      const mediator = new MediatorService({ registry, policy, risk, approval: { request: allow }, bus })
+      const before = policy.list().length
+      const result = await mediator.handleRequest({
+        sourceAgent: 'hermes',
+        targetTool: 'foreman_command',
+        message: callMessage(1, 'foreman_command', { command: 'stop', args: [] }),
+        requireHuman: { factor },
+      })
+      expect(allow).toHaveBeenCalledOnce()
+      const asked = (allow.mock.calls[0] as unknown as [{ riskBucket: string; riskReasons: string[] }])[0]
+      expect(asked.riskReasons).toContain('relayed_command')
+      expect(asked.riskBucket).toBe('high')
+      expect(result).toMatchObject({ decision: 'allowed', decidedBy: 'user:tui' })
+      expect(policy.list()).toHaveLength(before)
+    })
+
+    it('a policy deny still wins without asking', async () => {
+      policy.remember({ sourceAgent: 'hermes', target: 'tool:foreman_command', effect: 'deny' })
+      const mediator = new MediatorService({ registry, policy, risk, approval, bus })
+      const result = await mediator.handleRequest({
+        sourceAgent: 'hermes',
+        targetTool: 'foreman_command',
+        message: callMessage(1, 'foreman_command', { command: 'stop', args: [] }),
+        requireHuman: { factor },
+      })
+      expect(result.decision).toBe('denied')
+      expect(result.decidedBy).toMatch(/^policy:/)
+      expect(approval.request).not.toHaveBeenCalled()
+    })
+  })
+
   it('denies calls from a paused (disabled) agent', async () => {
     registry.register({ id: 'codex', displayName: 'C', transport: 'stdio' })
     registry.disable('codex')

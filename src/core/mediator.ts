@@ -8,7 +8,7 @@ import {
   type ForemanEventMap,
 } from "./event-bus.js";
 import type { PolicyEngine } from "./policy-engine.js";
-import { type RiskScorer } from "./risk-scorer.js";
+import { composeAssessment, type RiskScorer } from "./risk-scorer.js";
 import type {
   LlmVerification,
   RiskAssessment,
@@ -48,6 +48,12 @@ export interface MediatorInput {
    *  tool rules from mcp.yaml here, so policy.yaml always wins and the risk
    *  engine still escalates risky calls even when the fallback allows. */
   policyFallback?: { effect: "allow" | "ask" | "deny"; source: string };
+  /** Only a person may allow this call (#656), e.g. a `/foreman` command
+   *  an agent relays that changes Foreman. The factor is added to the risk
+   *  assessment so the prompt says why. Policy and the risk engine can
+   *  still deny it; nothing allows it without an approval (no allow rule,
+   *  no low score), and the decision is never remembered. */
+  requireHuman?: { factor: RiskFactor };
 }
 
 export interface MediatorOutput {
@@ -203,13 +209,20 @@ export class MediatorService {
       });
     }
 
-    const heuristic = this.deps.risk.assess({
+    const scored = this.deps.risk.assess({
       sourceAgent: input.sourceAgent,
       targetAgent: input.targetAgent,
       targetTool: input.targetTool,
       args: this.argsFromMessage(input.message),
       sessionId: input.sessionId,
     });
+    const heuristic = input.requireHuman
+      ? composeAssessment(
+          [...scored.factors, input.requireHuman.factor],
+          this.deps.policy.getBucketOverrides(),
+          scored.llmVerification,
+        )
+      : scored;
 
     // Optional LLM verification pass — short-circuits gracefully when off /
     // below threshold / over budget / cached. Combine folds the verdict back
@@ -267,7 +280,9 @@ export class MediatorService {
 
     const riskReasons = assessment.factors.map((f) => f.rule);
     const needsApproval =
-      policyResult.decision === "ask" || assessment.recommendation === "ask";
+      policyResult.decision === "ask" ||
+      assessment.recommendation === "ask" ||
+      input.requireHuman !== undefined;
 
     if (needsApproval) {
       // #525 — Stamp the absolute auto-resolve deadline on the event so
@@ -319,7 +334,8 @@ export class MediatorService {
       // "Always allow" is keyed to the source id; for an unverified
       // connection that would hand the rule to anyone who claims it.
       const rememberable =
-        approval.remember === "deny" || !isUntrustedSource(input.sourceAgent);
+        input.requireHuman === undefined &&
+        (approval.remember === "deny" || !isUntrustedSource(input.sourceAgent));
       if (approval.remember && rememberable && input.targetTool) {
         const target = input.targetAgent
           ? `${input.targetAgent}:${input.targetTool}`
