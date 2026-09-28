@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, describe, expect, it } from 'vitest'
+import { installPreToolUseHook } from '../../src/core/agent-hook.js'
 import { loadLlmPresets } from '../../src/core/llm-provider-presets.js'
-import { configuredPresetIds, doneServiceIds } from '../../src/tui/setup-wizard/done.js'
+import { claudeHookInstalled, configuredPresetIds, doneServiceIds } from '../../src/tui/setup-wizard/done.js'
 
 // =============================================================================
 // Done summary counts an OpenAI-compatible preset chosen as Foreman's brain.
@@ -35,5 +39,34 @@ describe('doneServiceIds', () => {
   it("doesn't count an integration's stored secret as a service", () => {
     expect(doneServiceIds(catalog, new Set(['github-pat', 'notion-token']))).toEqual([])
     expect(doneServiceIds(catalog, new Set(['github-pat', 'telegram-bot-token']))).toEqual(['telegram'])
+  })
+})
+
+// Terminal QA: the Done screen said how to launch Claude Code but never
+// that its PreToolUse hook (checks Bash / Edit / Read before they run) is
+// a separate opt-in. It now suggests `foreman agent hook install
+// claude-code` while the hook isn't there.
+describe('claudeHookInstalled', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fm-done-hook-'))
+  afterAll(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('is false without a settings file or without the hook', () => {
+    expect(claudeHookInstalled([join(dir, 'missing.json')])).toBe(false)
+    const plain = join(dir, 'plain.json')
+    writeFileSync(plain, JSON.stringify({ theme: 'dark' }))
+    expect(claudeHookInstalled([plain])).toBe(false)
+  })
+
+  it('is true once the hook is installed', () => {
+    const path = join(dir, 'hooked.json')
+    writeFileSync(path, '{}')
+    installPreToolUseHook({ settingsPath: path, hookCommand: 'foreman-hook claude-code' })
+    expect(claudeHookInstalled([path])).toBe(true)
+  })
+
+  it('is null when the settings file cannot be read', () => {
+    const bad = join(dir, 'bad.json')
+    writeFileSync(bad, '{ not json')
+    expect(claudeHookInstalled([bad])).toBeNull()
   })
 })

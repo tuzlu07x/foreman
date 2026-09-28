@@ -191,6 +191,11 @@ export function stripForemanHooks(
   };
 }
 
+/** Whether Foreman's PreToolUse hook for `agentId` is in these settings. */
+export function hasForemanHook(settings: ClaudeSettings, agentId: string): boolean {
+  return stripForemanHooks(settings, agentId) !== null;
+}
+
 /** The hook command's last argument names the agent it runs for. */
 function hookRunsFor(hook: HookEntry, agentId: string): boolean {
   return typeof hook.command === "string" && hook.command.trim().split(/\s+/).at(-1) === agentId;
