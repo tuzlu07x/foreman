@@ -48,7 +48,7 @@ import {
   type ChatScrollbackEntry,
 } from "./pages/chat-page.js";
 import { PolicyPage } from "./pages/policy-page.js";
-import { REVEAL_AUTO_HIDE_MS, SecretsPage } from "./pages/secrets-page.js";
+import { keysPageSecrets, REVEAL_AUTO_HIDE_MS, SecretsPage } from "./pages/secrets-page.js";
 import { AgentsPage } from "./pages/agents-page.js";
 import { ProvidersPage } from "./pages/providers-page.js";
 import { ServicesPage } from "./pages/services-page.js";
@@ -537,7 +537,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   }, []);
   const onSecretReveal = useCallback((): void => {
     if (!secretStore) return;
-    const all = secretStore.list();
+    const all = keysPageSecrets(secretStore);
     const target = all[secretsSelectedIdx];
     if (!target) return;
     try {
@@ -565,7 +565,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
 
   const onSecretRotate = useCallback((): void => {
     if (!secretStore) return;
-    const all = secretStore.list();
+    const all = keysPageSecrets(secretStore);
     const target = all[secretsSelectedIdx];
     if (!target) return;
     setRotateMode({ name: target.name });
@@ -596,7 +596,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   // `d` only asks; the secret named in the question is the one deleted.
   const onSecretRemove = useCallback((): void => {
     if (!secretStore) return;
-    const target = secretStore.list()[secretsSelectedIdx];
+    // Agent identity tokens are not on this page, so `d` can't reach one.
+    const target = keysPageSecrets(secretStore)[secretsSelectedIdx];
     if (!target) return;
     const name = target.name;
     setPendingConfirm({
