@@ -197,6 +197,13 @@
       "when": 1783200000000,
       "tag": "0027_approval_reviews",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "5",
+      "when": 1783300000000,
+      "tag": "0028_approval_heartbeat",
+      "breakpoints": true
     }
   ]
 }

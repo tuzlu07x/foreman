@@ -282,6 +282,9 @@ export interface DbApprovalOptions {
   timeoutMs?: number;
   /** How often to poll the DB for a resolution. */
   pollIntervalMs?: number;
+  /** How often the waiting request refreshes its heartbeat (#691).
+   *  Defaults to APPROVAL_HEARTBEAT_MS; tests shorten it. */
+  heartbeatIntervalMs?: number;
   /** #526 — Optional callback that injects a predicate-based deny rule
    *  from a custom approval action (`block_*` button). Set when wiring
    *  Foreman with a policy engine; omit in unit tests that don't
@@ -316,11 +319,17 @@ export interface ApprovalRuleInjection {
 
 const DEFAULT_POLL_INTERVAL_MS = 200;
 const STALE_GRACE_MS = 30_000;
+/** How often a waiting requester refreshes its row's heartbeat (#691). */
+export const APPROVAL_HEARTBEAT_MS = 5_000;
+/** A pending row whose heartbeat is older than this has no one waiting on
+ *  it any more (six missed beats): the bridge cancels it. */
+export const APPROVAL_ORPHAN_AFTER_MS = 30_000;
 
 export class DbApprovalService implements ApprovalService {
   private readonly bus: EventBus<ForemanEventMap>;
   private readonly timeoutMs: number;
   private readonly pollIntervalMs: number;
+  private readonly heartbeatIntervalMs: number;
   private readonly injectPredicateRule?: (
     input: ApprovalRuleInjection,
   ) => number;
@@ -341,6 +350,7 @@ export class DbApprovalService implements ApprovalService {
     // need real time to react. FOREMAN_APPROVAL_TIMEOUT env still wins.
     this.timeoutMs = opts.timeoutMs ?? envTimeoutMs() ?? DB_DEFAULT_TIMEOUT_MS;
     this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+    this.heartbeatIntervalMs = opts.heartbeatIntervalMs ?? APPROVAL_HEARTBEAT_MS;
     this.injectPredicateRule = opts.injectPredicateRule;
   }
 
@@ -376,12 +386,18 @@ export class DbApprovalService implements ApprovalService {
         status: "pending",
         requestedAt,
         deadlineMs,
+        heartbeatMs: requestedAt,
       })
       .run();
 
     const deadline = requestedAt + this.timeoutMs;
+    let beatAt = requestedAt;
     while (Date.now() < deadline) {
       if (this.closed) this.cancelPending([req.requestId]);
+      if (Date.now() - beatAt >= this.heartbeatIntervalMs) {
+        beatAt = Date.now();
+        this.heartbeat(req.requestId, beatAt);
+      }
       const row = this.db
         .select()
         .from(pendingApprovals)
@@ -436,6 +452,21 @@ export class DbApprovalService implements ApprovalService {
 
   close(): void {
     this.closed = true;
+  }
+
+  /** Tell the bridge someone still waits on this approval (#691). A write
+   *  lost to a busy database is skipped: the next beat retries, and a
+   *  cancelled row only ever means a denied call. */
+  private heartbeat(requestId: string, now: number): void {
+    try {
+      this.db
+        .update(pendingApprovals)
+        .set({ heartbeatMs: now })
+        .where(and(eq(pendingApprovals.requestId, requestId), eq(pendingApprovals.status, "pending")))
+        .run();
+    } catch {
+      // best effort
+    }
   }
 
   cancelPending(requestIds: readonly string[]): void {
@@ -736,13 +767,17 @@ export class ApprovalBridge {
         row.deadlineMs != null
           ? row.deadlineMs + STALE_GRACE_MS
           : row.requestedAt + this.staleMs;
-      if (now > expiresAt) {
+      // Nobody waits on it any more (#691): its requester was killed or
+      // crashed, so it stopped refreshing the heartbeat. Offering it would
+      // let someone "allow" a call that can no longer run.
+      const orphaned = row.heartbeatMs != null && now - row.heartbeatMs > APPROVAL_ORPHAN_AFTER_MS;
+      if (now > expiresAt || orphaned) {
         this.db
           .update(pendingApprovals)
           .set({
             status: "resolved",
             decision: "denied",
-            resolvedBy: "timeout",
+            resolvedBy: orphaned && now <= expiresAt ? "cancelled" : "timeout",
             resolvedAt: now,
           })
           // Only if still pending: never overwrite a decision that landed

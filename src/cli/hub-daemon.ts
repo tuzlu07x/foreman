@@ -103,6 +103,9 @@ interface Conn {
   teardown: () => Promise<void>;
   /** Set by endConn: the one run of teardown. */
   ended?: Promise<void>;
+  /** A hook still waiting for its answer: tell it Foreman is shutting
+   *  down (and the call is blocked) before the connection is dropped. */
+  onShutdown?: () => void;
 }
 
 /** Run a connection's teardown once, however many times it is asked for
@@ -201,6 +204,17 @@ export async function startHubDaemon(opts: HubDaemonOptions): Promise<HubDaemon>
       // session errors its unanswered calls. Pending approvals are
       // cancelled, never left to be allowed later.
       const all = [...conns];
+      // A hook waiting on a decision hears why its call is blocked, rather
+      // than "the daemon went away" (#691); the socket gets a moment to
+      // flush that line before it is dropped.
+      let told = false;
+      for (const conn of all) {
+        if (conn.onShutdown) {
+          conn.onShutdown();
+          told = true;
+        }
+      }
+      if (told) await new Promise((resolve) => setTimeout(resolve, 100));
       for (const conn of all) conn.socket.destroy();
       await Promise.allSettled(all.map((c) => endConn(c, opts.log)));
       await hub.close().catch(() => undefined);
@@ -323,6 +337,12 @@ function serveHook(conn: Conn, line: string, ctx: ServeContext): void {
   let approval: DbApprovalService | null = null;
   let answered = false;
   let gone = false;
+  let shuttingDown = false;
+  conn.onShutdown = () => {
+    if (answered || shuttingDown || socket.destroyed) return;
+    shuttingDown = true;
+    answer(2, [{ level: "error", text: "Foreman is shutting down — blocking the call. Review with `foreman log tail`." }]);
+  };
   // The hook process went away (Claude Code's timeout, a kill): its
   // approval can never be answered, so it is cancelled (denied), or never
   // opened when the call hasn't got that far.
@@ -353,7 +373,8 @@ function serveHook(conn: Conn, line: string, ctx: ServeContext): void {
     },
   }).then((verdict) => {
     answered = true;
-    if (!socket.destroyed) answer(verdict.exit, verdict.lines);
+    // Already told it Foreman is shutting down: that answer stands.
+    if (!socket.destroyed && !shuttingDown) answer(verdict.exit, verdict.lines);
   });
 }
 

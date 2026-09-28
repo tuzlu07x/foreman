@@ -237,6 +237,11 @@ export const pendingApprovals = sqliteTable(
     // Nullable for legacy rows + callers that don't compute a deadline
     // (BusApprovalService unit tests).
     deadlineMs: integer("deadline_ms"),
+    // #691 — Refreshed by the waiting requester every few seconds. The
+    // approval bridge cancels a pending row whose heartbeat went quiet (its
+    // requester died) instead of offering it for a decision that can no
+    // longer run. Null for legacy rows and callers that don't refresh it.
+    heartbeatMs: integer("heartbeat_ms"),
   },
   (t) => ({
     statusIdx: index("pending_approvals_status_idx").on(

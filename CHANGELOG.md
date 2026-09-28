@@ -93,6 +93,15 @@ everything works as before.
   whatever `policy.yaml` says, and is never projected into agent files.
 
 ### Fixed
+- **Approvals whose caller is gone no longer wait to be decided** (#691).
+  When Foreman or an agent was killed while a call waited for approval,
+  the approval stayed pending for up to 10 minutes: the next TUI session
+  offered it, and allowing it recorded a decision for a call that could no
+  longer run. The waiting caller now refreshes a heartbeat, and an approval
+  whose caller stopped is cancelled (denied) within about 30 seconds. On a
+  clean quit, a Claude Code hook call waiting on the daemon is told
+  "Foreman is shutting down — blocking the call" instead of "the daemon
+  went away".
 - **Setup wizard wording, from terminal QA.**
   - The Providers summary asked "Continue to agents?" and the Services
     summary "Continue to install?". They now name the actual next step
