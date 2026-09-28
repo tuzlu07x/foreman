@@ -24,9 +24,10 @@ describe('stepProgress', () => {
       'foreman-llm': 2,
       agents: 3,
       services: 4,
-      'chat-primary': 4,
-      'required-setup': 5,
-      install: 5,
+      integrations: 5,
+      'chat-primary': 6,
+      'required-setup': 6,
+      install: 6,
     })
   })
 

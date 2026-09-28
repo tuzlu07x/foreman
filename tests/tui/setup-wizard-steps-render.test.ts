@@ -149,6 +149,10 @@ import {
 import { runInstallStep } from '../../src/tui/setup-wizard/install-runner.js'
 import { discoverModels } from '../../src/core/llm/models-discovery.js'
 import { saveOAuthTokens } from '../../src/core/llm/oauth/token-store.js'
+import { createIntegrationWiring, loadIntegrationCatalogs } from '../../src/core/integrations/wiring.js'
+import { loadHubConfig } from '../../src/core/mcp-hub/config.js'
+
+const integrationCatalogs = loadIntegrationCatalogs()
 
 const ENTER = '\r'
 const ESC = '\u001B'
@@ -161,10 +165,21 @@ const ALL_BEFORE: Record<Step, Step[]> = {
   'foreman-llm': ['welcome', 'providers'],
   agents: ['welcome', 'providers', 'foreman-llm'],
   services: ['welcome', 'providers', 'foreman-llm', 'agents'],
-  'chat-primary': ['welcome', 'providers', 'foreman-llm', 'agents', 'services'],
-  'required-setup': ['welcome', 'providers', 'foreman-llm', 'agents', 'services', 'chat-primary'],
-  install: ['welcome', 'providers', 'foreman-llm', 'agents', 'services', 'chat-primary', 'required-setup'],
-  done: ['welcome', 'providers', 'foreman-llm', 'agents', 'services', 'chat-primary', 'required-setup', 'install'],
+  integrations: ['welcome', 'providers', 'foreman-llm', 'agents', 'services'],
+  'chat-primary': ['welcome', 'providers', 'foreman-llm', 'agents', 'services', 'integrations'],
+  'required-setup': ['welcome', 'providers', 'foreman-llm', 'agents', 'services', 'integrations', 'chat-primary'],
+  install: ['welcome', 'providers', 'foreman-llm', 'agents', 'services', 'integrations', 'chat-primary', 'required-setup'],
+  done: [
+    'welcome',
+    'providers',
+    'foreman-llm',
+    'agents',
+    'services',
+    'integrations',
+    'chat-primary',
+    'required-setup',
+    'install',
+  ],
 }
 
 function stripAnsi(s: string): string {
@@ -215,6 +230,10 @@ interface Mounted {
   until: (target: string | RegExp) => Promise<void>
   secretStore: SecretStore
   services: WizardServices
+  /** The temp mcp.yaml the Integrations step writes. */
+  mcpConfigPath: string
+  /** Audit events the Integrations step logged. */
+  auditEvents: { type: string; payload: unknown }[]
   chatPrimarySet: Mock<(a: string, b: string) => void>
   launchEditor: Mock<(path: string) => Promise<unknown>>
   onQuit: Mock<() => void>
@@ -233,6 +252,8 @@ async function mount(
     /** Resume from this state instead of "every step before `step`". */
     initialState?: SetupState
     afterExit?: 'exit' | 'launch-tui'
+    /** false = no integration wiring (the catalog failed to load). */
+    integrations?: false
   } = {},
 ): Promise<Mounted> {
   const handle = createInMemoryDb()
@@ -253,6 +274,17 @@ async function mount(
   writeFileSync(policyPath, 'rules:\n  - id: a\n  - id: b\n')
   const chatPrimarySet = vi.fn<(a: string, b: string) => void>()
   const launchEditor = vi.fn<(path: string) => Promise<unknown>>(async () => undefined)
+  const mcpConfigPath = join(dir, 'mcp.yaml')
+  const auditEvents: { type: string; payload: unknown }[] = []
+  const integrations =
+    opts.integrations === false
+      ? undefined
+      : createIntegrationWiring({
+          paths: { mcpConfigPath, mcpPinsPath: join(dir, 'mcp-pins.json') },
+          store: secretStore,
+          audit: { logEvent: (type, payload) => auditEvents.push({ type, payload }) },
+          catalogs: integrationCatalogs,
+        })
   const services: WizardServices = {
     db: handle.db,
     secretStore,
@@ -263,6 +295,7 @@ async function mount(
     notifyConfigPath: join(dir, 'notify.yaml'),
     voiceConfigPath: join(dir, 'voice.yaml'),
     launchEditor,
+    ...(integrations ? { integrations } : {}),
   }
   const onQuit = vi.fn<() => void>()
   const wizard = React.createElement(SetupWizard, {
@@ -348,6 +381,8 @@ async function mount(
     until,
     secretStore,
     services,
+    mcpConfigPath,
+    auditEvents,
     chatPrimarySet,
     launchEditor,
     onQuit,
@@ -434,7 +469,7 @@ describe('welcome step', () => {
   it('previews the steps and starts on Enter', async () => {
     const w = await mount('welcome')
     await w.until('Welcome to Foreman')
-    await w.until("We'll wire this up in 5 steps")
+    await w.until("We'll wire this up in 6 steps")
     await w.until('[Enter] Start setup')
     await w.press(ENTER, 'LLM Providers ▸ pick which to configure')
   })
@@ -457,12 +492,13 @@ describe('welcome step', () => {
 
 describe('step numbering', () => {
   it.each([
-    ['providers', 'Step 1 of 5 ▸ LLM Providers'],
-    ['foreman-llm', "Step 2 of 5 ▸ Foreman's brain"],
-    ['agents', 'Step 3 of 5 ▸ Agents'],
-    ['services', 'Step 4 of 5 ▸ Services'],
-    ['required-setup', 'Step 5 of 5 ▸ Required setup'],
-    ['install', 'Step 5 of 5 ▸ Install + configure'],
+    ['providers', 'Step 1 of 6 ▸ LLM Providers'],
+    ['foreman-llm', "Step 2 of 6 ▸ Foreman's brain"],
+    ['agents', 'Step 3 of 6 ▸ Agents'],
+    ['services', 'Step 4 of 6 ▸ Services'],
+    ['integrations', 'Step 5 of 6 ▸ Integrations'],
+    ['required-setup', 'Step 6 of 6 ▸ Required setup'],
+    ['install', 'Step 6 of 6 ▸ Install + configure'],
   ] as const)('%s shows "%s"', async (step, header) => {
     const w = await mount(step)
     if (step === 'install') await w.startInstall()
@@ -598,7 +634,8 @@ describe('agents confirm: removing keeps binaries unless asked', () => {
     const before = vi.mocked(runInstallStep).mock.calls.length
     await w.press('y', 'Services ▸ pick which to configure')
     await w.press(ENTER, 'Services ▸ summary')
-    await w.press('y')
+    await w.press('y', 'Integrations ▸ optional')
+    await w.press(ENTER)
     await w.startInstall()
     const call = vi.mocked(runInstallStep).mock.calls[before]
     expect(call?.[1]).toEqual(['codex'])
@@ -743,6 +780,123 @@ describe('services step', () => {
   })
 })
 
+describe('integrations step', () => {
+  // An obvious fake in the shape the GitHub token pattern accepts.
+  const FAKE_PAT = `ghp_${'F'.repeat(36)}`
+
+  it('resumes at the picker, and empty + Enter skips the step', async () => {
+    const w = await mount('integrations')
+    await w.until('Step 5 of 6 ▸ Integrations ▸ optional')
+    await w.until('GitHub — token')
+    await w.until('GitLab — browser sign-in, after setup')
+    await w.press(ENTER, 'Required setup')
+    expect(loadSetupState().completed).toContain('integrations')
+    expect(Object.keys(loadHubConfig(w.mcpConfigPath).servers)).toEqual([])
+    expect(w.auditEvents).toEqual([])
+  })
+
+  it('adds GitHub with a token: saved disabled, read-only, secret in the store', async () => {
+    const w = await mount('integrations')
+    await w.until('GitHub — token')
+    await w.pressInList(SPACE)
+    await w.press(ENTER, 'GitHub (1 of 1) ▸ access level')
+    await w.until('read-only (recommended)')
+    await w.until('Who can use it: hermes, claude-code')
+    await w.press(ENTER, 'GitHub (1 of 1) ▸ credentials')
+    await w.until('github.com/settings/personal-access-tokens/new')
+    await w.type(FAKE_PAT)
+    await w.press(ENTER, 'Integrations ▸ summary')
+    await w.until('✓ Saved 1 — off until you review it after setup')
+    await w.until('next: foreman integrations review github')
+    expect(w.frame()).not.toContain(FAKE_PAT)
+
+    const server = loadHubConfig(w.mcpConfigPath).servers.github!
+    expect(server.enabled).toBe(false)
+    expect(server.integration).toMatchObject({ id: 'github', variant: 'official', access_level: 'read-only' })
+    expect(server.access).toEqual({ agents: ['claude-code', 'hermes'] })
+    expect(w.secretStore.get('github-pat')).toBe(FAKE_PAT)
+    expect(w.auditEvents.map((e) => e.type)).toEqual(['integration:added'])
+    expect(w.auditEvents[0]!.payload).toMatchObject({ integration: 'github', via: 'wizard' })
+    expect(JSON.stringify(w.auditEvents)).not.toContain(FAKE_PAT)
+
+    await w.press(ENTER, 'Required setup')
+    const saved = loadSetupState()
+    expect(saved.completed).toContain('integrations')
+    expect(saved.session?.integrationsSelected).toEqual(['github'])
+    expect(readFileSync(getSetupStatePath(), 'utf-8')).not.toContain(FAKE_PAT)
+  })
+
+  it('refuses a malformed token, and empty Enter leaves the integration out', async () => {
+    const w = await mount('integrations')
+    await w.until('GitHub — token')
+    await w.pressInList(SPACE)
+    await w.press(ENTER, '▸ access level')
+    await w.press(ENTER, '▸ credentials')
+    await w.type('notatoken')
+    await w.press(ENTER, "doesn't look like a GitHub personal access token")
+    expect(w.frame()).toContain('GitHub (1 of 1) ▸ credentials')
+    await w.press(ENTER, 'Integrations ▸ summary')
+    await w.until('Skipped: GitHub (no GitHub personal access token)')
+    await w.until('no integrations added')
+    expect(loadHubConfig(w.mcpConfigPath).servers.github).toBeUndefined()
+    expect(w.secretStore.exists('github-pat')).toBe(false)
+  })
+
+  it('keeps a token already in the store (e.g. from the old Services step)', async () => {
+    const w = await mount('integrations', { secrets: { 'github-pat': FAKE_PAT } })
+    await w.until('GitHub — token')
+    await w.pressInList(SPACE)
+    await w.press(ENTER, '▸ access level')
+    await w.press(ENTER, 'already stored — Enter on empty input keeps it')
+    await w.press(ENTER, 'Integrations ▸ summary')
+    await w.until('✓ Saved 1')
+    expect(loadHubConfig(w.mcpConfigPath).servers.github!.integration!.secrets).toEqual({ 'github-pat': 'github-pat' })
+    expect(w.secretStore.get('github-pat')).toBe(FAKE_PAT)
+  })
+
+  it('saves an OAuth integration for sign-in later and lists the login on Done', async () => {
+    const w = await mount('integrations')
+    await w.until('GitLab — browser sign-in')
+    await w.pressInList(DOWN)
+    await w.pressInList(SPACE)
+    await w.press(ENTER, 'GitLab (1 of 1) ▸ details')
+    await w.until('GitLab host')
+    await w.press(ENTER, 'GitLab (1 of 1) ▸ access level')
+    await w.until('Signs in through your browser after setup: foreman integrations login gitlab')
+    await w.press(ENTER, 'Integrations ▸ summary')
+    await w.until('next: foreman integrations login gitlab')
+    const server = loadHubConfig(w.mcpConfigPath).servers.gitlab!
+    expect(server.enabled).toBe(false)
+    expect(server.auth).toBe('oauth')
+    expect(server.integration!.params).toEqual({ host: 'gitlab.com' })
+    await w.press(ENTER, 'Required setup')
+    await w.press('c', '✗ Hermes — install failed')
+    await w.press('s', 'Setup complete')
+    await w.until('Integrations — off until you review them')
+    await w.until('▸ foreman integrations login gitlab')
+  })
+
+  it('Esc goes required-setup → integrations → services', async () => {
+    const w = await mount('required-setup')
+    await w.until('Ready to install')
+    await w.press(ESC, 'Integrations ▸ optional')
+    await w.press(ESC, 'Services ▸ summary')
+  })
+
+  it('says integrations are unavailable when the catalog did not load, and Enter continues', async () => {
+    const w = await mount('integrations', { integrations: false })
+    await w.until("Integrations can't be set up here")
+    await w.press(ENTER, 'Required setup')
+  })
+
+  it('no longer offers GitHub, Jira or Notion on the Services step', async () => {
+    const w = await mount('services')
+    await w.until('Services ▸ pick which to configure')
+    await w.until('Telegram')
+    expect(w.frame()).not.toMatch(/GitHub —|Notion —|Atlassian|Jira —/)
+  })
+})
+
 describe('chat-primary step', () => {
   it('asks which chat agent owns a shared channel and saves the pick', async () => {
     const w = await mount('services', { registered: ['hermes', 'openclaw'] })
@@ -751,7 +905,8 @@ describe('chat-primary step', () => {
     await w.press(ENTER, 'prompt 1 of 2')
     await w.press(ENTER, 'prompt 2 of 2')
     await w.press(ENTER, 'Services ▸ summary')
-    await w.press('y', 'Primary Telegram agent')
+    await w.press('y', 'Integrations ▸ optional')
+    await w.press(ENTER, 'Primary Telegram agent')
     await w.until('Hermes')
     await w.until('OpenClaw')
     await w.pressInList(DOWN)
@@ -774,7 +929,8 @@ describe('required-setup step', () => {
     await w.press(ENTER, 'Agents ▸ confirm')
     await w.press('y', 'Services ▸ pick which to configure')
     await w.press(ENTER, 'Services ▸ summary')
-    await w.press('y', 'Required setup ▸ missing keys')
+    await w.press('y', 'Integrations ▸ optional')
+    await w.press(ENTER, 'Required setup ▸ missing keys')
     await w.until('openrouter-key')
     await w.until('❯ ⚠ openrouter-key  for: hermes · status: missing')
     await w.press(ENTER, 'paste openrouter-key')
@@ -804,7 +960,8 @@ describe('required-setup step [s] skip', () => {
     await w.press(ENTER, 'Agents ▸ confirm')
     await w.press('y', 'Services ▸ pick which to configure')
     await w.press(ENTER, 'Services ▸ summary')
-    await w.press('y', 'Required setup ▸ missing keys')
+    await w.press('y', 'Integrations ▸ optional')
+    await w.press(ENTER, 'Required setup ▸ missing keys')
     await w.until(/❯ ✓ openai-key .*status: present/)
     await w.press('s')
     // Used to flip to "✗ … status: skipped" for a key that is in the store.
@@ -831,10 +988,12 @@ describe('required-setup cursor', () => {
     await w.press(ENTER, 'Agents ▸ confirm')
     await w.press('y', 'Services ▸ pick which to configure')
     await w.press(ENTER, 'Services ▸ summary')
-    await w.press('y', 'Required setup ▸ missing keys')
+    await w.press('y', 'Integrations ▸ optional')
+    await w.press(ENTER, 'Required setup ▸ missing keys')
     await w.pressInList(DOWN)
     await w.until('❯ ⚠ openrouter-key')
     // Back to the agents picker; keep only OpenClaw → one row left.
+    await w.press(ESC, 'Integrations ▸ optional')
     await w.press(ESC, 'Services ▸ summary')
     await w.press(ESC, 'Services ▸ pick which to configure')
     await w.press(ESC, 'Agents ▸ confirm')
@@ -847,7 +1006,8 @@ describe('required-setup cursor', () => {
     await w.press(ENTER, 'Agents ▸ confirm')
     await w.press('y', 'Services ▸ pick which to configure')
     await w.press(ENTER, 'Services ▸ summary')
-    await w.press('y', 'Required setup ▸ all set')
+    await w.press('y', 'Integrations ▸ optional')
+    await w.press(ENTER, 'Required setup ▸ all set')
     // The stale cursor (1) used to point past the single row: nothing
     // focused, so Enter / [s] / [o] did nothing.
     await w.until('❯ ✓ openai-key')
@@ -904,7 +1064,8 @@ describe('resume keeps session-only choices', () => {
     await first.type(typedSecrets['telegram-bot-token'])
     await first.press(ENTER, 'prompt 2 of 2')
     await first.press(ENTER, 'Services ▸ summary')
-    await first.press('y', 'Required setup ▸ missing keys')
+    await first.press('y', 'Integrations ▸ optional')
+    await first.press(ENTER, 'Required setup ▸ missing keys')
     while (!first.frame().includes('❯ ⚠ openrouter-key')) await first.pressInList(DOWN)
     await first.press(ENTER, 'paste openrouter-key')
     await first.type(typedSecrets['openrouter-key'])
@@ -965,7 +1126,8 @@ describe('resume never uninstalls on its own', () => {
     await first.press(ENTER, 'Agents ▸ confirm')
     await first.press('y', 'Services ▸ pick which to configure')
     await first.press(ENTER, 'Services ▸ summary')
-    await first.press('y', 'Required setup')
+    await first.press('y', 'Integrations ▸ optional')
+    await first.press(ENTER, 'Required setup')
     unmount?.()
     unmount = null
     sqlite?.close()
@@ -985,7 +1147,8 @@ describe('resume never uninstalls on its own', () => {
     expect(resumed.frame()).not.toContain('Will unregister')
     await resumed.press('y', 'Services ▸ pick which to configure')
     await resumed.press(ENTER, 'Services ▸ summary')
-    await resumed.press('y', 'Required setup')
+    await resumed.press('y', 'Integrations ▸ optional')
+    await resumed.press(ENTER, 'Required setup')
     // One row, already focused: skip the missing key.
     await resumed.until('❯ ⚠ openrouter-key')
     await resumed.press('s', 'status: skipped')

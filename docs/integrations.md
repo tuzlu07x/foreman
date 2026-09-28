@@ -35,6 +35,16 @@ The same flow is on the TUI's Integrations page (`i` in `foreman start`):
 `n` adds, `space` enables or disables, `e` edits, `t` sets per-tool rules,
 `r` reviews and `d` removes.
 
+The setup wizard (`foreman setup`, or the wizard `foreman start` opens on a
+fresh install) has an optional Integrations step after Services. It asks
+for the access level and, for token integrations, the token; the agents you
+picked in the wizard may use it. It saves each integration **disabled** and
+never connects or opens a browser: finish it afterwards with
+`foreman integrations review <name>` (token) or
+`foreman integrations login <name>` (browser sign-in), then
+`foreman integrations enable <name>`. The Done screen lists the commands.
+Setups finished before this step existed are not sent back into the wizard.
+
 In a script, give the audience and pipe the token:
 
 ```bash

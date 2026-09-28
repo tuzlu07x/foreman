@@ -32,6 +32,13 @@ All notable changes to Foreman are documented here. The format follows
     private chat. Removing asks for a one-time code; changes need an owner
     (`owner_user_ids` for Slack / Discord), land in the inbox, and a
     relaying agent can only read. Credentials never go through chat.
+  - The setup wizard has an optional Integrations step (step 5 of 6, after
+    Services): pick integrations, the access level (read-only by default)
+    and a token for token variants. They're saved disabled for the agents
+    picked in the wizard; the Done screen lists `foreman integrations
+    review` / `login` for each. GitHub, Atlassian and Notion are no longer
+    offered on the wizard's Services step (`services.json` keeps them).
+    An existing setup is not reopened for the new step.
   - `foreman doctor` reports enabled integrations that can't work;
     `foreman secrets remove` / `rotate` say when an integration uses the
     secret.

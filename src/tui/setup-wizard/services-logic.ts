@@ -133,6 +133,17 @@ export function consumingAgentsFor(
   return service.used_by_agents.filter((id) => agentsSelected.includes(id));
 }
 
+/** GitHub, Jira/Confluence (atlassian) and Notion are set up in the
+ *  Integrations step now (docs/plans/integrations.md §13.2). services.json
+ *  keeps them so older setups and agents' `optional_services` still
+ *  resolve; only the wizard's Services picker stops offering them. */
+export const INTEGRATION_MANAGED_SERVICES: readonly string[] = ["github", "atlassian", "notion"];
+
+/** The services the wizard's Services picker offers. */
+export function wizardServiceChoices<T extends { id: string }>(catalog: readonly T[]): T[] {
+  return catalog.filter((s) => !INTEGRATION_MANAGED_SERVICES.includes(s.id));
+}
+
 /** Services pre-checked in the picker (#657): the session's pick (a resumed
  *  run) and every service whose secret is already stored, so a resumed or
  *  repeated setup shows what is configured instead of "(none)". */

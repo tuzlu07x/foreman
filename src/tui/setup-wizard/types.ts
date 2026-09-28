@@ -1,4 +1,5 @@
 import type { ChatPrimaryService } from "../../core/chat-primary.js";
+import type { IntegrationWiring } from "../../core/integrations/wiring.js";
 import type { RegistryService } from "../../core/registry.js";
 import type { SecretStore } from "../../core/secret-store.js";
 import type { ForemanDb } from "../../db/client.js";
@@ -27,6 +28,10 @@ export interface WizardServices {
    *  outer CLI for inline browser-flow execution. The CLI spawns them
    *  with inherited stdio so the user's browser actually opens. */
   requestOauthRun?: (steps: WizardOauthRunStep[]) => void;
+  /** The Integrations step saves through this (via: "wizard"). Absent when
+   *  the bundled integration catalog couldn't be loaded: the step then
+   *  says so and lets the user continue. */
+  integrations?: IntegrationWiring;
 }
 
 export interface WizardOauthRunStep {

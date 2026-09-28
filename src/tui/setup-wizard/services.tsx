@@ -16,9 +16,10 @@ import {
   notifyWiringNames,
   persistNotifyConfigFromWizardState,
   servicesPreChecked,
+  wizardServiceChoices,
 } from "./services-logic.js";
 
-// Step 4 — Services: picker → per-secret value prompts → summary.
+// Step 4 — Services (chat apps): picker → per-secret value prompts → summary.
 // Returns null when no services phase matches (root falls through).
 export function renderServicesStep(ctx: WizardContext): JSX.Element | null {
   const { services, advance, serviceCatalog } = ctx;
@@ -41,7 +42,8 @@ export function renderServicesStep(ctx: WizardContext): JSX.Element | null {
   } = ctx.set;
 // ---------------- Services — picker ----------------
 if (servicesPhase === "picker") {
-  const options = serviceCatalog.map((s) => {
+  const choices = wizardServiceChoices(serviceCatalog);
+  const options = choices.map((s) => {
     const consumers = consumingAgentsFor(s, agentsSelected);
     const usedBy =
       consumers.length > 0
@@ -56,14 +58,15 @@ if (servicesPhase === "picker") {
     <Box flexDirection="column" gap={1} paddingY={1}>
       <WizardProgress {...stepProgress("services")} label="Services" phase="pick which to configure" />
       <Text color={theme.fg.muted}>
-        ↑↓ move · <Text bold>Space toggle</Text> · Enter confirm. 3rd-party
-        tokens (Telegram, Discord, Slack, GitHub, …). Each one stores its
-        token encrypted on disk and gets handed to consuming agents on
-        demand. Skippable — leave empty + Enter to bypass.
+        ↑↓ move · <Text bold>Space toggle</Text> · Enter confirm. Chat
+        apps (Telegram, Discord, Slack). Each one stores its token
+        encrypted on disk and gets handed to consuming agents on demand.
+        GitHub, Jira and Notion are in the next step (Integrations).
+        Skippable — leave empty + Enter to bypass.
       </Text>
       <MultiSelect
         options={options}
-        defaultValue={servicesPreChecked(servicesSelected, serviceCatalog, services.secretStore)}
+        defaultValue={servicesPreChecked(servicesSelected, choices, services.secretStore)}
         onSubmit={(values) => {
           const result = applyServicesPickerSubmit(values);
           setServicesSelected(result.selected);

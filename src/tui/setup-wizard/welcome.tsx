@@ -14,13 +14,14 @@ export interface WelcomeStep {
 
 // Step preview rendered on the Welcome screen. Names must line up with
 // the actual step labels in the rest of the wizard so the user's mental
-// model from this screen matches what they see in Steps 1–4.
+// model from this screen matches what they see in Steps 1–6.
 export const WELCOME_STEPS: WelcomeStep[] = [
   { number: 1, name: "LLM Providers", estimateMinutes: 2 },
   { number: 2, name: "Foreman's brain", estimateMinutes: 1 },
   { number: 3, name: "Agents", estimateMinutes: 2 },
   { number: 4, name: "Services", estimateMinutes: 1, optional: true },
-  { number: 5, name: "Install + Verify", estimateMinutes: 3 },
+  { number: 5, name: "Integrations", estimateMinutes: 1, optional: true },
+  { number: 6, name: "Install + Verify", estimateMinutes: 3 },
 ];
 
 export function totalEstimatedMinutes(

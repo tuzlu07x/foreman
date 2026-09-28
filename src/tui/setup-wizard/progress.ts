@@ -11,7 +11,11 @@ const WELCOME_STEP_NAME: Record<Exclude<Step, "welcome" | "done">, string> = {
   "foreman-llm": "Foreman's brain",
   agents: "Agents",
   services: "Services",
-  "chat-primary": "Services",
+  integrations: "Integrations",
+  // Chat-primary runs after Integrations, so it counts with the other
+  // pre-install checks (required-setup) rather than with Services: the
+  // numbers never go backwards.
+  "chat-primary": "Install + Verify",
   "required-setup": "Install + Verify",
   install: "Install + Verify",
 };

@@ -19,7 +19,7 @@ Services are 3rd-party integrations (Telegram, Discord, GitHub, …) that one or
 
 ## Setup walkthroughs
 
-Each entry's `setup_steps` array drives the wizard's Step 4 (per-service walkthrough) and the TUI Services page's `[w]` overlay.
+Each entry's `setup_steps` array drives the wizard's Step 4 (per-service walkthrough) and the TUI Services page's `[w]` overlay. The wizard's Services step offers only the chat apps (Telegram, Discord, Slack); GitHub, Atlassian and Notion are set up in its Integrations step (Step 5) and stay in `services.json` for existing setups and the Services page.
 
 ### Telegram
 

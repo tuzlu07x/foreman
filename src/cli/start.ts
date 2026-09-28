@@ -77,6 +77,7 @@ import {
 } from "../tui/setup-state.js";
 import { SetupWizard, type WizardOauthRunStep } from "../tui/setup-wizard.js";
 import { runOauthFlows } from "./run-oauth-flow.js";
+import { wizardIntegrations } from "./wizard-integrations.js";
 import { runLoginWithSuspendedTui } from "../tui/run-login-in-tui.js";
 import { SecretStore } from "../core/secret-store.js";
 import type { IntegrationAuditSink } from "../core/integrations/service.js";
@@ -1647,6 +1648,7 @@ async function runOnboardingWizard(): Promise<boolean> {
   const registry = new RegistryService(db, bus);
   const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
   const chatPrimary = new ChatPrimaryService(db, { bus });
+  const wizardInt = wizardIntegrations(db, secretStore);
   // #468 — Auto-spawn OAuth flow queue. See setup.ts for the same wiring;
   // the wizard's [y] hotkey hands its OAuth steps here and we run them
   // post-unmount so interactive stdio reaches the child cleanly.
@@ -1668,6 +1670,7 @@ async function runOnboardingWizard(): Promise<boolean> {
         requestOauthRun: (steps) => {
           oauthQueue.push(...steps);
         },
+        ...(wizardInt.integrations ? { integrations: wizardInt.integrations } : {}),
       },
       // `foreman start` continues into the TUI once the wizard exits.
       afterExit: "launch-tui",
@@ -1679,6 +1682,7 @@ async function runOnboardingWizard(): Promise<boolean> {
     { exitOnCtrlC: false },
   );
   await instance.waitUntilExit();
+  wizardInt.dispose();
   if (oauthQueue.length > 0) {
     runOauthFlows(oauthQueue);
   }

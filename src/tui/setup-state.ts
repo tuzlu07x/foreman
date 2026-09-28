@@ -8,6 +8,10 @@ export const STEPS = [
   "foreman-llm",
   "agents",
   "services",
+  // Integrations (GitHub, GitLab, Jira/Confluence, Trello, Linear, Notion):
+  // optional and skippable. Saved disabled; they're reviewed (and signed
+  // in to) after setup. See docs/plans/integrations.md §7.
+  "integrations",
   // #426 — Primary chat agent per messaging channel. Runs after
   // services so we know which channels are in play, before
   // required-setup so the projector knows which agent gets the
@@ -46,6 +50,10 @@ export interface WizardSessionSnapshot {
   agentsSelected: string[];
   agentConfigs: Record<string, SessionAgentConfig>;
   servicesSelected: string[];
+  /** Integration ids picked in the Integrations step. Ids only — the
+   *  credentials go straight to the encrypted secret store. Absent in
+   *  snapshots written before the step existed. */
+  integrationsSelected?: string[];
   /** Live registry ids when the snapshot was saved. A resume compares it
    *  with the registry now; any difference re-opens the agents confirm
    *  step (planResume). Absent in snapshots written before it existed. */
@@ -85,13 +93,32 @@ export function loadSetupState(path: string = getSetupStatePath()): SetupState {
     if (!isValidState(raw)) return freshState();
     // A damaged session snapshot must not cost the user their completed
     // steps: keep the progress, drop only the snapshot.
-    const state: SetupState = { ...raw };
+    const state: SetupState = migrateCompleted({ ...raw });
     delete state.session;
     const session = sanitizeSession(raw.session);
     return session ? { ...state, session } : state;
   } catch {
     return freshState();
   }
+}
+
+/** Steps added after a user's setup-state.json was written count as done
+ *  once a later step is: an existing setup must not be sent back into the
+ *  wizard for an optional step it never saw (the Integrations step). */
+const BACKFILLED_STEPS: readonly Step[] = ["integrations"];
+
+function migrateCompleted(state: SetupState): SetupState {
+  let completed = state.completed;
+  for (const step of BACKFILLED_STEPS) {
+    if (completed.includes(step)) continue;
+    const idx = STEPS.indexOf(step);
+    if (completed.some((s) => STEPS.indexOf(s) > idx)) {
+      completed = [...completed, step].sort(
+        (a, b) => STEPS.indexOf(a) - STEPS.indexOf(b),
+      );
+    }
+  }
+  return completed === state.completed ? state : { ...state, completed };
 }
 
 export function saveSetupState(
@@ -231,6 +258,9 @@ export function sanitizeSession(
     agentConfigs,
     servicesSelected: r.servicesSelected.filter(knownService),
   };
+  if (isStringArray(r.integrationsSelected)) {
+    out.integrationsSelected = [...r.integrationsSelected];
+  }
   // Kept verbatim: it describes the registry, not the catalog.
   if (isStringArray(r.registeredAtSnapshot)) {
     out.registeredAtSnapshot = [...r.registeredAtSnapshot];
