@@ -496,11 +496,27 @@ function serveMcp(
   socket.write(`${JSON.stringify({ t: "ok", source: identity.source, trusted: identity.trusted })}\n`);
   announceIdentity(services, identity);
   // The agent closed its end: cancel what waits on a human, give running
-  // calls their grace period, then close.
+  // calls their grace period, write what the session left in the audit
+  // queue, then close. Its `foreman mcp-stdio` exits on that close, so the
+  // audit trail is on disk when it does, as when it ran Foreman itself.
   socket.on("end", () => {
-    void session.drain().finally(() => socket.end());
+    void session
+      .drain()
+      .then(() => flushAudit(ctx))
+      .finally(() => socket.end());
   });
   takeOver((chunk) => session.feed(chunk));
+}
+
+/** Write the shared audit queue now. A lock held by another process is
+ *  reported and retried by the logger itself (#594); the session still
+ *  closes. */
+function flushAudit(ctx: ServeContext): void {
+  try {
+    ctx.base.audit.flush();
+  } catch {
+    // kept queued and retried by the audit logger
+  }
 }
 
 function refuseAndClose(socket: Socket, reason: string): void {
