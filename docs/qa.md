@@ -46,10 +46,32 @@ Every scenario gets its own temporary directory with its own
 
 ## Platform
 
-Scenarios 3, 4, 6 and 7 drive `foreman start` through util-linux `script`
-(Linux only). Where it is missing they are reported as skipped with the
-reason. `QA_NO_PTY=1` skips them on purpose. Scenario 8 still runs without
-a pty; only its TUI approve and deny steps are skipped, with a note saying so.
+The suite runs the same way on Linux and macOS: all nine scenarios, the
+pty ones included.
+
+- **The pty.** Scenarios 3, 4, 6 and 7, and parts of 8 and 9, drive
+  `foreman start` in a 120×40 pseudo-terminal. On Linux that is util-linux
+  `script`. On macOS it is `qa/support/pty-run.py`, a small helper that uses
+  only Python 3's standard library (`python3` comes with the Xcode Command
+  Line Tools), so QA needs no native npm package. Both pass keystrokes in,
+  the screen out and Foreman's exit code through.
+- **Short sandbox paths.** `foreman start` runs its daemon on a Unix socket
+  in `FOREMAN_HOME`, and the socket path must be 100 characters or less.
+  Sandboxes go under `os.tmpdir()` when that fits (Linux: `/tmp`). macOS's
+  per-user `$TMPDIR` (`/var/folders/…/T`) is too long, so there they go under
+  `/tmp/fq-<scenario>-XXXXXX` (0700, deleted on teardown). Every
+  `foreman start` in QA waits for the daemon to listen, so a path that is too
+  long fails the scenario. Otherwise agents would quietly fall back to the
+  in-process path. Scenario 3 also checks the socket with
+  `foreman doctor --json`.
+- **Process checks.** Scenario 3 reads the running `foreman start`'s
+  environment from `/proc/<pid>/environ` on Linux and `ps eww` on macOS.
+  Zombie checks use `/proc/<pid>/stat` and `ps -o stat=` respectively.
+
+When no pty is available (no `script` on Linux, no `python3` on macOS, or
+Windows), the pty scenarios are reported as skipped with the reason.
+`QA_NO_PTY=1` skips them on purpose. Scenario 8 still runs without a pty;
+only its TUI approve and deny steps are skipped, with a note saying so.
 Scenario 9 likewise runs its setup and agent-side checks everywhere, and the
 steps that need `foreman start` (and so two-way Slack) only with a pty.
 
