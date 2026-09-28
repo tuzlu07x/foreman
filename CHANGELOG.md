@@ -6,6 +6,26 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **MCP hub access lists, confirm rules and live reload**
+  ([docs/mcp-hub.md](docs/mcp-hub.md#mcpyaml)).
+  - `access: { agents: [...], departments: [...] }` on a server limits it
+    to those agents and department members, on top of `org.yaml`
+    (`access: {}` = nobody).
+  - `tools.confirm` (merges, pushes): a person answers every call; no
+    allow rule, "always allow" or low risk score approves it.
+  - A running `foreman mcp-stdio` follows `mcp.yaml` and `org.yaml`: it
+    sends `notifications/tools/list_changed`, and a call approved after its
+    server was disabled or the agent lost access never runs (audited as
+    denied). A broken file leaves no hub servers.
+  - `foreman mcp add <id> --param host=…` for catalog servers with a
+    configurable host (self-managed GitLab). `mcp.yaml` writes are locked
+    and atomic and keep your comments.
+- **Integration credentials stay with the hub.** A secret an integration
+  server references can't be read by any agent through `secrets/get`,
+  whatever `policy.yaml` says, and is never projected into agent files.
+
 ### Fixed
 - **LLM budget pricing.** A model missing from Foreman's price table was
   billed at the provider's cheapest rate: Claude Opus 5 or Fable at Haiku
@@ -22,6 +42,7 @@ interfaces and defaults changed in ways that can break an existing setup.
 Read **Breaking changes** before you upgrade.
 
 ### Breaking changes
+
 - **Node 22.12+** is required (see Changed).
 - **Agent identity tokens (#618).** Agents wired before this release run as
   `untrusted:<id>` until you run `foreman agent rewire --all` and restart
@@ -49,6 +70,7 @@ Read **Breaking changes** before you upgrade.
   `foreman start` on the same home refuses to run.
 
 ### Added
+
 - **Per-agent identity tokens on the MCP path** (#618,
   [docs](docs/agent-lifecycle.md#agent-identity-tokens)).
   - `foreman agent add` mints a token, keeps it in the encrypted secret
@@ -221,6 +243,7 @@ Read **Breaking changes** before you upgrade.
   - Node 22/24 test matrix.
 
 ### Fixed
+
 - **Security fixes from the end-user QA pass** (#656).
   - Agents can't run Foreman: relayed commands that change it need you
     (see Breaking changes), and a `--source` can't create, revive or
@@ -386,6 +409,7 @@ Read **Breaking changes** before you upgrade.
   - Pushing a SOUL backs up user-authored identity files.
 
 ### Changed
+
 - **Release pipeline** (#620, [docs/releasing.md](docs/releasing.md)).
   - Publishing a GitHub release now publishes to npm with provenance.
   - Each binary is built and smoke-tested on its own architecture (macOS arm64 and x64, Linux x64 and arm64) and ships with `SHA256SUMS`.

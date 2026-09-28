@@ -184,7 +184,7 @@ it('Org: chart, delegation, department channels and per-department MCP servers',
     expect(eng.names.some((n) => n.startsWith('brand-kit__'))).toBe(false)
     const denied = await eng.agent.call('brand-kit__echo', { text: 'hi' })
     expect(denied.result?.isError).toBe(true)
-    expect(replyText(denied)).toContain("Your role in org.yaml does not include the 'brand-kit' MCP server")
+    expect(replyText(denied)).toContain("You don't have access to the 'brand-kit' MCP server")
     await eng.agent.close()
     const mkt = await hubTools('openclaw')
     expect(mkt.names).toContain('brand-kit__echo')

@@ -22,9 +22,13 @@ import {
   approvalIdMissHint,
   classifyApprovalIdInput,
 } from "../core/approval-id.js";
-import { deriveApprovalKey, parseApprovalToken } from "../core/approval-token.js";
+import {
+  deriveApprovalKey,
+  parseApprovalToken,
+} from "../core/approval-token.js";
 import { createMediatorStack } from "../core/mediator-stack.js";
-import { loadHub, scopeForAgent } from "../core/mcp-hub/boot.js";
+import { scopeForAgent } from "../core/mcp-hub/boot.js";
+import { HubRuntime } from "../core/mcp-hub/runtime.js";
 import { HubToolUnavailableError } from "../core/mcp-hub/hub.js";
 import type {
   AgentScope,
@@ -59,7 +63,12 @@ import {
   isValidAgentId,
 } from "../core/agent-identity.js";
 import { InboxService } from "../core/inbox.js";
-import { OrgComms, renderMessages, silencedReason, type MessageKind } from "../core/org/comms.js";
+import {
+  OrgComms,
+  renderMessages,
+  silencedReason,
+  type MessageKind,
+} from "../core/org/comms.js";
 import { ApprovalReviews } from "../core/org/review.js";
 import { createDecoder, encodeMessage } from "../mcp/framing.js";
 import type { JSONRPCMessage } from "../mcp/types.js";
@@ -115,13 +124,33 @@ export const mcpStdioCommand = new Command("mcp-stdio")
     // `--source QA-BOT` claims the registered `qa-bot` (#656): one spelling
     // per agent, so its block, pause and deny rules can't be dodged by case.
     const identity = resolveAgentIdentity({
-      claimed: options.source === undefined ? undefined : services.registry.canonicalId(options.source),
+      claimed:
+        options.source === undefined
+          ? undefined
+          : services.registry.canonicalId(options.source),
       token,
       store: services.secretStore,
       isRegistered: (id) => services.registry.get(id) !== null,
     });
     announceIdentity(services, identity);
-    services.hubScope = scopeForAgent(paths.orgConfigPath, identity.source, warn);
+    // The hub follows mcp.yaml and org.yaml while the agent stays
+    // connected: a disabled integration or a narrowed access list takes
+    // effect on the agent's next listing or call, not its next session.
+    services.hubRuntime = new HubRuntime({
+      paths: {
+        mcpConfigPath: paths.mcpConfigPath,
+        mcpPinsPath: paths.mcpPinsPath,
+        orgConfigPath: paths.orgConfigPath,
+      },
+      secretStore: services.secretStore,
+      agentId: identity.source,
+      onError: warn,
+      onToolsChanged: () => {
+        if (services.clientInitialized)
+          writeFrame(encodeMessage(TOOLS_LIST_CHANGED));
+      },
+    });
+    syncHub(services);
     // No connection creates a registry row (#656): agents are added with
     // `foreman agent add`, and a removed agent stays removed when its
     // client reconnects.
@@ -146,10 +175,15 @@ interface Services {
   /** Request ids of mediated calls still in flight in this process — their
    *  pending approvals are cancelled if the client disconnects. */
   pendingRequestIds?: Set<string>;
-  /** MCP hub — upstream servers from mcp.yaml, mediated per call. */
+  /** MCP hub — upstream servers from mcp.yaml, mediated per call. Kept
+   *  current by hubRuntime (see syncHub). */
   hub?: McpHub | null;
-  /** The connected agent's org.yaml server allow-list. */
+  /** The servers the connected agent may use (org.yaml ∩ mcp.yaml access). */
   hubScope?: AgentScope;
+  /** Rebuilds hub / hubScope when mcp.yaml or org.yaml change. */
+  hubRuntime?: HubRuntime;
+  /** The client sent `initialize`; notifications may follow. */
+  clientInitialized?: boolean;
   /** Department channels (#630). */
   comms?: OrgComms;
   /** Manager reviews of approvals (#623). */
@@ -172,7 +206,10 @@ function bootServices(): Services {
     approvalKey: deriveApprovalKey(masterKey),
     injectPredicateRule: (input) => {
       if (!policyEngine) throw new Error("policy engine not ready");
-      return policyEngine.addPredicateRule({ ...input, policyYamlPath: paths.policyPath });
+      return policyEngine.addPredicateRule({
+        ...input,
+        policyYamlPath: paths.policyPath,
+      });
     },
   });
   const secretStore = new SecretStore(db, masterKey);
@@ -184,6 +221,7 @@ function bootServices(): Services {
       policyPath: paths.policyPath,
       onPolicyError: warn,
       secretStore,
+      mcpConfigPath: paths.mcpConfigPath,
     });
   policyEngine = policy;
   const commandRouter = new ForemanCommandRouter();
@@ -222,7 +260,7 @@ function bootServices(): Services {
     orchestratorChat,
     controlChannel,
     pendingRequestIds: new Set<string>(),
-    hub: loadHub(paths, secretStore, warn),
+    hub: null,
     comms,
     reviews: new ApprovalReviews(db, comms, { registry }),
   };
@@ -235,7 +273,10 @@ function warn(message: string): void {
 
 /** Record who connected; tell the user loudly when it isn't proven. The
  *  token itself never reaches stderr, the inbox or the audit log. */
-function announceIdentity(services: Services, identity: ResolvedIdentity): void {
+function announceIdentity(
+  services: Services,
+  identity: ResolvedIdentity,
+): void {
   services.audit.logEvent("agent:identity", {
     source: identity.source,
     claimed: identity.claimed,
@@ -264,16 +305,34 @@ function announceIdentity(services: Services, identity: ResolvedIdentity): void 
  *  cancel their pending approvals and exit. */
 const SHUTDOWN_GRACE_MS = 5_000;
 
-function runMcpLoop(services: Services, initial: ResolvedIdentity, token: string): void {
+function runMcpLoop(
+  services: Services,
+  initial: ResolvedIdentity,
+  token: string,
+): void {
   const paths = getForemanPaths();
   let identity = initial;
   // Re-checked before every message, so `foreman agent token rotate` (or
   // removing the agent) takes a running session down to untrusted at once.
   const currentSource = (): string => {
-    const next = recheckAgentIdentity(identity, token, services.secretStore, (id) => services.registry.get(id) !== null);
+    const next = recheckAgentIdentity(
+      identity,
+      token,
+      services.secretStore,
+      (id) => services.registry.get(id) !== null,
+    );
     if (next !== identity) {
       identity = next;
-      services.hubScope = scopeForAgent(paths.orgConfigPath, identity.source, warn);
+      if (services.hubRuntime) {
+        services.hubRuntime.setAgent(identity.source);
+        syncHub(services);
+      } else {
+        services.hubScope = scopeForAgent(
+          paths.orgConfigPath,
+          identity.source,
+          warn,
+        );
+      }
       announceIdentity(services, identity);
     }
     return identity.source;
@@ -296,9 +355,14 @@ function runMcpLoop(services: Services, initial: ResolvedIdentity, token: string
       inFlight.add(task);
     }
   });
+  // An idle agent learns about a newly enabled (or disabled) server
+  // without having to call anything first.
+  const hubWatch = setInterval(() => syncHub(services), HUB_WATCH_MS);
+  hubWatch.unref();
   const shutdown = (): void => {
     if (shuttingDown) return;
     shuttingDown = true;
+    clearInterval(hubWatch);
     void drainAndExit(services, inFlight);
   };
   process.stdin.on("end", shutdown);
@@ -330,6 +394,24 @@ async function respond(
   }
   if (!response) return;
   writeFrame(encodeMessage(response));
+}
+
+const TOOLS_LIST_CHANGED = {
+  jsonrpc: "2.0",
+  method: "notifications/tools/list_changed",
+} as JSONRPCMessage;
+
+/** How often an idle session re-checks mcp.yaml / org.yaml. */
+const HUB_WATCH_MS = 2_000;
+
+/** Pick up mcp.yaml / org.yaml changes (throttled; `force` right before a
+ *  hub call runs). Without a runtime (tests), services.hub stays as set. */
+function syncHub(services: Services, opts: { force?: boolean } = {}): void {
+  const runtime = services.hubRuntime;
+  if (!runtime) return;
+  runtime.sync(opts);
+  services.hub = runtime.hub;
+  services.hubScope = runtime.scope;
 }
 
 const PARSE_ERROR_FRAME = `${JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } })}\n`;
@@ -399,9 +481,11 @@ export async function handleMessage(
   // MCP's required liveness utility: an empty result.
   if (method === "ping") return reply(id, {});
   if (method === "initialize") {
+    services.clientInitialized = true;
     return reply(id, {
       protocolVersion: PROTOCOL_VERSION,
-      capabilities: { tools: {} },
+      // listChanged: the hub's tools follow mcp.yaml / org.yaml live.
+      capabilities: { tools: { listChanged: true } },
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
     });
   }
@@ -490,14 +574,24 @@ export async function handleMessage(
             type: "object",
             required: ["to", "text"],
             properties: {
-              to: { type: "string", description: "department, role, agent, `leadership`, `all` or `boss`" },
-              text: { type: "string", description: "the message (plain text, up to 4000 characters)" },
+              to: {
+                type: "string",
+                description:
+                  "department, role, agent, `leadership`, `all` or `boss`",
+              },
+              text: {
+                type: "string",
+                description: "the message (plain text, up to 4000 characters)",
+              },
               kind: {
                 type: "string",
                 enum: ["message", "question", "handoff", "announcement"],
                 description: "optional; `question` when you need an answer",
               },
-              reply_to: { type: "string", description: "optional id of the message you are answering" },
+              reply_to: {
+                type: "string",
+                description: "optional id of the message you are answering",
+              },
             },
           },
         },
@@ -532,9 +626,16 @@ export async function handleMessage(
             type: "object",
             required: ["review_id", "recommendation", "reason"],
             properties: {
-              review_id: { type: "string", description: "the rv_… review_id from the review request" },
+              review_id: {
+                type: "string",
+                description: "the rv_… review_id from the review request",
+              },
               recommendation: { type: "string", enum: ["allow", "deny"] },
-              reason: { type: "string", description: "why, in one or two sentences (one line, up to 300 characters)" },
+              reason: {
+                type: "string",
+                description:
+                  "why, in one or two sentences (one line, up to 300 characters)",
+              },
             },
           },
         },
@@ -690,10 +791,20 @@ export async function handleMessage(
     ).params;
     const toolName = params?.name;
 
-    const refusal = untrustedRelayRefusal(sourceAgent, toolName, params?.arguments);
+    const refusal = untrustedRelayRefusal(
+      sourceAgent,
+      toolName,
+      params?.arguments,
+    );
     if (refusal) {
-      services.audit.logEvent("agent:identity-refused", { sourceAgent, tool: toolName ?? null });
-      return reply(id, { content: [{ type: "text", text: refusal }], isError: true });
+      services.audit.logEvent("agent:identity-refused", {
+        sourceAgent,
+        tool: toolName ?? null,
+      });
+      return reply(id, {
+        content: [{ type: "text", text: refusal }],
+        isError: true,
+      });
     }
 
     if (toolName === "secrets/get") {
@@ -947,14 +1058,20 @@ export async function handleMessage(
     if (toolName === "org_recommend") {
       const args = params?.arguments ?? {};
       const reviews = services.reviews;
-      if (!reviews) return replyError(id, -32603, "approval reviews are not available in this process");
+      if (!reviews)
+        return replyError(
+          id,
+          -32603,
+          "approval reviews are not available in this process",
+        );
       // Standing (blocked / disabled, any spelling of the id) is checked
       // inside recommend(), against the registry and the chart.
       const reviewId = typeof args.review_id === "string" ? args.review_id : "";
       const result = reviews.recommend({
         from: sourceAgent,
         reviewId,
-        recommendation: typeof args.recommendation === "string" ? args.recommendation : "",
+        recommendation:
+          typeof args.recommendation === "string" ? args.recommendation : "",
         reason: typeof args.reason === "string" ? args.reason : "",
       });
       services.audit.logEvent("org:recommendation", {
@@ -985,13 +1102,26 @@ export async function handleMessage(
       });
     }
 
-    if (toolName === "org_post" || toolName === "org_report" || toolName === "org_read") {
+    if (
+      toolName === "org_post" ||
+      toolName === "org_report" ||
+      toolName === "org_read"
+    ) {
       const args = params?.arguments ?? {};
       const comms = services.comms;
-      if (!comms) return replyError(id, -32603, "department channels are not available in this process");
+      if (!comms)
+        return replyError(
+          id,
+          -32603,
+          "department channels are not available in this process",
+        );
       // A blocked or disabled agent doesn't get a voice either, whatever
       // the case or spacing of its `--source`, and with or without its token.
-      const silenced = silencedReason(services.registry, sourceAgent, claimedAgentOf(sourceAgent));
+      const silenced = silencedReason(
+        services.registry,
+        sourceAgent,
+        claimedAgentOf(sourceAgent),
+      );
       if (silenced) {
         return reply(id, {
           content: [{ type: "text", text: `Not available: ${silenced}.` }],
@@ -1001,7 +1131,9 @@ export async function handleMessage(
       if (toolName === "org_read") {
         const messages = comms.read({
           viewer: sourceAgent,
-          ...(typeof args.channel === "string" && args.channel ? { channel: args.channel } : {}),
+          ...(typeof args.channel === "string" && args.channel
+            ? { channel: args.channel }
+            : {}),
           ...(typeof args.since === "number" ? { since: args.since } : {}),
           ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
         });
@@ -1025,8 +1157,12 @@ export async function handleMessage(
               from: sourceAgent,
               to: typeof args.to === "string" ? args.to : "",
               text,
-              ...(typeof args.kind === "string" ? { kind: args.kind as MessageKind } : {}),
-              ...(typeof args.reply_to === "string" ? { replyTo: args.reply_to } : {}),
+              ...(typeof args.kind === "string"
+                ? { kind: args.kind as MessageKind }
+                : {}),
+              ...(typeof args.reply_to === "string"
+                ? { replyTo: args.reply_to }
+                : {}),
             });
       services.audit.logEvent("org:message", {
         sourceAgent,
@@ -1039,7 +1175,9 @@ export async function handleMessage(
         content: [
           {
             type: "text",
-            text: result.ok ? `Posted to ${result.label} (id ${result.message.id}).` : `Not sent: ${result.reason}.`,
+            text: result.ok
+              ? `Posted to ${result.label} (id ${result.message.id}).`
+              : `Not sent: ${result.reason}.`,
           },
         ],
         isError: !result.ok,
@@ -1064,10 +1202,20 @@ export async function handleMessage(
       }
       // An agent relays commands but can't prove you typed them (#656):
       // one that changes Foreman runs only after you allow it.
-      const access = relayedCommandAccess(services.commandRouter, services.registry, command, argList);
+      const access = relayedCommandAccess(
+        services.commandRouter,
+        services.registry,
+        command,
+        argList,
+      );
       let confirmedBy: string | null = null;
       if (access === "change") {
-        const confirmation = await confirmRelayedCommand(services, sourceAgent, command, argList);
+        const confirmation = await confirmRelayedCommand(
+          services,
+          sourceAgent,
+          command,
+          argList,
+        );
         if (confirmation.decision !== "allowed") {
           services.audit.logEvent("foreman:command-refused", {
             command,
@@ -1078,7 +1226,12 @@ export async function handleMessage(
             decidedBy: confirmation.decidedBy,
           });
           return reply(id, {
-            content: [{ type: "text", text: relayedCommandRefusal(command, confirmation.decidedBy) }],
+            content: [
+              {
+                type: "text",
+                text: relayedCommandRefusal(command, confirmation.decidedBy),
+              },
+            ],
             isError: true,
           });
         }
@@ -1097,7 +1250,10 @@ export async function handleMessage(
         secretStore: services.secretStore,
         ...(confirmedBy ? { ownerConfirmed: true } : {}),
         ...(access === "delegate"
-          ? { agentDelegation: true, authorizeDelegation: delegationAuthorizer(services, sourceAgent) }
+          ? {
+              agentDelegation: true,
+              authorizeDelegation: delegationAuthorizer(services, sourceAgent),
+            }
           : {}),
       });
       services.audit.logEvent("foreman:command", {
@@ -1237,18 +1393,18 @@ export async function handleMessage(
 
       const mediatorResult = await trackRequest(services, (requestId) =>
         services.mediator.handleRequest({
-        requestId,
-        sourceAgent: normalised.sourceAgent,
-        targetTool: normalised.targetTool,
-        sessionId: normalised.sessionId,
-        message: {
-          jsonrpc: "2.0",
-          method: "tools/call",
-          params: {
-            name: normalised.targetTool,
-            arguments: normalised.args,
-          },
-        } as JSONRPCMessage,
+          requestId,
+          sourceAgent: normalised.sourceAgent,
+          targetTool: normalised.targetTool,
+          sessionId: normalised.sessionId,
+          message: {
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: {
+              name: normalised.targetTool,
+              arguments: normalised.args,
+            },
+          } as JSONRPCMessage,
         }),
       );
 
@@ -1286,9 +1442,14 @@ export async function handleMessage(
       });
     }
 
+    if (toolName) syncHub(services);
     const hubCall =
       toolName && services.hub
-        ? await services.hub.resolveCall(toolName, params?.arguments, services.hubScope)
+        ? await services.hub.resolveCall(
+            toolName,
+            params?.arguments,
+            services.hubScope,
+          )
         : null;
     if (hubCall) return handleHubCall(services, sourceAgent, id, hubCall);
 
@@ -1331,7 +1492,11 @@ async function confirmRelayedCommand(
   sourceAgent: string,
   command: string,
   args: string[],
-): Promise<{ decision: "allowed" | "denied"; decidedBy: string; requestId: string }> {
+): Promise<{
+  decision: "allowed" | "denied";
+  decidedBy: string;
+  requestId: string;
+}> {
   const text = `/foreman ${[command, ...args].join(" ")}`.slice(0, 200);
   const outcome = await trackRequest(services, (requestId) =>
     services.mediator.handleRequest({
@@ -1353,7 +1518,11 @@ async function confirmRelayedCommand(
       },
     }),
   );
-  return { decision: outcome.decision, decidedBy: outcome.decidedBy, requestId: outcome.requestId };
+  return {
+    decision: outcome.decision,
+    decidedBy: outcome.decidedBy,
+    requestId: outcome.requestId,
+  };
 }
 
 /** A hand-off from this agent to another, mediated as the call
@@ -1364,7 +1533,10 @@ async function confirmRelayedCommand(
 export function delegationAuthorizer(
   services: Pick<Services, "mediator" | "pendingRequestIds">,
   sourceAgent: string,
-): (targetAgent: string, task: string) => Promise<{ ok: true } | { ok: false; reason: string }> {
+): (
+  targetAgent: string,
+  task: string,
+) => Promise<{ ok: true } | { ok: false; reason: string }> {
   return async (targetAgent, task) => {
     const outcome = await trackRequest(services, (requestId) =>
       services.mediator.handleRequest({
@@ -1380,7 +1552,9 @@ export function delegationAuthorizer(
         policyFallback: { effect: "allow", source: "org.yaml" },
       }),
     );
-    return outcome.decision === "allowed" ? { ok: true } : { ok: false, reason: `denied by ${outcome.decidedBy}` };
+    return outcome.decision === "allowed"
+      ? { ok: true }
+      : { ok: false, reason: `denied by ${outcome.decidedBy}` };
   };
 }
 
@@ -1426,8 +1600,12 @@ export function untrustedRelayRefusal(
   if (toolName === "submit_resolution" || toolName === "submit_user_answer") {
     what = toolName;
   } else if (toolName === "submit_command") {
-    const command = typeof args?.command === "string" ? args.command.trim().toLowerCase() : "";
-    if (!READ_ONLY_COMMANDS.has(command)) what = `submit_command ${command || "(no command)"}`;
+    const command =
+      typeof args?.command === "string"
+        ? args.command.trim().toLowerCase()
+        : "";
+    if (!READ_ONLY_COMMANDS.has(command))
+      what = `submit_command ${command || "(no command)"}`;
   } else if (toolName === "submit_approval") {
     const raw = typeof args?.approval_id === "string" ? args.approval_id : "";
     if (!parseApprovalToken(classifyApprovalIdInput(raw).stripped).tag) {
@@ -1444,11 +1622,18 @@ export function untrustedRelayRefusal(
 /** Hub tools for `tools/list`. A failing upstream must never break the
  *  listing of Foreman's own tools. */
 async function hubToolsFor(services: Services): Promise<AgentTool[]> {
+  syncHub(services);
   if (!services.hub) return [];
+  const scope = services.hubScope;
   try {
-    return await services.hub.listForAgent(services.hubScope);
+    // run(): a hub replaced mid-listing stays open until the listing ends.
+    return services.hubRuntime
+      ? await services.hubRuntime.run((hub) => hub.listForAgent(scope))
+      : await services.hub.listForAgent(scope);
   } catch (err) {
-    warn(`MCP hub listing failed: ${err instanceof Error ? err.message : String(err)}`);
+    warn(
+      `MCP hub listing failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return [];
   }
 }
@@ -1461,15 +1646,20 @@ async function handleHubCall(
   id: string | number | undefined,
   hubCall: HubCallResolution,
 ): Promise<JSONRPCMessage | null> {
-  const hub = services.hub!;
   if (hubCall.kind === "search") {
-    const matches = await hub.search(hubCall.query, hubCall.limit, services.hubScope);
+    const scope = services.hubScope;
+    const matches = services.hubRuntime
+      ? await services.hubRuntime.run((hub) => hub.search(hubCall.query, hubCall.limit, scope))
+      : await services.hub!.search(hubCall.query, hubCall.limit, scope);
     return reply(id, {
       content: [{ type: "text", text: JSON.stringify({ tools: matches }) }],
     });
   }
   if (hubCall.kind === "unavailable") {
-    return reply(id, { content: [{ type: "text", text: hubCall.message }], isError: true });
+    return reply(id, {
+      content: [{ type: "text", text: hubCall.message }],
+      isError: true,
+    });
   }
   const { tool, args } = hubCall;
   const decision = await trackRequest(services, (requestId) =>
@@ -1483,15 +1673,75 @@ async function handleHubCall(
         params: { name: tool.exposedName, arguments: args },
       } as JSONRPCMessage,
       ...(tool.rule && tool.rule !== "deny"
-        ? { policyFallback: { effect: tool.rule, source: `mcp.yaml:${tool.server}` } }
+        ? {
+            policyFallback: {
+              effect: tool.rule,
+              source: `mcp.yaml:${tool.server}`,
+            },
+          }
+        : {}),
+      // tools.confirm (merges, pushes): no allow rule, "always allow" or
+      // low score approves it; policy.yaml can still deny it.
+      ...(tool.requiresHuman
+        ? {
+            requireHuman: {
+              factor: {
+                rule: "mcp_confirm",
+                category: "structural" as const,
+                points: 60,
+                reason: `${tool.server} marks ${tool.name} as a tool you confirm on every call`,
+              },
+            },
+          }
         : {}),
     }),
   );
   if (decision.decision !== "allowed") {
     return replyError(id, -32603, `Denied by ${decision.decidedBy}`);
   }
+
+  // The approval may have taken minutes. Run the call only if the server is
+  // still enabled, the agent still in its access list and the tool still
+  // offered as it is now — resolved again through the current hub.
+  syncHub(services, { force: true });
+  const current = services.hub
+    ? await services.hub.resolveCall(tool.exposedName, args, services.hubScope)
+    : null;
+  if (!current || current.kind !== "tool") {
+    const why =
+      current?.kind === "unavailable"
+        ? current.message
+        : `the '${tool.server}' MCP server is no longer enabled`;
+    const decidedBy =
+      current?.kind === "unavailable"
+        ? `mcp:withheld:${tool.server}`
+        : `integration:disabled:${tool.server}`;
+    services.audit.amendDecision?.(decision.requestId, "denied", decidedBy);
+    services.audit.logEvent("mcp:call", {
+      requestId: decision.requestId,
+      sourceAgent,
+      server: tool.server,
+      tool: tool.name,
+      isError: true,
+      withheld: true,
+      error: why,
+    });
+    return reply(id, {
+      content: [
+        {
+          type: "text",
+          text: `Not run: ${why}. Nothing was sent to the server.`,
+        },
+      ],
+      isError: true,
+    });
+  }
+  const runOn = async (target: McpHub) =>
+    target.call(current.tool, current.args);
   try {
-    const { result, stats, durationMs } = await hub.call(tool, args);
+    const { result, stats, durationMs } = services.hubRuntime
+      ? await services.hubRuntime.run(runOn)
+      : await runOn(services.hub!);
     services.audit.logEvent("mcp:call", {
       requestId: decision.requestId,
       sourceAgent,
@@ -1505,12 +1755,19 @@ async function handleHubCall(
   } catch (err) {
     // The hub already masks the secrets it injected; this catches anything
     // else secret-shaped an upstream error might echo.
-    const message = redactSecretShapes(err instanceof Error ? err.message : String(err)).text;
+    const message = redactSecretShapes(
+      err instanceof Error ? err.message : String(err),
+    ).text;
     // Withheld by the hub (a changed or newly appeared definition, a server
     // that dropped the tool): the call never ran, so the log must not keep
     // saying the policy allowed it (#635).
     const withheld = err instanceof HubToolUnavailableError;
-    if (withheld) services.audit.amendDecision?.(decision.requestId, "denied", `mcp:withheld:${tool.server}`);
+    if (withheld)
+      services.audit.amendDecision?.(
+        decision.requestId,
+        "denied",
+        `mcp:withheld:${tool.server}`,
+      );
     services.audit.logEvent("mcp:call", {
       requestId: decision.requestId,
       sourceAgent,
@@ -1521,7 +1778,12 @@ async function handleHubCall(
       error: message,
     });
     return reply(id, {
-      content: [{ type: "text", text: `Upstream MCP server '${tool.server}' failed: ${message}` }],
+      content: [
+        {
+          type: "text",
+          text: `Upstream MCP server '${tool.server}' failed: ${message}`,
+        },
+      ],
       isError: true,
     });
   }

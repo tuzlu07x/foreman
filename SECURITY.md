@@ -17,10 +17,10 @@ agree on a disclosure timeline with you.
 
 ## Supported versions
 
-| Version | Supported |
-| --- | --- |
-| `main` / latest release | ✅ |
-| older releases | ❌ — upgrade with `npm install -g foreman-agent@latest` |
+| Version                 | Supported                                               |
+| ----------------------- | ------------------------------------------------------- |
+| `main` / latest release | ✅                                                      |
+| older releases          | ❌ — upgrade with `npm install -g foreman-agent@latest` |
 
 Foreman requires Node.js 22.12+; Node 20 is end-of-life and unsupported.
 
@@ -43,7 +43,14 @@ and it fails closed:
 - Claude Code hook errors block the call.
 - Adapter decode errors deny the call.
 - Invalid policy patterns never widen a rule.
-- A broken `org.yaml` blocks delegation.
+- A broken `org.yaml` blocks delegation and every MCP hub server.
+- A broken `mcp.yaml` leaves no MCP hub servers; changes to either file
+  reach running agents without a restart, and a call approved after its
+  server was disabled or the agent lost access never runs.
+- Integration credentials are for the MCP hub only: no agent can read them
+  through `secrets/get`, whatever the policy says, and they are never
+  written into agent config files. `tools.confirm` tools (merges, pushes)
+  need a person for every call.
 
 Known limits, which we track as roadmap items rather than hide:
 
@@ -84,14 +91,14 @@ Known limits, which we track as roadmap items rather than hide:
   through the chat agent that polls the bot. Each allow button carries an
   HMAC tag bound to that action. Other agents can't approve anything, and
   the chat agent can't approve before you tap, because allow tokens never
-  appear in the message text. But once you tap *any* button on a message,
+  appear in the message text. But once you tap _any_ button on a message,
   Telegram hands the chat agent the whole keyboard, so against a
   compromised chat agent the tags are defence in depth only.
   **Close this with the approval bot** (`foreman notify approval-bot`): a
   second bot that only Foreman holds and polls. Approvals then never pass
   through an agent. Push-only channels (Slack, Discord, email, ntfy) never
   carry approval tokens. In two-way mode (`foreman notify
-  slack-interactive` / `discord-interactive`), Slack and Discord buttons
+slack-interactive` / `discord-interactive`), Slack and Discord buttons
   reach Foreman over a Socket Mode / Gateway connection only Foreman holds.
   Only the configured user ids can act, and each button is HMAC-tagged
   with a key separate from relay tokens, so button values readable in chat
