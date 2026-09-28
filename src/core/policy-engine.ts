@@ -1,9 +1,10 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { and, eq, gte, inArray, like, sql } from "drizzle-orm";
 import { isSeq, parse as parseYaml, parseDocument, YAMLSeq } from "yaml";
 import { z } from "zod";
 import type { ForemanDb } from "../db/client.js";
 import { agentUsage, pendingApprovals, policies, requests } from "../db/schema.js";
+import { writeConfigAtomically } from "./agent-config-injector.js";
 import { claimedAgentOf, isUntrustedSource } from "./agent-identity.js";
 import {
   bus as defaultBus,
@@ -710,10 +711,10 @@ export class PolicyEngine {
   ): number | null {
     let next: string;
     try {
-      const existing = existsSync(path) ? readFileSync(path, "utf-8") : "";
+      const existing = readPolicyText(path) ?? "";
       next = withApprovalRule(existing, input, conditions, addedAt);
       this.loadYamlText(next);
-      writeFileSync(path, next, "utf-8");
+      writeConfigAtomically(path, next);
       if (this.watched?.path === path) this.watched.stamp = fileStamp(path);
     } catch {
       return null;
@@ -751,12 +752,12 @@ export class PolicyEngine {
     if (!row) throw new PolicyRuleNotFoundError(ruleId);
     const approvalId = approvalIdOf(row.conditions);
     if (row.createdBy !== "remember-action" && approvalId === null) throw new NotRememberedRuleError(ruleId);
-    if (approvalId !== null && opts.policyYamlPath && existsSync(opts.policyYamlPath)) {
-      const text = readFileSync(opts.policyYamlPath, "utf-8");
+    const text = approvalId !== null && opts.policyYamlPath ? readPolicyText(opts.policyYamlPath) : null;
+    if (approvalId !== null && opts.policyYamlPath && text !== null) {
       const next = withoutApprovalRule(text, approvalId);
       if (next !== null) {
         this.loadYamlText(next);
-        writeFileSync(opts.policyYamlPath, next, "utf-8");
+        writeConfigAtomically(opts.policyYamlPath, next);
         if (this.watched?.path === opts.policyYamlPath) this.watched.stamp = fileStamp(opts.policyYamlPath);
       } else if (row.createdBy !== "remember-action") {
         throw new NotRememberedRuleError(ruleId);
@@ -1289,4 +1290,15 @@ function normalisePath(p: string): string {
     else parts.push(seg);
   }
   return `${absolute ? "/" : ""}${parts.join("/")}`;
+}
+
+/** policy.yaml's text, or null when the file doesn't exist. Read, not
+ *  checked-then-read, so there is no window between the two. */
+function readPolicyText(path: string): string | null {
+  try {
+    return readFileSync(path, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
 }
