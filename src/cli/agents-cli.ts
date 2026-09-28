@@ -713,8 +713,8 @@ agentsCommand
     if (!DEFAULT_PERMISSIONS[agentId]) {
       console.error(
         red("error: ") +
-          `No permission defaults shipped for '${agentId}' yet. Faz 1 covers ` +
-          `claude-code; codex / openclaw / hermes land in Faz 2 — see #517.`,
+          `No permission defaults shipped for '${agentId}' yet. ` +
+          `Supported: ${Object.keys(DEFAULT_PERMISSIONS).sort().join(", ")}.`,
       );
       closeDb();
       process.exit(2);
@@ -904,9 +904,9 @@ hookSub
       if (agentId !== "claude-code") {
         console.error(
           red("error: ") +
-            `Hook install is claude-code only in Faz 4. Other agents either ` +
-            `don't expose a pre-call hook (Codex, OpenClaw) or land in a ` +
-            `follow-up — see #517 for the roadmap.`,
+            `Hook install supports claude-code only. Other agents either ` +
+            `don't expose a pre-call hook (Codex, OpenClaw) or are not ` +
+            `supported yet.`,
         );
         closeDb();
         process.exit(2);

@@ -312,11 +312,11 @@ describe("applyPermissions — format dispatch (#517 Faz 2)", () => {
     ["zeroclaw", "TOML"],
     ["hermes", "YAML"],
   ])(
-    "refuses to write a %s config (format=%s) and points at Faz 4",
+    "refuses to write a %s config (format=%s) and says to apply it by hand",
     (agentId, label) => {
       const settingsPath = join(tmp, `${agentId}.cfg`);
       expect(() => applyPermissions(agentId, settingsPath)).toThrow(
-        new RegExp(`${label}.*Faz 4`),
+        new RegExp(`${label}.*only handles JSON.*by hand`),
       );
     },
   );

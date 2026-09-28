@@ -234,7 +234,7 @@ describe("DEFAULT_FOREMAN_SOUL — approval routing (#406)", () => {
 // and route it through the same submit_approval MCP tool.
 describe("DEFAULT_FOREMAN_SOUL — inline keyboard callbacks (#522)", () => {
   it("contains the inline keyboard section header", () => {
-    expect(DEFAULT_FOREMAN_SOUL).toMatch(/Inline keyboard taps.*#522/);
+    expect(DEFAULT_FOREMAN_SOUL).toContain("### Inline keyboard taps");
   });
 
   it("documents the callback_data prefix the channel emits", () => {
@@ -278,7 +278,7 @@ describe("DEFAULT_FOREMAN_SOUL — inline keyboard callbacks (#522)", () => {
   // Foreman can look up the predicate proposal + inject the deny rule.
   it("documents the block_* custom action handling (#526)", () => {
     expect(DEFAULT_FOREMAN_SOUL).toContain("`block_`");
-    expect(DEFAULT_FOREMAN_SOUL).toMatch(/custom policy-injection action.*#526/);
+    expect(DEFAULT_FOREMAN_SOUL).toContain("**custom policy-injection action**");
   });
 
   it("instructs the agent to pass action_id verbatim for block_* taps (#526)", () => {
@@ -300,7 +300,7 @@ describe("DEFAULT_FOREMAN_SOUL — inline keyboard callbacks (#522)", () => {
   // session id as an approval id (or vice-versa).
   it("documents the resolve_* custom action handling (#527)", () => {
     expect(DEFAULT_FOREMAN_SOUL).toContain("resolve_");
-    expect(DEFAULT_FOREMAN_SOUL).toMatch(/session-resume action.*#527/);
+    expect(DEFAULT_FOREMAN_SOUL).toContain("**session-resume action**");
   });
 
   it("routes resolve_* taps to submit_resolution, NOT submit_approval (#527)", () => {
@@ -325,11 +325,11 @@ describe("DEFAULT_FOREMAN_SOUL — inline keyboard callbacks (#522)", () => {
   // (plain reply → submit_user_answer with free_text).
   it("documents the ask_* custom action handling (#528)", () => {
     expect(DEFAULT_FOREMAN_SOUL).toContain("ask_");
-    // "structured-question\nanswer** (#528)" — the marker straddles a soft
+    // "structured-question\nanswer**" — the marker straddles a soft
     // line break inserted by the template formatter. Allow whitespace
     // (including newlines) between the words.
     expect(DEFAULT_FOREMAN_SOUL).toMatch(
-      /structured-question\s+answer[\s\S]*?#528/,
+      /\*\*structured-question\s+answer\*\*/,
     );
   });
 
@@ -349,7 +349,7 @@ describe("DEFAULT_FOREMAN_SOUL — inline keyboard callbacks (#522)", () => {
   });
 
   it("documents the free-text reply route via submit_user_answer.free_text (#528)", () => {
-    expect(DEFAULT_FOREMAN_SOUL).toMatch(/Free-text answers.*#528/);
+    expect(DEFAULT_FOREMAN_SOUL).toContain("### Free-text answers to `ask_user_with_options`");
     expect(DEFAULT_FOREMAN_SOUL).toMatch(/free_text/);
   });
 
@@ -396,7 +396,7 @@ describe("DEFAULT_FOREMAN_SOUL — orchestrator routing (#431)", () => {
   // without the `foreman write` prefix; the agent SOUL must recognise
   // peer-agent ids and relay via submit_command(command=<agentId>, …).
   it("documents the free-form agent invocation routing (#524)", () => {
-    expect(DEFAULT_FOREMAN_SOUL).toMatch(/Free-form agent invocation.*#524/);
+    expect(DEFAULT_FOREMAN_SOUL).toContain("### Free-form agent invocation");
   });
 
   it("instructs the agent to route '<peer> <task>' via submit_command (#524)", () => {

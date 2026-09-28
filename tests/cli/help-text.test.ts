@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Command } from 'commander'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { DEFAULT_FOREMAN_SOUL } from '../../src/cli/identity-template.js'
 import { buildProgram } from '../../src/cli/program.js'
 import { rememberSetupSkipped } from '../../src/cli/start.js'
 import { checkUpdate } from '../../src/core/doctor.js'
@@ -27,15 +28,42 @@ function helpStrings(cmd: Command, path: string[] = []): Array<{ where: string; 
   return out
 }
 
+// Render the full --help output (usage, arguments, options, subcommands
+// and any addHelpText blocks) for `cmd` and every command below it.
+function renderedHelp(cmd: Command, path: string[] = []): Array<{ where: string; text: string }> {
+  const here = [...path, cmd.name()].join(' ')
+  let text = ''
+  const saved = cmd.configureOutput()
+  cmd.configureOutput({ writeOut: (s) => { text += s }, writeErr: (s) => { text += s } })
+  try {
+    cmd.outputHelp()
+  } finally {
+    cmd.configureOutput(saved)
+  }
+  const out = [{ where: here, text }]
+  for (const sub of cmd.commands) out.push(...renderedHelp(sub, [...path, cmd.name()]))
+  return out
+}
+
 describe('--help text', () => {
   it('has no internal issue numbers or Turkish notes', () => {
-    // Owned by the security change for #657 (hook-cli.ts, secrets-cli.ts);
-    // drop from this list once fixed there.
-    const pending = new Set(['foreman hook', 'foreman secrets repush'])
-    const leaks = helpStrings(buildProgram()).filter(
-      (h) => /#\d+|\bFaz\b|phase \d/.test(h.text) && !pending.has(h.where),
-    )
+    const leaks = helpStrings(buildProgram()).filter((h) => /#\d+|\bFaz\b|phase \d/.test(h.text))
     expect(leaks).toEqual([])
+  })
+
+  it('renders no issue number in any command or subcommand help', () => {
+    const pages = renderedHelp(buildProgram())
+    expect(pages.length).toBeGreaterThan(50)
+    expect(pages.every((p) => p.text.includes('Usage:'))).toBe(true)
+    const leaks = pages
+      .filter((p) => /#\d{2,}|\bFaz \d/.test(p.text))
+      .map((p) => ({ where: p.where, match: p.text.match(/.{0,40}(#\d{2,}|\bFaz \d).{0,20}/)?.[0] }))
+    expect(leaks).toEqual([])
+  })
+
+  it('the SOUL template an agent reads has no issue numbers', () => {
+    expect(DEFAULT_FOREMAN_SOUL).not.toMatch(/#\d{2,}/)
+    expect(DEFAULT_FOREMAN_SOUL).not.toMatch(/\bFaz \d/)
   })
 
   it('init --help shows where this machine keeps the home', () => {

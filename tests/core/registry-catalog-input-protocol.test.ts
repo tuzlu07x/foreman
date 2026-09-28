@@ -10,7 +10,7 @@
  *   - `synthetic_update_template` accepts arbitrary JSON-shaped data
  *     because template validation is the wrap's job at spawn time.
  *   - Declaring BOTH `approval_adapter` and `input_protocol` fails
- *     validation with the cross-reference to #445 in the message.
+ *     validation with a message naming both transport models.
  *   - Declaring NEITHER stays valid (legacy hybrid path from #433).
  *   - Declaring just `approval_adapter` stays valid (codex case).
  *   - Declaring just `input_protocol` stays valid (Hermes/OpenClaw
@@ -163,9 +163,8 @@ describe('registry-catalog — mutual exclusion between approval_adapter and inp
     expect(result.success).toBe(false)
     if (!result.success) {
       const messages = result.error.issues.map((i) => i.message)
-      // Cross-reference to #445 in the error so an operator can find
-      // the decision matrix.
-      expect(messages.some((m) => m.includes('#445'))).toBe(true)
+      // User-facing text carries no issue-number cross-reference.
+      expect(messages.some((m) => /#\d{2,}/.test(m))).toBe(false)
       expect(messages.some((m) => m.includes('two distinct transport models'))).toBe(true)
     }
   })
