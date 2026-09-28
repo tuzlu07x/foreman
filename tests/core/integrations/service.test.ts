@@ -165,6 +165,11 @@ describe('IntegrationService', () => {
     })
   })
 
+  it('status resolves an alias to the server it names', async () => {
+    await svc.add({ id: 'github', access: 'all', credentials: { 'github-pat': PAT } }, CLI)
+    expect(svc.status('gh').server).toBe('github')
+  })
+
   describe('enable / disable', () => {
     it('refuses to enable before the tools are reviewed or while a secret is missing', async () => {
       await svc.add({ id: 'github', access: 'all' }, CLI)

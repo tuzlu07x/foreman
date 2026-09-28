@@ -64,6 +64,8 @@ describe('foreman integrations', () => {
     expect(list).toHaveLength(1)
     expect(list[0]).toMatchObject({ name: 'github', enabled: false, access_level: 'read-only', access: { agents: ['claude-code'] } })
 
+    // An alias resolves to the server (it used to crash on `show gh`).
+    expect(JSON.parse(run(['integrations', 'show', 'gh', '--json']).stdout)).toMatchObject({ name: 'github' })
     const show = JSON.parse(run(['integrations', 'show', 'github', '--json']).stdout) as { agents: Array<{ agent: string; allowed: boolean }> }
     expect(show.agents).toEqual(
       expect.arrayContaining([

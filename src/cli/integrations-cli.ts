@@ -668,13 +668,18 @@ function openContext(): { svc: IntegrationService; ctx: Ctx; audit: AuditLogger 
   const store = new SecretStore(db, loadOrCreateSecretsMasterKey());
   const audit = new AuditLogger(db, bus);
   const cats = catalogs();
-  const pins = new ToolPinStore(paths.mcpPinsPath);
   const svc = new IntegrationService({
     paths,
     mcpCatalog: cats.mcp,
     integrationCatalog: cats.integrations,
     secrets: store,
-    pins,
+    // Read the pin file on every check: `review` writes it through the
+    // review hub's own ToolPinStore, and a snapshot taken here would still
+    // say "not reviewed" when `add` goes on to enable.
+    pins: {
+      get: (server, fingerprint) => new ToolPinStore(paths.mcpPinsPath).get(server, fingerprint),
+      forget: (server) => new ToolPinStore(paths.mcpPinsPath).forget(server),
+    },
     audit,
     removeOAuthSession: async (server) => {
       const removed = await removeMcpOAuthSession(store, server, mcpOAuthLockPath(paths, server));

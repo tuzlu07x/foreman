@@ -161,14 +161,16 @@ export class IntegrationService {
     return loadHubConfig(this.deps.paths.mcpConfigPath);
   }
 
-  status(name: string, config: HubConfig = this.config()): IntegrationStatus {
-    const server = this.require(config, name).server;
+  status(query: string, config: HubConfig = this.config()): IntegrationStatus {
+    // Resolve ids and aliases (gh → github): the status names the server.
+    const { name, server } = this.require(config, query);
     return integrationStatus(name, server, {
       pins: this.deps.pins,
       secrets: this.deps.secrets,
       security: config.security,
     });
   }
+
 
   // ---------------------------------------------------------------------------
   // Add
