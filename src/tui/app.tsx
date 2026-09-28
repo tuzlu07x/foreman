@@ -1304,6 +1304,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
               ? `Foreman's model (${modelPicker.provider})`
               : `${modelPicker.agentId}'s model (${modelPicker.provider})`
           }
+          provider={modelPicker.provider}
           current={modelPicker.current}
           tiers={modelTierOptions(modelPicker.provider)}
           loadMore={loadLiveModels(modelPicker.provider)}

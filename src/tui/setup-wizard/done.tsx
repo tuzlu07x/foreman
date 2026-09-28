@@ -279,13 +279,9 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
               .
             </Text>
           ) : null}
-          {installSummary.identityNotApplicable.length > 0 ? (
-            <Text color={theme.fg.muted}>
-              No Foreman identity file for{" "}
-              {installSummary.identityNotApplicable.join(", ")} (nothing to
-              push).
-            </Text>
-          ) : null}
+          {/* Agents without an identity file (Claude Code, generic-mcp)
+              have nothing to push; saying so only read as a problem
+              (terminal QA), so they are simply not counted above. */}
           {/* #472 — Name the agents whose identity push failed + the
               underlying reason. Previously the count masked which agent
               broke, so the user had no path forward when the Telegram

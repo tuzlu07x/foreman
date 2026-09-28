@@ -17,6 +17,8 @@ export interface ModelOption {
 
 export interface ModelPickerProps {
   title: string;
+  /** Named in the note when the live list can't be fetched. */
+  provider?: string;
   current: string | null;
   tiers: ModelOption[];
   /** The provider's live list, when a key is stored (may reject). */
@@ -29,7 +31,7 @@ export interface ModelPickerProps {
 
 const CLEAR = "__clear__";
 
-export function ModelPicker({ title, current, tiers, loadMore, allowClear, onPick, onCancel }: ModelPickerProps): JSX.Element {
+export function ModelPicker({ title, provider, current, tiers, loadMore, allowClear, onPick, onCancel }: ModelPickerProps): JSX.Element {
   const [more, setMore] = useState<string[] | null>(loadMore ? null : []);
   const [note, setNote] = useState<string | null>(null);
 
@@ -41,7 +43,7 @@ export function ModelPicker({ title, current, tiers, loadMore, allowClear, onPic
       .catch((err: unknown) => {
         if (!live) return;
         setMore([]);
-        setNote(`live list unavailable (${err instanceof Error ? err.message : String(err)})`);
+        setNote(liveListNote(err instanceof Error ? err.message : String(err), provider ?? "the provider"));
       });
     return () => {
       live = false;
@@ -67,6 +69,19 @@ export function ModelPicker({ title, current, tiers, loadMore, allowClear, onPic
       <Text color={theme.fg.muted}>[↑↓] choose · [Enter] use it · [Esc] cancel</Text>
     </Box>
   );
+}
+
+/** Why only the registry's models are listed, in words (terminal QA: a
+ *  bare "fetch failed" with no network). */
+export function liveListNote(message: string, provider: string): string {
+  if (/abort|timeout|network|fetch failed|ENOTFOUND|ECONNREFUSED|EPERM/i.test(message)) {
+    return `couldn't reach ${provider} for its full model list — showing the usual models`;
+  }
+  const status = message.match(/^HTTP (\d{3})/)?.[1];
+  if (status === "401" || status === "403") {
+    return `${provider} rejected the stored key (HTTP ${status}) — showing the usual models`;
+  }
+  return `no full model list (${message}) — showing the usual models`;
 }
 
 /** Tiers first (labelled), then the rest of the live list, no duplicates. */

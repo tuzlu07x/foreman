@@ -1253,7 +1253,8 @@ describe('done step identity summary', () => {
     })
     await w.startInstall()
     await w.until('What next?')
-    await w.until('No Foreman identity file for generic-mcp')
+    // Nothing to push is not worth a line either (terminal QA).
+    expect(w.frame()).not.toContain('No Foreman identity file')
     expect(w.frame()).not.toContain('Identity push failed')
     expect(w.frame()).not.toContain('pushed to 0 of 1')
   })
