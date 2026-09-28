@@ -845,21 +845,23 @@ describe("ForemanCommandRouter (#431)", () => {
       const result = await router.dispatch("model", [], ctx);
       expect(result.ok).toBe(true);
       // Foreman LLM curated list (default config = anthropic)
+      // (from registry/providers.json model_tiers)
       expect(result.text).toContain("`foreman model claude-haiku-4-5`");
-      expect(result.text).toContain("`foreman model claude-sonnet-4-6`");
+      expect(result.text).toContain("`foreman model claude-sonnet-5`");
+      expect(result.text).toContain("`foreman model claude-fable-5-1`");
       // Per-agent quick switches:
       // codex → openai models
-      expect(result.text).toContain("`foreman model codex gpt-5-mini`");
-      expect(result.text).toContain("`foreman model codex gpt-5`");
+      expect(result.text).toContain("`foreman model codex gpt-6-luna`");
+      expect(result.text).toContain("`foreman model codex gpt-6-astra`");
       // claude-code → anthropic models
-      expect(result.text).toContain("`foreman model claude-code claude-sonnet-4-6`");
+      expect(result.text).toContain("`foreman model claude-code claude-sonnet-5`");
       // "Clear override" rows
       expect(result.text).toContain("`foreman model codex clear`");
       expect(result.text).toContain("`foreman model claude-code clear`");
       // Cost hints
       expect(result.text).toMatch(/cheapest/);
       expect(result.text).toMatch(/balanced/);
-      expect(result.text).toMatch(/top tier/);
+      expect(result.text).toMatch(/most capable/);
     });
 
     it("`models` is an alias of `model`", async () => {

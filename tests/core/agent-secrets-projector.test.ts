@@ -1288,7 +1288,7 @@ describe("projectSecretsForAgent — resolver path (#408 phase 2)", () => {
     ) as {
       model: { default: string; provider: string };
     };
-    expect(yamlContent.model.default).toBe("openai/gpt-4o-mini");
+    expect(yamlContent.model.default).toBe("openai/gpt-6-luna");
     expect(yamlContent.model.provider).toBe("openrouter");
     // Legacy "should-not-appear" did NOT land — resolver took precedence.
     expect(yamlContent.model.provider).not.toBe("should-not-appear");
@@ -1336,7 +1336,7 @@ describe("projectSecretsForAgent — resolver path (#408 phase 2)", () => {
     ) as {
       model: { default: string; provider: string };
     };
-    expect(yamlContent.model.default).toBe("openai/gpt-4o-mini");
+    expect(yamlContent.model.default).toBe("openai/gpt-6-luna");
   });
 
   // #450 — ctx.providerVariant overrides the registry's `preferred`
@@ -1554,7 +1554,7 @@ describe("projectSecretsForAgent — resolver path (#408 phase 2)", () => {
     expect(result.files.length).toBeGreaterThan(0);
     const parsed = JSON.parse(readFileSync(`${tmp}/openclaw.json`, "utf-8"));
     // Resolver wrote the model + env
-    expect(parsed.agents.defaults.model.primary).toBe("openai/gpt-4o-mini");
+    expect(parsed.agents.defaults.model.primary).toBe("openai/gpt-6-luna");
     expect(parsed.env.OPENAI_API_KEY).toBe("sk-oc-test");
     // Legacy json_channels fired (orthogonal to provider)
     expect(parsed.channels.telegram.botToken).toBe("tg-123");

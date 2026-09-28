@@ -56,6 +56,15 @@ All notable changes to Foreman are documented here. The format follows
   permissions, and prints what it removed. A config it can't read, parse or
   that is a symlink is left alone with a note and never blocks the removal
   ([docs/agent-lifecycle.md](docs/agent-lifecycle.md#what-gets-cleaned-up-on-remove)).
+- **Current default models.** Gemini's default, `gemini-2.0-flash`, has
+  been shut down by Google, so a Gemini brain stopped working; OpenAI's was
+  the older `gpt-4o-mini`. The defaults now come from one place,
+  `registry/providers.json` (`default_model` plus `model_tiers`: fast,
+  balanced, strongest): `claude-haiku-4-5`, `gpt-6-luna` and
+  `gemini-3.5-flash-lite`, also for Hermes, OpenClaw and the OpenRouter
+  preset. `/foreman model`'s tap-to-copy list follows the tiers and covers
+  Gemini. The wizard's live model list now includes GPT-6 models and sorts
+  newest first by version (Claude Fable no longer sank below Haiku).
 - **LLM budget pricing.** A model missing from Foreman's price table was
   billed at the provider's cheapest rate: Claude Opus 5 or Fable at Haiku
   prices, gpt-5.x at gpt-4o-mini, Gemini 2.5 and 3.x at 2.0 Flash, so the

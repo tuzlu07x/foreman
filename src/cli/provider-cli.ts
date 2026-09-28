@@ -273,10 +273,10 @@ const providerSwitchCommand = new Command("switch")
 // when omitted, the registry's variant default applies.
 const providerModelCommand = new Command("model")
   .description(
-    "Pin a specific model version for an agent (e.g. claude-opus-4-7). Pass --clear to revert to the variant default.",
+    "Pin a specific model version for an agent (e.g. claude-opus-5). Pass --clear to revert to the variant default.",
   )
   .argument("<agent>", "agent id (e.g. hermes)")
-  .argument("[model]", "model id (e.g. claude-opus-4-7, gpt-4o-mini). Omit when using --clear.")
+  .argument("[model]", "model id (e.g. claude-opus-5, gpt-6-sol). Omit when using --clear.")
   .option("--clear", "remove any pinned model; the projector will use the variant default")
   .action(
     (agentId: string, model: string | undefined, options: { clear?: boolean }) => {

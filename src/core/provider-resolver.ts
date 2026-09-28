@@ -297,6 +297,19 @@ function substituteTemplate(
 // must still handle this — the projector / live model picker (PR #405)
 // override with the user's actual pick at runtime.
 
+/** The provider's fast / balanced / strongest models from
+ *  registry/providers.json, or null. */
+export function providerModelTiers(
+  foremanProvider: string,
+): { fast: string; balanced: string; strongest: string } | null {
+  try {
+    const { doc } = loadActiveProviders();
+    return doc.providers.find((p) => p.id === foremanProvider)?.model_tiers ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function deriveDefaultModelId(foremanProvider: string): string {
   try {
     const { doc } = loadActiveProviders();

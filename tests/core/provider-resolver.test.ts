@@ -326,11 +326,9 @@ describe("describeResolveError", () => {
 describe("deriveDefaultModelId (#419 — data-driven)", () => {
   it("reads the default model from registry/providers.json", () => {
     // Defaults populated in PR fix/419 — registry edit, no TS change
-    expect(deriveDefaultModelId("openai")).toBe("gpt-4o-mini");
-    expect(deriveDefaultModelId("anthropic")).toBe(
-      "claude-haiku-4-5-20251001",
-    );
-    expect(deriveDefaultModelId("gemini")).toBe("gemini-2.0-flash");
+    expect(deriveDefaultModelId("openai")).toBe("gpt-6-luna");
+    expect(deriveDefaultModelId("anthropic")).toBe("claude-haiku-4-5");
+    expect(deriveDefaultModelId("gemini")).toBe("gemini-3.5-flash-lite");
     expect(deriveDefaultModelId("ollama")).toBe("llama3.2");
   });
 
@@ -560,5 +558,22 @@ describe("resolveAgentProviderConfig — version-aware path (#420)", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.config.variantId).toBe("native-v1"); // preferred wins
+  });
+});
+
+describe("model tiers (registry/providers.json)", () => {
+  it("names fast / balanced / strongest for each cloud provider, fast being the default", async () => {
+    const { providerModelTiers } = await import("../../src/core/provider-resolver.js");
+    for (const id of ["anthropic", "openai", "gemini"]) {
+      const tiers = providerModelTiers(id);
+      expect(tiers, id).not.toBeNull();
+      expect(tiers!.fast).toBe(deriveDefaultModelId(id));
+    }
+    expect(providerModelTiers("ollama")).toBeNull();
+  });
+
+  it("keeps llm.yaml's built-in default in step with the registry", async () => {
+    const { LlmConfigSchema } = await import("../../src/core/llm/config.js");
+    expect(LlmConfigSchema.parse({}).model).toBe(deriveDefaultModelId("anthropic"));
   });
 });

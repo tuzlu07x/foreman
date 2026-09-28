@@ -41,6 +41,7 @@ import {
 import { SecretNotFoundError } from "./secret-store.js";
 import { loadActiveRegistry } from "./registry-catalog.js";
 import type { RegistryService } from "./registry.js";
+import { providerModelTiers } from "./provider-resolver.js";
 import type { SecretStore } from "./secret-store.js";
 
 // =============================================================================
@@ -779,22 +780,19 @@ function modelHandler(
 // chat. Telegram renders backticked text as inline code → long-press
 // on mobile triggers a copy menu, which is the closest we get to an
 // inline-keyboard model picker without owning the bot.
-const QUICK_MODELS: Record<string, Array<{ id: string; hint: string }>> = {
-  openai: [
-    { id: "gpt-5-nano", hint: "cheapest" },
-    { id: "gpt-5-mini", hint: "balanced" },
-    { id: "gpt-5", hint: "top tier" },
-    { id: "gpt-4o-mini", hint: "legacy budget" },
-  ],
-  anthropic: [
-    { id: "claude-haiku-4-5", hint: "cheapest" },
-    { id: "claude-sonnet-4-6", hint: "balanced" },
-    { id: "claude-opus-4-8", hint: "top tier" },
-    { id: "claude-opus-4-7", hint: "previous top tier" },
-  ],
-};
+/** Tap-to-copy model ids per provider, from registry/providers.json's
+ *  model_tiers (a new model generation is a registry change). */
+function quickModels(provider: string): Array<{ id: string; hint: string }> {
+  const tiers = providerModelTiers(provider);
+  if (!tiers) return [];
+  return [
+    { id: tiers.fast, hint: "fast, cheapest" },
+    { id: tiers.balanced, hint: "balanced" },
+    { id: tiers.strongest, hint: "most capable" },
+  ];
+}
 
-// Maps each registry agent id → which provider's QUICK_MODELS list to
+// Maps each registry agent id → which provider's quick-switch list to
 // surface. Today only callable agents (codex / claude-code) need
 // this; daemon-style agents (Hermes, OpenClaw) don't have a
 // task_model_flag so the override would be a no-op.
@@ -878,7 +876,7 @@ function modelStatusReply(ctx: ForemanCommandContext): ForemanCommandResult {
   }
   // Tap-to-copy quick switches for Foreman LLM
   if (currentForemanProvider) {
-    const models = QUICK_MODELS[currentForemanProvider];
+    const models = quickModels(currentForemanProvider);
     if (models && models.length > 0) {
       lines.push("");
       lines.push(`Tap to switch Foreman LLM (keeping ${currentForemanProvider}):`);
@@ -891,7 +889,7 @@ function modelStatusReply(ctx: ForemanCommandContext): ForemanCommandResult {
   for (const agentId of overridableAgents) {
     const providerForAgent = AGENT_PROVIDER[agentId];
     if (!providerForAgent) continue;
-    const models = QUICK_MODELS[providerForAgent];
+    const models = quickModels(providerForAgent);
     if (!models || models.length === 0) continue;
     lines.push("");
     lines.push(`Tap to switch ${agentId} (${providerForAgent}):`);
@@ -1355,7 +1353,7 @@ function llmSubrouterHandler(
         ok: false,
         text:
           "Usage: `/foreman llm switch <provider> <model>`. " +
-          "Example: `/foreman llm switch openai gpt-4o-mini`.",
+          "Example: `/foreman llm switch openai gpt-6-luna`.",
         errorCode: "UNKNOWN_SUBCOMMAND",
       };
     }

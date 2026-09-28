@@ -194,7 +194,7 @@ describe("buildLlmConfigFromWizard — merge semantics", () => {
       existing,
     });
     expect(result.next.provider).toBe("openai");
-    expect(result.next.model).toBe("gpt-4o-mini");
+    expect(result.next.model).toBe("gpt-6-luna");
   });
 
   it("flips model to gemini default when switching to gemini", () => {
@@ -205,7 +205,7 @@ describe("buildLlmConfigFromWizard — merge semantics", () => {
       existing,
     });
     expect(result.next.provider).toBe("gemini");
-    expect(result.next.model).toBe("gemini-2.0-flash");
+    expect(result.next.model).toBe("gemini-3.5-flash-lite");
   });
 
   it("keeps a user-chosen native model across re-runs (gpt-4o stays gpt-4o)", () => {

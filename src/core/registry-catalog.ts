@@ -720,6 +720,13 @@ export const ProviderEntrySchema = z.object({
    *  (Ollama-local, custom endpoints) opt out — the resolver falls
    *  back to the literal `"default"` placeholder in that case. */
   default_model: z.string().min(1).nullable().optional(),
+  /** Current models by role: fast (Foreman's own checks, cheap agents),
+   *  balanced and strongest. Chat's quick-switch list and the wizard read
+   *  these, so a new model generation is a registry change, not a code one. */
+  model_tiers: z
+    .object({ fast: z.string().min(1), balanced: z.string().min(1), strongest: z.string().min(1) })
+    .strict()
+    .optional(),
 });
 
 export const ProviderCatalogSchema = z.object({
