@@ -6,14 +6,12 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
-### Security
+## [2.2.0] - 2026-09-29
 
-- **The Gemini API key no longer appears in the setup wizard's error
-  text.** Listing Gemini models sent the key as a `?key=` URL parameter,
-  and a failed request's message quoted that URL, so an unexpected HTTP
-  status (e.g. 400) could show the key on screen. The key now goes in the
-  `x-goog-api-key` header, as the Gemini client already did, and model
-  discovery errors never include a URL's query string.
+Foreman keeps guarding when the TUI is closed, can run its own model locally,
+and covers Claude Code's own tools from the first setup. Upgrade notes: nothing
+breaks; `foreman service install` is optional, and setup now asks before adding
+Claude Code's hook.
 
 ### Added
 
@@ -57,6 +55,21 @@ All notable changes to Foreman are documented here. The format follows
   - The service file is 0644 in your own directory, never written through a
     symlink or outside your home directory. The daemon's socket and token
     are unchanged.
+
+- **The setup wizard adds Claude Code's PreToolUse hook.** Claude Code's
+  own tools (Bash, Edit, Write, Read, WebFetch…) only went through
+  Foreman once you ran `foreman agent hook install claude-code`, a step
+  the wizard never mentioned. The agents step now asks "Also check Claude
+  Code's own tools before they run? (recommended)" — yes by default — and
+  the install step adds the hook to `~/.claude/settings.json`, keeping
+  every other setting and hook. Say no and the Done screen still shows the
+  command.
+
+### Changed
+
+- Tests run with a throwaway `HOME` as well as `FOREMAN_HOME`, so no test
+  can edit the developer's real Claude Code or Codex settings.
+
 ### Fixed
 
 - **The audit log names who decided an approval in Slack or Discord.**
@@ -77,6 +90,14 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Security
 
+- **The Gemini API key no longer appears in the setup wizard's error
+  text.** Listing Gemini models sent the key as a `?key=` URL parameter,
+  and a failed request's message quoted that URL, so an unexpected HTTP
+  status (e.g. 400) could show the key on screen. The key now goes in the
+  `x-goog-api-key` header, as the Gemini client already did, and model
+  discovery errors never include a URL's query string.
+
+
 - **Refused Slack and Discord interactions are audited.** A button tap or
   `/foreman` from someone not in `allowed_user_ids` was refused but left
   no trace. Each refusal now writes a `notify:interaction-refused` audit
@@ -86,21 +107,6 @@ All notable changes to Foreman are documented here. The format follows
   one event per user per minute (the next carries `suppressed`) and 30 per
   minute in all, so a flood can't grow the log without bound
   ([docs/notifications.md](docs/notifications.md#3a-two-way-slack-and-discord)).
-### Added
-
-- **The setup wizard adds Claude Code's PreToolUse hook.** Claude Code's
-  own tools (Bash, Edit, Write, Read, WebFetch…) only went through
-  Foreman once you ran `foreman agent hook install claude-code`, a step
-  the wizard never mentioned. The agents step now asks "Also check Claude
-  Code's own tools before they run? (recommended)" — yes by default — and
-  the install step adds the hook to `~/.claude/settings.json`, keeping
-  every other setting and hook. Say no and the Done screen still shows the
-  command.
-
-### Changed
-
-- Tests run with a throwaway `HOME` as well as `FOREMAN_HOME`, so no test
-  can edit the developer's real Claude Code or Codex settings.
 
 ## [2.1.1] - 2026-09-28
 
