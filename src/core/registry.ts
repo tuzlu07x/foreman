@@ -209,6 +209,17 @@ export class RegistryService {
     return row ? toRegisteredAgent(row) : null;
   }
 
+  /** The agent's Ed25519 public key, or null for an unknown agent. Foreman
+   *  never stores an agent's private key, so this is all there is to show. */
+  getPublicKey(agentId: string): Buffer | null {
+    const row = this.db
+      .select({ publicKey: agents.publicKey })
+      .from(agents)
+      .where(eq(agents.id, agentId))
+      .get();
+    return row ? Buffer.from(row.publicKey) : null;
+  }
+
   /** Every registered agent whose id matches `agentId` ignoring case and
    *  surrounding space (#656). Checks that must not be dodged by spelling
    *  an id differently (block, pause, "is this agent registered?") use

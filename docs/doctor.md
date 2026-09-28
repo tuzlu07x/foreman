@@ -162,6 +162,8 @@ fts5                 fail   requests_fts virtual table not present after migrati
 ```
 The loaded `better-sqlite3` has no FTS5. Since better-sqlite3 13 the npm package ships prebuilt binaries that include FTS5 (there is no install-time build any more), so this usually means an unsupported platform or a hand-built copy. Reinstall Foreman with `npm install -g foreman-agent` on a [supported platform](install.md#supported-platforms).
 
+Before `foreman init` there is no `foreman.db`, so the row reads ``FTS5 available (no database yet — run `foreman init`)`` and stays ok. `requests_fts ready` is only shown once the real database exists and has the table.
+
 **Agent needs a newer Node:**
 ```
 node_engines:openclaw  warn   OpenClaw needs Node >=24.16.0 <25 || >=26.1.0; found v22.12.0 on PATH

@@ -45,6 +45,19 @@ describe('delegation along the chart (startup template)', () => {
     expect(verdict?.reason).toMatch(/department heads/)
   })
 
+  it('a block keeps the pair’s reason and names the route the chart allows', () => {
+    const verdict = checkDelegation(org, 'codex', 'openclaw') // engineer → cmo
+    expect(verdict?.reason).toBe(
+      'engineer → cmo is outside the reporting chain in org.yaml: cross-department work must go through department heads',
+    )
+    expect(verdict?.next).toBe("hand it to cto (claude-code), engineer's manager, who can assign it to cmo")
+    const isolated = { ...org, delegation: { ...org.delegation, cross_department: 'deny' as const } }
+    const denied = checkDelegation(isolated, 'claude-code', 'openclaw') // cto → cmo
+    expect(denied?.reason).toContain('departments are isolated')
+    expect(denied?.next).toBe("hand it to ceo (hermes), cto's manager, who can assign it to cmo")
+    expect(checkDelegation(org, 'claude-code', 'codex')?.next).toBeUndefined()
+  })
+
   it('has no opinion about agents outside the chart', () => {
     expect(checkDelegation(org, 'codex', 'some-other-agent')).toBeNull()
   })

@@ -88,6 +88,22 @@ All notable changes to Foreman are documented here. The format follows
   agent whose responsibility note is known and isn't on the list now adds
   40 risk points (like the other responsibility rules, it never denies on
   its own; an agent without a note adds nothing).
+- **`foreman org check` explains more and fails on a typo.** It names the
+  side (`<from>` / `<to>`) that isn't in `org.yaml` and exits 1, accepts a
+  role id as well as an agent id, and keeps the chart's own reason for a
+  block with the route it allows instead (`next: hand it to cto
+  (claude-code), engineer's manager, …`). It checks `policy.yaml` first and
+  says when a `cannot_call` rule, a `can_call` list or an `ask` rule
+  decides. Hand-off enforcement is unchanged; the docs now say that a
+  `can_call` allow doesn't lift a block from the org chart.
+- **`foreman agent show` shows the agent's public key.** Text output adds a
+  `key:` line with the `ed25519:xxxxxxxx…` fingerprint (the style
+  `foreman init` uses for Foreman's own key); `--json` adds `publicKey`
+  (hex) and `publicKeyFingerprint`. No private material is printed.
+- **`foreman doctor` before `init`.** The `fts5` row said `requests_fts ready`
+  before any database existed. It now reports ``FTS5 available (no database
+  yet — run `foreman init`)`` until `foreman.db` exists, and only says
+  `requests_fts ready` when the real database has the table.
 - **LLM budget pricing.** A model missing from Foreman's price table was
   billed at the provider's cheapest rate: Claude Opus 5 or Fable at Haiku
   prices, gpt-5.x at gpt-4o-mini, Gemini 2.5 and 3.x at 2.0 Flash, so the
