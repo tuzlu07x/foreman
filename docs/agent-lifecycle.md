@@ -47,7 +47,7 @@ An unverified connection that claims a blocked or disabled id is refused too (se
 | `foreman agent disable <agentId>` | pause the agent without removing its config |
 | `foreman agent enable <agentId>` | make a disabled agent active again |
 | `foreman agent responsibility <agentId> [text...]` | set (or, with no text, clear) the responsibility note |
-| `foreman agent hook install\|uninstall claude-code` | add or remove Foreman's PreToolUse hook in Claude Code's settings |
+| `foreman agent hook install\|uninstall claude-code` | add or remove Foreman's PreToolUse hook in Claude Code's settings (`foreman setup` asks, and adds it unless you say no) |
 
 `foreman agent add <registry-id>` (for example `foreman agent add claude-code`) uses the catalog entry with that id. Any other name needs `--type <registry-id>`. Useful options: `--auto-install` installs the agent when its binary is missing, `--skip-config` leaves its config file alone, `--config-path <path>` writes a config at a non-default path, and `--token-out <file>` also writes its identity token to a file. `foreman agent add --help` lists them all.
 

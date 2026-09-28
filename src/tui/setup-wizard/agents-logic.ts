@@ -1,5 +1,6 @@
 import type { AgentEntry } from "../../core/registry-catalog.js";
 import type { AgentConfig } from "./types.js";
+import { supportsPreToolUseHook } from "../../core/agent-hook.js";
 
 // Same phase-machine pattern as Secrets — the old `agentsDone` boolean made
 // the picker drop straight into install with no confirmation step, so a
@@ -21,6 +22,7 @@ export type AgentConfigPromptKind =
   | "llm-choice"
   | "variant-pick"
   | "model-pick"
+  | "hook-choice"
   | "responsibility-note";
 
 export interface AgentConfigPrompt {
@@ -82,6 +84,8 @@ export function buildAgentConfigPromptList(
     if (choosable.length >= 1) {
       prompts.push({ agentId: id, kind: "model-pick" });
     }
+    // Claude Code: also check its own Bash / Edit / Read calls (yes by default).
+    if (supportsPreToolUseHook(id)) prompts.push({ agentId: id, kind: "hook-choice" });
     prompts.push({ agentId: id, kind: "responsibility-note" });
   }
   return prompts;

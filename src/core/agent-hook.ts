@@ -44,6 +44,12 @@ export const FOREMAN_HOOK_TIMEOUT_SECONDS = 660;
 /** The command written into the agent's settings. Prefers the lightweight
  *  `foreman-hook` binary (faster cold start on every tool call) when it is on
  *  PATH; standalone binaries only ship `foreman`, so fall back to it. */
+/** Agents with a pre-call hook Foreman can install: Claude Code's
+ *  PreToolUse. Others (Codex, OpenClaw, Hermes) don't expose one. */
+export function supportsPreToolUseHook(agentId: string): boolean {
+  return agentId === "claude-code";
+}
+
 export function defaultHookCommand(
   agentId: string,
   env: NodeJS.ProcessEnv = process.env,

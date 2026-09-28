@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -72,7 +72,7 @@ export class Sandbox {
 
   static async create(name: string): Promise<Sandbox> {
     if (!existsSync(FOREMAN_BIN)) throw new Error(`${FOREMAN_BIN} is missing: run \`npm run build\` first`)
-    const root = mkdtempSync(join(tmpdir(), `foreman-qa-${name}-`))
+    const root = makeRoot(name)
     const dirs = {
       home: join(root, 'foreman'),
       user: join(root, 'home'),
@@ -252,6 +252,32 @@ export class Sandbox {
   }
 }
 
+/** Foreman's limit on its daemon socket path (MAX_SOCKET_PATH in
+ *  src/core/daemon/protocol.ts): past it, `foreman start` runs without the
+ *  daemon and agents quietly serve in their own process. */
+const MAX_SOCKET_PATH = 100
+/** Where `foreman start` puts its socket, relative to the sandbox root. */
+const SOCKET_IN_ROOT = join('foreman', 'foreman.sock')
+
+/** A fresh sandbox root, short enough for the daemon's Unix socket. Under
+ *  os.tmpdir() when that fits (Linux: /tmp); macOS's per-user $TMPDIR
+ *  (/var/folders/…/T) is too long, so there it goes under /tmp/fq-*. The
+ *  path is resolved (/tmp is /private/tmp on macOS), as Foreman sees its
+ *  cwd. mkdtemp creates it 0700. */
+function makeRoot(name: string): string {
+  if (process.platform === 'win32') return mkdtempSync(join(tmpdir(), `foreman-qa-${name}-`))
+  const fits = (root: string): boolean => join(root, SOCKET_IN_ROOT).length <= MAX_SOCKET_PATH
+  const tmp = realpathSync(tmpdir())
+  // mkdtemp appends six characters.
+  const prefix = fits(join(tmp, `foreman-qa-${name}-XXXXXX`)) ? join(tmp, `foreman-qa-${name}-`) : join(realpathSync('/tmp'), `fq-${name}-`)
+  const root = mkdtempSync(prefix)
+  if (!fits(root)) {
+    rmSync(root, { recursive: true, force: true })
+    throw new Error(`the sandbox root is too long for Foreman's daemon socket: ${join(root, SOCKET_IN_ROOT)}`)
+  }
+  return root
+}
+
 function writeStub(dir: string, name: string, body: string): void {
   const path = join(dir, name)
   writeFileSync(path, body)
@@ -327,14 +353,34 @@ export async function waitFor<T>(
   }
 }
 
-/** The environment a running process was started with (Linux /proc). */
+/** The environment a running process was started with: Linux's
+ *  /proc/<pid>/environ, or elsewhere (macOS) the same kernel record as
+ *  `ps eww` prints it. `ps` joins the entries with spaces, so there an entry
+ *  runs up to the next ` NAME=`; values the sandbox sets never contain one. */
 export function processEnv(pid: number): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const entry of readFileSync(`/proc/${pid}/environ`, 'utf-8').split('\0')) {
+  let entries: string[]
+  if (process.platform === 'linux') {
+    entries = readFileSync(`/proc/${pid}/environ`, 'utf-8').split('\0')
+  } else {
+    const argv = psField(pid, 'command')
+    const withEnv = spawnSync('ps', ['eww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf-8' })
+    const line = withEnv.status === 0 ? withEnv.stdout.trim() : ''
+    if (argv === null || !line.startsWith(argv)) throw new Error(`cannot read the environment of pid ${pid} with ps`)
+    entries = line.slice(argv.length).trim().split(/ (?=[A-Za-z_][A-Za-z0-9_]*=)/)
+  }
+  for (const entry of entries) {
     const eq = entry.indexOf('=')
     if (eq > 0) out[entry.slice(0, eq)] = entry.slice(eq + 1)
   }
   return out
+}
+
+/** One `ps -o <field>=` column for `pid`, or null when it is gone. */
+function psField(pid: number, field: string): string | null {
+  const res = spawnSync('ps', ['-ww', '-o', `${field}=`, '-p', String(pid)], { encoding: 'utf-8' })
+  const value = res.status === 0 ? res.stdout.trim() : ''
+  return value === '' ? null : value
 }
 
 /** A running process (a zombie waiting to be reaped does not count). */
@@ -343,6 +389,11 @@ export function isAlive(pid: number): boolean {
     process.kill(pid, 0)
   } catch {
     return false
+  }
+  if (process.platform !== 'linux') {
+    // No /proc on macOS: ps reports a zombie's state as Z.
+    const state = psField(pid, 'stat')
+    return state !== null && !state.startsWith('Z')
   }
   try {
     // /proc/<pid>/stat: "pid (comm) state …"; comm may contain spaces.

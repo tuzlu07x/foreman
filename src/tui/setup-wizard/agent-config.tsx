@@ -328,6 +328,30 @@ export function renderAgentConfigStep(ctx: WizardContext): JSX.Element {
       </Box>
     );
   }
+  if (prompt.kind === "hook-choice") {
+    return (
+      <Box flexDirection="column" gap={1} paddingY={1}>
+        <WizardProgress
+          {...stepProgress("agents")}
+          label="Agents"
+          phase={`${agent.name} — its own tools ${progress}`}
+        />
+        <Text color={theme.fg.muted}>
+          Foreman checks the calls {agent.name} makes through Foreman. Its own
+          tools (Bash, Edit, Write, Read, WebFetch…) run on their own unless
+          Foreman's hook is in its settings. With it, a risky command waits for
+          your OK like any other call.
+        </Text>
+        <Text>
+          Also check {agent.name}'s own tools before they run? (recommended)
+        </Text>
+        <Text color={theme.accent.primary}>Y/n</Text>
+        <Text color={theme.fg.muted}>
+          [y / Enter] yes · [n] no (add it later with `foreman agent hook install {agent.id}`) · [Esc] back to selection
+        </Text>
+      </Box>
+    );
+  }
   return (
     <Box flexDirection="column" gap={1} paddingY={1}>
       <WizardProgress

@@ -139,12 +139,12 @@ that needs your approval waits, and is **denied** if nobody answers in time: 60 
 agents and 10 minutes for Claude Code's hook (`FOREMAN_APPROVAL_TIMEOUT`, in seconds, changes
 both). See [how approvals work](docs/tui.md#how-approvals-work).
 
-**Connect Claude Code.** Wire its MCP connection, then gate its built-in tools (Bash, Read,
-Write, WebFetch, …) with the PreToolUse hook:
+**Connect Claude Code.** `foreman setup` wires its MCP connection and, unless you say no, the
+PreToolUse hook that gates its built-in tools (Bash, Read, Write, WebFetch, …). From the CLI:
 
 ```bash
 foreman agent add claude-code            # MCP entry + identity token in ~/.claude.json
-foreman agent hook install claude-code
+foreman agent hook install claude-code   # its own tools go through Foreman too
 ```
 
 **Give every agent GitHub, safely:**

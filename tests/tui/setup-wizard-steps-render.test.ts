@@ -717,16 +717,30 @@ describe('agents step Esc navigation', () => {
     await w.until('Currently selected')
   })
 
+  it("asks whether to check Claude Code's own tools, and n moves on to its note", async () => {
+    const w = await mount('agents', {
+      secrets: { 'openai-key': 'sk-fake-openai-000', 'anthropic-key': 'sk-ant-fake-000' },
+    })
+    await w.until('Agents ▸ pick which to install')
+    await w.press(ENTER, 'Hermes (1/8)')
+    await w.press(ENTER, 'pick a Anthropic model')
+    await w.press(ENTER, 'Hermes — responsibility note')
+    await w.press(ENTER, 'Claude Code (5/8) · how to reach Anthropic')
+    await w.enterUntil('Claude Code — its own tools (7/8)')
+    expect(w.frame()).toContain("Also check Claude Code's own tools before they run? (recommended)")
+    await w.press('n', 'Claude Code — responsibility note (8/8)')
+  }, 20_000)
+
   it("Esc on a single-provider agent's variant screen returns to the picker, not the previous agent's note", async () => {
     const w = await mount('agents', {
       secrets: { 'openai-key': 'sk-fake-openai-000', 'anthropic-key': 'sk-ant-fake-000' },
     })
     await w.until('Agents ▸ pick which to install')
     // Hermes on Anthropic has one route, so its variant prompt auto-skips.
-    await w.press(ENTER, 'Hermes (1/7)')
+    await w.press(ENTER, 'Hermes (1/8)')
     await w.press(ENTER, 'pick a Anthropic model')
     await w.press(ENTER, 'Hermes — responsibility note')
-    await w.press(ENTER, 'Claude Code (5/7) · how to reach Anthropic')
+    await w.press(ENTER, 'Claude Code (5/8) · how to reach Anthropic')
     await w.press(ESC, 'Agents ▸ pick which to install')
     expect(w.frame()).not.toContain('responsibility note')
   }, 20_000)
