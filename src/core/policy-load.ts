@@ -1,5 +1,8 @@
 import { readFileSync } from "node:fs";
-import type { PolicyEngine } from "./policy-engine.js";
+import { isNode, parse as parseYaml, parseDocument } from "yaml";
+import { createInMemoryDb } from "../db/client.js";
+import { EventBus, type ForemanEventMap } from "./event-bus.js";
+import { invalidPatterns, PolicyEngine, type RuleConditions } from "./policy-engine.js";
 
 // =============================================================================
 // policy.yaml load errors (#657)
@@ -16,7 +19,7 @@ import type { PolicyEngine } from "./policy-engine.js";
 export class PolicyLoadError extends Error {
   constructor(
     readonly path: string,
-    /** 1-based line of a YAML syntax error; null for schema errors. */
+    /** 1-based line of the problem, when it can be placed. */
     readonly line: number | null,
     readonly detail: string,
   ) {
@@ -28,14 +31,16 @@ export class PolicyLoadError extends Error {
   readonly foremanFriendly = true;
 }
 
-/** The file, line and one-line reason for a policy.yaml that won't load. */
-export function toPolicyLoadError(path: string, err: unknown): PolicyLoadError {
+/** The file, line and one-line reason for a policy.yaml that won't load.
+ *  With the file's text, a schema error is placed on its line too. */
+export function toPolicyLoadError(path: string, err: unknown, text?: string): PolicyLoadError {
   if (err instanceof PolicyLoadError) return err;
   // ZodError: the first issue's path and message ("rules.0.source: Required").
   if (err !== null && typeof err === "object" && "issues" in err && Array.isArray(err.issues)) {
     const first = (err.issues as Array<{ path?: (string | number)[]; message?: string }>)[0];
     const where = first?.path && first.path.length > 0 ? `${first.path.join(".")}: ` : "";
-    return new PolicyLoadError(path, null, `${where}${first?.message ?? "invalid policy"}`);
+    const line = text !== undefined && first?.path ? lineOfPath(text, first.path) : null;
+    return new PolicyLoadError(path, line, `${where}${first?.message ?? "invalid policy"}`);
   }
   const message = err instanceof Error ? err.message : String(err);
   // YAMLParseError: "<reason> at line 3, column 1:" followed by a code frame.
@@ -66,7 +71,7 @@ export function followPolicyFile(
     try {
       policy.loadYamlText(text);
     } catch (err) {
-      throw toPolicyLoadError(path, err);
+      throw toPolicyLoadError(path, err, text);
     }
   }
   policy.watchFile(path, onError);
@@ -81,4 +86,48 @@ function readPolicyText(path: string): string | null {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw toPolicyLoadError(path, err);
   }
+}
+
+/** Everything `loadFromYaml` would reject, plus rule patterns that are not
+ *  valid regular expressions (they would silently never match). Checked
+ *  against a throwaway in-memory database; null when the file is fine. */
+export function validatePolicyText(path: string, text: string): PolicyLoadError | null {
+  const { db, sqlite } = createInMemoryDb();
+  try {
+    try {
+      new PolicyEngine(db, new EventBus<ForemanEventMap>()).loadYamlText(text);
+    } catch (err) {
+      return toPolicyLoadError(path, err, text);
+    }
+    const doc = parseYaml(text) as { rules?: Array<{ conditions?: RuleConditions }> } | null;
+    for (const [i, rule] of (doc?.rules ?? []).entries()) {
+      const bad = rule.conditions ? invalidPatterns(rule.conditions) : [];
+      if (bad.length > 0) {
+        return new PolicyLoadError(
+          path,
+          lineOfPath(text, ["rules", i, "conditions"]),
+          `rules.${i}.conditions: not a valid regular expression: ${bad.map((p) => JSON.stringify(p)).join(", ")}`,
+        );
+      }
+    }
+    return null;
+  } finally {
+    sqlite.close();
+  }
+}
+
+/** 1-based line of the deepest node on `path` that exists in the YAML. */
+function lineOfPath(text: string, path: readonly (string | number)[]): number | null {
+  try {
+    const doc = parseDocument(text);
+    for (let n = path.length; n > 0; n--) {
+      const node = doc.getIn(path.slice(0, n), true);
+      if (isNode(node) && node.range) {
+        return text.slice(0, node.range[0]).split("\n").length;
+      }
+    }
+  } catch {
+    /* the reason alone is still useful */
+  }
+  return null;
 }

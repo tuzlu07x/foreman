@@ -53,7 +53,7 @@ describe('a broken policy.yaml', () => {
 
   it('names the field when the YAML parses but the policy is invalid', () => {
     writeFileSync(join(home, 'policy.yaml'), 'rules:\n  - effect: maybe\n')
-    expect(() => startForeman({ withTui: false })).toThrow(/failed to parse: rules\.0\.\w+: /)
+    expect(() => startForeman({ withTui: false })).toThrow(/failed to parse \(line 2\): rules\.0\.\w+: /)
   })
 
   it('reaches every agent entry point as a PolicyLoadError', () => {

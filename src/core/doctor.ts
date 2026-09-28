@@ -27,6 +27,7 @@ import { missingSecrets } from "./mcp-hub/manage.js";
 import { describeMcpOAuthStatus, mcpOAuthStatus } from "./mcp-hub/oauth-store.js";
 import { loadOrg, OrgValidationError } from "./org/org.js";
 import { findDuplicateSlots } from "./secret-slot-migration.js";
+import { validatePolicyText } from "./policy-load.js";
 import { isReservedSecretName, SecretDecryptError, SecretStore } from "./secret-store.js";
 import { loadSecretsMasterKey, MasterKeyError } from "../identity/master-key.js";
 import { RegistryService } from "./registry.js";
@@ -383,33 +384,33 @@ export function checkPolicyYaml(): CheckResult {
       remediation: "Run 'foreman init' to write the default template.",
     };
   }
+  let text: string;
   try {
-    const text = readFileSync(paths.policyPath, "utf-8");
-    const parsed = parseYaml(text);
-    if (
-      parsed !== null &&
-      (typeof parsed !== "object" || Array.isArray(parsed))
-    ) {
-      return {
-        name: "policy_yaml",
-        status: "fail",
-        message: "policy.yaml top-level must be an object (or empty)",
-        remediation: `Edit ${paths.policyPath} — see the comments in the template for shape.`,
-      };
-    }
-    return {
-      name: "policy_yaml",
-      status: "ok",
-      message: "parses",
-    };
+    text = readFileSync(paths.policyPath, "utf-8");
   } catch (err) {
     return {
       name: "policy_yaml",
       status: "fail",
-      message: `policy.yaml failed to parse: ${err instanceof Error ? err.message : String(err)}`,
-      remediation: `Open ${paths.policyPath} and fix the syntax (YAML validators online help).`,
+      message: `policy.yaml unreadable: ${err instanceof Error ? err.message : String(err)}`,
+      remediation: `Check the permissions of ${paths.policyPath}.`,
     };
   }
+  // The same checks `foreman start` applies, plus patterns that would never
+  // match (#657): syntax, the policy schema, regexes in rule conditions.
+  const problem = validatePolicyText(paths.policyPath, text);
+  if (problem) {
+    return {
+      name: "policy_yaml",
+      status: "fail",
+      message: problem.message,
+      remediation: `Open ${paths.policyPath}${problem.line !== null ? ` at line ${problem.line}` : ""} and fix it; \`foreman start\` refuses to run on it until then.`,
+    };
+  }
+  return {
+    name: "policy_yaml",
+    status: "ok",
+    message: "parses and matches the policy schema",
+  };
 }
 
 // Notification config — best-effort lint. Doesn't require a working bot.
