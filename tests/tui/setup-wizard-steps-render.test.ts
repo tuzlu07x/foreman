@@ -171,6 +171,10 @@ function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, '')
 }
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/** Polls a mock assertion (onQuit, launchEditor): a key's effect is never
+ *  assumed to have landed after a fixed sleep. */
+const eventually = (check: () => void): Promise<void> => vi.waitFor(check, { timeout: 5_000, interval: 10 })
 
 let sandbox: string
 let savedForemanHome: string | undefined
@@ -202,9 +206,13 @@ afterEach(() => {
 
 interface Mounted {
   frame: () => string
-  press: (keys: string, waitFor?: string) => Promise<void>
+  press: (keys: string, waitFor?: string | RegExp) => Promise<void>
+  /** ↑ / ↓ / Space in a list: returns once the cursor row shows it. */
+  pressInList: (key: string) => Promise<void>
+  /** Enter, one rendered screen at a time, until `text` shows. */
+  enterUntil: (text: string) => Promise<void>
   type: (text: string) => Promise<void>
-  until: (text: string) => Promise<void>
+  until: (target: string | RegExp) => Promise<void>
   secretStore: SecretStore
   services: WizardServices
   chatPrimarySet: Mock<[string, string], void>
@@ -271,28 +279,52 @@ async function mount(
   const inst = render(wizard)
   unmount = () => inst.unmount()
   const frame = (): string => stripAnsi(inst.lastFrame() ?? '')
-  const until = async (text: string): Promise<void> => {
+  const waitFrame = async (done: (f: string) => boolean, what: string): Promise<void> => {
     const deadline = Date.now() + 5_000
-    while (!frame().includes(text)) {
+    while (!done(frame())) {
       if (Date.now() > deadline) {
-        throw new Error(`timed out waiting for ${JSON.stringify(text)}; frame:\n${frame()}`)
+        throw new Error(`timed out waiting for ${what}; frame:\n${frame()}`)
       }
       await sleep(10)
     }
   }
-  // Every key gets a render tick before the next one: the wizard's handlers
-  // read state from the last render, like a human typing.
-  const press = async (keys: string, waitFor?: string): Promise<void> => {
+  const until = (target: string | RegExp): Promise<void> =>
+    typeof target === 'string'
+      ? waitFrame((f) => f.includes(target), JSON.stringify(target))
+      : waitFrame((f) => target.test(f), String(target))
+  // A key's effect can land after any fixed sleep (Esc is dispatched on a
+  // timer, effects re-render later, a loaded machine is slow), so every key
+  // that another key or an assertion depends on waits for what it draws:
+  // the wizard's handlers act on the screen as last rendered, like a human.
+  const press = async (keys: string, waitFor?: string | RegExp): Promise<void> => {
     inst.stdin.write(keys)
     await sleep(60)
     if (waitFor) await until(waitFor)
+  }
+  // The list row under the cursor: required-setup and the brain picker draw
+  // ❯; @inkjs/ui's Select / MultiSelect draw figures.pointer, `>` here.
+  const cursorRow = (f: string): string => f.split('\n').find((l) => /^\s*[❯>] \S/.test(l)) ?? ''
+  const pressInList = async (key: string): Promise<void> => {
+    const before = cursorRow(frame())
+    inst.stdin.write(key)
+    await waitFrame((f) => cursorRow(f) !== before, `the cursor row to change from ${JSON.stringify(before)}`)
+  }
+  const enterUntil = async (text: string): Promise<void> => {
+    for (let i = 0; i < 10 && !frame().includes(text); i++) {
+      const before = frame()
+      inst.stdin.write(ENTER)
+      await waitFrame((f) => f !== before, `a new screen on the way to ${JSON.stringify(text)}`)
+    }
+    await until(text)
   }
   const type = async (text: string): Promise<void> => {
     for (const ch of text) {
       inst.stdin.write(ch)
       await sleep(5)
     }
-    await sleep(60)
+    // The field shows it as typed, or masked (required-setup's •, PasswordInput's *).
+    const shown = [text, '•'.repeat(Math.min(text.length, 32)), '*'.repeat(text.length)]
+    await until(new RegExp(shown.map(escapeRegExp).join('|')))
   }
   await sleep(60)
   const startInstall = async (): Promise<void> => {
@@ -310,6 +342,8 @@ async function mount(
   return {
     frame,
     press,
+    pressInList,
+    enterUntil,
     type,
     until,
     secretStore,
@@ -327,16 +361,16 @@ describe('Ctrl-C and modified hotkeys', () => {
   it('Ctrl-C quits from the Welcome screen', async () => {
     const w = await mount('welcome')
     await w.until('Welcome to Foreman')
-    expect(w.frame()).toContain('Quit any time with Ctrl-C (except while agents are installing)')
+    await w.until('Quit any time with Ctrl-C (except while agents are installing)')
     await w.press(CTRL_C)
-    expect(w.onQuit).toHaveBeenCalledTimes(1)
+    await eventually(() => expect(w.onQuit).toHaveBeenCalledTimes(1))
   })
 
   it('Ctrl-C quits from a picker screen', async () => {
     const w = await mount('providers')
     await w.until('pick which to configure')
     await w.press(CTRL_C)
-    expect(w.onQuit).toHaveBeenCalledTimes(1)
+    await eventually(() => expect(w.onQuit).toHaveBeenCalledTimes(1))
   })
 
   it('Ctrl-C at "ready to install" quits instead of starting the install', async () => {
@@ -346,7 +380,7 @@ describe('Ctrl-C and modified hotkeys', () => {
     // Ctrl-C reaches the handlers as input "c" + ctrl — this screen's
     // "[c] continue" used to start the install.
     await w.press(CTRL_C)
-    expect(w.onQuit).toHaveBeenCalledTimes(1)
+    await eventually(() => expect(w.onQuit).toHaveBeenCalledTimes(1))
     expect(vi.mocked(runInstallStep).mock.calls.length - before).toBe(0)
   })
 
@@ -355,7 +389,7 @@ describe('Ctrl-C and modified hotkeys', () => {
     const w = await mount('required-setup')
     await w.until('Ready to install')
     await w.press('\u001Bc')
-    expect(w.frame()).toContain('Required setup')
+    await w.until('Required setup')
     expect(vi.mocked(runInstallStep).mock.calls.length - before).toBe(0)
     expect(w.onQuit).not.toHaveBeenCalled()
   })
@@ -378,7 +412,7 @@ describe('Ctrl-C and modified hotkeys', () => {
     expect(install.resolution).toBeNull()
     await w.press('s', 'Setup complete')
     await w.press(CTRL_C)
-    expect(w.onQuit).toHaveBeenCalledTimes(1)
+    await eventually(() => expect(w.onQuit).toHaveBeenCalledTimes(1))
     expect(vi.mocked(runInstallStep).mock.calls.length - before).toBe(1)
   })
 
@@ -389,10 +423,10 @@ describe('Ctrl-C and modified hotkeys', () => {
     // Used to stay on the install screen forever (Ctrl-C refused too).
     await w.until('Setup complete')
     await w.press('l', 'Install log')
-    expect(w.frame()).toContain('✗ install step failed: fake installer crashed')
+    await w.until('✗ install step failed: fake installer crashed')
     await w.press('b', 'What next?')
     await w.press(CTRL_C)
-    expect(w.onQuit).toHaveBeenCalledTimes(1)
+    await eventually(() => expect(w.onQuit).toHaveBeenCalledTimes(1))
   })
 })
 
@@ -400,8 +434,8 @@ describe('welcome step', () => {
   it('previews the steps and starts on Enter', async () => {
     const w = await mount('welcome')
     await w.until('Welcome to Foreman')
-    expect(w.frame()).toContain("We'll wire this up in 5 steps")
-    expect(w.frame()).toContain('[Enter] Start setup')
+    await w.until("We'll wire this up in 5 steps")
+    await w.until('[Enter] Start setup')
     await w.press(ENTER, 'LLM Providers ▸ pick which to configure')
   })
 
@@ -440,15 +474,15 @@ describe('providers step', () => {
   it('stores a pasted key in the encrypted store and summarises it', async () => {
     const w = await mount('providers')
     await w.until('pick which to configure')
-    expect(w.frame()).toContain('Google Gemini')
-    await w.press(DOWN)
-    await w.press(DOWN)
-    await w.press(SPACE)
+    await w.until('Google Gemini')
+    await w.pressInList(DOWN)
+    await w.pressInList(DOWN)
+    await w.pressInList(SPACE)
     await w.press(ENTER, 'Value for Google Gemini API key')
     await w.type('fake-gemini-key-000')
     await w.press(ENTER, 'LLM Providers ▸ summary')
-    expect(w.frame()).toContain('✓ Saved 1 provider value')
-    expect(w.frame()).toContain('gemini-key')
+    await w.until('✓ Saved 1 provider value')
+    await w.until('gemini-key')
     // Security boundary: the value lands only in the SecretStore, never in
     // a rendered frame.
     expect(w.secretStore.get('gemini-key')).toBe('fake-gemini-key-000')
@@ -459,10 +493,10 @@ describe('providers step', () => {
   it('warns (and still saves) when an endpoint is not a URL', async () => {
     const w = await mount('providers')
     await w.until('pick which to configure')
-    await w.press(DOWN)
-    await w.press(DOWN)
-    await w.press(DOWN)
-    await w.press(SPACE)
+    await w.pressInList(DOWN)
+    await w.pressInList(DOWN)
+    await w.pressInList(DOWN)
+    await w.pressInList(SPACE)
     await w.press(ENTER)
     await w.until('Local (Ollama)')
     // The field starts with the default endpoint; this makes it invalid.
@@ -475,11 +509,11 @@ describe('providers step', () => {
   it('asks OAuth-capable providers for key vs subscription first', async () => {
     const w = await mount('providers')
     await w.until('pick which to configure')
-    await w.press(SPACE)
+    await w.pressInList(SPACE)
     await w.press(ENTER, 'How do you want to authenticate to')
-    expect(w.frame()).toContain('Sign in with your Claude subscription instead of')
+    await w.until('Sign in with your Claude subscription instead of')
     await w.press('y', 'Will sign in via subscription')
-    expect(w.frame()).toContain('runs `foreman llm login anthropic`')
+    await w.until('runs `foreman llm login anthropic`')
   })
 })
 
@@ -487,10 +521,10 @@ describe("foreman-llm step (Foreman's brain)", () => {
   it('greys out unconfigured cloud rows and lists live models for a configured one', async () => {
     const w = await mount('foreman-llm', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
     await w.until("Foreman's brain ▸ pick an LLM")
-    expect(w.frame()).toContain('✗ Anthropic')
-    expect(w.frame()).toContain('✓ OpenAI')
+    await w.until('✗ Anthropic')
+    await w.until('✓ OpenAI')
     await w.press(ENTER, 'pick a OpenAI model')
-    expect(w.frame()).toContain('openai-fake-large')
+    await w.until('openai-fake-large')
   })
 
   it('shows Ollama and OpenAI-compatible as coming in v0.2, not selectable', async () => {
@@ -498,13 +532,13 @@ describe("foreman-llm step (Foreman's brain)", () => {
     // the user save a brain that failed on its first call.
     const w = await mount('foreman-llm')
     await w.until('pick an LLM')
-    expect(w.frame()).toMatch(/✗ Local — Ollama on this machine\s+\(coming in v0\.2\)/)
-    expect(w.frame()).toMatch(/✗ Custom — OpenAI-compatible\s+\(coming in v0\.2\)/)
+    await w.until(/✗ Local — Ollama on this machine\s+\(coming in v0\.2\)/)
+    await w.until(/✗ Custom — OpenAI-compatible\s+\(coming in v0\.2\)/)
     // With no cloud provider configured, Skip is the only selectable row.
-    expect(w.frame()).toContain('❯ ✓ Skip — heuristics only')
+    await w.until('❯ ✓ Skip — heuristics only')
     await w.press(DOWN)
     await w.press('\u001B[A')
-    expect(w.frame()).toContain('❯ ✓ Skip — heuristics only')
+    await w.until('❯ ✓ Skip — heuristics only')
     await w.press(ENTER, 'Agents ▸ pick which to install')
     expect(readFileSync(w.services.llmConfigPath, 'utf-8')).toContain('enabled: false')
   })
@@ -514,16 +548,16 @@ describe('agents step', () => {
   it('walks picker → per-agent config → confirm', async () => {
     const w = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
     await w.until('Agents ▸ pick which to install')
-    expect(w.frame()).toContain('Checked: hermes')
+    await w.until('Checked: hermes')
     await w.press(ENTER, 'Hermes (1/4)')
-    expect(w.frame()).toContain('Currently selected')
+    await w.until('Currently selected')
     await w.press(ENTER, 'how to reach OpenAI')
     await w.press(ENTER, 'pick a OpenAI model')
     await w.press(ENTER, 'responsibility note')
     await w.type('Code review')
     await w.press(ENTER, 'Agents ▸ confirm')
-    expect(w.frame()).toContain('▸ Will install: hermes')
-    expect(w.frame()).toContain('Continue to services? (y/n)')
+    await w.until('▸ Will install: hermes')
+    await w.until('Continue to services? (y/n)')
   })
 })
 
@@ -533,20 +567,19 @@ describe('agents step', () => {
 describe('agents confirm: removing keeps binaries unless asked', () => {
   const untickCodexTickGeneric = async (w: Mounted): Promise<void> => {
     await w.until('Checked: codex')
-    await w.press(DOWN)
-    await w.press(DOWN)
+    await w.pressInList(DOWN)
+    await w.pressInList(DOWN)
     await w.press(SPACE, 'Checked: (none)')
-    await w.press(DOWN)
-    await w.press(DOWN)
+    await w.pressInList(DOWN)
+    await w.pressInList(DOWN)
     await w.press(SPACE, 'Checked: generic-mcp')
-    await w.press(ENTER)
-    while (!w.frame().includes('Agents ▸ confirm')) await w.press(ENTER)
+    await w.enterUntil('Agents ▸ confirm')
   }
 
   it('says unticked agents stay installed, and offers no uninstall Foreman may not do', async () => {
     const w = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' }, registered: ['codex'] })
     await untickCodexTickGeneric(w)
-    expect(w.frame()).toContain('▸ Will unregister: codex (binaries stay installed)')
+    await w.until('▸ Will unregister: codex (binaries stay installed)')
     expect(w.frame()).not.toContain('also uninstall')
   })
 
@@ -557,9 +590,9 @@ describe('agents confirm: removing keeps binaries unless asked', () => {
       installedByForeman: ['codex'],
     })
     await untickCodexTickGeneric(w)
-    expect(w.frame()).toContain('☐ also uninstall what Foreman')
+    await w.until('☐ also uninstall what Foreman')
     await w.press('u', '☑')
-    expect(w.frame()).toContain('▸ Will unregister: codex · and uninstall codex')
+    await w.until('▸ Will unregister: codex · and uninstall codex')
     await w.press('u', '☐')
     await w.press('u', '☑')
     const before = vi.mocked(runInstallStep).mock.calls.length
@@ -579,17 +612,17 @@ describe('agents picker header', () => {
     await w.until('Checked: hermes')
     // Untick Hermes: the header used to keep saying "Pre-checked: hermes".
     await w.press(SPACE, 'Checked: (none)')
-    await w.press(DOWN)
+    await w.pressInList(DOWN)
     await w.press(SPACE, 'Checked: openclaw')
     // The toggles themselves survive the re-render (check glyph varies: ✔ / √).
-    expect(w.frame()).toMatch(/OpenClaw — Multi-channel assistant with a lobster-themed TUI [✔√]/)
+    await w.until(/OpenClaw — Multi-channel assistant with a lobster-themed TUI [✔√]/)
     expect(w.frame()).not.toMatch(/Hermes — Personal AI assistant on Telegram and Discord [✔√]/)
     // QA #657 M11 — Esc back to the picker used to re-tick the defaults
     // (and Enter then installed Hermes). It keeps your pick now.
     await w.press(ENTER, 'OpenClaw (1/4)')
     await w.press(ESC, 'Agents ▸ pick which to install')
-    expect(w.frame()).toContain('Checked: openclaw')
-    expect(w.frame()).toMatch(/OpenClaw — Multi-channel assistant with a lobster-themed TUI [✔√]/)
+    await w.until('Checked: openclaw')
+    await w.until(/OpenClaw — Multi-channel assistant with a lobster-themed TUI [✔√]/)
     expect(w.frame()).not.toMatch(/Hermes — Personal AI assistant on Telegram and Discord [✔√]/)
   })
 
@@ -606,26 +639,24 @@ describe('agents picker header', () => {
     await w.press(ENTER, 'how to reach OpenAI')
     await w.press(ENTER, 'pick a OpenAI model')
     await w.press(ENTER, 'responsibility note')
-    expect(w.frame()).toContain('Nightly diff triage')
+    await w.until('Nightly diff triage')
   })
 
   it('keeps your pick after Esc from the confirm screen', async () => {
     const w = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
     await w.until('Checked: hermes')
     await w.press(SPACE, 'Checked: (none)')
-    await w.press(DOWN)
-    await w.press(DOWN)
-    await w.press(DOWN)
-    await w.press(DOWN)
+    await w.pressInList(DOWN)
+    await w.pressInList(DOWN)
+    await w.pressInList(DOWN)
+    await w.pressInList(DOWN)
     await w.press(SPACE, 'Checked: generic-mcp')
-    await w.press(ENTER)
-    while (!w.frame().includes('Agents ▸ confirm')) await w.press(ENTER)
-    expect(w.frame()).toContain('▸ Will install: generic-mcp')
+    await w.enterUntil('Agents ▸ confirm')
+    await w.until('▸ Will install: generic-mcp')
     await w.press(ESC, 'Agents ▸ pick which to install')
-    expect(w.frame()).toContain('Checked: generic-mcp')
-    await w.press(ENTER)
-    while (!w.frame().includes('Agents ▸ confirm')) await w.press(ENTER)
-    expect(w.frame()).toContain('▸ Will install: generic-mcp')
+    await w.until('Checked: generic-mcp')
+    await w.enterUntil('Agents ▸ confirm')
+    await w.until('▸ Will install: generic-mcp')
     expect(w.frame()).not.toContain('hermes')
   })
 })
@@ -635,14 +666,14 @@ describe('agents step Esc navigation', () => {
     const w = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
     await w.until('Agents ▸ pick which to install')
     // hermes off, openclaw (single "native" variant on OpenAI) on
-    await w.press(SPACE)
-    await w.press(DOWN)
-    await w.press(SPACE)
+    await w.pressInList(SPACE)
+    await w.pressInList(DOWN)
+    await w.pressInList(SPACE)
     await w.press(ENTER, 'OpenClaw (1/4)')
     await w.press(ENTER, 'pick a OpenAI model')
     // Used to loop: Esc → auto-skipped variant prompt → back to model-pick.
     await w.press(ESC, 'OpenClaw (1/4)')
-    expect(w.frame()).toContain('Currently selected')
+    await w.until('Currently selected')
   })
 
   it("Esc on a single-provider agent's variant screen returns to the picker, not the previous agent's note", async () => {
@@ -664,14 +695,14 @@ describe('services step', () => {
   it('prompts per secret, stores values encrypted and summarises', async () => {
     const w = await mount('services')
     await w.until('Services ▸ pick which to configure')
-    await w.press(SPACE)
+    await w.pressInList(SPACE)
     await w.press(ENTER, 'prompt 1 of 2')
-    expect(w.frame()).toContain('Setting up')
+    await w.until('Setting up')
     await w.type('fake-telegram-token-000')
     await w.press(ENTER, 'telegram-chat-id')
     await w.press(ENTER, 'Services ▸ summary')
-    expect(w.frame()).toContain('✓ Wired 1 service')
-    expect(w.frame()).toContain('⚠ Skipped 1 (empty value)')
+    await w.until('✓ Wired 1 service')
+    await w.until('⚠ Skipped 1 (empty value)')
     expect(w.secretStore.get('telegram-bot-token')).toBe('fake-telegram-token-000')
     expect(w.frame()).not.toContain('fake-telegram-token-000')
   })
@@ -684,13 +715,13 @@ describe('services step', () => {
       secrets: { 'telegram-bot-token': '123456789:AAHfake_token-abcdefghijklmnopqrstuvwxyz' },
     })
     await w.until('Services ▸ pick which to configure')
-    expect(w.frame()).toMatch(/Telegram — .* [✔√]/)
+    await w.until(/Telegram — .* [✔√]/)
     await w.press(ENTER, 'prompt 1 of 2')
-    expect(w.frame()).toContain('already stored — Enter on empty input keeps it')
+    await w.until('already stored — Enter on empty input keeps it')
     await w.press(ENTER, 'telegram-chat-id')
     await w.press(ENTER, 'Services ▸ summary')
-    expect(w.frame()).toContain('✓ Wired 1 service')
-    expect(w.frame()).toContain('• telegram-bot-token')
+    await w.until('✓ Wired 1 service')
+    await w.until('• telegram-bot-token')
     expect(w.frame()).not.toContain('no services configured')
     expect(w.secretStore.get('telegram-bot-token')).toBe('123456789:AAHfake_token-abcdefghijklmnopqrstuvwxyz')
   })
@@ -699,14 +730,14 @@ describe('services step', () => {
   it('warns (and still saves) when a token or chat id has the wrong shape', async () => {
     const w = await mount('services')
     await w.until('Services ▸ pick which to configure')
-    await w.press(SPACE)
+    await w.pressInList(SPACE)
     await w.press(ENTER, 'prompt 1 of 2')
     await w.type('notatoken')
     await w.press(ENTER, 'telegram-chat-id')
-    expect(w.frame()).toContain("doesn't look like a Telegram bot token")
+    await w.until("doesn't look like a Telegram bot token")
     await w.type('my chat')
     await w.press(ENTER, 'Services ▸ summary')
-    expect(w.frame()).toContain("doesn't look like a Telegram chat id")
+    await w.until("doesn't look like a Telegram chat id")
     expect(w.secretStore.get('telegram-bot-token')).toBe('notatoken')
     expect(w.secretStore.get('telegram-chat-id')).toBe('my chat')
   })
@@ -716,14 +747,14 @@ describe('chat-primary step', () => {
   it('asks which chat agent owns a shared channel and saves the pick', async () => {
     const w = await mount('services', { registered: ['hermes', 'openclaw'] })
     await w.until('Services ▸ pick which to configure')
-    await w.press(SPACE)
+    await w.pressInList(SPACE)
     await w.press(ENTER, 'prompt 1 of 2')
     await w.press(ENTER, 'prompt 2 of 2')
     await w.press(ENTER, 'Services ▸ summary')
     await w.press('y', 'Primary Telegram agent')
-    expect(w.frame()).toContain('Hermes')
-    expect(w.frame()).toContain('OpenClaw')
-    await w.press(DOWN)
+    await w.until('Hermes')
+    await w.until('OpenClaw')
+    await w.pressInList(DOWN)
     await w.press(ENTER, 'Required setup')
     expect(w.chatPrimarySet).toHaveBeenCalledWith('telegram', 'openclaw')
   })
@@ -744,15 +775,14 @@ describe('required-setup step', () => {
     await w.press('y', 'Services ▸ pick which to configure')
     await w.press(ENTER, 'Services ▸ summary')
     await w.press('y', 'Required setup ▸ missing keys')
-    expect(w.frame()).toContain('openrouter-key')
-    expect(w.frame()).toContain('status: missing')
-    await w.press(DOWN)
+    await w.until('openrouter-key')
+    await w.until('❯ ⚠ openrouter-key  for: hermes · status: missing')
     await w.press(ENTER, 'paste openrouter-key')
     await w.type('sk-or-fake-000')
-    expect(w.frame()).toContain('•'.repeat('sk-or-fake-000'.length))
+    await w.until('•'.repeat('sk-or-fake-000'.length))
     expect(w.frame()).not.toContain('sk-or-fake-000')
     await w.press(ENTER, 'Required setup ▸ all set')
-    expect(w.frame()).toContain('status: saved-in-session')
+    await w.until('status: saved-in-session')
     expect(w.secretStore.get('openrouter-key')).toBe('sk-or-fake-000')
   })
 })
@@ -762,8 +792,8 @@ describe('required-setup step [s] skip', () => {
     const w = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
     await w.until('Agents ▸ pick which to install')
     // Hermes (needs openrouter-key, missing) + OpenClaw (uses the stored openai-key).
-    await w.press(DOWN)
-    await w.press(SPACE)
+    await w.pressInList(DOWN)
+    await w.pressInList(SPACE)
     await w.press(ENTER, 'Hermes (1/8)')
     await w.press(ENTER, 'how to reach OpenAI')
     await w.press(ENTER, 'pick a OpenAI model')
@@ -775,11 +805,11 @@ describe('required-setup step [s] skip', () => {
     await w.press('y', 'Services ▸ pick which to configure')
     await w.press(ENTER, 'Services ▸ summary')
     await w.press('y', 'Required setup ▸ missing keys')
-    expect(w.frame()).toMatch(/❯ ✓ openai-key .*status: present/)
+    await w.until(/❯ ✓ openai-key .*status: present/)
     await w.press('s')
     // Used to flip to "✗ … status: skipped" for a key that is in the store.
-    expect(w.frame()).toMatch(/❯ ✓ openai-key .*status: present/)
-    await w.press(DOWN)
+    await w.until(/❯ ✓ openai-key .*status: present/)
+    await w.pressInList(DOWN)
     await w.press('s', 'openrouter-key  for: hermes · status: skipped')
   }, 20_000)
 })
@@ -789,8 +819,8 @@ describe('required-setup cursor', () => {
     const w = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
     await w.until('Agents ▸ pick which to install')
     // Hermes + OpenClaw → two rows; focus the second.
-    await w.press(DOWN)
-    await w.press(SPACE)
+    await w.pressInList(DOWN)
+    await w.pressInList(SPACE)
     await w.press(ENTER, 'Hermes (1/8)')
     await w.press(ENTER, 'how to reach OpenAI')
     await w.press(ENTER, 'pick a OpenAI model')
@@ -802,8 +832,8 @@ describe('required-setup cursor', () => {
     await w.press('y', 'Services ▸ pick which to configure')
     await w.press(ENTER, 'Services ▸ summary')
     await w.press('y', 'Required setup ▸ missing keys')
-    await w.press(DOWN)
-    expect(w.frame()).toContain('❯ ⚠ openrouter-key')
+    await w.pressInList(DOWN)
+    await w.until('❯ ⚠ openrouter-key')
     // Back to the agents picker; keep only OpenClaw → one row left.
     await w.press(ESC, 'Services ▸ summary')
     await w.press(ESC, 'Services ▸ pick which to configure')
@@ -820,7 +850,7 @@ describe('required-setup cursor', () => {
     await w.press('y', 'Required setup ▸ all set')
     // The stale cursor (1) used to point past the single row: nothing
     // focused, so Enter / [s] / [o] did nothing.
-    expect(w.frame()).toContain('❯ ✓ openai-key')
+    await w.until('❯ ✓ openai-key')
   }, 40_000)
 })
 
@@ -831,7 +861,7 @@ describe('resume into install', () => {
     const w = await mount('install')
     await w.until('Ready to install')
     await sleep(300)
-    expect(w.frame()).toContain('Required setup')
+    await w.until('Required setup')
     expect(vi.mocked(runInstallStep).mock.calls.length - before).toBe(0)
     await w.press('c', '✗ Hermes — install failed')
     expect(vi.mocked(runInstallStep).mock.calls.length - before).toBe(1)
@@ -869,13 +899,13 @@ describe('resume keeps session-only choices', () => {
       'telegram-bot-token': 'fake-resume-telegram-token-000',
       'openrouter-key': 'sk-or-fake-resume-000',
     }
-    await first.press(SPACE)
+    await first.pressInList(SPACE)
     await first.press(ENTER, 'prompt 1 of 2')
     await first.type(typedSecrets['telegram-bot-token'])
     await first.press(ENTER, 'prompt 2 of 2')
     await first.press(ENTER, 'Services ▸ summary')
     await first.press('y', 'Required setup ▸ missing keys')
-    while (!first.frame().includes('❯ ⚠ openrouter-key')) await first.press(DOWN)
+    while (!first.frame().includes('❯ ⚠ openrouter-key')) await first.pressInList(DOWN)
     await first.press(ENTER, 'paste openrouter-key')
     await first.type(typedSecrets['openrouter-key'])
     await first.press(ENTER, 'Required setup ▸ all set')
@@ -911,9 +941,8 @@ describe('resume keeps session-only choices', () => {
     })
     // Before the fix the resumed run had no per-agent provider, so it
     // showed "No secrets needed" and registered Hermes without an LLM.
-    await resumed.until('openrouter-key  for: hermes · status: missing')
-    await resumed.press(DOWN)
-    await resumed.press('s')
+    await resumed.until('❯ ⚠ openrouter-key  for: hermes · status: missing')
+    await resumed.press('s', 'status: skipped')
     await resumed.press('c', 'Install + configure')
     await resumed.until('✗ Hermes — install failed')
     const call = vi.mocked(runInstallStep).mock.calls.at(-1)
@@ -952,14 +981,14 @@ describe('resume never uninstalls on its own', () => {
       initialState: saved,
     })
     await resumed.until('Agents ▸ confirm')
-    expect(resumed.frame()).toContain('▸ Will install: hermes')
+    await resumed.until('▸ Will install: hermes')
     expect(resumed.frame()).not.toContain('Will unregister')
     await resumed.press('y', 'Services ▸ pick which to configure')
     await resumed.press(ENTER, 'Services ▸ summary')
     await resumed.press('y', 'Required setup')
-    await resumed.press(DOWN)
-    await resumed.press(DOWN)
-    await resumed.press('s')
+    // One row, already focused: skip the missing key.
+    await resumed.until('❯ ⚠ openrouter-key')
+    await resumed.press('s', 'status: skipped')
     await resumed.press('c', 'Install + configure')
     await resumed.until('✗ Hermes — install failed')
     const call = vi.mocked(runInstallStep).mock.calls.at(-1)
@@ -974,11 +1003,11 @@ describe('install step', () => {
   it('shows the failure prompt, the manual-fix overlay, and resolves skip', async () => {
     const w = await mount('install')
     await w.startInstall()
-    expect(w.frame()).toContain('Selected agents: hermes, claude-code')
+    await w.until('Selected agents: hermes, claude-code')
     await w.until('✗ Hermes — install failed')
-    expect(w.frame()).toContain('[r] retry · [s] skip this agent · [m] manual fix instructions')
+    await w.until('[r] retry · [s] skip this agent · [m] manual fix instructions')
     await w.press('m', 'Manual fix — Hermes')
-    expect(w.frame()).toContain('Run `fake-install` from your shell.')
+    await w.until('Run `fake-install` from your shell.')
     await w.press(ESC, '[r] retry')
     await w.press('s', 'Setup complete')
     expect(install.resolution).toBe('skip')
@@ -989,17 +1018,17 @@ describe('foreman-llm step with a subscription sign-in (#575 follow-up)', () => 
   it('acts on the row it draws and explains the pending sign-in', async () => {
     const w = await mount('providers')
     await w.until('pick which to configure')
-    await w.press(SPACE)
+    await w.pressInList(SPACE)
     await w.press(ENTER, 'How do you want to authenticate to')
     await w.press('y', 'Will sign in via subscription')
     await w.press('y', "Foreman's brain ▸ pick an LLM")
-    expect(w.frame()).toContain('❯ ✓ Anthropic')
+    await w.until('❯ ✓ Anthropic')
     await w.press(ENTER, 'Anthropic ▸ default model')
     // Used to open the Ollama screen (the key handler ignored sign-ins) or
     // say "No anthropic-key in the secret store".
     expect(w.frame()).not.toContain('Ollama not detected')
     expect(w.frame()).not.toContain('No anthropic-key')
-    expect(w.frame()).toContain('foreman llm login anthropic')
+    await w.until('foreman llm login anthropic')
     await w.press(ENTER, 'Agents ▸ pick which to install')
     const llmYaml = readFileSync(w.services.llmConfigPath, 'utf-8')
     expect(llmYaml).toContain('provider: anthropic')
@@ -1018,7 +1047,7 @@ describe('foreman-llm step with a subscription sign-in (#575 follow-up)', () => 
     await w.press('\u001B[A')
     await w.until('❯ ✓ Anthropic')
     await w.press(ENTER, 'pick a Anthropic model')
-    expect(w.frame()).toContain('anthropic-fake-large')
+    await w.until('anthropic-fake-large')
     expect(vi.mocked(discoverModels)).toHaveBeenLastCalledWith('anthropic', {
       apiKey: 'fake-oauth-access-token',
       auth: 'oauth',
@@ -1032,7 +1061,7 @@ describe('done step summary', () => {
       secrets: { 'openai-key': 'sk-fake-openai-000', 'deepseek-api-key': 'fake-deepseek-000' },
     })
     await w.until('What next?')
-    expect(w.frame()).toContain('2 LLM providers   openai, deepseek')
+    await w.until('2 LLM providers   openai, deepseek')
   })
 })
 
@@ -1057,7 +1086,7 @@ describe('done step identity summary', () => {
     })
     await w.startInstall()
     await w.until('What next?')
-    expect(w.frame()).toContain('No Foreman identity file for generic-mcp')
+    await w.until('No Foreman identity file for generic-mcp')
     expect(w.frame()).not.toContain('Identity push failed')
     expect(w.frame()).not.toContain('pushed to 0 of 1')
   })
@@ -1093,7 +1122,7 @@ describe('done step fits 24 rows', () => {
     expect(frame).toMatch(/\[q\]\s+Exit\s*$/m)
     expect(frame).not.toContain('skip OAuth')
     await w.press('d', 'foreman doctor')
-    expect(w.frame()).toContain('✓ 1 ok: fake-check')
+    await w.until('✓ 1 ok: fake-check')
   })
 })
 
@@ -1145,9 +1174,9 @@ describe('done step Node requirement', () => {
     })
     await w.startInstall()
     await w.until('What next?')
-    expect(w.frame()).toContain('Not installed: these agents need a newer Node.js')
-    expect(w.frame()).toContain('OpenClaw needs Node >=24.16.0 <25 || >=26.1.0')
-    expect(w.frame()).toContain('curl -fsSL https://openclaw.ai/install.sh | bash')
+    await w.until('Not installed: these agents need a newer Node.js')
+    await w.until('OpenClaw needs Node >=24.16.0 <25 || >=26.1.0')
+    await w.until('curl -fsSL https://openclaw.ai/install.sh | bash')
   })
 })
 
@@ -1155,7 +1184,7 @@ describe('done step [Enter] label', () => {
   it('does not promise a TUI under `foreman setup`', async () => {
     const w = await mount('done')
     await w.until('What next?')
-    expect(w.frame()).toContain('[Enter] Finish setup — start Foreman later with `foreman start`')
+    await w.until('[Enter] Finish setup — start Foreman later with `foreman start`')
     expect(w.frame()).not.toContain('Launch Foreman TUI')
   })
 
@@ -1183,13 +1212,13 @@ describe('done step [Enter] label', () => {
       },
     })
     await w.until('What next?')
-    expect(w.frame()).toContain(label)
+    await w.until(label)
   })
 
   it('offers the TUI when the host launches it (`foreman start`)', async () => {
     const w = await mount('done', { afterExit: 'launch-tui' })
     await w.until('What next?')
-    expect(w.frame()).toContain('[Enter] Launch Foreman TUI')
+    await w.until('[Enter] Launch Foreman TUI')
   })
 })
 
@@ -1197,14 +1226,14 @@ describe('done step', () => {
   it('summarises setup and serves the doctor / log / policy hotkeys', async () => {
     const w = await mount('done')
     await w.until('Setup complete — Foreman is ready to guard your agents.')
-    expect(w.frame()).toContain('2 policy rules')
-    expect(w.frame()).toContain('What next?')
+    await w.until('2 policy rules')
+    await w.until('What next?')
     await w.press('d', 'foreman doctor')
-    expect(w.frame()).toContain('fake-check')
+    await w.until('fake-check')
     await w.press(ESC, 'What next?')
     await w.press('l', 'Install log')
     await w.press('b', 'What next?')
     await w.press('p')
-    expect(w.launchEditor).toHaveBeenCalledWith(w.services.policyPath)
+    await eventually(() => expect(w.launchEditor).toHaveBeenCalledWith(w.services.policyPath))
   })
 })
