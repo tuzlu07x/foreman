@@ -15,17 +15,26 @@ function makeFilters(partial: Partial<LogFilters> = {}): LogFilters {
 }
 
 describe('toFtsQuery', () => {
-  it('converts plain word into prefix match', () => {
-    expect(toFtsQuery('env')).toBe('env*')
+  it('converts plain word into a quoted prefix match', () => {
+    expect(toFtsQuery('env')).toBe('"env"*')
   })
   it('quotes tokens with dots', () => {
-    expect(toFtsQuery('.env')).toBe('".env"')
+    expect(toFtsQuery('.env')).toBe('".env"*')
   })
   it('handles multiple tokens', () => {
-    expect(toFtsQuery('read file')).toBe('read* file*')
+    expect(toFtsQuery('read file')).toBe('"read"* "file"*')
   })
-  it('drops special chars', () => {
-    expect(toFtsQuery('foo!@#bar')).toBe('foo* bar*')
+  it('quotes hyphens and operators instead of parsing them', () => {
+    expect(toFtsQuery('qa-b')).toBe('"qa-b"*')
+    expect(toFtsQuery('rm -rf')).toBe('"rm"* "-rf"*')
+    expect(toFtsQuery('a AND')).toBe('"a"* "AND"*')
+  })
+  it('doubles inner quotes', () => {
+    expect(toFtsQuery('say "hi"')).toBe('"say"* """hi"""*')
+  })
+  it('drops words with no letter or digit', () => {
+    expect(toFtsQuery('*** -')).toBeNull()
+    expect(toFtsQuery('env ***')).toBe('"env"*')
   })
 })
 
@@ -145,6 +154,76 @@ describe('queryLogs', () => {
       const hits = queryLogs(sqlite, { search: 'env' })
       expect(hits.rows.map((r) => r.id)).toContain('r-env')
       expect(hits.rows.map((r) => r.id)).not.toContain('r-auth')
+    } finally {
+      sqlite.close()
+    }
+  })
+})
+
+// QA #657 H3 — a hyphen in the Logs search crashed the whole TUI (and
+// `foreman log search claude-code` exited 7 with a raw SqliteError).
+describe('queryLogs — search text is never FTS5 syntax', () => {
+  function seeded() {
+    const { sqlite, db } = createInMemoryDb()
+    const now = Date.now()
+    db.insert(requests)
+      .values({
+        id: 'r-cc',
+        sourceAgent: 'claude-code',
+        targetTool: 'shell_exec',
+        args: JSON.stringify({ command: 'rm -rf /tmp/x' }),
+        riskScore: 0,
+        decision: 'denied',
+        decidedBy: 'user',
+        createdAt: now,
+      })
+      .run()
+    db.insert(requests)
+      .values({
+        id: 'r-qa',
+        sourceAgent: 'qa-bot',
+        targetTool: 'read_file',
+        args: JSON.stringify({ path: 'README.md' }),
+        riskScore: 0,
+        decision: 'allowed',
+        decidedBy: 'auto',
+        createdAt: now - 1000,
+      })
+      .run()
+    return sqlite
+  }
+
+  it.each(['qa-', 'qa-b', 'claude-code', 'generic-mcp', 'rm -rf', 'foo-bar', '-x', '***', 'a AND', 'NOT', '"', 'x:y', '(', 'NEAR(a b)'])(
+    'does not throw for %j',
+    (text) => {
+      const sqlite = seeded()
+      try {
+        const result = queryLogs(sqlite, { search: text })
+        expect(result.error).toBeUndefined()
+      } finally {
+        sqlite.close()
+      }
+    },
+  )
+
+  it('finds agent ids with hyphens as typed', () => {
+    const sqlite = seeded()
+    try {
+      expect(queryLogs(sqlite, { search: 'qa-b' }).rows.map((r) => r.id)).toEqual(['r-qa'])
+      expect(queryLogs(sqlite, { search: 'claude-code' }).rows.map((r) => r.id)).toEqual(['r-cc'])
+      expect(queryLogs(sqlite, { search: 'rm -rf' }).rows.map((r) => r.id)).toEqual(['r-cc'])
+    } finally {
+      sqlite.close()
+    }
+  })
+
+  it('reports a query the database rejects instead of throwing', () => {
+    const sqlite = seeded()
+    try {
+      sqlite.exec('DROP TABLE requests_fts')
+      const result = queryLogs(sqlite, { search: 'env' })
+      expect(result.rows).toEqual([])
+      expect(result.error).toMatch(/^invalid search: /)
     } finally {
       sqlite.close()
     }

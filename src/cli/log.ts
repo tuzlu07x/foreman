@@ -34,7 +34,12 @@ logCommand
     requireInitialised();
     getDb();
     const sqlite = getSqlite();
-    const { rows } = queryLogs(sqlite, { search: query, limit: options.limit });
+    const { rows, error } = queryLogs(sqlite, { search: query, limit: options.limit });
+    if (error) {
+      console.error(red("error: ") + `couldn't search for "${query}": ${error}`);
+      closeDb();
+      process.exit(1);
+    }
     if (options.json) {
       process.stdout.write(
         JSON.stringify(rows.map(renderRequestJson), null, 2) + "\n",

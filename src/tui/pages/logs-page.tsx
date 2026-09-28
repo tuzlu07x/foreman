@@ -51,12 +51,13 @@ export function LogsPage(props: LogsPageProps): JSX.Element {
     return () => clearInterval(t);
   }, []);
 
-  const results = useMemo(
-    () => queryLogs(sqlite, { search, filters, limit: 200 }).rows,
+  const query = useMemo(
+    () => queryLogs(sqlite, { search, filters, limit: 200 }),
     // refreshKey forces re-query on the 2s tick
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sqlite, search, filters, refreshKey],
   );
+  const results = query.rows;
 
   const safeSelected = Math.max(0, Math.min(selectedIdx, results.length - 1));
   const offsetStart = Math.max(
@@ -81,11 +82,13 @@ export function LogsPage(props: LogsPageProps): JSX.Element {
         right={`${results.length} match${results.length === 1 ? "" : "es"}`}
       />
 
-      <SearchBar query={search} active={searchMode} />
+      <SearchBar query={search} active={searchMode} error={query.error ?? null} />
       <FilterBar filters={filters} />
 
       <Box flexDirection="column" marginTop={1}>
-        {results.length === 0 ? (
+        {results.length === 0 && search.trim().length > 0 ? (
+          <Text color={theme.fg.muted}>No requests match "{search.trim()}".</Text>
+        ) : results.length === 0 ? (
           <EmptyState
             title="No requests logged yet"
             body="Foreman audits every tool call (allowed, denied, asked). Once an agent makes a request, you'll see it here with full risk factors, the decision, and a one-key replay."
@@ -136,19 +139,28 @@ export function LogsPage(props: LogsPageProps): JSX.Element {
 function SearchBar({
   query,
   active,
+  error,
 }: {
   query: string;
   active: boolean;
+  error: string | null;
 }): JSX.Element {
   return (
-    <Box>
-      <Text color={active ? theme.accent.primary : theme.fg.muted}>
-        {active ? "› " : "  "}
-      </Text>
-      <Text color={active ? theme.fg.emphasis : theme.fg.muted}>
-        {query.length > 0 ? query : "(type / to search)"}
-      </Text>
-      {active && <Text color={theme.accent.primary}>▌</Text>}
+    <Box flexDirection="column">
+      <Box>
+        <Text color={active ? theme.accent.primary : theme.fg.muted}>
+          {active ? "› " : "  "}
+        </Text>
+        <Text color={active ? theme.fg.emphasis : theme.fg.muted}>
+          {query.length > 0 ? query : "(type / to search)"}
+        </Text>
+        {active && <Text color={theme.accent.primary}>▌</Text>}
+      </Box>
+      {error ? (
+        <Text color={theme.accent.warning} wrap="truncate-end">
+          {`  ${theme.symbols.warn} ${error}`}
+        </Text>
+      ) : null}
     </Box>
   );
 }
