@@ -1,86 +1,110 @@
 # Agent lifecycle
 
-Foreman manages each agent from install through removal. The same operations are available via the CLI (`foreman agent ...`) and the TUI Agents page (`[a]` hotkey).
+Foreman manages each agent from registration through removal. The same operations are available from the CLI (`foreman agent ...`) and from the TUI's Agents page (press `a` on the Home page).
 
 ## Lifecycle states
 
 ```
-   ┌────────────┐    install     ┌────────────┐
-   │ uninstalled│───────────────▶│  enabled   │◀──── enable
-   └────────────┘                └─────┬──────┘
-                                       │  disable
-                                       ▼
-   ┌────────────┐    block      ┌────────────┐
-   │  blocked   │◀──────────────│  disabled  │
-   └─────┬──────┘               └────────────┘
-         │  unblock
-         ▼
-     enabled
+                      add
+   not registered ──────────▶ active ◀─────────────────┐
+                              │    ▲                   │
+                      disable │    │ enable            │ unblock
+                              ▼    │                   │
+                             disabled                  │
+                                                       │
+   active or disabled ─────────── block ──────────▶ blocked
 
-   any state ──────remove──────▶ uninstalled
+   any state ─────────────── remove ──────────────▶ not registered
 ```
 
-- **enabled** — default after install. Agent can make MCP calls; Foreman mediates per policy.
-- **disabled** — registered but inactive. MCP calls return a "disabled" error without going through the policy engine. Use this to pause an agent without losing its config or its slot in the wizard.
-- **blocked** — Foreman refuses every call from the agent and writes an audit row for each attempt. Use this when an agent's behavior has gone off the rails and you want a paper trail.
-- **uninstalled** — not registered. The agent binary stays on disk: `remove` only uninstalls it when you pass `--uninstall`, and only a binary Foreman installed itself.
+`foreman agent list` shows the state as `status=…`:
+
+- **active** — the default after `add`. Its calls go through policy, risk scoring and your approval.
+- **disabled** — paused. Every call is refused (`agent:disabled`) and recorded in the audit log, before policy is consulted. The registration, keys, identity token and config stay, so `enable` picks up where it left off.
+- **blocked** — refused the same way (`agent:blocked`), for an agent whose behaviour has gone off the rails. `unblock` makes it **active** again, even if it was disabled before.
+- **not registered** — after `remove`. Its keypair and identity token are revoked.
+
+The agent's binary stays installed after `remove`. `--uninstall` also removes it, but only when Foreman installed it itself.
+
+An unverified connection that claims a blocked or disabled id is refused too (see [Agent identity tokens](#agent-identity-tokens)).
 
 ## CLI surface
 
 | Command | Purpose |
 |---|---|
-| `foreman agent list` | tabular list of registered agents + state |
-| `foreman agent add [name]` | register an agent (looks up `registry/agents.json` if `name` is provided) |
-| `foreman agent show <name>` | full record — id, public key, state, config path, registered secrets |
-| `foreman agent update [name]` | re-fetch registry entry + re-inject MCP block |
-| `foreman agent remove <name> [--uninstall]` | unregister + strip MCP block from config; `--uninstall` also uninstalls a binary Foreman installed |
+| `foreman agent list` | registered agents (including disabled and blocked) and their status |
+| `foreman agent add <registry-id>` | register an agent from the bundled catalog (`foreman registry list`); see below |
+| `foreman agent add <name> --type <registry-id>` | the same under a name of your own |
+| `foreman agent add` | interactive: pick from the catalog |
+| `foreman agent show <name>` | the agent row (status, registry entry, transport, identity token) plus its MCP config snippet |
+| `foreman agent update [name]` | upgrade an agent's npm package (omit the name or pass `all` for every agent) |
+| `foreman agent remove <name> [--uninstall]` | unregister, revoke its keypair and identity token; `--uninstall` also uninstalls the binary if Foreman installed it |
 | `foreman agent rewire [<name>\|--all]` | give the agent its identity token and rewrite its MCP wiring (see [Agent identity tokens](#agent-identity-tokens)) |
 | `foreman agent token rotate <name>` | mint a new identity token and rewrite the wiring; the old token stops working at once |
 | `foreman agent regenerate-key <name>` | issue a new Ed25519 keypair (revokes the old one) |
-| `foreman agent block <agentId>` | force every call to deny + audit |
-| `foreman agent unblock <agentId>` | return to whatever state the agent was in before block |
-| `foreman agent disable <agentId>` | pause without auditing every attempt |
-| `foreman agent enable <agentId>` | resume from disabled |
+| `foreman agent block <agentId>` | refuse and log every call |
+| `foreman agent unblock <agentId>` | make a blocked agent active again |
+| `foreman agent disable <agentId>` | pause the agent without removing its config |
+| `foreman agent enable <agentId>` | make a disabled agent active again |
+| `foreman agent responsibility <agentId> [text...]` | set (or, with no text, clear) the responsibility note |
+| `foreman agent hook install\|uninstall claude-code` | add or remove Foreman's PreToolUse hook in Claude Code's settings |
+
+`foreman agent add <registry-id>` (for example `foreman agent add claude-code`) uses the catalog entry with that id. Any other name needs `--type <registry-id>`. Useful options: `--auto-install` installs the agent when its binary is missing, `--skip-config` leaves its config file alone, `--config-path <path>` writes a config at a non-default path, and `--token-out <file>` also writes its identity token to a file. `foreman agent add --help` lists them all.
 
 `foreman agents` is an alias for `foreman agent`.
 
 ## TUI flow
 
-Open the Agents page with `[a]` from the dashboard:
+Press `a` on the Home page to open the Agents page:
 
 ```
- Agents (4)
- ─────────────
- ▸ claude-code     enabled   anthropic   "code review"
-   hermes          enabled   anthropic   "telegram chat"
-   codex           disabled  openai      —
-   openclaw        blocked   anthropic   "spam-filter test"
+│ Agents                              1 registered · 1 active · 0 crashed · 0 disabled · 0 blocked │
+│ ────────────────────────────────────────────────────────────                                     │
+│                                                                                                  │
+│ ▸ ● generic-mcp (Generic MCP server) · stdio · last 00:44:56                                     │
 ```
 
-Per-row hotkeys:
+Keys on this page:
 
-- `[e]` edit — change LLM provider (for multi-provider agents) + responsibility note
-- `[d]` disable / enable
-- `[b]` block / unblock
-- `[r]` regenerate key
-- `[x]` remove
+| Key | |
+| --- | --- |
+| `↑` `↓` | select an agent |
+| `Enter` | expand it: registry id, status, `--source` key, responsibility note, LLM provider |
+| `d` / `e` | disable / enable |
+| `b` | block, or unblock a blocked agent |
+| `N` | edit the responsibility note |
+| `L` | change its LLM provider |
+| `o` | run its login (OAuth or interactive setup) |
+| `r` | regenerate its keypair; the new private key is shown once |
+| `x` | remove it: unregister it and revoke its key and identity token (the binary and the agent's config files stay) |
+| `Esc` | back to Home |
 
-The responsibility note is a free-text answer to "why did I install this agent again, 3 months later?" — it surfaces in audit logs, approval prompts, and the dashboard.
+`r` and `x` ask first (`y` goes ahead; any other key cancels).
+
+The responsibility note is a free-text answer to "why did I install this agent again, 3 months later?" — it surfaces in audit logs, approval prompts, and the dashboard, and `responsibility_policies` in [`policy.yaml`](policy.md#responsibility_policies) check calls against it.
 
 ## What gets cleaned up on `remove`
 
 When you remove an agent, Foreman:
 
-1. Strips the `mcpServers.foreman` (or `mcp_servers.foreman` for Codex's TOML, or `mcp.servers.foreman` for niche configs) entry from every `config_paths` entry. No orphaned MCP blocks.
-2. Deletes the agent's row from the DB (and any per-agent config like `llmProvider` / `responsibilityNote`).
-3. Revokes the Ed25519 keypair and the agent's identity token — even if the binary is left on disk, a new install can't impersonate the removed agent.
-4. **Does not** delete the agent's own config files outside the MCP block, the agent's binary (unless you pass `--uninstall` and Foreman installed it via `npm`/`brew`), or anything in the agent's own state dir (`~/.hermes/`, `~/.openclaw/`, etc.).
+1. Deletes the agent's row from the database (with its per-agent settings such as the LLM provider and responsibility note).
+2. Revokes its Ed25519 keypair and its identity token. The `foreman` MCP entry left in the agent's config now connects as `untrusted:<id>`, and a new install can't impersonate the removed agent.
+3. **Does not** remove the `foreman` MCP entry from the agent's config files (see the table under [Agent identity tokens](#agent-identity-tokens) for where it is), the Claude Code PreToolUse hook (run `foreman agent hook uninstall claude-code` first), keys Foreman [projected](#secret-projection-222--223) into the agent's own files, or anything in the agent's own state dir (`~/.hermes/`, `~/.openclaw/`, etc.).
 
-For script-installed agents like Hermes, `remove --uninstall` prints the manual uninstall hint:
+4. Leaves the agent's binary installed, and says so. `--uninstall` also uninstalls it, but only a binary Foreman installed itself (with `agent add --auto-install` or the setup wizard); it runs the matching command, for example `npm uninstall -g @anthropic-ai/claude-code`. For an agent you installed yourself, `--uninstall` refuses before changing anything:
 
 ```
-Remove the hermes binary manually (try the installer's --uninstall flag).
+error: Foreman didn't install Codex, so it won't uninstall it (it may be your own install).
+  → Run 'foreman agent remove codex' to unregister it, then uninstall it yourself: npm uninstall -g @openai/codex
 ```
+
+An agent Foreman installed with a script (like Hermes) can't be uninstalled automatically; `--uninstall` prints a hint instead:
+
+```
+note: Hermes was installed via a script — Foreman can't auto-uninstall. Remove the hermes binary manually (try the installer's --uninstall flag).
+```
+
+Unticking an agent in the setup wizard unregisters it the same way. When Foreman installed one of the unticked agents, the wizard's confirm screen also offers `u` to uninstall it.
 
 ## Agent identity tokens
 
@@ -200,7 +224,7 @@ If the agent's registry entry declares an `identity_path` (e.g. `~/.hermes/SOUL.
 foreman identity push
 ```
 
-The push is best-effort — some runtimes (notably Hermes' core LLM prompt) weight their built-in system prompt above any user-supplied SOUL.md. The push still gets you the strongest available identity hook for that runtime; whether the upstream LLM respects it is upstream's call. See [`docs/qa-report-v0.1.0.md`](qa-report-v0.1.0.md) for the original Hermes identity finding.
+The push is best-effort — some runtimes (notably Hermes' core LLM prompt) weight their built-in system prompt above any user-supplied SOUL.md. The push still gets you the strongest available identity hook for that runtime; whether the upstream LLM respects it is upstream's call. See the archived [v0.1.0 QA report](archive/qa-report-v0.1.0.md) for the original Hermes identity finding.
 
 ## Secret projection (#222 / #223)
 

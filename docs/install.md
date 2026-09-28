@@ -1,8 +1,8 @@
-# Foreman v0.1.0 — Install + first-run guide
+# Install Foreman
 
-Step-by-step recipes for macOS, Linux, and Windows. Pick the section that matches your machine.
+How to install Foreman on macOS, Linux and Windows (WSL2), run it for the first time, check it, and remove it again.
 
-> **Pre-release note**: As of v0.1.0 the `foreman-agent` npm package is **not yet published** and the GitHub repo is **private**. The documented `curl … | bash` shortcut therefore 404s today. Until both ship, follow the **from-source** path below — same outcome, two extra commands.
+Foreman is published on npm as [`foreman-agent`](https://www.npmjs.com/package/foreman-agent). It needs **Node.js 22.12 or later**. Node 20 is end-of-life and not supported.
 
 ---
 
@@ -10,22 +10,16 @@ Step-by-step recipes for macOS, Linux, and Windows. Pick the section that matche
 
 | Step | macOS | Linux | Windows |
 | --- | --- | --- | --- |
-| 1. Prereqs | Node 20+, git, `chafa` (optional) | Node 20+, git, `chafa` (optional) | WSL2 Ubuntu — see below |
-| 2. Get the code | `git clone … && cd foreman` | `git clone … && cd foreman` | inside WSL2 |
-| 3. Install | `npm ci && npm run build && npm install -g .` | same | same (inside WSL2) |
-| 4. First run | `foreman start` → wizard auto-launches | same | same |
-| 5. Verify | `foreman doctor` → 12+ ok, 1–2 warn | same | same |
+| 1. Prereqs | Node 22.12+ (the installer can set it up), `chafa` (optional) | same | WSL2 with Ubuntu, then as Linux |
+| 2. Install | `curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh \| bash` or `npm install -g foreman-agent` | same | same, inside WSL2 |
+| 3. First run | `foreman start`, then the setup wizard | same | same |
+| 4. Verify | `foreman doctor`: exit code 0 or 1 (warnings only) | same | same |
 
 > **OpenClaw needs a newer Node than Foreman.** Since v2026.9.3 OpenClaw requires Node `>=24.16.0 <25 || >=26.1.0`. If the `node` on your PATH is older (say 22.x), Foreman won't run `npm install -g openclaw`: the wizard and `foreman agent add` print the requirement and OpenClaw's upstream installer instead, and set up your other agents as usual. Either switch to Node 24.16+ or 26.1+ (e.g. `nvm install 24`) and add OpenClaw again, or run the upstream installer yourself, which provisions a supported Node when it's missing:
 > ```bash
 > curl -fsSL https://openclaw.ai/install.sh | bash
 > ```
 > Foreman never runs that script for you. `foreman doctor` warns while OpenClaw is registered or installed on an older Node.
-
-After release-day (`npm publish` + GH release + repo public) the entire install becomes one line:
-```
-curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash
-```
 
 ---
 
@@ -41,6 +35,63 @@ Foreman's SQLite driver, better-sqlite3, ships prebuilt native binaries inside i
 | Windows | x64, arm64 | inside WSL2 | inside WSL2 (Linux binary) |
 
 On any other platform or architecture (FreeBSD, 32-bit ARM, …) `npm install` still succeeds, but Foreman can't open its database and exits with an error.
+
+---
+
+## Install
+
+Pick one. All of them put the same `foreman` command on your PATH.
+
+### The install script (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash
+```
+
+The script reuses the `node` on your PATH when it is Node 22 or 24. Otherwise it installs nvm and Node 22 LTS through it (no compiler or Python needed), then runs `npm install -g foreman-agent`. Options:
+
+| Variable / flag | Effect |
+| --- | --- |
+| `FOREMAN_VERSION=<version>` | Install that release instead of the latest |
+| `FOREMAN_INSTALL_PREFIX=<dir>` | Use a non-default npm prefix |
+| `FOREMAN_SKIP_NVM=1` | Never bootstrap nvm; fail if no supported Node is found |
+| `FOREMAN_REUSE_ANY_NODE=1` | Reuse a Node >= 22 outside the tested 22 / 24 lines |
+| `--uninstall` | Remove the global package (Foreman's data is left in place) |
+
+Flags go after `bash -s --`, for example `curl -fsSL …/install.sh | bash -s -- --uninstall`.
+
+If the script installed Node through nvm, open a new shell (or run `. "$HOME/.nvm/nvm.sh"`) before running `foreman`.
+
+### npm
+
+With Node 22.12+ already installed:
+
+```bash
+npm install -g foreman-agent
+```
+
+### Homebrew (macOS, Linuxbrew)
+
+```bash
+brew tap tuzlu07x/foreman && brew install foreman-agent
+```
+
+### From source (contributors)
+
+```bash
+git clone https://github.com/tuzlu07x/foreman.git
+cd foreman
+npm ci
+npm run build
+npm install -g .
+```
+
+### Check it
+
+```bash
+foreman --version       # prints the installed version
+which foreman
+```
 
 ---
 
@@ -69,244 +120,212 @@ To uninstall, delete the binary and the `runtime/` directory in the cache dir, t
 
 ---
 
-## macOS
+## Platform notes
 
-### 1. Prereqs
+### macOS
+
 ```bash
-# Node 20+ — Homebrew or nvm both fine
-brew install node
-
-# Optional: chafa for the higher-fidelity boot mascot
-brew install chafa
-
-# Verify
-node --version          # v20.x or v22.x
-git --version
+brew install node       # or nvm; you need Node 22.12+
+brew install chafa      # optional: the higher-fidelity boot mascot
+node --version          # v22.12 or later
 ```
 
-### 2. Get + build Foreman
-```bash
-git clone git@github.com:tuzlu07x/foreman.git ~/Projects/foreman
-cd ~/Projects/foreman
-npm ci
-npm run build
-npm install -g .
+Then use any of the [install](#install) options.
 
-# Verify
-foreman --version       # 0.1.0
-which foreman           # /opt/homebrew/bin/foreman
-```
+Foreman keeps its files in:
 
-### 3. First run
-```bash
-foreman start
-```
-
-The wizard auto-launches because the foreman home doesn't exist yet. Walk through:
-
-1. **Welcome** → Enter to start.
-2. **Step 1 of 5 — LLM Providers** — Space toggles the providers you have, Enter confirms. For Anthropic / OpenAI you can sign in with your Claude / ChatGPT subscription instead of pasting a key; otherwise paste each key at its prompt (a help URL is shown, e.g. `Get yours at: https://console.anthropic.com/settings/keys`).
-3. **Step 2 of 5 — Foreman's brain** — pick the LLM Foreman itself uses: a configured cloud provider (and model), or Skip. Local Ollama and OpenAI-compatible brains are listed as "coming in v0.2".
-4. **Step 3 of 5 — Agents** — `hermes` + `claude-code` are pre-checked; agents whose LLM isn't configured are hidden. Per agent, pick its LLM, route and model plus an optional responsibility note, then confirm.
-5. **Step 4 of 5 — Services** — optional tokens (Telegram, Discord, Slack, GitHub, …). If two chat agents share a channel, you pick which one is primary.
-6. **Step 5 of 5 — Install + Verify** — required setup lists any keys the chosen routes still need (paste or skip), then Foreman installs, configures and registers each agent.
-7. **Done** — a summary; press Enter to open the TUI.
-
-The dashboard shows three panels (Agents · Activity · Today) and the status bar lists every hotkey:
-```
-[?] help · [a] agents · [c] chat · [g] settings · [k] keys · [l] logs · [p] policy · [s] sessions · [q] quit
-```
-
-### 4. Verify
-In another shell:
-```bash
-foreman doctor          # 12 ok · 1–2 warnings, exit code 1 is normal on a fresh box
-foreman agent list      # the agents you picked
-foreman secrets list    # the keys you entered, last-accessed "never"
-```
-
-### Filesystem layout (macOS)
-- Config + state: `~/Library/Application Support/foreman/`
-  - `identity.key`, `secrets.key`, `policy.yaml`, `SOUL.md`, `foreman.db`, `setup-state.json`
+- Config and state: `~/Library/Application Support/foreman/` (`identity.key`, `secrets.key`, `policy.yaml`, `SOUL.md`, `foreman.db`, `setup-state.json`, …)
 - Cache: `~/Library/Caches/foreman/`
 
-### Common macOS gotchas
-- **`Application Support` has a space in the path.** When wiping state, use `"$HOME/Library/Application Support/foreman"` (quoted) or zsh's `nomatch` will abort the whole `rm`.
-- **`/bin/false` doesn't exist on macOS** — use `/usr/bin/false` if a script hard-codes it.
+Gotchas:
 
----
+- **`Application Support` has a space in the path.** When wiping state, quote it (`"$HOME/Library/Application Support/foreman"`), or zsh's `nomatch` aborts the whole `rm`.
+- **`/bin/false` doesn't exist on macOS.** Use `/usr/bin/false` if a script hard-codes it.
 
-## Linux (Ubuntu 22.04+ / Debian / similar)
+### Linux (Ubuntu 22.04+, Debian and similar)
 
-### 1. Prereqs
+The install script sets up Node for you. To do it yourself with nvm:
+
 ```bash
-# Node 20+ — nvm is the path of least resistance
 curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh" | bash
 export NVM_DIR="$HOME/.nvm"
 . "$NVM_DIR/nvm.sh"
-nvm install 20
+nvm install 22
+node --version          # v22.12 or later
 
-# Optional, for the boot mascot
-sudo apt install chafa
-
-# Verify
-node --version
-git --version
+sudo apt install chafa  # optional: the higher-fidelity boot mascot
 ```
 
-### 2. Get + build Foreman
-Same as macOS:
-```bash
-git clone git@github.com:tuzlu07x/foreman.git ~/Projects/foreman
-cd ~/Projects/foreman
-npm ci
-npm run build
-npm install -g .
+Foreman follows the XDG layout:
 
-foreman --version       # 0.1.0
-which foreman           # ~/.nvm/versions/node/v20.x/bin/foreman
-```
-
-### 3. First run
-```bash
-foreman start
-```
-
-Same wizard flow as macOS.
-
-### 4. Verify
-```bash
-foreman doctor
-foreman agent list
-foreman secrets list
-```
-
-### Filesystem layout (Linux — XDG)
-- Config: `~/.config/foreman/` — `identity.key`, `secrets.key`, `policy.yaml`, `SOUL.md`
-- State: `~/.local/state/foreman/foreman.db`
+- Config: `~/.config/foreman/` (`identity.key`, `secrets.key`, `policy.yaml`, `SOUL.md`, `setup-state.json`, …)
+- State: `~/.local/state/foreman/` (`foreman.db`)
 - Cache: `~/.cache/foreman/`
 
-`$XDG_CONFIG_HOME` / `$XDG_STATE_HOME` / `$XDG_CACHE_HOME` are honoured if set.
+`$XDG_CONFIG_HOME`, `$XDG_STATE_HOME` and `$XDG_CACHE_HOME` are honoured if set. If `FOREMAN_HOME` is set, everything goes into that one directory instead (cache in `$FOREMAN_HOME/cache/`). `foreman doctor` prints the paths in use.
 
-### Common Linux gotchas
-- **nvm doesn't auto-source in every shell.** If you open a fresh ssh session and `foreman` says "command not found", `. "$HOME/.nvm/nvm.sh"` first.
-- **`chafa` package name** is `chafa` on Debian / Ubuntu; build from source on older distros.
-- **Systemd user-mode** required for the Hermes gateway path (`hermes gateway install` creates `~/.config/systemd/user/hermes-gateway.service`). Enable with `loginctl enable-linger $USER` so it survives logout.
+Gotchas:
 
----
+- **nvm doesn't load in every shell.** If a fresh SSH session says `foreman: command not found`, run `. "$HOME/.nvm/nvm.sh"` first.
+- **`chafa`** is packaged as `chafa` on Debian and Ubuntu; build it from source on older distros.
+- **The Hermes gateway runs as a systemd user service** (`hermes gateway install` creates `~/.config/systemd/user/hermes-gateway.service`). Run `loginctl enable-linger $USER` so it survives logout.
 
-## Windows
+### Windows
 
-Foreman runs **inside WSL2** today. Native Windows support is on the roadmap but the Ink TUI's raw-mode handling expects a Unix terminal.
+Foreman runs **inside WSL2**. Native Windows isn't supported: the Ink TUI's raw-mode handling expects a Unix terminal.
 
-### 1. Install WSL2
 From an admin PowerShell:
+
 ```powershell
 wsl --install -d Ubuntu-22.04
 ```
-Reboot, then open the Ubuntu app to finish user setup.
 
-### 2. Inside WSL2 — same as Linux
+Reboot, open the Ubuntu app to finish the user setup, then follow the Linux steps inside it. [`windows-wsl2.md`](windows-wsl2.md) has the full walkthrough and the WSL-specific quirks.
+
+- **File system performance** is best inside the WSL filesystem (`~/`), not the Windows mount (`/mnt/c/...`). Keep Foreman's state there.
+- **Telegram polling needs outbound TCP.** WSL uses the host's network; if a corporate VPN blocks api.telegram.org, the Hermes gateway retries in a loop.
+
+---
+
+## First run
+
 ```bash
-# Node 20+
-curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh" | bash
-export NVM_DIR="$HOME/.nvm"
-. "$NVM_DIR/nvm.sh"
-nvm install 20
-
-# Optional
-sudo apt install chafa
-
-# Foreman
-git clone git@github.com:tuzlu07x/foreman.git ~/Projects/foreman
-cd ~/Projects/foreman
-npm ci
-npm run build
-npm install -g .
-
-foreman --version
 foreman start
 ```
 
-### Filesystem layout (Windows native — for when WSL isn't in the picture)
-- Config + state: `%APPDATA%\foreman\` (typically `C:\Users\<you>\AppData\Roaming\foreman\`)
-- Cache: `%LOCALAPPDATA%\foreman\Cache\`
+On a fresh machine Foreman says it isn't configured yet and offers:
 
-Foreman resolves these paths correctly, but the TUI's Ink raw-mode currently expects a Unix-style TTY — see [`docs/windows-wsl2.md`](windows-wsl2.md) for the deeper notes.
+```
+  [Enter] Run setup now
+  [s]     Skip and launch with defaults
+  [q]     Quit
+```
 
-### Common WSL gotchas
-- **File system performance** is best inside the WSL filesystem (`~/`), not the Windows mount (`/mnt/c/...`).
-- **Telegram polling needs working outbound TCP.** WSL inherits the host's network; if the corporate VPN blocks api.telegram.org, the Hermes gateway will retry-loop.
-- **Path translation** when piping between Windows tools and WSL — keep Foreman state inside WSL home dir.
+Enter creates Foreman's home (identity key, secret store key, default `policy.yaml`, `SOUL.md`, database) and starts the setup wizard. You can also run the wizard on its own with `foreman setup`. The wizard has five steps:
+
+1. **Welcome.** Enter starts setup, `q` quits. You can quit later with Ctrl-C (except while agents are installing) and pick up where you left off with `foreman setup --resume`.
+2. **Step 1 of 5: LLM Providers.** Space toggles the providers you have (Anthropic, OpenAI, Google Gemini, local Ollama, a custom OpenAI-compatible endpoint), Enter confirms. For Anthropic and OpenAI you can sign in with your Claude or ChatGPT subscription instead of pasting a key. Otherwise paste each key at its prompt; a help URL is shown. You can confirm with nothing selected and add providers later.
+3. **Step 2 of 5: Foreman's brain.** Pick the LLM Foreman itself uses to check risky calls and write summaries: Anthropic, OpenAI or Google Gemini (rows you haven't configured in Step 1 are greyed out), or **Skip: heuristics only**. Local Ollama and OpenAI-compatible brains are listed as "coming in v0.2".
+4. **Step 3 of 5: Agents.** Space toggles the agents to install; Hermes and Claude Code are pre-checked when their LLM is configured, and agents whose LLM isn't configured are hidden. For each agent you pick its LLM, route and model and an optional responsibility note, then confirm. On a re-run, unticking an agent unregisters it and leaves its binary installed; if Foreman installed it, `u` on the confirm screen uninstalls it too.
+5. **Step 4 of 5: Services** (optional). Tokens for Telegram, Discord, Slack, GitHub, Atlassian, … If two chat agents share a channel, you pick which one is primary.
+6. **Step 5 of 5: Install + Verify.** First the keys the chosen routes still need (paste or skip), then Foreman installs, configures and registers each agent.
+7. **Done.** A summary, then:
+
+   | Key | |
+   | --- | --- |
+   | `Enter` | Under `foreman start`: launch the TUI. Under `foreman setup`: finish and exit (start Foreman later with `foreman start`). If a sign-in is required, it runs first. |
+   | `y` | Run every OAuth sign-in step now, including optional ones (shown only when there are any) |
+   | `d` | Run `foreman doctor` |
+   | `p` | Review the policy file |
+   | `l` | Show the install log |
+   | `q` | Exit without launching anything or running sign-ins |
+
+The dashboard shows your agents, the activity feed and today's numbers. The bottom line lists the keys for the page you're on, and `?` on the Home page shows all of them. See [`tui.md`](tui.md).
+
+`foreman start` is also what answers approvals: keep it running while your agents work. See [How approvals work](tui.md#how-approvals-work).
+
+To start with the default policy only, press `s` at that prompt or run `foreman start --skip-setup`. Either way Foreman remembers the choice and doesn't offer the wizard again; `foreman setup` opens it whenever you want it.
+
+---
+
+## Verify
+
+In another shell:
+
+```bash
+foreman doctor          # exit 1 with a few warnings is normal on a fresh machine
+foreman agent list      # the agents you picked
+foreman secrets list    # the keys you entered
+```
+
+On a fresh machine `doctor` warns that no agents are registered yet and that the optional `chafa` is missing. Exit code 2 is a real failure. See [`doctor.md`](doctor.md).
 
 ---
 
 ## After the install: optional follow-ups
 
-### Wire a partner agent
-The wizard already installed + registered whatever you picked. Add a new one later with:
+### Add another agent
+
+The wizard already installed and registered whatever you picked. Add another one later:
+
 ```bash
-foreman agent add openclaw --type openclaw      # respects the registry catalogue
+foreman registry list                     # the agents Foreman knows
+foreman agent add openclaw --auto-install # install it if missing, then register it
 foreman agent list
 ```
+
 OpenClaw needs Node `>=24.16.0 <25 || >=26.1.0` on your PATH (see the note under the [cheat sheet](#tldr-cheat-sheet)). On an older Node, `--auto-install` stops with the requirement and the upstream installer command instead of installing.
 
-### Drop the dummy keys, paste real ones
+### Replace a key
+
 ```bash
-foreman secrets rotate anthropic-key            # interactive; paste new value
+foreman secrets rotate anthropic-key            # prompts for the new value
 foreman secrets show anthropic-key --reveal
 ```
 
-### Look at Foreman's identity persona
+### Foreman's persona
+
 ```bash
-foreman identity show                            # the SOUL.md every agent inherits
-foreman identity edit                            # opens $EDITOR; on save re-propagates
-foreman identity push                            # re-sync after manual edits
+foreman identity show        # the SOUL.md every agent inherits
+foreman identity edit        # opens $EDITOR, then pushes it to the agents
+foreman identity push        # re-push after editing the file by hand
 ```
 
-### Set up shell completion
+### Shell completion
+
 ```bash
 foreman completion zsh > ~/.zsh/completions/_foreman
 # or
 foreman completion bash > /etc/bash_completion.d/foreman
 ```
 
+See [`completion.md`](completion.md).
+
 ### Run the doctor whenever something feels off
+
 ```bash
-foreman doctor
-# 14 checks across: node version, paths, identity, db, fts5, policy, agents,
-# mcp gateway, legacy home, updates, chafa.
-# Exit code: 0 (all green) / 1 (warn) / 2 (fail).
+foreman doctor           # exit 0 (all ok), 1 (warnings only), 2 (failures)
+foreman doctor --json    # the same checks, for scripts
 ```
 
 ---
 
 ## Uninstall
 
-Same on every platform:
+Do it in this order: the first steps need the `foreman` command, which step 5 removes.
+
 ```bash
-# 1. Drop the global package
-npm uninstall -g foreman-agent
+# 1. Remove the PreToolUse hook Foreman added to Claude Code (if you installed it).
+foreman agent hook uninstall claude-code
 
-# 2. Remove the foreman home (back it up if you want the audit log preserved)
-# macOS
-rm -rf "$HOME/Library/Application Support/foreman" "$HOME/Library/Caches/foreman"
-# Linux / WSL
-rm -rf ~/.config/foreman ~/.local/state/foreman ~/.cache/foreman
-# Windows native
-# Remove %APPDATA%\foreman and %LOCALAPPDATA%\foreman\Cache
+# 2. Note where Foreman keeps its files (the foreman_home and paths lines).
+foreman doctor
 
-# 3. (optional) Undo the Foreman SOUL injection in each agent's identity hook.
-#    Foreman kept a copy of any file it replaced as <file>.pre-foreman.bak —
-#    restore it instead of deleting the file (Codex's AGENTS.md holds your
+# 3. (optional) Undo the Foreman SOUL injection in each agent's identity file.
+#    Foreman kept a copy of any file it replaced as <file>.pre-foreman.bak.
+#    Restore it instead of deleting the file (Codex's AGENTS.md holds your
 #    own global instructions). Only delete files Foreman created itself.
 for f in ~/.hermes/SOUL.md ~/.codex/AGENTS.md; do
   [ -f "$f.pre-foreman.bak" ] && mv "$f.pre-foreman.bak" "$f"
 done
 
-# 4. (optional) Remove the PreToolUse hook Foreman added to Claude Code
-foreman agent hook uninstall claude-code   # run before step 1
+# 4. Remove the `foreman` MCP server entry from each agent's config.
+#    `foreman agent remove` doesn't do this; see docs/agent-lifecycle.md
+#    for where each agent keeps it (e.g. mcpServers.foreman in ~/.claude.json).
+
+# 5. Remove the package (whichever way you installed it).
+npm uninstall -g foreman-agent
+# or: curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash -s -- --uninstall
+# or: brew uninstall foreman-agent
+
+# 6. Remove Foreman's home. Back it up first if you want to keep the audit log.
+# macOS
+rm -rf "$HOME/Library/Application Support/foreman" "$HOME/Library/Caches/foreman"
+# Linux / WSL (or the FOREMAN_HOME directory, if you set one)
+rm -rf ~/.config/foreman ~/.local/state/foreman ~/.cache/foreman
 ```
+
+Keys Foreman projected into an agent's own files (for example `~/.hermes/.env`, see [Secret projection](agent-lifecycle.md#secret-projection-222--223)) stay there; remove them if you no longer want them.
 
 ---
 
@@ -314,13 +333,14 @@ foreman agent hook uninstall claude-code   # run before step 1
 
 | Symptom | What to try |
 | --- | --- |
-| `foreman: command not found` after install | Re-source your shell (`hash -r` / new terminal) or check `npm prefix -g` is on PATH. |
-| `foreman start` skips the wizard | The foreman home already exists with registered agents. Either wipe it (see Uninstall) or re-run the wizard explicitly with `foreman setup --resume` or `foreman setup --reset`. |
-| Wizard's Step 1 doesn't ask for key values | You probably hit Enter on an empty MultiSelect. As of PR #148 the three common keys are pre-checked — make sure you're on a build that includes the merge. |
+| `foreman: command not found` after install | Open a new terminal (or `hash -r`). If you installed through nvm, run `. "$HOME/.nvm/nvm.sh"`. Otherwise check that `$(npm prefix -g)/bin` is on your PATH. |
+| npm warns `EBADENGINE`, or `foreman doctor` fails `node_version` | Your Node is older than Foreman needs (22.12+). Install Node 22 LTS (`nvm install 22`) and reinstall Foreman. |
+| `foreman start` skips the wizard | Foreman's home already exists with registered agents, or you skipped setup before. Run the wizard with `foreman setup --resume` or `foreman setup --reset`, or wipe the home (see [Uninstall](#uninstall)). |
+| Wizard's Step 1 doesn't ask for any key | Nothing was selected when you pressed Enter. Press Esc to go back to the selection, Space on each provider, then Enter. |
 | Wizard or `foreman agent add` says "OpenClaw needs Node >=24.16.0 <25 \|\| >=26.1.0" | The `node` on your PATH is too old for OpenClaw. Switch to Node 24.16+ or 26.1+ (`nvm install 24`) and add it again, or run `curl -fsSL https://openclaw.ai/install.sh \| bash` yourself. |
-| OpenClaw / Codex toggle didn't take in the wizard | The `@inkjs/ui` MultiSelect selected state can be subtle. Check the install-step summary line `Selected agents: …` — if your pick isn't there, Esc back, Space again, Enter. |
-| Telegram polling fails on Linux | Check outbound TCP to `api.telegram.org` (149.154.166.110:443) isn't blocked. The gateway prints `httpx.ConnectError: All connection attempts failed` in journalctl. |
-| Bot still says "Hermes Agent" not "Foreman" after registration | Run `hermes sessions prune --older-than 0 --yes` then restart the gateway — cached session prompt from before the SOUL write. |
-| `foreman doctor` exits 1 on a fresh box | Normal — usually `agents_registered` (no agents yet) + `chafa` (optional) warnings. Exit 2 is a real failure (missing identity.key, corrupt DB, malformed policy.yaml). |
+| An agent toggle didn't take in the wizard | Check the `Checked:` line above the list and the confirm screen (`Selected: …`). If your pick isn't there, Esc back, Space again, Enter. |
+| Telegram polling fails on Linux | Check that outbound TCP to `api.telegram.org` isn't blocked. The gateway prints `httpx.ConnectError: All connection attempts failed` in journalctl. |
+| Bot still says "Hermes Agent" instead of "Foreman" after registration | Run `hermes sessions prune --older-than 0 --yes`, then restart the gateway. The session prompt was cached before the SOUL write. |
+| `foreman doctor` exits 1 on a fresh machine | Normal: warnings only (no agents yet, `chafa` missing). Exit 2 is a real failure (missing identity key, missing `secrets.key` while secrets are stored, corrupt database, malformed `policy.yaml`). |
 
 Open an issue at `github.com/tuzlu07x/foreman/issues` if something here doesn't match what you see.

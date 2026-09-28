@@ -1,11 +1,11 @@
-# Out-of-band notifications (#235 — C11)
+# Notifications
 
 How Foreman reaches you when you're not at the terminal. Channels:
 **Telegram** (alerts + tap-to-approve), **Slack**, **Discord**, **email**
 (SMTP), **ntfy** (phone push, no account), a signed **webhook**, and native
-**system** notifications. Approvals are decided in the TUI or in Telegram;
-the push-only channels tell you where to decide and never carry the
-approval token.
+**system** notifications. Approvals are decided in the TUI, in Telegram,
+or in Slack and Discord once two-way mode is on; the push-only channels
+tell you where to decide and never carry the approval token.
 
 Fastest way to get alerts on your phone:
 
@@ -13,6 +13,8 @@ Fastest way to get alerts on your phone:
 foreman notify ntfy-setup      # creates a private topic, enables + routes it
 foreman notify test ntfy
 ```
+
+Notifications and approval buttons are sent by `foreman start`: keep it running. Without it, nothing is sent and an approval an agent is waiting on is denied when it times out. See [How approvals work](tui.md#how-approvals-work).
 
 ---
 
@@ -24,7 +26,9 @@ Phishing attempt at 3 AM? Foreman knows AND can tell you. You tap *Deny* on your
 
 ---
 
-## 2. `~/.foreman/notify.yaml` config
+## 2. `notify.yaml` config
+
+`notify.yaml` lives in Foreman's config directory, next to `policy.yaml`: `~/.config/foreman/` on Linux, `~/Library/Application Support/foreman/` on macOS, or `$FOREMAN_HOME` if you set it (`foreman notify enable` prints the full path). Credentials are never written into it: the `*_ref` fields name secrets in Foreman's encrypted store (`foreman secrets add <name>`).
 
 ```yaml
 channels:
@@ -69,33 +73,42 @@ channels:
     topic_ref: ntfy-topic               # the topic name is the secret
 
 routing:
-  critical:                              # high/critical risk → must ask
+  critical:                              # approvals for high / critical-risk calls
     channels: [telegram]
-    timeout_seconds: 300                 # 5 min until default_action fires
-    default_action: deny                 # safer than allow
+    timeout_seconds: 300                 # shown by `notify status`; see below
+    default_action: deny
 
-  warning:                               # heads-up only
+  warning:                               # approvals for medium-risk calls, heads-ups
     channels: [telegram]
-    timeout_seconds: 0                   # purely informational
 
-  info:                                  # routine activity — silent by default
+  info:                                  # approvals for low-risk calls — unrouted by default
     channels: []
-    timeout_seconds: 0
 
-  summary:                               # daily digest (C11c)
+  summary:                               # daily digest
     channels: [telegram]
     schedule: "daily 20:00"
 
-  budget_alert:                          # LLM spend warning (C10)
+  budget_alert:                          # LLM spend warning
     channels: [telegram]
-    timeout_seconds: 0
+
+  risk_deny:                             # a call Foreman denied on its own
+    channels: [telegram]
+
+  session_lifecycle:                     # long agent sessions started / progress / done
+    channels: [telegram]
 ```
 
-Defaults match this shape — every level has a sane out-of-the-box route. Run `foreman notify status` to see what's active.
+These are the defaults (plus `activity_summary`, an LLM-written activity digest that is off unless you route it). Run `foreman notify status` to see what's active, and `foreman notify route <level> <channels…>` to change a route.
+
+An approval goes out on the level that matches its risk: `critical` for high and critical risk, `warning` for medium, `info` for low. A low-risk call that asks only because a policy rule says `ask` therefore reaches no channel until you route `info` somewhere.
+
+`timeout_seconds` and `default_action` are shown by `foreman notify status` but don't change how long an approval waits. That deadline belongs to the process that asked, and an approval nobody answers is always denied (see [How approvals work](tui.md#how-approvals-work)).
 
 ---
 
 ## 3. Setting up Telegram
+
+Shortcut: the setup wizard does the steps below for you. In Step 4 (Services) pick Telegram, paste the bot token and your chat id, and it writes the `telegram` channel into `notify.yaml`.
 
 ### Bot creation
 1. Open Telegram, message [@BotFather](https://t.me/BotFather).
@@ -111,19 +124,19 @@ Defaults match this shape — every level has a sane out-of-the-box route. Run `
 2. Send any message ("hi").
 3. Fetch the updates with the token to find your chat_id:
    ```bash
-   curl -s "https://api.telegram.org/bot$(foreman secrets reveal telegram-bot-token)/getUpdates" \
+   curl -s "https://api.telegram.org/bot$(foreman secrets show telegram-bot-token --reveal)/getUpdates" \
      | jq '.result[-1].message.chat.id'
    ```
-4. Edit `~/.foreman/notify.yaml` and set `channels.telegram.chat_id` to the number you saw.
-
-The setup wizard will automate steps 1-4 when [#220](https://github.com/tuzlu07x/foreman/issues/220) lands.
 
 ### Enable + test
+
 ```bash
-foreman notify enable telegram
+foreman notify enable telegram --chat-id 123456789   # the number you found
 foreman notify test telegram
 # → check your Telegram chat — you should see a "Foreman test ✓" message
 ```
+
+`notify enable telegram` points the channel at the `telegram-bot-token` secret and saves the chat id in `notify.yaml` (`chat_id`, a quoted string). Without `--chat-id` it uses the chat id the setup wizard stored, or asks for one when you run it in a terminal. It prints whatever is still missing, for example `foreman secrets add telegram-bot-token`.
 
 ### Approval bot (recommended)
 
@@ -154,7 +167,7 @@ goes back to relaying approvals through the chat bot.
 
 ---
 
-## 3a. Two-way Slack and Discord (#615)
+## 3a. Two-way Slack and Discord
 
 By default Slack and Discord are push-only: they alert you, and you decide in
 the TUI or Telegram. Turn on two-way mode and you get **Allow / Deny buttons**
@@ -205,18 +218,13 @@ presses.
 3. Point Foreman at the bot and the alerts channel. Turn on Developer Mode
    (User Settings → Advanced), then right-click the channel → *Copy Channel ID*
    and yourself → *Copy User ID*.
-   ```yaml
-   # notify.yaml
-   channels:
-     discord:
-       enabled: true
-       bot_token_ref: discord-bot-token
-       channel: "123456789012345678"
-   ```
    ```bash
    foreman secrets add discord-bot-token
+   foreman notify enable discord --channel 123456789012345678
    foreman notify discord-interactive --user 111111111111111111
    ```
+   `notify enable discord --channel` sets `bot_token_ref: discord-bot-token`
+   and `channel` in `notify.yaml`.
 4. Restart `foreman start`. It connects to the gateway and registers
    `/foreman`.
 
@@ -226,33 +234,46 @@ inbox. Undo with `--off`.
 
 ---
 
-## 3b. Webhook + System channels (C11b-1)
+## 3b. Webhook + System channels
 
 Two **outbound-only** channels for deployments that want delivery without bidirectional callbacks. They send alerts but can't capture user decisions — pair them with Telegram (or the TUI) for the actual deciding.
 
 ### Webhook — generic HTTP POST integration
 
-Routes every notification as a JSON POST to your configured URL. Suitable for Discord/Slack-incoming webhooks, n8n / Zapier / PagerDuty, or your own relay.
+Sends every notification routed to it as a JSON POST to your configured URL. Suitable for Discord/Slack-incoming webhooks, n8n / Zapier / PagerDuty, or your own relay.
 
-The URL must be `https://`. Plain `http://` is only accepted to this machine (`localhost`, `127.0.0.1`, `::1`), because the payload describes tool calls.
+The URL must be `https://`; plain `http://` is accepted only to this machine (`localhost`, `127.0.0.0/8`, `::1`), because the payload describes tool calls. The same goes for Slack, Discord and ntfy URLs. A URL with a user name or password in it is refused, and errors never repeat the URL.
 
-```bash
-foreman secrets add webhook-url
-# paste the URL, hit Enter
-foreman secrets add webhook-secret      # optional — HMAC signing key
-foreman notify enable webhook
-foreman notify test webhook
-```
+1. Store the URL, and optionally a signing key, in the secret store:
 
-Then edit `~/.foreman/notify.yaml`:
+   ```bash
+   foreman secrets add webhook-url         # paste the URL, hit Enter
+   foreman secrets add webhook-secret      # optional — HMAC signing key
+   ```
 
-```yaml
-channels:
-  webhook:
-    enabled: true
-    webhook_url_ref: webhook-url
-    signing_secret_ref: webhook-secret   # optional
-```
+2. Turn the channel on. It points the channel at those two secrets:
+
+   ```bash
+   foreman notify enable webhook
+   # ✓ webhook enabled in …/notify.yaml  url=webhook-url · sig=webhook-secret
+   ```
+
+   The result in `notify.yaml`:
+
+   ```yaml
+   channels:
+     webhook:
+       enabled: true
+       webhook_url_ref: webhook-url
+       signing_secret_ref: webhook-secret   # only when that secret exists
+   ```
+
+3. Route the levels you want to it (by default only Telegram gets anything), then send a test. `test` bypasses routing, so it works either way:
+
+   ```bash
+   foreman notify route critical telegram webhook
+   foreman notify test webhook
+   ```
 
 **Payload shape** (`schema: "foreman.notification.v1"`):
 
@@ -298,12 +319,7 @@ Inside that window a receiver that must never act twice should also drop a
 `messageId` it has already seen. (Before #656 the signature covered the body
 only; update receivers that verify it.)
 
-Webhook, Slack, Discord and ntfy URLs must be `https://`; plain `http://`
-is accepted only to this machine (`localhost`, `127.0.0.0/8`, `::1`). A URL
-with a user name or password in it is refused, and errors never repeat the
-URL.
-
-**No callback support yet** — Foreman doesn't run an inbound HTTP server in v0.1, so webhooks are delivery-only. A bidirectional flow (your automation POSTs back a decision) needs significant new infrastructure; tracked as a follow-up.
+**No callback support** — Foreman doesn't run an inbound HTTP server, so webhooks are delivery-only: your automation can't POST a decision back.
 
 ### System — macOS / Linux native notifications
 
@@ -325,7 +341,7 @@ Windows support is deferred to v0.2 (PowerShell BurntToast).
 
 ---
 
-## 3c. Silence, mute, daily digest (C11c)
+## 3c. Silence, mute, daily digest
 
 ### Silence — temporary "stop pinging me" window
 
@@ -335,7 +351,7 @@ foreman notify silence 30m         # short window during a meeting
 foreman notify unsilence           # clear early
 ```
 
-**Critical alerts still fire.** Silence drops `warning` / `info` / `summary` / `budget_alert` only — phishing / loop / catastrophic shell calls still wake you up. The window persists in `~/.foreman/notify-state.json`; the bridge re-reads on every dispatch so the silence takes effect without restart.
+**Critical alerts still fire.** Silence drops everything except the `critical` level — phishing / loop / catastrophic shell calls still wake you up. The window persists in `notify-state.json` in Foreman's state directory; the bridge re-reads it on every dispatch, so the silence takes effect without a restart.
 
 ### Mute — never alert about a specific agent
 
@@ -355,7 +371,7 @@ When `routing.summary.schedule` is set (default `"daily 20:00"`) and the route h
 - High-risk calls flagged
 - Notifications delivered (excluding prior digests)
 
-Footer: *"Smart analysis is off. Enable with `foreman llm enable` for contextual reports."* When C8 (LLM verification) + C9 (smart report) ship, the prose narrative comes from the model — for v0.1, you get counts + a hint.
+Footer: *"Smart analysis is off. Enable with `foreman llm enable` for contextual reports."*
 
 ```bash
 foreman notify summary             # print the digest body to stdout (preview)
@@ -370,23 +386,35 @@ The scheduler runs **only when `foreman start` is running** (it lives next to th
 ## 4. CLI
 
 ```bash
-foreman notify status                  # enabled channels + last 5 notifications + active silence/mute
-foreman notify enable <channel>        # toggle channel on (telegram / webhook / system)
-foreman notify disable <channel>       # toggle channel off (keeps credentials)
+foreman notify status                  # enabled channels, routing, last 5 notifications, silence/mute
+foreman notify enable <channel>        # turn a channel on and point it at its credentials
+                                       #   --chat-id <id> (Telegram), --channel <name|id> (Slack, Discord)
+foreman notify disable <channel>       # turn it off (keeps credentials)
 foreman notify test <channel>          # send a test alert (bypasses routing)
+foreman notify route <level> [channels...]   # which channels get a level; no channels = mute it
 
-foreman notify silence 4h              # mute non-critical for 4 hours
+foreman notify silence 4h              # mute non-critical for 4 hours (30m, 4h, 1d, …)
 foreman notify unsilence               # clear active silence window
 foreman notify mute <agent>            # don't alert about a specific source agent
 foreman notify unmute <agent>          # re-enable alerts for the agent
-foreman notify summary                 # print today's digest to stdout
-foreman notify summary --now           # send today's digest now on every routed channel
+foreman notify summary                 # print the digest to stdout
+foreman notify summary --now           # send it now on every channel routed for summary
 foreman notify summary --hours <n>     # widen the digest window (default 12)
 
-# Coming in C11b-2
-foreman notify route critical --channels=telegram,slack
-foreman notify timeout critical --seconds=120
+foreman notify ntfy-setup              # phone push in one step
+foreman notify approval-bot            # Telegram approvals through a bot only Foreman holds
+foreman notify slack-interactive --user <id>     # two-way Slack
+foreman notify discord-interactive --user <id>   # two-way Discord
 ```
+
+Channels: `telegram`, `slack`, `discord`, `email`, `ntfy`, `webhook`, `system`. Levels: `critical`, `warning`, `info`, `summary`, `budget_alert`, `risk_deny`, `activity_summary`, `session_lifecycle`. For example:
+
+```bash
+foreman notify route critical telegram slack
+foreman notify route info                      # mute the info level
+```
+
+There is no command for timeouts: an approval's deadline is set by the process that asks (see [How approvals work](tui.md#how-approvals-work)).
 
 ---
 
@@ -439,23 +467,11 @@ await approval.request(...)   ← mediator blocks here
 mediator finalize + return to agent
 ```
 
-C11a-2 ships the **`NotificationBridge`** — the missing wire from `onAnyDecision` back to `bus.emit('approval:resolved')`. Cross-process flow (mcp-stdio / wrap) works via the existing `DbApprovalService` + `ApprovalBridge` (#117): pending_approvals row → start.ts's bus → notification → tap → bus.emit('approval:resolved') → DbApprovalService poll picks up.
+The **`NotificationBridge`** wires `onAnyDecision` back to `bus.emit('approval:resolved')`. Calls mediated in another process (`foreman mcp-stdio`, `foreman wrap`, the Claude Code hook) reach it through `DbApprovalService` + `ApprovalBridge`: pending_approvals row → the `foreman start` process's bus → notification → tap → bus.emit('approval:resolved') → the requesting process's `DbApprovalService` poll picks it up. Both bridges run inside `foreman start`.
 
 ---
 
-## 7. C11 sub-issue plan
-
-| PR | Scope | Status |
-|---|---|---|
-| C11a-1 | Foundation: notify.yaml + NotificationService + TelegramChannel + CLI + migration + doctor | shipped |
-| C11a-2 | Mediator wire: NotificationBridge bridges bus ↔ channels; OOB tap unblocks the agent; "resolved elsewhere" update on race | shipped |
-| C11b-1 | Webhook (HMAC-signed outbound) + System (macOS osascript / Linux notify-send) channels | shipped |
-| **C11c** (this) | Daily digest scheduler + silence / mute commands + state persistence | shipped |
-| C11b-2 | Discord (interactive components) + Slack (Block Kit, socket mode) — bidirectional channels | last slice |
-
----
-
-## 8. Sources
+## 7. Sources
 
 - [Telegram Bot API — inline keyboards + callback queries](https://core.telegram.org/bots/api)
 - [PagerDuty / OpsGenie / VictorOps](https://www.pagerduty.com/) — out-of-band incident workflows, the spiritual model for "Foreman pauses the agent until you decide"
@@ -468,12 +484,12 @@ C11a-2 ships the **`NotificationBridge`** — the missing wire from `onAnyDecisi
 
 | Channel | Credentials | Notes |
 | --- | --- | --- |
-| Telegram | `foreman secrets add telegram-bot-token` + `chat_id` | Interactive: inline Allow / Deny buttons carry an HMAC-tagged approval id. Only the typed `/deny` fallback appears in the text. Other agents can't approve; for the chat agent's own calls, see [SECURITY.md](../SECURITY.md#threat-model-in-brief). |
-| Slack | incoming webhook URL → `foreman secrets add slack-webhook-url` | Or `bot_token_ref` + `channel` (needs `chat:write`). Agent text is escaped (no `<!channel>` pings). Two-way: [§3a](#3a-two-way-slack-and-discord-615). |
-| Discord | channel webhook URL → `foreman secrets add discord-webhook-url` | Or `bot_token_ref` + `channel` id. Mentions are always disabled. Two-way (bot only): [§3a](#3a-two-way-slack-and-discord-615). |
-| Email | `foreman secrets add smtp-app-password` | Gmail / iCloud / Fastmail need an app password. Credentials are never sent over an unencrypted connection to a remote host. |
+| Telegram | `foreman secrets add telegram-bot-token`, then `foreman notify enable telegram --chat-id <id>` | Interactive: inline Allow / Deny buttons carry an HMAC-tagged approval id. Only the typed `/deny` fallback appears in the text. Other agents can't approve; for the chat agent's own calls, see [SECURITY.md](../SECURITY.md#threat-model-in-brief). |
+| Slack | incoming webhook URL → `foreman secrets add slack-webhook-url`, then `foreman notify enable slack` | Or a bot: `slack-bot-token` and `foreman notify enable slack --channel <name>` (needs `chat:write`). Agent text is escaped (no `<!channel>` pings). Two-way: [§3a](#3a-two-way-slack-and-discord). |
+| Discord | channel webhook URL → `foreman secrets add discord-webhook-url`, then `foreman notify enable discord` | Or a bot: `discord-bot-token` and `foreman notify enable discord --channel <id>`. Mentions are always disabled. Two-way (bot only): [§3a](#3a-two-way-slack-and-discord). |
+| Email | `foreman secrets add smtp-app-password`, then `smtp_host`, `email_from`, `email_to` and `password_ref: smtp-app-password` under `channels.email` in `notify.yaml` ([§2](#2-notifyyaml-config)) | Gmail / iCloud / Fastmail need an app password. Credentials are never sent over an unencrypted connection to a remote host. |
 | ntfy | `foreman notify ntfy-setup` | Install the ntfy app and subscribe to the printed topic. Self-host ntfy or set `access_token_ref` for stricter privacy. |
-| Webhook | `webhook_url_ref` (+ `signing_secret_ref`) | JSON POST with `X-Foreman-Timestamp` and `X-Foreman-Signature: sha256=…` over `<timestamp>.<body>`. |
+| Webhook | `foreman secrets add webhook-url` (+ `webhook-secret`), then `foreman notify enable webhook` ([§3b](#3b-webhook--system-channels)) | JSON POST with `X-Foreman-Timestamp` and `X-Foreman-Signature: sha256=…` over `<timestamp>.<body>`. |
 
 Then route levels to channels:
 

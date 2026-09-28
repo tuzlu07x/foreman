@@ -220,7 +220,7 @@ illustration / chibi style. Reference vibe: OpenClaw's lobster mascot."*
 
         ▸ Identity loaded   (ed25519:7a3f...)
         ▸ Policy loaded     (12 rules)
-        ▸ Database ready    (~/.foreman/foreman.db)
+        ▸ Database ready    (~/.local/state/foreman/foreman.db)
         ▸ MCP gateway up    (stdio + ws:7700)
 
         Press ? for help · q to quit

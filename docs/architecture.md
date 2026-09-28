@@ -46,10 +46,20 @@ Every subcommand lives in its own file under `src/cli/`. The root `src/cli/index
 | `foreman secrets add / list / show / rotate / remove` | Manages the encrypted secret store (AES-256-GCM at rest). `show` refuses without `--reveal`. |
 | `foreman registry list / info / update / validate` | Curated catalogue lookup. `update` refreshes from the upstream URL (24 h TTL). |
 | `foreman identity show / edit / reset / push` | Foreman's canonical SOUL.md propagated into each partner runtime's identity hook (`~/.hermes/SOUL.md`, etc.). |
-| `foreman doctor` | 14 checks across paths, identity, db, fts5, policy, agents, mcp gateway, legacy home, updates, chafa. Exit codes 0 / 1 / 2. |
-| `foreman migrate-config` | Migrates a legacy `~/.foreman/` install into the platform-native XDG / macOS / Windows dirs. |
+| `foreman doctor` | Checks paths, identity, db, fts5, policy, agents and their tokens, optional configs (notify, llm, voice, mcp hub, org), legacy home, updates, chafa. Exit codes 0 / 1 / 2. See [`doctor.md`](doctor.md). |
+| `foreman migrate-config` | Migrates a legacy `~/.foreman/` install (the layout before platform-native dirs) into the XDG / macOS / Windows dirs. |
 | `foreman migrate --check / --apply` | DB schema migration runner. |
 | `foreman completion bash / zsh / fish` | Prints a shell-completion script. |
+
+**The Foreman home** is where Foreman keeps its files, resolved in `src/utils/config.ts`:
+
+| | Config (`identity.key`, `secrets.key`, `policy.yaml`, `SOUL.md`, the other YAML configs) | State (`foreman.db`, runtime state) | Cache |
+| --- | --- | --- | --- |
+| Linux (XDG) | `~/.config/foreman/` | `~/.local/state/foreman/` | `~/.cache/foreman/` |
+| macOS | `~/Library/Application Support/foreman/` | same as config | `~/Library/Caches/foreman/` |
+| `FOREMAN_HOME` set | `$FOREMAN_HOME/` | `$FOREMAN_HOME/` | `$FOREMAN_HOME/cache/` |
+
+On Linux, `$XDG_CONFIG_HOME`, `$XDG_STATE_HOME` and `$XDG_CACHE_HOME` are honoured. `<foreman_home>` below means the config directory. `foreman doctor` prints the paths in use (see also [`install.md`](install.md#platform-notes)).
 
 Each command:
 1. Verifies the foreman home exists (or prompts to run `init`).
@@ -161,10 +171,10 @@ Three panels, responsive layout via `useLayout()`:
 | Page | Hotkey | What it does |
 | --- | --- | --- |
 | `dashboard` | (default) | the 3-panel overview |
-| `agents` | `a` | list registered agents incl. blocked, per-row block/unblock/regen-key/remove (PR #143) |
+| `agents` | `a` | list registered agents incl. blocked; per row `b` block/unblock, `d`/`e` disable/enable, `r` regenerate key and `x` remove (both ask y/N) |
 | `chat` | `c` | pick source agent → type tool name + JSON args → mediator returns decision (PR #146) |
 | `settings` | `g` | edit Foreman SOUL.md, edit policy.yaml, surface re-run-wizard command (PR #145) |
-| `secrets` | `k` | list stored secrets, reveal value 10 s, rotate inline, remove (PR #144) |
+| `secrets` | `k` | list stored secrets (not agent identity tokens), reveal value 10 s, rotate inline, delete (asks y/N) |
 | `logs` | `l` | audit log with FTS5 search, filters (allowed/denied/ask/errored), replay, export |
 | `policy` | `p` | view rules, `e` opens `$EDITOR` then reloads, `d` toggles enabled |
 | `sessions` | `s` | active + completed sessions, expand for full transcript, `k` halts active |
@@ -172,7 +182,7 @@ Three panels, responsive layout via `useLayout()`:
 | quit | `q` / Ctrl-C | exits; asks first while approvals are waiting |
 
 ### Approval modal
-Pops on any `approval:requested` event. Shows agent → target flow, indented tool call, ◆ risk reasons, 60 s countdown that colour-shifts at ≤30 s / ≤10 s. Hotkeys: `a` allow once / `A` always allow / `d` deny / `D` always deny / `r` remember rule / `i` inspect (request chain + full JSON).
+Pops on any `approval:requested` event. Shows agent → target flow, indented tool call, ◆ risk reasons, a countdown to the request's deadline that colour-shifts at ≤30 s / ≤10 s. Hotkeys: `a` allow once / `A` always allow / `d` deny / `D` always deny / `i` inspect (request chain + full JSON) / `t` technical / `k` halt session. `D`, and `a` / `A` on a high- or critical-risk call, wait for `y`. See [`tui.md`](tui.md#approvals).
 
 ### Modal pattern
 Pages with sub-input modes (Secrets page rotate, Chat page input) use the same shape: a boolean flag (`rotateMode`, `chatInputMode`). The page-level keyboard handler short-circuits to Esc-only when the flag is true; the `PasswordInput` / `TextInput` from `@inkjs/ui` owns the rest.

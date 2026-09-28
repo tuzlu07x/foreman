@@ -9,7 +9,7 @@ Foreman targets POSIX environments. On Windows the path is **WSL2 with Ubuntu 22
 - **Windows 11** (or Windows 10 22H2+) with WSL2 enabled.
 - **Ubuntu 22.04 LTS** under WSL2 (`wsl --install Ubuntu-22.04`).
 - **Windows Terminal** — render quality matters here; the legacy `cmd.exe` console doesn't do true-color or the Unicode block glyphs the boot mascot uses.
-- **Node 20+** *or* the standalone Linux binary from the release page (curl installer handles the Node bootstrap automatically).
+- **Node 22.12+** *or* the standalone Linux binary from the release page (the curl installer sets up Node 22 through nvm when it's missing).
 
 ## Walkthrough
 
@@ -31,7 +31,7 @@ exec bash -l
 
 # 4. Initialise
 foreman init                           # creates ~/.config/foreman/ + ~/.local/state/foreman/
-foreman doctor                         # all checks green except 'agents_registered' (warn)
+foreman doctor                         # exit 1 (warnings only) is normal: no agents yet, agent CLIs not installed
 
 # 5. Boot the TUI
 foreman start                          # leave running in one Windows Terminal tab
@@ -102,6 +102,6 @@ Everything else in the walkthrough is identical. Keep `FOREMAN_HOME` (and your h
 Open an issue with `area:install` and include:
 
 1. Output of `wsl --version` and `lsb_release -a`.
-2. Output of `foreman doctor` (capture all 12 check lines).
+2. The full output of `foreman doctor`.
 3. Whether you used the curl installer, the standalone binary, or `npm install -g`.
 4. The exact terminal you're running in (Windows Terminal? a third-party one? legacy console?).

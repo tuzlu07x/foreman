@@ -1,4 +1,6 @@
-# Sample Foreman policy — copy to ~/.foreman/policy.yaml and adjust.
+# Sample Foreman policy — copy over your policy.yaml and adjust:
+#   Linux ~/.config/foreman/policy.yaml, macOS ~/Library/Application Support/foreman/policy.yaml,
+#   or $FOREMAN_HOME/policy.yaml if you set FOREMAN_HOME. See docs/policy.md.
 #
 # Form A: per-agent allow / deny tool lists.
 agents:

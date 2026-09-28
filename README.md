@@ -119,13 +119,13 @@ while you watch the real TUI. You'll see:
 
 - department messages, and a task handed down the org chart;
 - an agent reaching for `.env` (press `a` or `d`);
-- a poisoned instruction blocked;
+- a poisoned instruction (pipe a script into bash) caught and turned into an approval request you can deny;
 - marketing going over its daily budget;
 - the CEO's report landing in your inbox.
 
 The agents are stand-ins with canned answers, and they're the only agent CLIs on the demo's
 `PATH`. Everything lives in a throwaway folder with its own `FOREMAN_HOME`, and no keys are
-needed. Your real agents, files and `~/.foreman` are never touched.
+needed. Your real agents, your files and your own Foreman home are never touched.
 
 **Then set up your own:**
 
@@ -133,6 +133,11 @@ needed. Your real agents, files and `~/.foreman` are never touched.
 foreman init            # identity, policy, encrypted secret store, audit DB
 foreman start           # guided setup on first run, then the live TUI
 ```
+
+Keep `foreman start` running: it is what shows approvals and sends them to your phone. A call
+that needs your approval waits, and is **denied** if nobody answers in time: 60 seconds for MCP
+agents and 10 minutes for Claude Code's hook (`FOREMAN_APPROVAL_TIMEOUT`, in seconds, changes
+both). See [how approvals work](docs/tui.md#how-approvals-work).
 
 **Connect Claude Code.** Wire its MCP connection, then gate its built-in tools (Bash, Read,
 Write, WebFetch, …) with the PreToolUse hook:
@@ -172,8 +177,8 @@ foreman notify ntfy-setup         # or configure Telegram for tap-to-approve
 › approve
 ```
 
-`n` opens your inbox, and `Tab` moves between pages. From any shell, `foreman inbox`
-shows the same notifications. See [`docs/tui.md`](docs/tui.md).
+`n` opens your inbox (on Keys, Providers and Services it means "new"), and `Tab` moves between
+pages. From any shell, `foreman inbox` shows the same notifications. See [`docs/tui.md`](docs/tui.md).
 
 Then watch it work: `foreman log tail --follow`, `foreman doctor`, `foreman policy show`.
 
@@ -226,6 +231,7 @@ effects afterwards. See [`docs/architecture.md`](docs/architecture.md).
 | [`docs/org.md`](docs/org.md) | Foreman Org: departments, roles, delegation, upgrades |
 | [`docs/notifications.md`](docs/notifications.md) | Telegram, Slack, Discord, email, ntfy, webhook |
 | [`docs/architecture.md`](docs/architecture.md) | Mediator pipeline, approval flow, data model |
+| [`docs/policy.md`](docs/policy.md) | `policy.yaml` reference: rules, conditions, precedence |
 | [`docs/detection.md`](docs/detection.md) | Risk rules and scoring |
 | [`docs/agent-lifecycle.md`](docs/agent-lifecycle.md) | Install / disable / block / remove agents |
 | [`docs/install.md`](docs/install.md) | Install, upgrade, uninstall |

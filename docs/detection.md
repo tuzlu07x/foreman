@@ -295,12 +295,7 @@ The rule needs `sessionId` to query the `sessions` table for token budget. The C
 A top-level `buckets:` block lets the user pin recommendations differently from the defaults — useful once a deployment has measured its own false-positive rate:
 
 ```yaml
-# ~/.foreman/policy.yaml
-
-agents:
-  hermes:
-    can_call:
-      claude-code: [read_file, list_files]
+# policy.yaml — see docs/policy.md for where it lives
 
 # Optional: override the default per-bucket recommendation
 buckets:
@@ -310,7 +305,9 @@ buckets:
   low:      allow  # (default, explicit)
 ```
 
-Read by [`PolicyEngine.getBucketOverrides()`](../src/core/policy-engine.ts) and threaded into the scorer via the `bucketOverrides` callback. `foreman start`, every running `foreman mcp-stdio`, `foreman wrap` and the Claude Code hook follow `policy.yaml`: they check it (one `stat`, at most every 250 ms) before each decision and apply an edit on the next call, no restart needed. An edit that doesn't parse is not applied: the last good policy stays in force, and the error is reported once (stderr for `mcp-stdio`, `wrap` and the hook; the inbox for `foreman start`). A file that doesn't parse when one of them starts stops it instead, with the file, line and reason: `foreman start`, `mcp-stdio` and `wrap` exit 1, and the hook, which starts on every call, blocks the call. Rules that didn't change keep their ids, so `policy:<id>` in the audit log keeps pointing at the rule that decided. Confirm what's active with:
+Loaded with the rest of `policy.yaml` and read by the scorer through [`PolicyEngine.getBucketOverrides()`](../src/core/policy-engine.ts) on every call. `foreman start`, every running `foreman mcp-stdio`, `foreman wrap` and the Claude Code hook follow `policy.yaml`: they check it (one `stat`, at most every 250 ms) before each decision and apply an edit on the next call, no restart needed. An edit that doesn't parse is not applied: the last good policy stays in force, and the error is reported once (stderr for `mcp-stdio`, `wrap` and the hook; the inbox for `foreman start`). A file that doesn't parse when one of them starts stops it instead, with the file, line and reason: `foreman start`, `mcp-stdio` and `wrap` exit 1, and the hook, which starts on every call, blocks the call. Rules that didn't change keep their ids, so `policy:<id>` in the audit log keeps pointing at the rule that decided. See [How edits apply](policy.md#how-edits-apply).
+
+A policy rule's `ask` still asks when a bucket is set to `allow`, and a bucket set to `deny` refuses the call even when a rule allows it (see [How a call is decided](policy.md#how-a-call-is-decided)). Confirm what's active with:
 
 ```bash
 foreman policy show --json   # → { rules: [...], bucketOverrides: { critical: "deny" } }
@@ -333,7 +330,7 @@ interface LlmVerification {
 }
 ```
 
-When `~/.foreman/llm.yaml` is configured (C7, #230), the mediator will optionally route high-bucket assessments through the LLM for second-opinion verification before opening the modal. The DB column already exists (`requests.llm_verification`); writes are gated on `~/.foreman/llm.yaml` being present.
+When `llm.yaml` (in Foreman's config directory, see [`llm.md`](llm.md#2-llmyaml-config)) is configured (C7, #230), the mediator will optionally route high-bucket assessments through the LLM for second-opinion verification before opening the modal. The DB column already exists (`requests.llm_verification`); writes are gated on `llm.yaml` being present.
 
 Until C8 lands, the field is always `null`.
 

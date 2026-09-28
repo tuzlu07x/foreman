@@ -21,9 +21,51 @@ The header answers "is anything waiting on me?" from every page:
 - **today**: calls allowed and denied since midnight.
 
 The tab row under it lists every page. `Tab` / `Shift+Tab` move between
-them, and each page also keeps its one-letter shortcut (`n` inbox, `a`
-agents, `l` logs, …). The bottom line shows the keys that work on the
-page you're on.
+them from any page, and `Esc` goes back to Home. On the Home page each
+page also has a one-letter shortcut (`n` inbox, `a` agents, `l` logs, …;
+see below), and `?` or `h` opens the full key list. The bottom line shows
+the keys that work on the page you're on.
+
+## Pages and keys
+
+These work on every page, unless you are typing into a field:
+
+| Key | |
+| --- | --- |
+| `:` | open the [command console](#command-console) |
+| `Tab` / `Shift+Tab` | next / previous page |
+| `n` | the [inbox](#inbox), except on Keys, Providers and Services, where `n` means "new" |
+| `Esc` | back to Home |
+| `q` / `Ctrl-C` | quit: at once, or after a `y` / `n` question while approvals are waiting |
+
+On the Home page:
+
+| Key | Page | Key | Page |
+| --- | --- | --- | --- |
+| `n` | Inbox | `k` | Keys (the secret store) |
+| `a` | Agents | `v` | Providers (LLM keys and sign-ins) |
+| `s` | Sessions | `V` | Services (Telegram, GitHub, … tokens) |
+| `d` | Delegations | `g` | Settings |
+| `l` | Logs | `c` | Test (send a test call as an agent) |
+| `p` | Policy | `?` / `h` | help |
+
+`/` also opens the console on Home.
+
+Keys on each page:
+
+| Page | Keys |
+| --- | --- |
+| Agents | `↑↓` select, `Enter` details, `d` / `e` disable / enable, `b` block / unblock, `N` note, `L` LLM, `o` login, `r` regenerate key, `x` remove. See [`agent-lifecycle.md`](agent-lifecycle.md#tui-flow). |
+| Logs | `/` search (`Enter` keeps the filter, `Esc` clears it), `1`–`4` toggle allowed / denied / ask / errored, `↑↓` select, `Enter` details, `r` replay, `e` export |
+| Policy | `↑↓` select, `Enter` details, `d` turn the rule on / off, `e` edit `policy.yaml` in `$EDITOR`. See [`policy.md`](policy.md#the-tui-policy-page). |
+| Sessions | `↑↓` select, `Enter` details, `k` halt the session |
+| Delegations | `↑↓` select, `Enter` details |
+| Keys | `↑↓` select, `Enter` details, `n` new secret, `v` reveal, `r` rotate, `d` delete |
+| Providers, Services | `↑↓` select, `Enter` details, `n` configure the selected one, `r` rotate, `d` remove (asks first), `s` show the value for 10 s; `o` sign in with a Claude / ChatGPT subscription (Providers), `w` setup walkthrough (Services) |
+| Settings | `↑↓` select, `Enter` open, `e` edit `SOUL.md`, `p` edit `policy.yaml`, `P` Policy page, `w` how to re-run the wizard |
+| Test | `←→` pick the source agent, `i` type a request, `Enter` send |
+
+Regenerating an agent's key (`r`), removing an agent (`x`) and deleting a secret (`d` on Keys) ask first: `y` goes ahead, any other key cancels. The Keys page doesn't list agents' identity tokens; manage those with `foreman agent token rotate` and `foreman agent rewire`.
 
 ## Approvals
 
@@ -36,21 +78,55 @@ deadline first:
 | Key | |
 | --- | --- |
 | `a` / `d` | allow once / deny. Allowing a high- or critical-risk call asks once more: press `y` |
-| `A` / `D` | always allow / always deny: a rule for this agent, this tool and, when the call names one, this file or command (shown as "remembers:" before you press it). `D` asks for `y`; so does `A` on a high- or critical-risk call. `foreman policy remembered list` / `remove <id>` |
-| `←` `→` or `[` `]` | next / previous approval in the queue |
-| `i` | inspect the full request |
+| `A` / `D` | always allow / always deny: a rule for this agent, this tool and, when the call names one, this file or command (shown as "remembers:" before you press it). `D` asks for `y`; so does `A` on a high- or critical-risk call. See [`policy.md`](policy.md#always-allow-and-always-deny-a--d) and `foreman policy remembered list` / `remove <id>` |
+| `←` `→` or `[` `]` | previous / next approval in the queue |
+| `i` | inspect the full request (`↑↓` / `PgUp` `PgDn` scroll, `Esc` closes, `a` / `d` still decide) |
 | `t` | technical details |
+| `k` | halt the agent's session (shown when a loop is detected) |
 | `:` | open the console (`approve` / `deny` work there too) |
+| `q` / `Ctrl-C` | quit, after a `y` / `n` question; the call keeps waiting until its deadline |
 
-Each key applies to the approval that's on screen. When an approval is
-decided somewhere else (a Telegram tap, or the requester's own timeout),
-it leaves the queue right away. The TUI never times approvals out itself;
-the agent's request keeps its own deadline.
+Each key applies to the approval that's on screen. For a moment after the
+approval on screen changes (a new one arrives, or one is decided), letter
+keys are ignored, so a key meant for the page underneath can't decide it.
+When an approval is decided somewhere else (a Telegram tap, or the
+requester's own timeout), it leaves the queue right away. The TUI never
+times approvals out itself; the agent's request keeps its own deadline.
 
 With [approval escalation](org.md#approval-escalation) on, a manager
 agent's recommendation shows under "Manager review" on the approval,
 labelled "unverified id" (agent ids are self-declared). It is advice only;
 the keys above still decide.
+
+## How approvals work
+
+When a call needs your decision, the process that checks it waits for an
+answer: the agent's `foreman mcp-stdio`, the Claude Code hook, `foreman
+wrap`, or `foreman start` itself for the tasks it runs (`foreman write`,
+`assign`, the console). `foreman start` is what gets the question to you: it
+shows the approval here, sends it to the channels routed in
+[`notify.yaml`](notifications.md) and receives your taps from Telegram,
+Slack and Discord. **Keep `foreman start` running while your agents
+work.**
+
+An approval nobody answers in time is **denied**. It shows as
+`approval-timeout` in `foreman log tail`, and the agent gets an error
+(`Denied by approval-timeout`). The same happens when `foreman start`
+isn't running: nothing shows the approval, no notification is sent, and
+the call is denied when it times out. The next `foreman inbox` or
+`foreman start` records what was denied that way ("N approvals timed out
+while Foreman wasn't running"), and `foreman inbox` says when approvals
+are still waiting for an answer.
+
+How long a call waits:
+
+| Where the call comes from | Waits | To change it |
+| --- | --- | --- |
+| MCP agents (`foreman mcp-stdio`), `foreman wrap` | 60 seconds | set `FOREMAN_APPROVAL_TIMEOUT` in that process's environment, e.g. in the `env` of the agent's `foreman` MCP entry |
+| tasks `foreman start` runs itself | 60 seconds | set `FOREMAN_APPROVAL_TIMEOUT` in the environment you start `foreman start` from |
+| Claude Code's hook (`foreman hook claude-code`) | 10 minutes | set `FOREMAN_APPROVAL_TIMEOUT` in the environment Claude Code runs in, or add `--timeout-ms <ms>` (which wins) to the `foreman hook claude-code` command in `~/.claude/settings.json`. Claude Code itself gives the hook 660 seconds, so a longer wait is cut short there. |
+
+`FOREMAN_APPROVAL_TIMEOUT` is a whole number of **seconds** (`FOREMAN_APPROVAL_TIMEOUT=300` waits five minutes). Quitting the TUI doesn't decide anything: calls still waiting are denied when their time runs out.
 
 ## Command console
 
@@ -97,8 +173,9 @@ restarts:
 
 ![Inbox](images/tui-inbox.png)
 
-`n` opens it from anywhere. New warnings pop up as a one-line toast on
-whatever page you're on. On the inbox page: `↑↓` select, `Enter` details,
+`n` opens it from any page except Keys, Providers and Services (there `n`
+means "new"; press `Esc`, then `n`). New warnings pop up as a one-line
+toast on whatever page you're on. On the inbox page: `↑↓` select, `Enter` details,
 `r` mark read, `R` mark all read, `f` filter (all, unread, warnings).
 
 The same inbox works outside the TUI too, which is handy over SSH:
