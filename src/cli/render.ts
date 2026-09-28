@@ -1,7 +1,7 @@
 import type { RegisteredAgent } from "../core/registry.js";
 import { terminalSafe as t } from "../core/terminal-text.js";
 import type { policies, Request } from "../db/schema.js";
-import { formatDuration, formatTime } from "../tui/format.js";
+import { formatDuration, formatTime, summariseTool } from "../tui/format.js";
 import { dim, green, orange, red } from "./colors.js";
 
 type PolicyRow = typeof policies.$inferSelect;
@@ -14,12 +14,19 @@ export function renderRequestLine(row: Request): string {
         ? red("✗")
         : orange("⚠");
   // Agent-supplied fields are shown with hidden characters made visible
-  // (#656), before any colour codes of ours are added.
+  // (#656), before any colour codes of ours are added. The tool comes with
+  // a short summary of its args, as the TUI Logs page shows it (#657):
+  // `read_file("src/a.ts")`, `shell_exec(command="ls")`.
   const target = t(row.targetAgent ? `${row.sourceAgent} → ${row.targetAgent}` : row.sourceAgent);
-  const tool = t(row.targetTool ? row.targetTool : "(no tool)");
+  const tool = clipLine(summariseTool(row.targetTool, row.args), 80);
   const duration =
     row.durationMs !== null ? ` · ${formatDuration(row.durationMs)}` : "";
   return `${dim(`[${formatTime(row.createdAt)}]`)} ${orange(target)} ${tool} ${status} ${dim(`${row.decision}${row.decidedBy ? ` · ${t(row.decidedBy)}` : ""}${duration}`)}`;
+}
+
+function clipLine(text: string, max: number): string {
+  const oneLine = text.replace(/\s+/g, " ");
+  return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 2)}…)`;
 }
 
 export function renderRequestJson(row: Request): unknown {

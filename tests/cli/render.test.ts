@@ -77,6 +77,27 @@ describe('renderRequestLine', () => {
     expect(out).toContain('allowed · policy:7 · 18ms')
   })
 
+  // QA #657 L29 — `log tail` showed the tool with no args.
+  it('shows a short summary of the args, hidden characters made visible', () => {
+    expect(stripAnsi(renderRequestLine(sampleRequest))).toContain('read_file("src/auth.ts")')
+    const shell = stripAnsi(
+      renderRequestLine({
+        ...sampleRequest,
+        targetTool: 'shell_exec',
+        args: JSON.stringify({ command: `rm -rf /tmp/x\u001b[2K\r${'y'.repeat(200)}` }),
+      }),
+    )
+    expect(shell).toContain('shell_exec(command="rm -rf /tmp/x')
+    expect(shell).not.toMatch(/\u001b|\r/)
+    expect(shell).toMatch(/…\) ✓/)
+    expect(shell.length).toBeLessThan(160)
+    // A path is quoted as is: escape sequences in it must not reach the
+    // terminal; they show as visible stand-ins (#656).
+    const path = renderRequestLine({ ...sampleRequest, args: JSON.stringify({ path: 'x\u001b[2K\rdocs/README.md' }) })
+    expect(stripAnsi(path)).toContain('read_file("x␛[2K␍docs/README.md")')
+    expect(path).not.toContain('\u001b[2K')
+  })
+
   it('renders ✗ for denied and · decidedBy', () => {
     const out = stripAnsi(
       renderRequestLine({
