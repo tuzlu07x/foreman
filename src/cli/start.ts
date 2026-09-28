@@ -39,6 +39,8 @@ import {
 import { defaultLlmConfig, saveLlmConfig } from "../core/llm/config.js";
 import { ForemanCommandRouter, registerBuiltinCommands } from "../core/foreman-command.js";
 import { InboxRecorder, InboxService, oneLineSummary, recordDelegationOutcome } from "../core/inbox.js";
+import { auditAgentTokens, describeTokenAudit } from "../core/agent-wiring.js";
+import { responsibilityLookup } from "../core/mediator-stack.js";
 import { OrchestratorChat } from "../core/orchestrator-chat.js";
 import { RegistryService } from "../core/registry.js";
 import { RiskScorer } from "../core/risk-scorer.js";
@@ -210,8 +212,7 @@ export function startForeman(
     // Wire the responsibility-violation rule (#300). Both lookups close
     // over `registry` + `policy` so a YAML reload or agent edit shows up
     // on the next request without rebuilding the scorer.
-    getAgentResponsibility: (agentId) =>
-      registry.get(agentId)?.responsibilityNote ?? null,
+    getAgentResponsibility: responsibilityLookup(registry),
     responsibilityPolicies: () => policy.getResponsibilityPolicies(),
   });
   // QA-fix 2026-05-24 — wire the cost provider (#530 out-of-scope) so
@@ -264,6 +265,7 @@ export function startForeman(
   const inbox = new InboxService(db, bus);
   const inboxRecorder = new InboxRecorder(db, inbox, { bus });
   inboxRecorder.start();
+  warnAboutAgentTokens(registry, secretStore, inbox, withTui);
 
   // Spend ledger (#629): agents report their token usage over
   // OpenTelemetry to a receiver on 127.0.0.1; spawned tasks get the
@@ -1399,6 +1401,47 @@ function setupActivitySummaryScheduler(args: {
   });
   scheduler.start();
   return scheduler;
+}
+
+const AGENT_TOKENS_INBOX_KEY = "identity:agent-tokens";
+
+/** #618 — Agents without their identity token run untrusted on the MCP
+ *  path. Raised on every start (as unread) until `foreman agent rewire`
+ *  fixes it; best-effort, it never blocks the boot. */
+function warnAboutAgentTokens(
+  registry: RegistryService,
+  secretStore: SecretStore,
+  inbox: InboxService,
+  withTui: boolean,
+): void {
+  try {
+    let doc: ReturnType<typeof loadActiveRegistry>["doc"] | null = null;
+    try {
+      doc = loadActiveRegistry().doc;
+    } catch {
+      doc = null;
+    }
+    const audit = auditAgentTokens(registry.listAll(), secretStore, (id) =>
+      doc?.agents.find((a) => a.id === id) ?? null,
+    );
+    const problem = describeTokenAudit(audit);
+    if (!problem) {
+      inbox.markKeyRead(AGENT_TOKENS_INBOX_KEY);
+      return;
+    }
+    inbox.upsert({
+      level: "warning",
+      kind: "system",
+      title: "Some agents can't prove their identity to Foreman",
+      body: `${problem.message}. ${problem.remediation}`,
+      dedupeKey: AGENT_TOKENS_INBOX_KEY,
+    });
+    if (!withTui) {
+      process.stderr.write(`${orange("warning: ")}${problem.message}\n  → ${problem.remediation}\n`);
+    }
+  } catch {
+    /* doctor reports the same problem */
+  }
 }
 
 // Returns true when the user appears to be a first-time user: no foreman home

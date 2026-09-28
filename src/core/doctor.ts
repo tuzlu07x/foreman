@@ -34,6 +34,12 @@ import {
   resolveInstallerNodeVersion,
   type InstallerNode,
 } from "./node-engines.js";
+import {
+  auditAgentTokens,
+  describeTokenAudit,
+  describeUnverifiedWiring,
+  verifiedAgentCount,
+} from "./agent-wiring.js";
 import { getUpdateCachePath, isNewer } from "./update-check.js";
 
 export type CheckStatus = "ok" | "warn" | "fail";
@@ -836,6 +842,66 @@ export function checkAgentsRegistered(): CheckResult {
   }
 }
 
+// #618 — Agents without an identity token (installs from before tokens, or
+// custom agents never given one) run untrusted on the MCP path; so do agents
+// whose config still carries a rotated token. Say so, with the fix. Only
+// agents whose wiring was read and holds their current token count as
+// proving their identity; one whose wiring doctor can't see (generic-mcp)
+// gets its own row, `agent_tokens:<id>`.
+export function checkAgentTokens(): CheckResult | CheckResult[] {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.dbPath)) {
+    return { name: "agent_tokens", status: "ok", message: "database not yet initialised" };
+  }
+  try {
+    const db = getDb();
+    const agents = new RegistryService(db, new EventBus<ForemanEventMap>()).listAll();
+    if (agents.length === 0) {
+      return { name: "agent_tokens", status: "ok", message: "no agents registered" };
+    }
+    const store = new SecretStore(db, loadOrCreateSecretsMasterKey());
+    let doc: ReturnType<typeof loadActiveRegistry>["doc"] | null = null;
+    try {
+      doc = loadActiveRegistry().doc;
+    } catch {
+      doc = null; // registry problems are reported by their own checks
+    }
+    const audit = auditAgentTokens(agents, store, (id) => doc?.agents.find((a) => a.id === id) ?? null);
+    const problem = describeTokenAudit(audit);
+    const unverified: CheckResult[] = audit.unverified.map((id) => ({
+      name: `agent_tokens:${id}`,
+      status: "warn",
+      ...describeUnverifiedWiring(id),
+    }));
+    if (problem) {
+      return [
+        { name: "agent_tokens", status: "warn", message: problem.message, remediation: problem.remediation },
+        ...unverified,
+      ];
+    }
+    const verified = verifiedAgentCount(agents.length, audit);
+    // Nothing verified and nothing wrong: the per-agent rows say it all.
+    if (verified === 0) return unverified;
+    const proves = verified === 1 ? "proves its" : "prove their";
+    const who =
+      verified === agents.length
+        ? agents.length === 1
+          ? "1 agent"
+          : `all ${agents.length} agents`
+        : `${verified} of ${agents.length} agents`;
+    return [
+      { name: "agent_tokens", status: "ok", message: `${who} ${proves} identity with a token` },
+      ...unverified,
+    ];
+  } catch (err) {
+    return {
+      name: "agent_tokens",
+      status: "warn",
+      message: `could not check agent tokens: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 // #408 / #412 — Validate that every registered agent with a
 // provider_mapping has its required secret (or OAuth credential) in
 // place. Surfaces ✓ / ⚠ / ✗ per-agent so the operator can see at a
@@ -1470,6 +1536,7 @@ const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkSecretSlotDuplicates,
   checkVoiceConfig,
   checkAgentsRegistered,
+  checkAgentTokens,
   checkAcpAgents,
   () => checkAgentNodeEngines(),
   checkProviderMapping,

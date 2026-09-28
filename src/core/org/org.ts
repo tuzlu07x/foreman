@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
+import { isUntrustedSource } from "../agent-identity.js";
 
 // =============================================================================
 // Foreman Org — a company of agents, as configuration (`<configDir>/org.yaml`)
@@ -271,6 +272,8 @@ export function chainOf(doc: OrgDoc, roleId: string): { chain: string[]; cycle: 
 /** Agent ids compare case-insensitively: callers lowercase what they get
  *  from chat commands, while org.yaml keeps whatever the user typed. */
 export function rolesForAgent(doc: OrgDoc, agentId: string): string[] {
+  // An unverified MCP connection holds no role, whatever org.yaml says.
+  if (isUntrustedSource(agentId)) return [];
   const id = agentId.trim().toLowerCase();
   return Object.entries(doc.roles)
     .filter(([, r]) => r.agent.trim().toLowerCase() === id)
@@ -346,6 +349,13 @@ export const HUMAN_SOURCES: ReadonlySet<string> = new Set([
   "discord",
 ]);
 
+/** An agent whose identity isn't proven by its token can't hand work to
+ *  anyone: outside the chart it would otherwise keep pre-org freedom. */
+export const UNTRUSTED_DELEGATION: DelegationVerdict = {
+  allowed: false,
+  reason: "the sender's identity is unverified (no valid agent token) — run `foreman agent rewire <agent>`",
+};
+
 /**
  * May `fromAgent` hand work to `toAgent`? Returns `null` when the org has no
  * opinion (either side is not part of the chart), so callers keep their
@@ -357,6 +367,7 @@ export function checkDelegation(
   toAgent: string,
 ): DelegationVerdict | null {
   if (HUMAN_SOURCES.has(fromAgent.trim().toLowerCase())) return { allowed: true, reason: "assigned by the human" };
+  if (isUntrustedSource(fromAgent)) return UNTRUSTED_DELEGATION;
   const fromRoles = rolesForAgent(doc, fromAgent);
   const toRoles = rolesForAgent(doc, toAgent);
   if (fromRoles.length === 0 || toRoles.length === 0) return null;
@@ -415,6 +426,7 @@ function describeCrossPolicy(doc: OrgDoc): string {
  * (agent outside the org, or no role/department declares a list).
  */
 export function allowedMcpServers(doc: OrgDoc, agentId: string): Set<string> | null {
+  if (isUntrustedSource(agentId)) return new Set();
   const roles = rolesForAgent(doc, agentId);
   if (roles.length === 0) return null;
   const allowed = new Set<string>();

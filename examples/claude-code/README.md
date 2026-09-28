@@ -19,26 +19,36 @@ You should see the boot banner, then the empty dashboard. Leave this running in 
 
 ## 3. Point Claude Code at Foreman
 
-Register Foreman as a user-scope MCP server so it loads in every project:
+The easy way: `foreman agent add claude-code` registers Claude Code and writes the `foreman` entry, with its identity token, into `~/.claude.json`, where Claude Code reads user-scope MCP servers (`mcpServers`). `~/.claude/settings.json` is not an MCP config: it only gets the env projection and, with `foreman agent hook install`, the PreToolUse hook.
+
+To wire it by hand, register it and write its identity token to a file first:
 
 ```bash
-claude mcp add --scope user foreman -- foreman mcp-stdio --source claude-code
+foreman agent add claude-code --type claude-code --skip-config --token-out ~/.claude-code-foreman.token
 ```
 
-Claude Code stores user-scope servers under `mcpServers` in `~/.claude.json` (not in `~/.claude/settings.json`). The command above writes this entry:
+Then register Foreman as a user-scope MCP server so it loads in every project (the token briefly shows up in this one command's argument list):
+
+```bash
+claude mcp add --scope user foreman -e FOREMAN_AGENT_TOKEN="$(cat ~/.claude-code-foreman.token)" -- foreman mcp-stdio --source claude-code
+```
+
+That writes this entry under `mcpServers` in `~/.claude.json` (you can also add it there by hand; keep it out of a project's `.mcp.json`, which is usually committed to git):
 
 ```json
 {
   "mcpServers": {
     "foreman": {
       "command": "foreman",
-      "args": ["mcp-stdio", "--source", "claude-code"]
+      "args": ["mcp-stdio", "--source", "claude-code"],
+      "env": { "FOREMAN_AGENT_TOKEN": "<contents of ~/.claude-code-foreman.token>" }
     }
   }
 }
 ```
 
 - `--source` is the agent id Foreman records on every request. `claude-code` is the convention; pick whatever matches your other policy rules.
+- `FOREMAN_AGENT_TOKEN` proves the id. Without it (or with a wrong one) the connection runs as `untrusted:claude-code`: none of `claude-code`'s allow rules, org role or MCP hub servers (its deny rules still apply). Delete the token file once it's wired, and never pass the token to `foreman` as an argument. See [agent identity tokens](../../docs/agent-lifecycle.md#agent-identity-tokens).
 - Everything after `--` is passed to the server untouched. If you installed without `-g`, replace `foreman` after the `--` with `node /absolute/path/to/dist/cli/index.js`.
 
 ## 4. Check the connection

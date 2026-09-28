@@ -86,6 +86,10 @@ export interface InstallStepSummary {
    *  agent's `engines.node` range. `lines` explains the requirement and
    *  the upstream installer command for the user to run themselves. */
   nodeEngineSkipped: { agentId: string; lines: string[] }[];
+  /** #618 — Registered agents given an identity token that Foreman had
+   *  nowhere to write (no MCP config or wrapper in the registry, e.g.
+   *  generic-mcp). Done shows how to fetch it; never the token itself. */
+  tokenToWire: string[];
 }
 
 export type AgentInstallStage = "install" | "config-inject" | "register";

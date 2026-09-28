@@ -1,0 +1,282 @@
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type Database from 'better-sqlite3'
+import { parse as parseToml } from 'smol-toml'
+import { parse as parseYaml } from 'yaml'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { readWiredAgentToken } from '../../src/core/agent-config-injector.js'
+import { AGENT_TOKEN_PLACEHOLDER, buildMcpSnippet } from '../../src/core/agent-mcp-snippet.js'
+import { hasAgentToken, issueAgentToken, verifyAgentToken } from '../../src/core/agent-token.js'
+import {
+  auditAgentTokens,
+  describeTokenAudit,
+  describeWiringError,
+  rewireAgent,
+  WiringParseError,
+  writeAgentWiring,
+} from '../../src/core/agent-wiring.js'
+import type { AgentEntry } from '../../src/core/registry-catalog.js'
+import { SecretStore } from '../../src/core/secret-store.js'
+import { createInMemoryDb } from '../../src/db/client.js'
+import { generateMasterKey } from '../../src/identity/encryption.js'
+
+// #618 — the agent's MCP wiring carries its identity token in the server's
+// env (never argv), in files only the owner can read.
+
+function entry(overrides: Partial<AgentEntry>): AgentEntry {
+  return {
+    id: 'claude-code',
+    name: 'Claude Code',
+    tagline: 'tag',
+    homepage: 'https://example.com',
+    install: { npm: null, brew: null },
+    config_paths: [],
+    config_snippet: null,
+    required_secrets: [],
+    optional_secrets: [],
+    llm_compat: [],
+    mcp_compatible: true,
+    supported_versions: '*',
+    min_foreman_version: '0.1.0',
+    ...overrides,
+  }
+}
+
+const mode = (path: string): number => statSync(path).mode & 0o777
+
+describe('agent MCP wiring with identity tokens', () => {
+  let dir: string
+  let sqlite: Database.Database
+  let store: SecretStore
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'foreman-wiring-'))
+    const handle = createInMemoryDb()
+    sqlite = handle.sqlite
+    store = new SecretStore(handle.db, generateMasterKey())
+  })
+  afterEach(() => {
+    sqlite.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('the snippet passes the token as an env var, not an argument; shown snippets carry a placeholder', () => {
+    const withToken = buildMcpSnippet('codex', entry({}), 'fat_abc').json as {
+      mcpServers: { foreman: { args: string[]; env: Record<string, string> } }
+    }
+    expect(withToken.mcpServers.foreman.env).toEqual({ FOREMAN_AGENT_TOKEN: 'fat_abc' })
+    expect(withToken.mcpServers.foreman.args.join(' ')).not.toContain('fat_abc')
+    const shown = buildMcpSnippet('codex', entry({}))
+    expect(shown.yaml).toContain(AGENT_TOKEN_PLACEHOLDER)
+  })
+
+  it('JSON (Claude Code): keeps other settings, adds the env block, makes the file owner-only', () => {
+    const path = join(dir, 'settings.json')
+    writeFileSync(path, JSON.stringify({ theme: 'dark', mcpServers: { foreman: { command: 'foreman', args: ['mcp-stdio', '--source', 'claude-code'] } } }), { mode: 0o644 })
+    const token = issueAgentToken(store, 'claude-code')
+    const result = writeAgentWiring('claude-code', entry({}), token, { configPath: path })
+    expect(result.config).toBe('replaced')
+    const doc = JSON.parse(readFileSync(path, 'utf-8')) as { theme: string; mcpServers: { foreman: { env: Record<string, string> } } }
+    expect(doc.theme).toBe('dark')
+    expect(doc.mcpServers.foreman.env.FOREMAN_AGENT_TOKEN).toBe(token)
+    expect(mode(path)).toBe(0o600)
+    expect(readWiredAgentToken(path)).toBe(token)
+  })
+
+  it('TOML (Codex): writes an env table under mcp_servers.foreman', () => {
+    const path = join(dir, 'config.toml')
+    writeFileSync(path, 'model = "gpt-5"\n')
+    writeAgentWiring('codex', entry({ id: 'codex', mcp_servers_key: 'mcp_servers' }), 'fat_codex', { configPath: path })
+    const doc = parseToml(readFileSync(path, 'utf-8')) as { model: string; mcp_servers: { foreman: { env: Record<string, string> } } }
+    expect(doc.model).toBe('gpt-5')
+    expect(doc.mcp_servers.foreman.env.FOREMAN_AGENT_TOKEN).toBe('fat_codex')
+  })
+
+  it('YAML + wrapper (Hermes): the wrapper exports the token and is 0700', () => {
+    const path = join(dir, 'config.yaml')
+    const hermes = entry({
+      id: 'hermes',
+      mcp_register_cli: {
+        command_template: 'hermes mcp add foreman --command {wrapper_path}',
+        wrapper: {
+          path_template: '~/.foreman/wrappers/{agent_id}-mcp.sh',
+          content_template: '#!/usr/bin/env bash\nexec foreman mcp-stdio --source {agent_id}\n',
+        },
+      },
+    })
+    const result = writeAgentWiring('hermes', hermes, 'fat_hermes', { configPath: path, homeDir: dir })
+    expect((parseYaml(readFileSync(path, 'utf-8')) as { mcpServers: { foreman: { env: Record<string, string> } } }).mcpServers.foreman.env.FOREMAN_AGENT_TOKEN).toBe('fat_hermes')
+    expect(result.wrapperPath).toBe(join(dir, '.foreman/wrappers/hermes-mcp.sh'))
+    const script = readFileSync(result.wrapperPath!, 'utf-8')
+    expect(script).toBe("#!/usr/bin/env bash\nexport FOREMAN_AGENT_TOKEN='fat_hermes'\nexec foreman mcp-stdio --source hermes\n")
+    expect(mode(result.wrapperPath!)).toBe(0o700)
+  })
+
+  it('rewire keeps the current token; rotate replaces it and rewrites the wiring', () => {
+    const path = join(dir, 'settings.json')
+    const first = rewireAgent(store, 'claude-code', entry({}), { configPath: path })
+    expect(first).toMatchObject({ minted: true, config: 'written' })
+    const token = readWiredAgentToken(path)!
+    expect(verifyAgentToken(store, 'claude-code', token)).toBe(true)
+
+    expect(rewireAgent(store, 'claude-code', entry({}), { configPath: path })).toMatchObject({ minted: false, config: 'current' })
+    expect(readWiredAgentToken(path)).toBe(token)
+
+    expect(rewireAgent(store, 'claude-code', entry({}), { configPath: path, rotate: true })).toMatchObject({ minted: true, config: 'replaced' })
+    const rotated = readWiredAgentToken(path)!
+    expect(rotated).not.toBe(token)
+    expect(verifyAgentToken(store, 'claude-code', token)).toBe(false)
+    expect(verifyAgentToken(store, 'claude-code', rotated)).toBe(true)
+  })
+
+  it('writes the token to --token-out (0600) for agents wired by hand', () => {
+    // Nowhere to write it: minted and stored, handed over by a later --token-out.
+    expect(rewireAgent(store, 'bot', null)).toMatchObject({ minted: true, config: 'none', tokenOutPath: null })
+    expect(hasAgentToken(store, 'bot')).toBe(true)
+    const out = join(dir, 'bot.token')
+    writeFileSync(out, 'old', { mode: 0o644 })
+    const res = rewireAgent(store, 'bot', null, { tokenOut: out })
+    expect(res).toMatchObject({ minted: false, tokenOutPath: out })
+    expect(verifyAgentToken(store, 'bot', readFileSync(out, 'utf-8').trim())).toBe(true)
+    expect(mode(out)).toBe(0o600)
+  })
+
+  it('rotating a hand-wired agent with nowhere to write still invalidates the old token', () => {
+    const out = join(dir, 'bot.token')
+    rewireAgent(store, 'bot', null, { tokenOut: out })
+    const old = readFileSync(out, 'utf-8').trim()
+    const res = rewireAgent(store, 'bot', null, { rotate: true })
+    expect(res).toMatchObject({ minted: true, config: 'none', tokenOutPath: null })
+    expect(verifyAgentToken(store, 'bot', old)).toBe(false)
+    // The new one can be fetched afterwards without another rotation.
+    rewireAgent(store, 'bot', null, { tokenOut: out })
+    expect(verifyAgentToken(store, 'bot', readFileSync(out, 'utf-8').trim())).toBe(true)
+  })
+
+  it("a config that doesn't parse never has its content quoted in the error", () => {
+    const path = join(dir, 'settings.json')
+    const secret = `fat_${'S'.repeat(43)}`
+    writeFileSync(path, `{ "mcpServers": { "foreman": { "env": { "FOREMAN_AGENT_TOKEN": "${secret}" } } `)
+    let caught: unknown
+    try {
+      writeAgentWiring('claude-code', entry({}), 'fat_new', { configPath: path })
+    } catch (err) {
+      caught = err
+    }
+    expect(caught).toBeInstanceOf(WiringParseError)
+    expect(describeWiringError(caught)).toContain("doesn't parse")
+    expect(describeWiringError(caught)).not.toContain(secret)
+    // Anything else unknown is summarised, never echoed.
+    expect(describeWiringError(new SyntaxError(`Unexpected token in "${secret}"`))).not.toContain(secret)
+    // A real filesystem error (from a system call) is shown as it is...
+    const fsErr = Object.assign(new Error(`EACCES: permission denied, open '${path}'`), {
+      code: 'EACCES',
+      syscall: 'open',
+    })
+    expect(describeWiringError(fsErr)).toContain('EACCES')
+    // ...but a string `code` alone (YAML's BAD_INDENT) doesn't make one.
+    const yamlErr = Object.assign(new Error(`BAD_INDENT at line 3:\n  FOREMAN_AGENT_TOKEN: ${secret}`), {
+      code: 'BAD_INDENT',
+    })
+    expect(describeWiringError(yamlErr)).not.toContain(secret)
+  })
+
+  it('refuses, and leaves alone, a config whose top level is not a map (#618 review L5)', () => {
+    for (const [name, text] of [
+      ['list.json', '[{"mcpServers": {}}]\n'],
+      ['scalar.yaml', 'just a string\n'],
+      ['list.yaml', '- a\n- b\n'],
+    ] as const) {
+      const path = join(dir, name)
+      writeFileSync(path, text)
+      expect(() => writeAgentWiring('claude-code', entry({}), 'fat_x', { configPath: path })).toThrow(
+        /isn't a map at the top level/,
+      )
+      expect(readFileSync(path, 'utf-8')).toBe(text)
+    }
+  })
+
+  it("warns in one line when rewriting a YAML or TOML config drops its comments", () => {
+    const yamlPath = join(dir, 'config.yaml')
+    writeFileSync(yamlPath, '# my Hermes settings\nmodel: x # the default\n')
+    const yamlResult = writeAgentWiring('hermes', entry({ id: 'hermes', mcp_servers_key: 'mcp_servers' }), 'fat_x', {
+      configPath: yamlPath,
+    })
+    expect(yamlResult.config).toBe('written')
+    expect(yamlResult.note).toMatch(/comments were not kept/)
+    expect(yamlResult.note!.split('\n')).toHaveLength(1)
+    // Nothing is rewritten the second time, so nothing to warn about.
+    expect(writeAgentWiring('hermes', entry({ id: 'hermes', mcp_servers_key: 'mcp_servers' }), 'fat_x', { configPath: yamlPath }).note).toBeUndefined()
+
+    const tomlPath = join(dir, 'config.toml')
+    writeFileSync(tomlPath, '# codex\nmodel = "gpt-5"\n')
+    expect(writeAgentWiring('codex', entry({ id: 'codex', mcp_servers_key: 'mcp_servers' }), 'fat_x', { configPath: tomlPath }).note).toMatch(
+      /comments were not kept/,
+    )
+    // JSON (and a comment-free file) says nothing.
+    const jsonPath = join(dir, 'settings.json')
+    writeFileSync(jsonPath, '{"theme": "dark"}')
+    expect(writeAgentWiring('claude-code', entry({}), 'fat_x', { configPath: jsonPath }).note).toBeUndefined()
+  })
+
+  it('rotating revokes the old token even when writing the wiring fails', () => {
+    const path = join(dir, 'settings.json')
+    rewireAgent(store, 'claude-code', entry({}), { configPath: path })
+    const old = readWiredAgentToken(path)!
+    writeFileSync(path, '{ not json')
+    expect(() => rewireAgent(store, 'claude-code', entry({}), { configPath: path, rotate: true })).toThrow(/doesn't parse/)
+    expect(verifyAgentToken(store, 'claude-code', old)).toBe(false)
+  })
+
+  it('audit finds agents with no token and wiring that lost or kept an old token', () => {
+    const fresh = join(dir, 'fresh.json')
+    const stale = join(dir, 'stale.json')
+    const elsewhere = join(dir, 'elsewhere.json')
+    const e = (path: string): AgentEntry => entry({ config_paths: [path] })
+    const entries: Record<string, AgentEntry> = { fresh: e(fresh), stale: e(stale), elsewhere: e(elsewhere) }
+    rewireAgent(store, 'fresh', entries.fresh!)
+    rewireAgent(store, 'stale', entries.stale!)
+    issueAgentToken(store, 'stale') // rotated without rewriting the file
+    issueAgentToken(store, 'elsewhere') // default file has no foreman entry: wired elsewhere
+    writeFileSync(elsewhere, '{}')
+    const gone = join(dir, 'gone.json')
+    entries.gone = e(gone)
+    issueAgentToken(store, 'gone') // its config file doesn't exist
+    const agents = ['fresh', 'stale', 'elsewhere', 'legacy', 'gone'].map((id) => ({ id, metadata: { registryId: id } }))
+    const audit = auditAgentTokens(agents, store, (id) => entries[id] ?? null)
+    // `elsewhere` has a token but its default file has no foreman entry:
+    // wired somewhere doctor can't see, so not counted as verified.
+    expect(audit).toEqual({ missing: ['legacy'], stale: ['stale'], unwired: ['gone'], exposed: [], unverified: ['elsewhere'] })
+    const text = describeTokenAudit(audit)!
+    expect(text.message).toContain('legacy')
+    expect(text.remediation).toContain('foreman agent rewire --all')
+    expect(JSON.stringify(text)).not.toMatch(/fat_/)
+    expect(describeTokenAudit({ missing: [], stale: [], unwired: [], exposed: [], unverified: ['elsewhere'] })).toBeNull()
+  })
+
+  it('audit flags token files others can read, and a wrapper with a stale token', () => {
+    const config = join(dir, 'config.json')
+    const hermesLike = entry({
+      id: 'hermes',
+      config_paths: [config],
+      mcp_register_cli: {
+        command_template: 'x {wrapper_path}',
+        wrapper: { path_template: '~/.foreman/wrappers/{agent_id}-mcp.sh', content_template: '#!/bin/sh\nexec foreman mcp-stdio --source {agent_id}\n' },
+      },
+    })
+    rewireAgent(store, 'hermes', hermesLike, { homeDir: dir })
+    const agents = [{ id: 'hermes', metadata: { registryId: 'hermes' } }]
+    const audit = (): ReturnType<typeof auditAgentTokens> => auditAgentTokens(agents, store, () => hermesLike, { homeDir: dir })
+    expect(audit()).toEqual({ missing: [], stale: [], unwired: [], exposed: [], unverified: [] })
+    chmodSync(config, 0o644)
+    expect(audit().exposed).toEqual([config])
+    expect(describeTokenAudit(audit())!.remediation).toContain(`chmod 600\` ${config}`)
+    // Rotating the token without rewriting the wrapper leaves it stale.
+    const wrapper = join(dir, '.foreman/wrappers/hermes-mcp.sh')
+    const before = readFileSync(wrapper, 'utf-8')
+    rewireAgent(store, 'hermes', hermesLike, { homeDir: dir, rotate: true })
+    writeFileSync(wrapper, before)
+    expect(audit().stale).toEqual(['hermes'])
+  })
+})

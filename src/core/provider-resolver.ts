@@ -40,7 +40,7 @@ export interface ResolvedAgentProviderConfig {
   envVars: Record<string, string>;
   /** Codex-style flat JSON auth files. */
   authJsonWrites: { path: string; key: string; value: string }[];
-  /** TOML config writes (Codex `preferred_auth_method`, ZeroClaw
+  /** TOML config writes (ZeroClaw
    *  `default_provider`/`api_key`). */
   tomlWrites: { path: string; key: string; value: string }[];
   /** Foreman secret-store slot name (e.g. `openrouter-key`). `null`

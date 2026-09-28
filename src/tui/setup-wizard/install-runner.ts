@@ -1,16 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { homedir } from "node:os";
 import {
   checkSecrets,
-  pickConfigPath,
+  pickMcpConfigPath,
   registerAgent,
 } from "../../core/agent-add-flow.js";
-import {
-  applyInjection,
-  planInjection,
-  UnsupportedConfigFormatError,
-} from "../../core/agent-config-injector.js";
 import { projectSecretsForAgent } from "../../core/agent-secrets-projector.js";
 import {
   detectProviderConflict,
@@ -26,12 +18,14 @@ import {
   runShell,
   runUninstall,
 } from "../../core/agent-install.js";
-import { buildMcpSnippet } from "../../core/agent-mcp-snippet.js";
 import {
   checkNodeEngine,
   describeNodeEngineMismatch,
   resolveInstallerNodeVersion,
 } from "../../core/node-engines.js";
+import { ensureAgentToken, revokeAgentToken } from "../../core/agent-token.js";
+import { buildMcpSnippet } from "../../core/agent-mcp-snippet.js";
+import { NO_CONFIG_PATH_NOTE, tokenHandoffHint } from "../../core/agent-wiring.js";
 import {
   autoRegisterMcp,
   buildMcpRegisterHint,
@@ -41,11 +35,11 @@ import {
   findAgent,
   loadActiveProviders,
   loadActiveRegistry,
-  resolveBundledTemplatePath,
   type AgentEntry,
 } from "../../core/registry-catalog.js";
 import { applyForemanSoul } from "../../core/foreman-soul.js";
 import { getForemanPaths } from "../../utils/config.js";
+import { wireAgentConfig } from "./install-config.js";
 import { safeFind } from "./shared.js";
 import type {
   AgentConfigsMap,
@@ -79,6 +73,7 @@ export async function runInstallStep(
     removed: [],
     mcpRegisterFailed: [],
     nodeEngineSkipped: [],
+    tokenToWire: [],
   };
   const { doc } = loadActiveRegistry();
   // #373 — load provider catalog once so checkSecrets can filter
@@ -96,6 +91,7 @@ export async function runInstallStep(
     const entry = registryId ? safeFind(doc, registryId) : null;
     log(`▸ Removing ${existing.displayName}`);
     services.registry.remove(id);
+    revokeAgentToken(services.secretStore, id);
     summary.removed.push(id);
     log(`  ✓ unregistered "${id}"`);
     if (entry) {
@@ -235,112 +231,54 @@ export async function runInstallStep(
       );
     }
 
-    const configPath = pickConfigPath(entry);
-    const requiresExisting = entry.install.requires_existing_config === true;
-    if (configPath) {
-      try {
-        // #385 — Seed bundled template first when the agent's config file
-        // doesn't exist (OpenClaw). Template ships under
-        // registry/templates/<agent>.json; Foreman writes it expanded so
-        // the MCP/secret overlay lands on a schema-valid base. Replaces
-        // the #377/#378 "skip + manual repush" workaround.
-        const templatePath = entry.install.config_template_path
-          ? resolveBundledTemplatePath(entry.install.config_template_path)
-          : null;
-        let seeded = false;
-        if (templatePath) {
-          try {
-            const raw = readFileSync(templatePath, "utf-8");
-            const expanded = raw.replace(/~\//g, `${homedir()}/`);
-            mkdirSync(dirname(configPath), { recursive: true });
-            // "wx" (O_CREAT | O_EXCL) is the existence check: an existing
-            // config (or a symlink at its path) is never overwritten or
-            // written through.
-            writeFileSync(configPath, expanded, { mode: 0o600, flag: "wx" });
-            seeded = true;
-            log(
-              `  ✓ seeded ${entry.name} config from bundled template → ${configPath}`,
-            );
-          } catch (seedErr) {
-            // EEXIST: the agent already has a config — keep it.
-            if ((seedErr as NodeJS.ErrnoException).code !== "EEXIST") {
-              log(
-                `  ⚠ template seed failed: ${seedErr instanceof Error ? seedErr.message : String(seedErr)}`,
-              );
-            }
-          }
-        }
-        // #377 fallback — when no template is bundled AND the registry
-        // flags requires_existing_config, leave the file alone and hint.
-        if (!seeded && requiresExisting && !existsSync(configPath)) {
-          log(
-            `  ⚠ ${entry.name} config not initialised at ${configPath}`,
-          );
-          log(
-            `     Run \`${entry.install.binary ?? id}\` once to create it, then \`foreman secrets repush ${id}\` to apply Foreman's keys.`,
-          );
-        } else {
-          const snippet = buildMcpSnippet(id, entry);
-          const plan = planInjection(configPath, snippet.json);
-          if (plan.alreadyHasForeman) {
-            log(`  ✓ config already wired at ${configPath}`);
-          } else if (plan.replacedStale) {
-            applyInjection(configPath, plan);
-            log(`  ⟳ replaced stale foreman entry at ${configPath}`);
-          } else {
-            applyInjection(configPath, plan);
-            log(`  ✓ wrote MCP snippet to ${configPath}`);
-          }
-        }
-      } catch (err) {
-        if (err instanceof UnsupportedConfigFormatError) {
-          log(`  ⚠ ${configPath} unsupported format — paste manually`);
-        } else {
-          log(
-            `  ⚠ config inject skipped: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
-    }
+    // The agent's config file: seed it from the bundled template when
+    // missing, then write Foreman's MCP entry (install-config.ts).
+    const configRefused = wireAgentConfig(id, entry, services.secretStore, log);
 
     // Secret projection (#222 / #223) — write Foreman-stored keys to the
     // agent's own env/config files so it launches without a separate setup
     // step. Best-effort: any failure is a warning, not an install abort.
-    try {
-      // #471 — Mirror the register-time fallback so projection sees the
-      // resolved provider for single-compat agents.
-      const projCompat = entry.llm_compat ?? [];
-      const projProvider =
-        agentConfigs[id]?.llmProvider ??
-        (projCompat.length === 1 ? projCompat[0] : undefined);
-      const projection = projectSecretsForAgent(entry, {
-        providersSelected: projectionCtx.providersSelected,
-        servicesSelected: projectionCtx.servicesSelected,
-        // #389 — per-agent llmProvider so config_overrides' if_provider
-        // resolves to the user's per-agent pick (not the global Step 1 set).
-        llmProvider: projProvider,
-        // #450 — per-agent variant override (e.g. Codex OAuth instead
-        // of OpenRouter for Hermes/openai).
-        providerVariant: agentConfigs[id]?.providerVariant,
-        // #434 — per-agent specific model id chosen in the wizard's
-        // model-pick phase; falls back to the variant default when omitted.
-        modelVersion: agentConfigs[id]?.modelVersion,
-        secretStore: services.secretStore,
-        // #426 — Skip channel-tied writes for agents that aren't the
-        // primary for a messaging channel.
-        chatPrimary: services.chatPrimary,
-      });
-      for (const f of projection.files) {
-        const tag = f.replacedStale ? "⟳ rotated" : f.created ? "✓ wrote" : "✓ updated";
-        log(`  ${tag} ${f.secrets.length} secret${f.secrets.length === 1 ? "" : "s"} → ${f.path}`);
+    // Not into a config file just refused for the agent's token (#618): the
+    // projector would replace that symlink with a regular file.
+    if (configRefused) {
+      log(`  ◦ keys not projected either: fix that file, then \`foreman secrets repush ${id}\``);
+    } else {
+      try {
+        // #471 — Mirror the register-time fallback so projection sees the
+        // resolved provider for single-compat agents.
+        const projCompat = entry.llm_compat ?? [];
+        const projProvider =
+          agentConfigs[id]?.llmProvider ??
+          (projCompat.length === 1 ? projCompat[0] : undefined);
+        const projection = projectSecretsForAgent(entry, {
+          providersSelected: projectionCtx.providersSelected,
+          servicesSelected: projectionCtx.servicesSelected,
+          // #389 — per-agent llmProvider so config_overrides' if_provider
+          // resolves to the user's per-agent pick (not the global Step 1 set).
+          llmProvider: projProvider,
+          // #450 — per-agent variant override (e.g. Codex OAuth instead
+          // of OpenRouter for Hermes/openai).
+          providerVariant: agentConfigs[id]?.providerVariant,
+          // #434 — per-agent specific model id chosen in the wizard's
+          // model-pick phase; falls back to the variant default when omitted.
+          modelVersion: agentConfigs[id]?.modelVersion,
+          secretStore: services.secretStore,
+          // #426 — Skip channel-tied writes for agents that aren't the
+          // primary for a messaging channel.
+          chatPrimary: services.chatPrimary,
+        });
+        for (const f of projection.files) {
+          const tag = f.replacedStale ? "⟳ rotated" : f.created ? "✓ wrote" : "✓ updated";
+          log(`  ${tag} ${f.secrets.length} secret${f.secrets.length === 1 ? "" : "s"} → ${f.path}`);
+        }
+        for (const s of projection.skipped) {
+          log(`  ◦ skip projection of ${s.secret}: ${s.reason}`);
+        }
+      } catch (err) {
+        log(
+          `  ⚠ secret projection failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
-      for (const s of projection.skipped) {
-        log(`  ◦ skip projection of ${s.secret}: ${s.reason}`);
-      }
-    } catch (err) {
-      log(
-        `  ⚠ secret projection failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
     }
 
     // #350 — provider-config conflict check. Many agents have `provider:`
@@ -452,7 +390,17 @@ export async function runInstallStep(
       // CLI command via `printf 'y\n' | <cmd>` so the user doesn't have
       // to do it manually. Falls back to the manual hint when the run
       // fails (binary missing, prompt won't pipe, etc).
-      const registerHint = buildMcpRegisterHint(id, entry);
+      const registerHint = buildMcpRegisterHint(id, entry, {
+        token: ensureAgentToken(services.secretStore, id),
+      });
+      // #618 — Nowhere to write the token (generic-mcp): say how to fetch
+      // it, as `foreman agent add` does. The snippet has a placeholder.
+      if (!pickMcpConfigPath(entry) && !registerHint?.wrapper) {
+        log(`  ◦ ${NO_CONFIG_PATH_NOTE}`);
+        for (const line of buildMcpSnippet(id, entry).yaml.trimEnd().split("\n")) log(`      ${line}`);
+        log(`  ◦ ${tokenHandoffHint(id)}`);
+        summary.tokenToWire.push(id);
+      }
       if (registerHint) {
         // #346 — write the wrapper script for agents (Hermes) that can't
         // accept multi-token --args.

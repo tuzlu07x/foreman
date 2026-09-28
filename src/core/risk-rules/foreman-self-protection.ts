@@ -1,5 +1,6 @@
 import { homedir } from 'node:os'
 import { getForemanPaths } from '../../utils/config.js'
+import { isUntrustedSource } from '../agent-identity.js'
 import { shortFingerprint } from './secret-patterns.js'
 import type { RiskFactor, RiskRule } from './types.js'
 
@@ -37,12 +38,26 @@ const FOREMAN_STATE_PATTERNS: ReadonlyArray<{ re: RegExp; reason: string }> = [
  *  would unhook itself or impersonate another agent id. */
 const AGENT_WIRING_PATTERNS: ReadonlyArray<{ re: RegExp; reason: string }> = [
   { re: /\.claude[/\\]settings(\.local)?\.json\b/i, reason: 'Claude Code settings (holds the Foreman hook)' },
-  { re: /(^|[/\\\s"'~])\.claude\.json\b/i, reason: 'Claude Code MCP config (holds the Foreman --source id)' },
+  { re: /(^|[/\\\s"'~])\.claude\.json\b/i, reason: 'Claude Code MCP config (holds the Foreman wiring and agent token)' },
   { re: /(^|[/\\\s"'])\.mcp\.json\b/i, reason: "project MCP config (can shadow Foreman's MCP server)" },
   { re: /\.codex[/\\]config\.toml\b/i, reason: 'Codex config (MCP wiring)' },
   { re: /\.hermes[/\\]config\.ya?ml\b/i, reason: 'Hermes config (MCP wiring)' },
   { re: /\.openclaw[/\\][^\s"']*\.(json|ya?ml|toml)\b/i, reason: 'OpenClaw config (MCP wiring)' },
+  { re: /\.zeroclaw[/\\]config\.toml\b/i, reason: 'ZeroClaw config (MCP wiring)' },
 ]
+
+/** Where each agent's MCP wiring, and so its identity token (#618), lives.
+ *  An agent reading ANOTHER agent's file is after that agent's identity. */
+const TOKEN_WIRING_FILES: ReadonlyArray<{ re: RegExp; agent: string; label: string }> = [
+  { re: /(^|[/\\\s"'~])\.claude\.json\b/i, agent: 'claude-code', label: "Claude Code's MCP config" },
+  { re: /\.codex[/\\]config\.toml\b/i, agent: 'codex', label: "Codex's config" },
+  { re: /\.hermes[/\\]config\.ya?ml\b/i, agent: 'hermes', label: "Hermes' config" },
+  { re: /\.openclaw[/\\][^\s"']*\.(json5?|ya?ml|toml)\b/i, agent: 'openclaw', label: "OpenClaw's config" },
+  { re: /\.zeroclaw[/\\]config\.toml\b/i, agent: 'zeroclaw', label: "ZeroClaw's config" },
+]
+
+/** Any process's environment: an MCP server's holds its agent's token. */
+const PROC_ENVIRON = /\/proc\/[^\s"'/]+\/environ\b/i
 
 /** `foreman` CLI verbs that change security state. Read-only verbs
  *  (`log`, `doctor`, `--version`) and delegation (`write`) stay allowed. */
@@ -106,6 +121,34 @@ export const foremanSelfProtectionRule: RiskRule = {
           break
         }
       }
+    }
+
+    // Any access, read included: the file holds another agent's token.
+    // Only a verified agent's own file is exempt; `untrusted:<id>` hasn't
+    // proven it is <id>, and <id>'s file is exactly what it would want.
+    const self = isUntrustedSource(req.sourceAgent) ? null : req.sourceAgent.trim().toLowerCase()
+    for (const { re, agent, label } of TOKEN_WIRING_FILES) {
+      const m = re.exec(text)
+      if (m && agent !== self) {
+        factors.push({
+          rule: 'agent_token_access',
+          category: 'structural',
+          points: CRITICAL,
+          reason: `Touches ${label}, which holds ${agent}'s Foreman identity token — an agent can use it to pass as ${agent}`,
+          evidence: m[0].trim(),
+        })
+        break
+      }
+    }
+    const environ = PROC_ENVIRON.exec(text)
+    if (environ) {
+      factors.push({
+        rule: 'process_environ_access',
+        category: 'structural',
+        points: CRITICAL,
+        reason: "Reads a process's environment, where agents' Foreman identity tokens live",
+        evidence: environ[0],
+      })
     }
 
     const reveal = SECRET_REVEAL.exec(text)

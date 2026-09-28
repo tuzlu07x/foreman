@@ -394,6 +394,12 @@ interface ContentPattern {
 
 const CONTENT_PATTERNS: ContentPattern[] = [
   {
+    // An agent carrying another agent's identity token is impersonation in
+    // flight (#618).
+    pattern: /\bfat_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/,
+    label: 'Foreman agent token',
+  },
+  {
     pattern: /sk-ant-api03-[A-Za-z0-9_-]{50,}/,
     label: 'Anthropic API key',
   },

@@ -25,6 +25,7 @@ import { requests } from "../db/schema.js";
 import type { SessionManager } from "./session.js";
 import { isMcpOAuthSecretName } from "./mcp-hub/config.js";
 import { SecretNotFoundError, type SecretStore } from "./secret-store.js";
+import { claimedAgentOf, isUntrustedSource } from "./agent-identity.js";
 
 export interface MediatorInput {
   requestId?: string;
@@ -142,9 +143,11 @@ export class MediatorService {
 
     // A blocked or paused agent is quarantined from real traffic. Checked on
     // every call so `foreman agent block <id>` takes effect immediately on
-    // every transport (mcp-stdio, wrap, hook, ACP / codex bridges).
-    const sourceStatus = this.deps.registry.get(input.sourceAgent)?.status;
-    if (sourceStatus === "blocked" || sourceStatus === "disabled") {
+    // every transport (mcp-stdio, wrap, hook, ACP / codex bridges). An
+    // unverified `untrusted:<id>` connection is held to <id>'s status too,
+    // so dropping the token never lifts a block (#618).
+    const sourceStatus = this.quarantineStatus(input.sourceAgent);
+    if (sourceStatus) {
       return this.finalize({
         requestId,
         input,
@@ -178,6 +181,7 @@ export class MediatorService {
     const usesFallback =
       input.policyFallback !== undefined &&
       evaluated.matchedRuleId === undefined &&
+      evaluated.label === undefined &&
       evaluated.decision === "ask";
     const policyResult = usesFallback
       ? { decision: input.policyFallback!.effect }
@@ -186,7 +190,7 @@ export class MediatorService {
       ? input.policyFallback!.source
       : evaluated.matchedRuleId !== undefined
         ? String(evaluated.matchedRuleId)
-        : null;
+        : (evaluated.label ?? null);
 
     if (policyResult.decision === "deny") {
       return this.finalize({
@@ -312,7 +316,11 @@ export class MediatorService {
           : approval.via
             ? `user:${approval.via}`
             : "user";
-      if (approval.remember && input.targetTool) {
+      // "Always allow" is keyed to the source id; for an unverified
+      // connection that would hand the rule to anyone who claims it.
+      const rememberable =
+        approval.remember === "deny" || !isUntrustedSource(input.sourceAgent);
+      if (approval.remember && rememberable && input.targetTool) {
         const target = input.targetAgent
           ? `${input.targetAgent}:${input.targetTool}`
           : `tool:${input.targetTool}`;
@@ -456,6 +464,14 @@ export class MediatorService {
           : args,
       } as JSONRPCMessage,
     });
+  }
+
+  private quarantineStatus(sourceAgent: string): "blocked" | "disabled" | null {
+    for (const id of new Set([sourceAgent, claimedAgentOf(sourceAgent)])) {
+      const status = this.deps.registry.get(id)?.status;
+      if (status === "blocked" || status === "disabled") return status;
+    }
+    return null;
   }
 
   private authenticate(input: MediatorInput): boolean {

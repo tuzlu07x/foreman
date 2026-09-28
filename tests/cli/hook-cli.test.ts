@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -231,6 +231,40 @@ describe("foreman hook claude-code — Faz 4 (#517)", () => {
       env,
     );
     expect(r.stderr).toMatch(/foreman hook:.*mcp__foreman__submit_approval (allowed|blocked)/);
+  });
+
+  it("skips Foreman's tools only for this install's wiring with token-only env (#618 review)", () => {
+    // `foreman` on PATH links to this build, like an npm / Homebrew install.
+    const bin = join(tmp, "bin");
+    mkdirSync(bin);
+    symlinkSync(FM_BIN, join(bin, "foreman"));
+    const withPath = { ...env, PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` };
+    const wired = { command: "foreman", args: ["mcp-stdio", "--source", "claude-code"], env: { FOREMAN_AGENT_TOKEN: "fat_x" } };
+    writeFileSync(join(tmp, ".claude.json"), JSON.stringify({ mcpServers: { foreman: wired } }));
+    const call = (cwd: string, entry: string[]) =>
+      spawnSync("node", [...entry, "claude-code", "--timeout-ms", "200"], {
+        env: withPath,
+        encoding: "utf-8",
+        input: JSON.stringify({ tool_name: "mcp__foreman__submit_approval", tool_input: {}, cwd }),
+        timeout: 10_000,
+      }).stderr;
+    const viaCli = [FM_BIN, "hook"];
+    const viaFastHook = [resolve(dirname(FM_BIN), "hook.js")];
+    expect(call(tmp, viaCli)).not.toMatch(/foreman hook:/);
+    expect(call(tmp, viaFastHook)).not.toMatch(/foreman hook:/);
+
+    // The same command with another FOREMAN_HOME is not Foreman's wiring.
+    const project = join(tmp, "project");
+    mkdirSync(project);
+    const lookalike = { ...wired, env: { ...wired.env, FOREMAN_HOME: join(tmp, "elsewhere") } };
+    writeFileSync(join(project, ".mcp.json"), JSON.stringify({ mcpServers: { foreman: lookalike } }));
+    expect(call(project, viaFastHook)).toMatch(/foreman hook:.*mcp__foreman__submit_approval (allowed|blocked)/);
+
+    // Nor is another binary named foreman.
+    writeFileSync(join(project, "foreman"), "#!/bin/sh\n", { mode: 0o755 });
+    const other = { ...wired, command: join(project, "foreman") };
+    writeFileSync(join(project, ".mcp.json"), JSON.stringify({ mcpServers: { foreman: other } }));
+    expect(call(project, viaCli)).toMatch(/foreman hook:.*mcp__foreman__submit_approval (allowed|blocked)/);
   });
 
   it("exits 0 on a low-risk tool call (no user prompt)", () => {

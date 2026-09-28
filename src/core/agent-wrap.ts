@@ -37,6 +37,7 @@ import {
   type TelegramUpdate,
 } from './telegram-poller.js'
 import type { AgentEntry } from './registry-catalog.js'
+import { withoutAgentToken } from './agent-identity.js'
 
 /** Spawn shim mirroring the shape `agent-spawn.ts` uses. AgentWrap
  *  takes whichever stdio mode the caller wants; production wants
@@ -158,7 +159,7 @@ export function startAgentWrap(opts: AgentWrapOptions): AgentWrapHandle {
     opts.spawnImpl ?? (nodeSpawn as unknown as WrapSpawnLike)
   const child = spawnFn(opts.childArgv.command, opts.childArgv.args, {
     cwd: opts.childCwd,
-    env: { ...process.env, ...(opts.childEnv ?? {}) },
+    env: withoutAgentToken({ ...process.env, ...(opts.childEnv ?? {}) }),
     shell: false,
     detached: false,
     stdio: ['pipe', 'pipe', 'pipe'],

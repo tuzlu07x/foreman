@@ -7,6 +7,7 @@ import {
   spawnAgentTask,
 } from "../../src/core/agent-spawn.js";
 import type { AgentEntry } from "../../src/core/registry-catalog.js";
+import { withoutAgentToken } from "../../src/core/agent-identity.js";
 
 // =============================================================================
 // Generic agent spawn engine — PR C of the multi-agent orchestration epic.
@@ -472,6 +473,30 @@ describe("spawnAgentTask", () => {
     } finally {
       if (previous === undefined) delete process.env.ANTHROPIC_API_KEY;
       else process.env.ANTHROPIC_API_KEY = previous;
+    }
+  });
+
+  it("never passes an agent identity token to a spawned agent (#618)", async () => {
+    const prev = process.env.FOREMAN_AGENT_TOKEN;
+    const prevFile = process.env.FOREMAN_AGENT_TOKEN_FILE;
+    process.env.FOREMAN_AGENT_TOKEN = "fat_parent_token";
+    process.env.FOREMAN_AGENT_TOKEN_FILE = "/tmp/parent.token";
+    try {
+      const cmd = makeScript(
+        "env-token-probe.sh",
+        "#!/bin/sh\necho \"tok=${FOREMAN_AGENT_TOKEN:-MISSING} file=${FOREMAN_AGENT_TOKEN_FILE:-MISSING}\"\n",
+      );
+      const result = await spawnAgentTask({ entry: agent({ task_command_template: cmd }), task: "x" });
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") expect(result.stdout).toContain("tok=MISSING file=MISSING");
+      expect(withoutAgentToken({ FOREMAN_AGENT_TOKEN: "a", FOREMAN_AGENT_TOKEN_FILE: "b", PATH: "/bin" })).toEqual({
+        PATH: "/bin",
+      });
+    } finally {
+      if (prev === undefined) delete process.env.FOREMAN_AGENT_TOKEN;
+      else process.env.FOREMAN_AGENT_TOKEN = prev;
+      if (prevFile === undefined) delete process.env.FOREMAN_AGENT_TOKEN_FILE;
+      else process.env.FOREMAN_AGENT_TOKEN_FILE = prevFile;
     }
   });
 

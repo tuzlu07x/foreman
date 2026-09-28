@@ -20,7 +20,7 @@ import {
   approvalIdMissHint,
   classifyApprovalIdInput,
 } from "../core/approval-id.js";
-import { deriveApprovalKey } from "../core/approval-token.js";
+import { deriveApprovalKey, parseApprovalToken } from "../core/approval-token.js";
 import { createMediatorStack } from "../core/mediator-stack.js";
 import { loadHub, scopeForAgent } from "../core/mcp-hub/boot.js";
 import { HubToolUnavailableError } from "../core/mcp-hub/hub.js";
@@ -42,6 +42,21 @@ import { closeDb, getDb } from "../db/client.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { redactSecretShapes } from "../core/risk-rules/secret-patterns.js";
 import { isHumanSource } from "../core/org/guard.js";
+import {
+  AGENT_TOKEN_ENV,
+  describeUntrustedIdentity,
+  takeAgentToken,
+  recheckAgentIdentity,
+  resolveAgentIdentity,
+  type ResolvedIdentity,
+} from "../core/agent-token.js";
+import {
+  claimedAgentOf,
+  displayAgentId,
+  isUntrustedSource,
+  isValidAgentId,
+} from "../core/agent-identity.js";
+import { InboxService } from "../core/inbox.js";
 import { OrgComms, renderMessages, silencedReason, type MessageKind } from "../core/org/comms.js";
 import { ApprovalReviews } from "../core/org/review.js";
 import { createDecoder, encodeMessage } from "../mcp/framing.js";
@@ -60,10 +75,15 @@ export const mcpStdioCommand = new Command("mcp-stdio")
   )
   .option(
     "-s, --source <id>",
-    "agent id recorded as the source on every call",
-    "mcp-client",
+    `agent id this connection claims to be; it is trusted only with that agent's token in ${AGENT_TOKEN_ENV}`,
   )
-  .action(async (options: { source: string }) => {
+  .action(async (options: { source?: string }) => {
+    // Read the token once and take it out of this process's environment, so
+    // nothing we spawn (hub servers, agents started by the drain poller)
+    // inherits another agent's credential.
+    const intake = takeAgentToken(process.env);
+    if (intake.problem) warn(`${intake.problem}; running without a token`);
+    const token = intake.token;
     const paths = getForemanPaths();
     if (!existsSync(paths.root) || !existsSync(paths.identityPath)) {
       process.stderr.write(
@@ -74,7 +94,15 @@ export const mcpStdioCommand = new Command("mcp-stdio")
     }
     // Human surfaces skip org delegation rules; an agent must not be able
     // to pass itself off as one.
-    if (isHumanSource(options.source)) {
+    // The id lands in audit rows, the inbox and stderr: one plain charset.
+    if (options.source !== undefined && !isValidAgentId(options.source)) {
+      process.stderr.write(
+        red("error: ") +
+          `--source '${displayAgentId(options.source)}' is not a valid agent id (letters, digits, '.', '_', '-'; at most 64).\n`,
+      );
+      process.exit(1);
+    }
+    if (options.source !== undefined && isHumanSource(options.source)) {
       process.stderr.write(
         red("error: ") +
           `'${options.source}' is reserved for you (the CLI, TUI and chat commands). Give the agent its own id with --source.\n`,
@@ -82,9 +110,17 @@ export const mcpStdioCommand = new Command("mcp-stdio")
       process.exit(1);
     }
     const services = bootServices();
-    services.hubScope = scopeForAgent(paths.orgConfigPath, options.source, warn);
-    autoRegisterSource(services.registry, options.source);
-    runMcpLoop(services, options.source);
+    const identity = resolveAgentIdentity({
+      claimed: options.source,
+      token,
+      store: services.secretStore,
+    });
+    announceIdentity(services, identity);
+    services.hubScope = scopeForAgent(paths.orgConfigPath, identity.source, warn);
+    // Only a verified agent gets a registry row; an unverified connection
+    // must not be able to create identities.
+    if (identity.trusted) autoRegisterSource(services.registry, identity.source);
+    runMcpLoop(services, identity, token ?? "");
   });
 
 interface Services {
@@ -191,6 +227,33 @@ function warn(message: string): void {
   process.stderr.write(`foreman mcp-stdio: ${message}\n`);
 }
 
+/** Record who connected; tell the user loudly when it isn't proven. The
+ *  token itself never reaches stderr, the inbox or the audit log. */
+function announceIdentity(services: Services, identity: ResolvedIdentity): void {
+  services.audit.logEvent("agent:identity", {
+    source: identity.source,
+    claimed: identity.claimed,
+    trusted: identity.trusted,
+    reason: identity.reason,
+  });
+  if (identity.trusted) return;
+  const message = describeUntrustedIdentity(identity);
+  warn(message);
+  try {
+    // One item a day for all untrusted connections, so cycling claimed ids
+    // can't flood the inbox; every connection is still audited above.
+    new InboxService(getDb(), bus).add({
+      level: "warning",
+      kind: "system",
+      title: `${displayAgentId(identity.claimed)} is connected without a valid agent token`,
+      body: message,
+      dedupeKey: `identity:untrusted:${new Date().toISOString().slice(0, 10)}`,
+    });
+  } catch {
+    // The inbox is a convenience; stderr and the audit event already say it.
+  }
+}
+
 function autoRegisterSource(
   registry: RegistryService,
   sourceAgent: string,
@@ -207,7 +270,20 @@ function autoRegisterSource(
  *  cancel their pending approvals and exit. */
 const SHUTDOWN_GRACE_MS = 5_000;
 
-function runMcpLoop(services: Services, sourceAgent: string): void {
+function runMcpLoop(services: Services, initial: ResolvedIdentity, token: string): void {
+  const paths = getForemanPaths();
+  let identity = initial;
+  // Re-checked before every message, so `foreman agent token rotate` (or
+  // removing the agent) takes a running session down to untrusted at once.
+  const currentSource = (): string => {
+    const next = recheckAgentIdentity(identity, token, services.secretStore);
+    if (next !== identity) {
+      identity = next;
+      services.hubScope = scopeForAgent(paths.orgConfigPath, identity.source, warn);
+      announceIdentity(services, identity);
+    }
+    return identity.source;
+  };
   const decoder = createDecoder();
   const inFlight = new Set<Promise<void>>();
   let shuttingDown = false;
@@ -217,7 +293,7 @@ function runMcpLoop(services: Services, sourceAgent: string): void {
     // Each message is handled independently: a `tools/call` waiting on a
     // human approval must not hold up a `ping` or a second call behind it.
     for (const message of messages) {
-      const task = respond(services, sourceAgent, message).finally(() => {
+      const task = respond(services, currentSource(), message).finally(() => {
         inFlight.delete(task);
       });
       inFlight.add(task);
@@ -609,6 +685,12 @@ export async function handleMessage(
     ).params;
     const toolName = params?.name;
 
+    const refusal = untrustedRelayRefusal(sourceAgent, toolName, params?.arguments);
+    if (refusal) {
+      services.audit.logEvent("agent:identity-refused", { sourceAgent, tool: toolName ?? null });
+      return reply(id, { content: [{ type: "text", text: refusal }], isError: true });
+    }
+
     if (toolName === "secrets/get") {
       const secretName = params?.arguments?.name;
       if (typeof secretName !== "string" || secretName.length === 0) {
@@ -830,6 +912,9 @@ export async function handleMessage(
         remember,
         sourceAgent,
         actionId,
+        // An unverified connection proves nothing itself: every decision it
+        // relays, deny included, needs the tag from the user's tap.
+        ...(isUntrustedSource(sourceAgent) ? { requireTag: true } : {}),
       });
       if (result.ok) {
         const tail = result.policyRuleId
@@ -900,8 +985,8 @@ export async function handleMessage(
       const comms = services.comms;
       if (!comms) return replyError(id, -32603, "department channels are not available in this process");
       // A blocked or disabled agent doesn't get a voice either, whatever
-      // the case or spacing of its `--source`.
-      const silenced = silencedReason(services.registry, sourceAgent);
+      // the case or spacing of its `--source`, and with or without its token.
+      const silenced = silencedReason(services.registry, sourceAgent, claimedAgentOf(sourceAgent));
       if (silenced) {
         return reply(id, {
           content: [{ type: "text", text: `Not available: ${silenced}.` }],
@@ -1199,6 +1284,47 @@ export async function handleMessage(
     return replyError(id, -32601, `Method not found: ${method ?? "(unknown)"}`);
   }
   return null;
+}
+
+/** `/foreman` verbs that only read, which an unverified connection may
+ *  still relay. Everything else changes state or spends money. */
+const READ_ONLY_COMMANDS: ReadonlySet<string> = new Set([
+  "help",
+  "status",
+  "agent",
+  "agents",
+  "activity",
+  "org",
+  "spend",
+]);
+
+/** The relay tools act for the human (answers, resolutions, commands,
+ *  approvals). An unverified connection (#618) may use them only where
+ *  something else proves the human: an HMAC-tagged approval button, or a
+ *  read-only command. Returns the refusal text, or null. */
+export function untrustedRelayRefusal(
+  sourceAgent: string,
+  toolName: string | undefined,
+  args: Record<string, unknown> | undefined,
+): string | null {
+  if (!isUntrustedSource(sourceAgent)) return null;
+  let what: string | null = null;
+  if (toolName === "submit_resolution" || toolName === "submit_user_answer") {
+    what = toolName;
+  } else if (toolName === "submit_command") {
+    const command = typeof args?.command === "string" ? args.command.trim().toLowerCase() : "";
+    if (!READ_ONLY_COMMANDS.has(command)) what = `submit_command ${command || "(no command)"}`;
+  } else if (toolName === "submit_approval") {
+    const raw = typeof args?.approval_id === "string" ? args.approval_id : "";
+    if (!parseApprovalToken(classifyApprovalIdInput(raw).stripped).tag) {
+      what = "submit_approval without the tag from a Foreman button";
+    }
+  }
+  if (!what) return null;
+  return (
+    `Not available: ${what} needs a verified agent, and this connection has no valid agent token ` +
+    `(it runs as ${sourceAgent}). Ask the user to run \`foreman agent rewire ${claimedAgentOf(sourceAgent)}\`.`
+  );
 }
 
 /** Hub tools for `tools/list`. A failing upstream must never break the

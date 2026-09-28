@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -581,6 +581,34 @@ describe('projectSecretsForAgent — wiring', () => {
       expect(parsed.mcp.servers).toEqual({})
       expect(parsed.channels).toEqual({})
       expect(parsed.gateway.mode).toBe('local')
+    })
+
+    it('never seeds the template through a dangling symlink at the config path (#618)', () => {
+      const targetPath = `${tmp}/openclaw.json`
+      const elsewhere = `${tmp}/elsewhere.json`
+      symlinkSync(elsewhere, targetPath)
+      const entry = fakeEntry({
+        install: {
+          npm: null,
+          brew: null,
+          binary: 'openclaw',
+          config_template_path: 'registry/templates/openclaw.json',
+        },
+        secret_projection: {
+          json_env: { path: targetPath, section: 'env' },
+          env_vars: {
+            OPENAI_API_KEY: { from_secret: 'openai-key', if_provider: 'openai' },
+          },
+        },
+      })
+      projectSecretsForAgent(entry, {
+        providersSelected: ['openai'],
+        servicesSelected: [],
+        secretStore: store,
+        home: tmp,
+      })
+      // The template never went through the link to its target.
+      expect(existsSync(elsewhere)).toBe(false)
     })
 
     it('skips seeding when template path is set but template is missing', () => {

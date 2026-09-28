@@ -1,14 +1,27 @@
-# ZeroClaw defines MCP servers as an array of tables (`[[mcp.servers]]`) in
-# ~/.zeroclaw/config.toml, each identified by `name` (upstream:
-# docs/book/src/tools/mcp.md). A server is only connected for agents that are
-# granted it through `mcp_bundles`, e.g. in TOML:
+# ZeroClaw keeps MCP servers in a `[[mcp.servers]]` array in
+# ~/.zeroclaw/config.toml and connects an agent only to the servers of the
+# bundles listed in its `agents.<alias>.mcp_bundles` (zeroclaw
+# docs/book/src/tools/mcp.md). `foreman agent add` writes this in TOML:
+#
+#   [[mcp.servers]]
+#   name = "foreman"
+#   command = "foreman"
+#   args = ["mcp-stdio", "--source", "zeroclaw"]
+#   [mcp.servers.env]
+#   FOREMAN_AGENT_TOKEN = "<written by foreman agent rewire>"
+#
 #   [mcp_bundles.foreman]
 #   servers = ["foreman"]
-#   [agents.<alias>]
-#   mcp_bundles = ["foreman"]
+#
+# and adds "foreman" to `mcp_bundles` of every [agents.<alias>] in the file.
 mcp:
-  enabled: true
   servers:
     - name: foreman
       command: foreman
       args: ["mcp-stdio", "--source", "zeroclaw"]
+      # Proves the agent's identity (#618); never in args.
+      env:
+        FOREMAN_AGENT_TOKEN: "<written by foreman agent rewire>"
+mcp_bundles:
+  foreman:
+    servers: ["foreman"]

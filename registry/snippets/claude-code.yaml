@@ -1,7 +1,14 @@
-# Claude Code stores user-scope MCP servers under `mcpServers` in ~/.claude.json
-# (not in ~/.claude/settings.json). Register this block with:
-#   claude mcp add --scope user foreman -- foreman mcp-stdio --source claude-code
+# Claude Code reads user-scope MCP servers from ~/.claude.json (top-level
+# `mcpServers`), not from ~/.claude/settings.json. `foreman agent add`
+# merges this block into ~/.claude.json and keeps every other key; the
+# settings file only gets the env projection and the PreToolUse hook.
+# CLI equivalent:
+#   claude mcp add --scope user foreman -e FOREMAN_AGENT_TOKEN=<token> -- foreman mcp-stdio --source claude-code
 mcpServers:
   foreman:
     command: foreman
     args: ["mcp-stdio", "--source", "claude-code"]
+    # Proves the agent's identity (#618). `foreman agent add` / `rewire`
+    # write the real token here; it never goes in args.
+    env:
+      FOREMAN_AGENT_TOKEN: "<written by foreman agent rewire>"

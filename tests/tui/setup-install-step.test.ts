@@ -6,6 +6,7 @@ import {
   type ForemanEventMap,
 } from "../../src/core/event-bus.js";
 import { RegistryService } from "../../src/core/registry.js";
+import { hasAgentToken } from "../../src/core/agent-token.js";
 import { SecretStore } from "../../src/core/secret-store.js";
 import { createInMemoryDb, type ForemanDb } from "../../src/db/client.js";
 
@@ -199,6 +200,25 @@ describe("setup-wizard.runInstallStep diff logic", () => {
     expect(summary.identityPushed).toEqual([]);
     expect(summary.identitySkipped).toEqual([]);
     expect(summary.identityNotApplicable).toEqual(["generic-mcp"]);
+  });
+
+  it("tells how to fetch the token of an agent with no config to write it to (#618)", async () => {
+    const summary = await runInstallStep(
+      ["generic-mcp"],
+      [],
+      services(),
+      (line) => logs.push(line),
+    );
+    // A token exists, but Foreman had nowhere to put it: say how to get it,
+    // in the same words as `foreman agent add`, and never print it.
+    expect(hasAgentToken(secretStore, "generic-mcp")).toBe(true);
+    const text = logs.join("\n");
+    expect(text).toContain("no config path declared in the registry");
+    expect(text).toContain(
+      "get its token with 'foreman agent rewire generic-mcp --token-out <file>' and set it as FOREMAN_AGENT_TOKEN",
+    );
+    expect(text).not.toMatch(/fat_[A-Za-z0-9_-]{20,}/);
+    expect(summary.tokenToWire).toEqual(["generic-mcp"]);
   });
 
   it("does not call onFailure on the happy path (no install command, register succeeds)", async () => {

@@ -12,6 +12,7 @@ import { RiskScorer } from '../../src/core/risk-scorer.js'
 import { SessionManager } from '../../src/core/session.js'
 import { AuditLogger } from '../../src/core/audit.js'
 import { SecretStore } from '../../src/core/secret-store.js'
+import { ensureAgentToken } from '../../src/core/agent-token.js'
 import { closeDb, getDb } from '../../src/db/client.js'
 import { requests } from '../../src/db/schema.js'
 import { loadOrCreateSecretsMasterKey } from '../../src/identity/master-key.js'
@@ -160,6 +161,8 @@ describe('#308 — fresh setup to demo (E2E gate)', () => {
       transport: 'stdio',
       responsibilityNote: 'code writing',
     })
+    // The wizard's MCP wiring step mints the agent's identity token (#618).
+    ensureAgentToken(store, TEST_AGENT_ID)
 
     // All three configs land on disk.
     expect(existsSync(paths.llmConfigPath)).toBe(true)
@@ -181,7 +184,7 @@ describe('#308 — fresh setup to demo (E2E gate)', () => {
     expect(voice.proactive_notifications.pattern_detection.enabled).toBe(true)
   })
 
-  it('phase 3: foreman doctor reports every required check ok (only chafa / acp:* may warn)', () => {
+  it('phase 3: foreman doctor reports every required check ok (only chafa / acp:* / the unwired agent may warn)', () => {
     const report = runDoctor()
     const failed = report.checks.filter((c) => c.status === 'fail')
     expect(failed).toEqual([])
@@ -192,11 +195,17 @@ describe('#308 — fresh setup to demo (E2E gate)', () => {
     //     OpenClaw / ZeroClaw all warn in a vanilla setup). Not a
     //     regression in Foreman; the check tells the operator which
     //     install to run.
+    //   - agent_tokens:<TEST_AGENT_ID>: phase 2 only mints the agent's
+    //     token; it writes no MCP wiring (the real HOME is not isolated
+    //     here), so doctor can't verify it and says so (#618).
+    const unverified = report.checks.find((c) => c.name === `agent_tokens:${TEST_AGENT_ID}`)
+    expect(unverified?.message).toContain('token issued, wiring not visible to doctor')
     const otherWarns = report.checks.filter(
       (c) =>
         c.status === 'warn' &&
         c.name !== 'chafa' &&
-        !c.name.startsWith('acp:'),
+        !c.name.startsWith('acp:') &&
+        c !== unverified,
     )
     if (otherWarns.length > 0) {
       const msgs = otherWarns

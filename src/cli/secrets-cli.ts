@@ -13,6 +13,7 @@ import {
 import { loadActiveRegistry } from "../core/registry-catalog.js";
 import { RegistryService } from "../core/registry.js";
 import {
+  ReservedSecretError,
   SecretAlreadyExistsError,
   SecretNotFoundError,
   SecretStore,
@@ -570,6 +571,13 @@ function handleStoreError(err: unknown): void {
     console.error(
       red("error: ") +
         `secret "${err.secretName}" already exists — use 'foreman secrets rotate' to replace it`,
+    );
+    process.exit(1);
+  }
+  if (err instanceof ReservedSecretError) {
+    console.error(
+      red("error: ") +
+        `"${err.secretName}" is an agent identity token. Use 'foreman agent rewire' or 'foreman agent token rotate'.`,
     );
     process.exit(1);
   }

@@ -38,6 +38,7 @@ import {
   type MediatorLike,
 } from "./codex-mediator-connector.js";
 import { FOREMAN_VERSION } from "../version.js";
+import { withoutAgentToken } from "./agent-identity.js";
 
 /** Stub-able spawn type — mirrors the shape `agent-spawn.ts` exports so
  *  test doubles can be reused if useful. We require pipe stdin/stdout
@@ -123,7 +124,7 @@ export function spawnCodexMediated(
   const spawnFn = options.spawnImpl ?? (nodeSpawn as unknown as CodexSpawnLike);
   const child = spawnFn(argv.command, argv.args, {
     cwd: options.cwd,
-    env: { ...process.env, ...(options.env ?? {}) },
+    env: withoutAgentToken({ ...process.env, ...(options.env ?? {}) }),
     shell: false,
     detached: false,
     stdio: ["pipe", "pipe", "pipe"],

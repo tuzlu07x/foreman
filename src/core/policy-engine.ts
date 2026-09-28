@@ -1,9 +1,10 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { and, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, like, sql } from "drizzle-orm";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { ForemanDb } from "../db/client.js";
-import { policies, requests } from "../db/schema.js";
+import { pendingApprovals, policies, requests } from "../db/schema.js";
+import { claimedAgentOf, isUntrustedSource } from "./agent-identity.js";
 import {
   bus as defaultBus,
   type EventBus,
@@ -22,7 +23,15 @@ export interface EvaluateRequest {
 export interface Evaluation {
   decision: Effect;
   matchedRuleId?: number;
+  /** Why, when no policy row decided (e.g. `identity:untrusted-rate-limit`). */
+  label?: string;
 }
+
+/** #618 — every unverified (`untrusted:*`) connection together, so cycling
+ *  claimed ids can't multiply the budget: calls per minute, and approval
+ *  prompts waiting on you at once. */
+export const UNTRUSTED_CALLS_PER_MINUTE = 30;
+export const UNTRUSTED_OPEN_APPROVALS = 3;
 
 export interface RuleConditions {
   /** Rule applies only when `args.path` matches one of these regex patterns. */
@@ -181,8 +190,23 @@ export const DEFAULT_SESSION_LIMITS: SessionLimits = {
   tokenBudgetWarningPct: 80,
 };
 
+/** #618 — what an unverified (`untrusted:<id>`) MCP connection may do:
+ *  `deny` quarantines it, `ask` (default) never auto-allows it, so every
+ *  call it makes comes to you, and `allow_wildcards` lets `source: "*"`
+ *  allow rules apply to it like to any unknown agent. The claimed agent's
+ *  denials and limits bind it in every mode. */
+const IdentitySchema = z
+  .object({
+    untrusted: z.enum(["deny", "ask", "allow_wildcards"]).optional(),
+  })
+  .strict();
+
+export type UntrustedMode = "deny" | "ask" | "allow_wildcards";
+export const DEFAULT_UNTRUSTED_MODE: UntrustedMode = "ask";
+
 const PolicyDocSchema = z
   .object({
+    identity: IdentitySchema.optional(),
     agents: z.record(z.string(), AgentEntrySchema).optional(),
     rules: z.array(RulesArrayItemSchema).optional(),
     buckets: BucketOverridesSchema.optional(),
@@ -217,6 +241,7 @@ export class PolicyEngine {
   // boundary) + the loop-detection rule (advisory warning). Per-call
   // accessor so YAML reload applies without a restart.
   private sessionLimits: SessionLimits = { ...DEFAULT_SESSION_LIMITS };
+  private untrustedMode: UntrustedMode = DEFAULT_UNTRUSTED_MODE;
 
   constructor(
     private readonly db: ForemanDb,
@@ -236,6 +261,7 @@ export class PolicyEngine {
     const now = Date.now();
     this.bucketOverrides = doc.buckets ?? {};
     this.responsibilityPolicies = doc.responsibility_policies ?? [];
+    this.untrustedMode = doc.identity?.untrusted ?? DEFAULT_UNTRUSTED_MODE;
     // #529 — Merge with defaults so a partial `session_limits:` block (only
     // `token_limit:` set) keeps the warning pct at 80 instead of becoming
     // undefined. Omitting the block entirely also restores defaults — a
@@ -332,6 +358,29 @@ export class PolicyEngine {
     });
 
     const winner = candidates[0];
+    // #618 — only `identity.untrusted: allow_wildcards` lets an unverified
+    // connection read secrets through a `*` rule at all.
+    if (isUntrustedSource(sourceAgent) && this.untrustedMode !== "allow_wildcards") {
+      return { decision: "deny", decidedBy: "policy:identity:untrusted" };
+    }
+    // #618 — the claimed agent's secret denials bind an unverified connection.
+    if (winner && winner.effect === "allow" && isUntrustedSource(sourceAgent)) {
+      const claimedDeny = this.db
+        .select()
+        .from(policies)
+        .where(
+          and(
+            eq(policies.sourceAgent, claimedAgentOf(sourceAgent)),
+            eq(policies.target, target),
+            eq(policies.effect, "deny"),
+            eq(policies.enabled, 1),
+          ),
+        )
+        .get();
+      if (claimedDeny) {
+        return { decision: "deny", matchedRuleId: claimedDeny.id, decidedBy: `policy:cannot_access_secrets` };
+      }
+    }
     if (winner && winner.effect === "allow") {
       return {
         decision: "allow",
@@ -392,8 +441,38 @@ export class PolicyEngine {
     const undominated = matching.filter((r) => !matching.some((o) => overrides(o, r)));
     undominated.sort((a, b) => EFFECT_ORDER[a.effect] - EFFECT_ORDER[b.effect] || a.id - b.id);
     const winner = undominated[0];
-    if (winner) return { decision: winner.effect, matchedRuleId: winner.id };
-    return { decision: "ask" };
+    const result: Evaluation = winner ? { decision: winner.effect, matchedRuleId: winner.id } : { decision: "ask" };
+    return this.withUntrustedMode(req, this.withClaimedRestrictions(req, target, result));
+  }
+
+  getUntrustedMode(): UntrustedMode {
+    return this.untrustedMode;
+  }
+
+  /** `identity.untrusted` from policy.yaml (#618). */
+  private withUntrustedMode(req: EvaluateRequest, result: Evaluation): Evaluation {
+    if (!isUntrustedSource(req.sourceAgent) || result.decision === "deny") return result;
+    if (this.untrustedMode === "deny") return { decision: "deny", label: "identity:untrusted" };
+    if (this.untrustedMode === "ask" && result.decision === "allow") return { decision: "ask", label: "identity:untrusted" };
+    return result;
+  }
+
+  /** An unverified `untrusted:<id>` connection (#618) gets none of <id>'s
+   *  allow rules, but <id>'s deny and ask rules still bind it: dropping the
+   *  token must never loosen a restriction. */
+  private withClaimedRestrictions(req: EvaluateRequest, target: string, result: Evaluation): Evaluation {
+    if (!isUntrustedSource(req.sourceAgent) || result.decision === "deny") return result;
+    const claimed = claimedAgentOf(req.sourceAgent);
+    const restrictions = this.db
+      .select()
+      .from(policies)
+      .where(and(eq(policies.sourceAgent, claimed), eq(policies.target, target), eq(policies.enabled, 1)))
+      .all()
+      .filter((r) => r.effect !== "allow" && this.conditionsPass(r, { ...req, sourceAgent: claimed }))
+      .sort((a, b) => EFFECT_ORDER[a.effect] - EFFECT_ORDER[b.effect] || a.id - b.id);
+    const strictest = restrictions[0];
+    if (!strictest || EFFECT_ORDER[strictest.effect] >= EFFECT_ORDER[result.decision]) return result;
+    return { decision: strictest.effect, matchedRuleId: strictest.id };
   }
 
   remember(input: RememberInput): number {
@@ -643,30 +722,34 @@ export class PolicyEngine {
   }
 
   private checkRateLimits(req: EvaluateRequest): Evaluation | null {
+    // An unverified connection is held to the claimed agent's limits too,
+    // counting both ids: dropping the token must not reset the budget.
+    const untrusted = isUntrustedSource(req.sourceAgent);
+    const counted = untrusted ? [req.sourceAgent, claimedAgentOf(req.sourceAgent)] : [req.sourceAgent];
     const rules = this.db
       .select()
       .from(policies)
       .where(
         and(
-          inArray(policies.sourceAgent, [req.sourceAgent, "*"]),
+          inArray(policies.sourceAgent, [...counted, "*"]),
           eq(policies.enabled, 1),
         ),
       )
       .all();
 
+    const since = Date.now() - 60_000;
     for (const rule of rules) {
       if (!rule.conditions) continue;
       const cond = this.parseConditions(rule.conditions);
       const limit = cond?.rateLimits?.messagesPerMinute;
       if (!limit) continue;
 
-      const since = Date.now() - 60_000;
       const row = this.db
         .select({ count: sql<number>`count(*)` })
         .from(requests)
         .where(
           and(
-            eq(requests.sourceAgent, req.sourceAgent),
+            inArray(requests.sourceAgent, counted),
             gte(requests.createdAt, since),
           ),
         )
@@ -674,6 +757,23 @@ export class PolicyEngine {
       if ((row?.count ?? 0) >= limit) {
         return { decision: "deny", matchedRuleId: rule.id };
       }
+    }
+    return untrusted ? this.checkUntrustedFlood(since) : null;
+  }
+
+  private checkUntrustedFlood(since: number): Evaluation | null {
+    const recent = this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(requests)
+      .where(and(like(requests.sourceAgent, "untrusted:%"), gte(requests.createdAt, since)))
+      .get();
+    const waiting = this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(pendingApprovals)
+      .where(and(like(pendingApprovals.sourceAgent, "untrusted:%"), eq(pendingApprovals.status, "pending")))
+      .get();
+    if ((recent?.count ?? 0) >= UNTRUSTED_CALLS_PER_MINUTE || (waiting?.count ?? 0) >= UNTRUSTED_OPEN_APPROVALS) {
+      return { decision: "deny", label: "identity:untrusted-rate-limit" };
     }
     return null;
   }

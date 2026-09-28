@@ -150,6 +150,57 @@ describe('relayed approvals (submit_approval) across processes', () => {
     await expect(waiting).resolves.toMatchObject({ decision: 'denied' })
   })
 
+  it('an unverified relay (#618) needs the button tag even to deny', async () => {
+    const waiting = pendingRequest('req-u')
+    await waitForRow('req-u')
+    const bare = await relay().submitFromAgent({
+      approvalId: 'req-u',
+      decision: 'deny',
+      sourceAgent: 'untrusted:hermes',
+      requireTag: true,
+    })
+    expect(bare.ok).toBe(false)
+    const forged = await relay().submitFromAgent({
+      approvalId: 'req-u.AAAAAAAAAA',
+      decision: 'deny',
+      sourceAgent: 'untrusted:hermes',
+      requireTag: true,
+    })
+    expect(forged.ok).toBe(false)
+    // The allow tag doesn't deny either: the tag is bound to the action.
+    const wrongAction = await relay().submitFromAgent({
+      approvalId: `req-u.${sign('req-u', 'allow')}`,
+      decision: 'deny',
+      sourceAgent: 'untrusted:hermes',
+      requireTag: true,
+    })
+    expect(wrongAction.ok).toBe(false)
+    expect(db.select().from(pendingApprovals).all().find((r) => r.requestId === 'req-u')?.status).toBe('pending')
+    const tapped = await relay().submitFromAgent({
+      approvalId: `req-u.${sign('req-u', 'deny')}`,
+      decision: 'deny',
+      sourceAgent: 'untrusted:hermes',
+      requireTag: true,
+    })
+    expect(tapped.ok).toBe(true)
+    await expect(waiting).resolves.toMatchObject({ decision: 'denied' })
+  })
+
+  it('without an approval key, an unverified relay can decide nothing', async () => {
+    const waiting = pendingRequest('req-k')
+    await waitForRow('req-k')
+    const keyless = new DbApprovalService(db, { bus: new EventBus<ForemanEventMap>() })
+    const out = await keyless.submitFromAgent({
+      approvalId: `req-k.${sign('req-k', 'deny')}`,
+      decision: 'deny',
+      sourceAgent: 'untrusted:hermes',
+      requireTag: true,
+    })
+    expect(out.ok).toBe(false)
+    await relay().submitFromAgent({ approvalId: 'req-k', decision: 'deny', sourceAgent: 'hermes' })
+    await waiting
+  })
+
   it('reports an approval that is no longer pending', async () => {
     const waiting = pendingRequest('req-e')
     await waitForRow('req-e')

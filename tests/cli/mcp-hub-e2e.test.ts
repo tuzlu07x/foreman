@@ -73,8 +73,21 @@ describe('MCP hub through foreman mcp-stdio', () => {
   })
   afterEach(() => rmSync(home, { recursive: true, force: true }))
 
+  /** Register `id` and return its agent token (#618). */
+  const tokenFor = (id: string): string => {
+    const file = join(home, `${id}.token`)
+    spawnSync('node', [FM_BIN, 'agent', 'add', id, '--type', 'generic-mcp', '--skip-config', '--token-out', file], {
+      env,
+      encoding: 'utf-8',
+    })
+    return readFileSync(file, 'utf-8').trim()
+  }
+
   it('lists hub tools, runs policy-allowed calls, gates the rest, and audits both', async () => {
-    const s = new Session(spawn('node', [FM_BIN, 'mcp-stdio', '--source', 'claude-code'], { env }))
+    const token = tokenFor('claude-code')
+    const s = new Session(
+      spawn('node', [FM_BIN, 'mcp-stdio', '--source', 'claude-code'], { env: { ...env, FOREMAN_AGENT_TOKEN: token } }),
+    )
     await s.call(1, 'initialize')
     const list = await s.call(2, 'tools/list')
     const names = list.result!.tools!.map((t) => t.name)
@@ -99,14 +112,15 @@ describe('MCP hub through foreman mcp-stdio', () => {
   }, 30_000)
 
   it('a rug pull is logged as denied and shows in `foreman mcp tools` without --refresh (#634, #635)', async () => {
-    const first = new Session(spawn('node', [FM_BIN, 'mcp-stdio', '--source', 'claude-code'], { env }))
+    const agentEnv = { ...env, FOREMAN_AGENT_TOKEN: tokenFor('claude-code') }
+    const first = new Session(spawn('node', [FM_BIN, 'mcp-stdio', '--source', 'claude-code'], { env: agentEnv }))
     await first.call(1, 'initialize')
     expect((await first.call(2, 'tools/call', { name: 'demo__echo', arguments: { text: 'a' } })).result!.isError).toBeFalsy()
     await first.close()
     // The server now serves a different definition under the same name.
     const yaml = readFileSync(join(home, 'mcp.yaml'), 'utf-8')
     writeFileSync(join(home, 'mcp.yaml'), yaml.replace('    tools:', '    env: { DEMO_VARIANT: changed }\n    tools:'))
-    const second = new Session(spawn('node', [FM_BIN, 'mcp-stdio', '--source', 'claude-code'], { env }))
+    const second = new Session(spawn('node', [FM_BIN, 'mcp-stdio', '--source', 'claude-code'], { env: agentEnv }))
     await second.call(1, 'initialize')
     const withheld = await second.call(2, 'tools/call', { name: 'demo__echo', arguments: { text: 'b' } })
     expect(withheld.result!.isError).toBe(true)
@@ -150,7 +164,9 @@ describe('MCP hub through foreman mcp-stdio', () => {
         '',
       ].join('\n'),
     )
-    const child = spawn('node', [FM_BIN, 'mcp-stdio', '--source', 'claude-code'], { env })
+    const child = spawn('node', [FM_BIN, 'mcp-stdio', '--source', 'claude-code'], {
+      env: { ...env, FOREMAN_AGENT_TOKEN: tokenFor('claude-code') },
+    })
     let stderr = ''
     child.stderr.on('data', (d: Buffer) => (stderr += d.toString()))
     const s = new Session(child)
@@ -180,6 +196,21 @@ describe('MCP hub through foreman mcp-stdio', () => {
       expect(raw).not.toContain(token)
       expect(raw).not.toContain(shaped)
     }
+  }, 30_000)
+
+  it('gives an unverified connection no hub servers (#618)', async () => {
+    tokenFor('claude-code')
+    // Claims claude-code but carries no token: runs as untrusted:claude-code.
+    const s = new Session(spawn('node', [FM_BIN, 'mcp-stdio', '--source', 'claude-code'], { env }))
+    await s.call(1, 'initialize')
+    const names = (await s.call(2, 'tools/list')).result!.tools!.map((t) => t.name)
+    expect(names).toContain('secrets/get')
+    expect(names.some((n) => n.startsWith('demo__'))).toBe(false)
+    const echo = await s.call(3, 'tools/call', { name: 'demo__echo', arguments: { text: 'hi' } })
+    // Not a hub tool for this identity: it goes through policy + risk as an
+    // unknown tool and is never proxied to the upstream server.
+    expect(echo.result?.content?.[0]?.text).not.toBe('hi')
+    await s.close()
   }, 30_000)
 
   it('`foreman mcp tools` shows the inventory with the deny rule applied', () => {

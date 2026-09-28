@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import type { ForemanDb } from "../db/client.js";
+import { claimedAgentOf } from "./agent-identity.js";
 import type { ApprovalService } from "./approval.js";
 import type { EventBus, ForemanEventMap } from "./event-bus.js";
 import type { LlmVerifier } from "./llm/verifier.js";
@@ -39,6 +40,16 @@ export interface MediatorStack {
   mediator: MediatorService;
 }
 
+/** The responsibility note the risk rules check an agent against. An
+ *  unverified `untrusted:<id>` connection is checked against <id>'s: those
+ *  rules only ever add risk (cannot_access, can_use_services, …), so the
+ *  restrictions follow the claimed id while no privilege does (#618). */
+export function responsibilityLookup(
+  registry: Pick<RegistryService, "get">,
+): (agentId: string) => string | null {
+  return (agentId) => registry.get(claimedAgentOf(agentId))?.responsibilityNote ?? null;
+}
+
 export function createMediatorStack(opts: MediatorStackOptions): MediatorStack {
   const { db, bus } = opts;
   const registry = new RegistryService(db, bus);
@@ -48,8 +59,7 @@ export function createMediatorStack(opts: MediatorStackOptions): MediatorStack {
   }
   const risk = new RiskScorer(db, undefined, {
     bucketOverrides: () => policy.getBucketOverrides(),
-    getAgentResponsibility: (agentId) =>
-      registry.get(agentId)?.responsibilityNote ?? null,
+    getAgentResponsibility: responsibilityLookup(registry),
     responsibilityPolicies: () => policy.getResponsibilityPolicies(),
   });
   const sessionManager = new SessionManager(db, { bus });

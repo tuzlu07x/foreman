@@ -273,6 +273,24 @@ export const AgentEntrySchema = z
      *  `{mcp: {enabled: true, servers: {foreman: ...}}}` (OpenClaw).
      *  Default `flat` for backward-compat. */
     mcp_format: z.enum(["flat", "nested"]).optional(),
+    /** Where the agent really reads its MCP servers, when that is not
+     *  `config_paths` (#618). Claude Code reads `~/.claude.json`, not
+     *  `settings.json`; Hermes reads `mcp_servers:`; ZeroClaw reads a
+     *  `[[mcp.servers]]` array granted through `mcp_bundles`.
+     *   - `paths`: candidates, first existing wins (else the first).
+     *   - `layout: map` writes `<key>.foreman = {command, args, env}`
+     *     (`key` is dotted, default `mcpServers`).
+     *   - `layout: zeroclaw` writes a `name = "foreman"` entry in
+     *     `mcp.servers`, a `mcp_bundles.foreman` bundle, and grants it to
+     *     every `[agents.<alias>]`. */
+    mcp_config: z
+      .object({
+        paths: z.array(z.string().min(1)).min(1),
+        layout: z.enum(["map", "zeroclaw"]).default("map"),
+        key: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/).optional(),
+      })
+      .strict()
+      .optional(),
     supported_versions: z.string().min(1),
     min_foreman_version: z.string().min(1),
     /** #646 — Node.js range the agent itself needs, copied from its npm
@@ -478,8 +496,8 @@ export const AgentEntrySchema = z
             section: z.string().min(1),
           })
           .optional(),
-        /** TOML file + simple top-level key=value writes (Codex's
-         *  `preferred_auth_method = "apikey"`, ZeroClaw's `api_key = "…"`). */
+        /** TOML file + simple top-level key=value writes (ZeroClaw's
+         *  `default_provider` and `api_key = "…"`). */
         toml_writes: z
           .array(
             z.object({

@@ -27,7 +27,11 @@ That command runs the install, injects the MCP snippet into `~/.openclaw/opencla
 
 ## 2. (Manual) point OpenClaw at Foreman
 
-If you'd rather wire things by hand, merge the foreman block into OpenClaw's JSON5 config (default path `~/.openclaw/openclaw.json`):
+If you'd rather wire things by hand, register OpenClaw to get its identity token, then merge the foreman block into OpenClaw's JSON5 config (default path `~/.openclaw/openclaw.json`):
+
+```bash
+foreman agent add openclaw --type openclaw --skip-config --token-out ~/.openclaw-foreman.token
+```
 
 ```jsonc
 // ~/.openclaw/openclaw.json — merge with your existing config, leave the rest alone
@@ -37,6 +41,8 @@ If you'd rather wire things by hand, merge the foreman block into OpenClaw's JSO
       "foreman": {
         "command": "foreman",
         "args": ["mcp-stdio", "--source", "openclaw"],
+        // Proves the agent id; without it OpenClaw runs as untrusted:openclaw.
+        "env": { "FOREMAN_AGENT_TOKEN": "<contents of ~/.openclaw-foreman.token>" },
       },
     },
   },
@@ -45,7 +51,7 @@ If you'd rather wire things by hand, merge the foreman block into OpenClaw's JSO
 
 OpenClaw validates its config strictly and refuses to start on unknown keys, so add only the `mcp.servers.foreman` entry (no `mcp.enabled`). `openclaw mcp list` should then show `foreman`.
 
-`--source openclaw` is the agent id Foreman records on every request. Match it to the rules in your policy below.
+`--source openclaw` is the agent id Foreman records on every request, and `FOREMAN_AGENT_TOKEN` proves it ([agent identity tokens](../../docs/agent-lifecycle.md#agent-identity-tokens)). Match the id to the rules in your policy below.
 
 ## 3. Apply the skill-safe policy
 

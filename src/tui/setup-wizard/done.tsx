@@ -321,6 +321,29 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
           </Text>
         </Box>
       )}
+      {/* #618 — Agents with a token Foreman had nowhere to write (no MCP
+          config in the registry) run untrusted until it is wired by hand.
+          Name the command that fetches it; never the token. */}
+      {installSummary && installSummary.tokenToWire.length > 0 && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold color={theme.accent.warning}>
+            ⚠ Wire these agents' identity tokens by hand:
+          </Text>
+          {installSummary.tokenToWire.map((id) => (
+            <Box key={id} flexDirection="column" marginLeft={2}>
+              <Text color={theme.accent.warning}>▸ {id}</Text>
+              <Text color={theme.fg.muted}>
+                {"    "}foreman agent rewire {id} --token-out {"<file>"}
+              </Text>
+            </Box>
+          ))}
+          <Text color={theme.fg.muted}>
+            Set the file's token as FOREMAN_AGENT_TOKEN (or point
+            FOREMAN_AGENT_TOKEN_FILE at the file) in the agent's MCP server
+            env; without it the agent's calls run untrusted.
+          </Text>
+        </Box>
+      )}
       {/* #646 — The install screen advances to Done on its own, so an
           agent held back by its Node range would otherwise only appear in
           a log the user never saw. Repeat the requirement and the

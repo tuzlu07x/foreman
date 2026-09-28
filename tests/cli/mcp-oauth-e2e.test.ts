@@ -104,7 +104,11 @@ describe('foreman mcp login / logout (MCP OAuth)', () => {
     ]
       .map((m) => JSON.stringify(m))
       .join('\n')
-    const stdio = await runUntilReplies(['mcp-stdio', '--source', 'claude-code'], rpc, 2)
+    // Hub servers go only to an agent that proves its id with its token (#618).
+    const tokenFile = join(home, 'claude-code.token')
+    await run(['agent', 'add', 'claude-code', '--type', 'generic-mcp', '--skip-config', '--token-out', tokenFile])
+    const token = readFileSync(tokenFile, 'utf-8').trim()
+    const stdio = await runUntilReplies(['mcp-stdio', '--source', 'claude-code'], rpc, 2, { FOREMAN_AGENT_TOKEN: token })
     expect(stdio).toContain('"text":"hello"')
     outputs.push(stdio)
 
@@ -151,9 +155,14 @@ describe('foreman mcp login / logout (MCP OAuth)', () => {
     expect(mock.calls.register).toBe(0)
   }, 30_000)
 
-  function runUntilReplies(args: string[], input: string, replies: number): Promise<string> {
+  function runUntilReplies(
+    args: string[],
+    input: string,
+    replies: number,
+    extraEnv: NodeJS.ProcessEnv = {},
+  ): Promise<string> {
     return new Promise((done, fail) => {
-      const child = spawn('node', [FM_BIN, ...args], { env })
+      const child = spawn('node', [FM_BIN, ...args], { env: { ...env, ...extraEnv } })
       let stdout = ''
       let stderr = ''
       const timer = setTimeout(() => {

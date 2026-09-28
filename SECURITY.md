@@ -51,9 +51,35 @@ Known limits, which we track as roadmap items rather than hide:
   access can in principle read Foreman's files. The tamper-protection rule
   flags any such access as critical, and files are owner-only. True
   isolation needs a separate OS user or keychain, which is planned.
-- **Self-declared agent ids.** `--source` identifies an agent on the MCP
-  path. Per-agent identity tokens are planned. Blocked and paused agents
-  are denied on every transport today.
+- **Agent identity on the MCP path.** `--source` only names an agent; its
+  identity token proves it. `foreman agent add` mints a 256-bit token,
+  keeps it in the encrypted secret store under a name nothing agent-facing
+  can read (`foreman secrets show` and the MCP `secrets/get` tool refuse
+  it), and writes it into the agent's MCP config as the
+  `FOREMAN_AGENT_TOKEN` env var, never as an argument. Files that carry it
+  are owner-only. A connection with no token, a wrong one, or another
+  agent's runs as `untrusted:<id>`: none of that agent's allow rules,
+  nothing auto-allowed (`identity.untrusted` in `policy.yaml`: `ask` by
+  default, or `deny` / `allow_wildcards`), no secrets, no org role, no delegation, no MCP hub servers, and no remembered "always
+  allow". The claimed agent's deny and ask rules, block and pause still
+  apply, so dropping the token never loosens anything. Tokens are
+  compared in constant time, re-checked on every message (so
+  `foreman agent token rotate` cuts off running sessions), and never
+  printed, logged or audited. Installs from before tokens degrade to
+  untrusted until `foreman agent rewire --all`; `foreman doctor` and
+  `foreman start` say so. Token files are owner-only, never written
+  through a symlink or into a project's git work tree, and `foreman doctor`
+  flags any that others can read. Remaining limits: an agent running as
+  the same OS user (see above) can read another agent's MCP config file,
+  and so its token; tamper protection flags such a read (and any
+  `/proc/*/environ` read) as critical, but a call that skips mediation
+  isn't seen. `foreman mcp-stdio` deletes the token from its environment
+  at start, so nothing it spawns inherits it, but Linux keeps the initial
+  environment in `/proc/<pid>/environ`, readable by the same user. Agents
+  that can instead point `FOREMAN_AGENT_TOKEN_FILE` at a 0600 file keep
+  the token out of any process environment. `foreman write` from an agent's shell still trusts
+  `FOREMAN_SPAWNED_BY`.
+  Blocked and paused agents are denied on every transport.
 - **Relayed approvals.** By default, Telegram decisions reach Foreman
   through the chat agent that polls the bot. Each allow button carries an
   HMAC tag bound to that action. Other agents can't approve anything, and

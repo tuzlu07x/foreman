@@ -22,6 +22,11 @@
       },
       "config_paths": ["~/.hermes/config.yaml"],
       "config_snippet": "registry/snippets/hermes.yaml",
+      "mcp_config": {
+        "paths": ["~/.hermes/config.yaml"],
+        "layout": "map",
+        "key": "mcp_servers"
+      },
       "identity_path": "~/.hermes/SOUL.md",
       "required_secrets": ["anthropic-key"],
       "optional_secrets": ["telegram-bot-token", "discord-bot-token"],
@@ -124,15 +129,6 @@
         "command": "hermes",
         "args": ["gateway"],
         "label": "Telegram/Discord gateway"
-      },
-      "mcp_register_cli": {
-        "command_template": "hermes mcp add foreman --command {wrapper_path}",
-        "verify_template": "hermes mcp list",
-        "note": "Hermes' --args parsing strips multi-token strings, so we point it at a one-line wrapper instead. Foreman writes the wrapper for you; just run the hermes command above once.",
-        "wrapper": {
-          "path_template": "~/.foreman/wrappers/{agent_id}-mcp.sh",
-          "content_template": "#!/usr/bin/env bash\nexec foreman mcp-stdio --source {agent_id}\n"
-        }
       },
       "secret_projection": {
         "env_file": "~/.hermes/.env",
@@ -410,13 +406,6 @@
           "variants": {
             "oauth": {
               "label": "ChatGPT account OAuth (recommended — covered by your subscription)",
-              "toml_writes": [
-                {
-                  "path": "~/.codex/config.toml",
-                  "key": "preferred_auth_method",
-                  "value": "chatgpt"
-                }
-              ],
               "interactive_setup": "codex login",
               "post_setup_verify": "codex login status",
               "required_secret": null,
@@ -427,13 +416,6 @@
             },
             "api-key": {
               "label": "OpenAI API key (pay-per-token)",
-              "toml_writes": [
-                {
-                  "path": "~/.codex/config.toml",
-                  "key": "preferred_auth_method",
-                  "value": "apikey"
-                }
-              ],
               "auth_json_writes": {
                 "path": "~/.codex/auth.json",
                 "key": "OPENAI_API_KEY",
@@ -449,9 +431,6 @@
         }
       },
       "secret_projection": {
-        "toml_writes": [
-          { "path": "~/.codex/config.toml", "key": "preferred_auth_method", "value": "apikey" }
-        ],
         "auth_json": {
           "path": "~/.codex/auth.json",
           "key": "OPENAI_API_KEY",
@@ -473,6 +452,7 @@
       },
       "config_paths": ["~/.claude/settings.json"],
       "config_snippet": "registry/snippets/claude-code.yaml",
+      "mcp_config": { "paths": ["~/.claude.json"], "layout": "map", "key": "mcpServers" },
       "required_secrets": [],
       "optional_secrets": ["anthropic-key"],
       "llm_compat": ["anthropic"],
@@ -537,6 +517,7 @@
       },
       "config_paths": ["~/.zeroclaw/config.toml"],
       "config_snippet": "registry/snippets/zeroclaw.yaml",
+      "mcp_config": { "paths": ["~/.zeroclaw/config.toml"], "layout": "zeroclaw" },
       "required_secrets": [],
       "optional_secrets": ["anthropic-key", "openai-key"],
       "llm_compat": ["anthropic", "openai", "gemini"],

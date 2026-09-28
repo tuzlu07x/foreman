@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
+import { InvalidTokenAgentIdError, isReservedAgentId } from "./agent-token.js";
 import type { AgentEntry, ProviderEntry } from "./registry-catalog.js";
 import type { RegistryService } from "./registry.js";
 import type { SecretStore } from "./secret-store.js";
@@ -120,6 +121,16 @@ export function pickConfigPath(entry: AgentEntry): string | null {
   return first ? expandHome(first) : null;
 }
 
+/** The file the agent reads its MCP servers from: `mcp_config.paths` when
+ *  the registry declares it (Claude Code's `~/.claude.json`), otherwise the
+ *  agent's config file. */
+export function pickMcpConfigPath(entry: AgentEntry): string | null {
+  const paths = entry.mcp_config?.paths;
+  if (!paths) return pickConfigPath(entry);
+  const expanded = paths.map(expandHome);
+  return expanded.find((p) => existsSync(p)) ?? expanded[0] ?? null;
+}
+
 export interface RegisterAgentInput {
   agentId: string;
   entry: AgentEntry;
@@ -140,6 +151,8 @@ export interface RegisterAgentResult {
 }
 
 export function registerAgent(input: RegisterAgentInput): RegisterAgentResult {
+  // Your own ids and the `untrusted:` namespace can't be agents (#618).
+  if (isReservedAgentId(input.agentId)) throw new InvalidTokenAgentIdError(input.agentId);
   if (input.registry.get(input.agentId)) {
     throw new AgentAlreadyRegisteredError(input.agentId);
   }

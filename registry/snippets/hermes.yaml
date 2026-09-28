@@ -1,8 +1,13 @@
 # Foreman wires Hermes through the MCP gateway so every outbound tool call is
 # policy-checked and audited. Hermes reads MCP servers from the top-level
-# `mcp_servers` map in ~/.hermes/config.yaml (upstream: website/docs/reference/
-# mcp-config-reference.md). `hermes mcp add` writes the same map.
+# `mcp_servers:` map in ~/.hermes/config.yaml (see hermes-agent's
+# mcp-config-reference); `foreman agent add` merges this entry there and
+# keeps the rest of the file. Reload with /reload-mcp after a change.
 mcp_servers:
   foreman:
     command: foreman
     args: ["mcp-stdio", "--source", "hermes"]
+    # Proves the agent's identity (#618). `foreman agent add` / `rewire`
+    # write the real token here; it never goes in args.
+    env:
+      FOREMAN_AGENT_TOKEN: "<written by foreman agent rewire>"
