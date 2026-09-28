@@ -351,6 +351,10 @@ async function mount(
     await until(text)
   }
   const type = async (text: string): Promise<void> => {
+    // The field's input handler subscribes in an effect that runs after
+    // the frame showing it; on a loaded machine a key sent the moment the
+    // frame appears was lost (8 of 9 characters, full-suite QA run).
+    await sleep(100)
     for (const ch of text) {
       inst.stdin.write(ch)
       await sleep(5)
