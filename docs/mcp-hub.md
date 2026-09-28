@@ -256,6 +256,8 @@ When the daemon isn't running (no `foreman start`, or you quit it), each
 before: slower, with the same decisions. `foreman daemon` runs the daemon
 without the TUI, for machines where you don't keep the TUI open. Set
 `FOREMAN_NO_DAEMON=1` in an agent's environment to keep it off the daemon.
+`foreman doctor` shows whether agents can use it (the `daemon` row), and
+the Inbox says why when `foreman start` couldn't start it.
 
 How it stays safe:
 

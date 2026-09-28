@@ -19,6 +19,9 @@ everything works as before.
   While `foreman start` runs, agents' `foreman mcp-stdio` and Claude
   Code's PreToolUse hook connect to its daemon instead of starting Foreman
   themselves. `foreman daemon` runs it without the TUI.
+  - `foreman doctor` has a `daemon` row: listening, not running, or why
+    agents can't use it (socket path too long, a socket or token file they
+    don't trust).
   - Each MCP hub stdio server starts once for all agents; each agent still
     sees only the servers its access list and `org.yaml` allow.
   - The hook answers in about 30 ms instead of about 200 ms (p50 on an
