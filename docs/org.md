@@ -25,8 +25,10 @@ foreman org sync                                       # push roles to registere
 foreman org assign marketing "draft the launch post"   # department → its head
 ```
 
+<!-- pending: #656/#657 -->
 Any registered runtime can fill a role — Claude Code, Codex, Hermes,
-OpenClaw, ZeroClaw or your own MCP agent (`foreman agent add <id>`).
+OpenClaw, ZeroClaw or your own MCP agent (`foreman agent add <id>`, where
+`<id>` is a catalog id from `foreman registry list`).
 
 ## What the chart enforces
 

@@ -9,7 +9,7 @@ This recipe is intentionally short — when Hermes changes its config format, fo
 ```bash
 # Foreman
 curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash
-foreman init                       # ~/.foreman/ (identity, policy, db)
+foreman init                       # Foreman's home (identity, policy, db)
 foreman secrets add anthropic-key  # stored once, every agent reads it back
 
 # Hermes — official installer (curl on macOS / Linux / WSL2; PowerShell on Windows).
@@ -19,8 +19,9 @@ hermes setup                       # one-time bootstrap
 
 Or have Foreman install Hermes for you when you select it. Hermes ships only via curl (no npm package today), so Foreman pipes the installer to bash on your explicit consent:
 
+<!-- pending: #656/#657 -->
 ```bash
-foreman agent add hermes --type hermes --auto-install
+foreman agent add hermes --auto-install
 ```
 
 That command runs the installer, injects the MCP snippet into `~/.hermes/config.yaml`, and registers Hermes with Foreman. The interactive `foreman setup` wizard does the same thing when you check the Hermes box. Unchecking later removes the registration and prints a note with the manual uninstall command (script installers vary; Hermes typically supports `--uninstall`).
@@ -29,10 +30,11 @@ That command runs the installer, injects the MCP snippet into `~/.hermes/config.
 
 If you'd rather wire things by hand, install Hermes from the official installer, register it with Foreman to get its identity token, and merge the foreman block into its config:
 
+<!-- pending: #656/#657 -->
 ```bash
 curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 hermes setup     # one-time bootstrap; writes ~/.hermes/config.yaml
-foreman agent add hermes --type hermes --skip-config --token-out ~/.hermes-foreman.token
+foreman agent add hermes --skip-config --token-out ~/.hermes-foreman.token
 ```
 
 ```yaml
@@ -51,8 +53,10 @@ Hermes' real config keys evolve faster than this doc — pull the current skelet
 
 ## 3. Apply the phishing-safe policy
 
+This replaces your `policy.yaml` ([where it lives](../../docs/policy.md#where-the-file-is); the Linux path is shown):
+
 ```bash
-cp examples/hermes-integration/example-policy.yaml ~/.foreman/policy.yaml
+cp examples/hermes-integration/example-policy.yaml ~/.config/foreman/policy.yaml
 foreman policy show
 ```
 
@@ -61,7 +65,7 @@ foreman policy show
 - `read_file` / `write_file` on `.env`, `*.key`, `id_rsa`, `id_ed25519`, anything under `~/.ssh/`, `~/.aws/credentials` → **ask**
 - `shell_exec` containing `rm -rf`, `chmod 777`, `| sh`, `| bash`, `curl`, `wget` → **ask**
 - `list_files`, `stat`, generic `read_file` → **allow** (Hermes' normal idle traffic)
-- 60 msg/min, 200K tokens/hour rate limit on Hermes
+- a 60 calls/minute rate limit on Hermes (the file also sets 200K tokens/hour, which isn't enforced yet)
 
 ## 4. Run them together
 
@@ -79,8 +83,8 @@ hermes                   # whatever your Hermes process is (TUI or daemon)
 
 Now message Hermes through Telegram or Discord. Foreman's Activity panel scrolls every MCP tool call live.
 
-- A normal `read_file("README.md")` → `✓ allow · policy:N · Xms`
-- A phishing prompt's `read_file(".env")` → ⚠ approval modal with the path, risk score, and reasons. Press `[d]` to deny, `[a]` to allow, `[r]` to remember.
+- A normal `read_file("README.md")` → `✓ allowed · policy:N · Xms`
+- A phishing prompt's `read_file(".env")` → ⚠ approval modal with the path, risk score, and reasons. Press `d` to deny, `a` to allow once, `A` / `D` to allow / deny and remember it for every `read_file` from Hermes.
 
 ## 5. Audit afterwards
 
