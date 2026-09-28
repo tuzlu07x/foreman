@@ -19,12 +19,10 @@ You should see the boot banner, then the empty dashboard. Leave this running in 
 
 ## 3. Point Claude Code at Foreman
 
-<!-- pending: #656/#657 -->
 The easy way: `foreman agent add claude-code` registers Claude Code and writes the `foreman` entry, with its identity token, into `~/.claude.json`, where Claude Code reads user-scope MCP servers (`mcpServers`). `~/.claude/settings.json` is not an MCP config: it only gets the env projection and, with `foreman agent hook install`, the PreToolUse hook.
 
 To wire it by hand, register it and write its identity token to a file first:
 
-<!-- pending: #656/#657 -->
 ```bash
 foreman agent add claude-code --skip-config --token-out ~/.claude-code-foreman.token
 ```
@@ -86,14 +84,13 @@ agents:
       messages_per_minute: 60
 ```
 
-<!-- pending: #656/#657 -->
-Edit it with `foreman policy edit` (or `e` on the TUI's Policy page); the change applies from the next call. [`docs/policy.md`](../../docs/policy.md) has every field.
+Edit it with `foreman policy edit` (or `e` on the TUI's Policy page, or any editor); the change applies from the next call, no restart. A file that doesn't parse isn't applied: the last good policy stays in force, and the error names the line. [`docs/policy.md`](../../docs/policy.md) has every field.
 
 ## What you should see
 
 - **Allow path**: Claude reads `README.md` → the default `read_file` allow rule matches → the TUI's Activity feed shows `✓ allowed · policy:N · Xms`.
 - **Deny path**: Claude reads `~/.ssh/id_rsa` → the deny rule matches → Claude Code shows the call as blocked by Foreman (`policy:N`).
-- **Ask path**: a rule says `ask`, or the risk engine scores the call 30 or more → the approval pops up in the TUI. Press `a` / `d` to allow once or deny, `A` / `D` to remember it, `i` to inspect.
+- **Ask path**: a rule says `ask`, or the risk engine scores the call 30 or more → the approval pops up in the TUI. Press `a` / `d` to allow once or deny, `A` / `D` to remember the answer for that file or command, `i` to inspect. Allowing a high- or critical-risk call, and `D`, ask for `y` first.
 
 ## Troubleshooting
 

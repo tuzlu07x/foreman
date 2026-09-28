@@ -25,7 +25,6 @@ foreman org sync                                       # push roles to registere
 foreman org assign marketing "draft the launch post"   # department → its head
 ```
 
-<!-- pending: #656/#657 -->
 Any registered runtime can fill a role — Claude Code, Codex, Hermes,
 OpenClaw, ZeroClaw or your own MCP agent (`foreman agent add <id>`, where
 `<id>` is a catalog id from `foreman registry list`).
@@ -47,7 +46,9 @@ Foreman spawned for it), Foreman checks the chart:
 | you (terminal / owner) → anyone | ✅ always |
 
 `cross_department` can also be `allow` or `deny` (isolated departments).
-`foreman org check <from> <to>` explains any decision.
+`foreman org check <from> <to>` explains any decision. A `can_call` /
+`cannot_call` rule in `policy.yaml` for that pair of agents decides first
+(see [hand-offs](policy.md#hand-offs-between-agents)).
 
 **Least-privilege tools.** Each department (or a single role) lists the
 [MCP hub](./mcp-hub.md) servers it may use. Finance sees Stripe, not GitHub;

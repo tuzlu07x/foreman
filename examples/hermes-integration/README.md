@@ -19,18 +19,16 @@ hermes setup                       # one-time bootstrap
 
 Or have Foreman install Hermes for you when you select it. Hermes ships only via curl (no npm package today), so Foreman pipes the installer to bash on your explicit consent:
 
-<!-- pending: #656/#657 -->
 ```bash
 foreman agent add hermes --auto-install
 ```
 
-That command runs the installer, injects the MCP snippet into `~/.hermes/config.yaml`, and registers Hermes with Foreman. The interactive `foreman setup` wizard does the same thing when you check the Hermes box. Unchecking later removes the registration and prints a note with the manual uninstall command (script installers vary; Hermes typically supports `--uninstall`).
+That command runs the installer, injects the MCP snippet into `~/.hermes/config.yaml`, and registers Hermes with Foreman. The interactive `foreman setup` wizard does the same thing when you check the Hermes box. Unticking it later only unregisters it; Hermes stays installed. Foreman can't uninstall a script install, so remove it with Hermes' own installer (it typically supports `--uninstall`).
 
 ## 2. (Manual) point Hermes at Foreman
 
 If you'd rather wire things by hand, install Hermes from the official installer, register it with Foreman to get its identity token, and merge the foreman block into its config:
 
-<!-- pending: #656/#657 -->
 ```bash
 curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 hermes setup     # one-time bootstrap; writes ~/.hermes/config.yaml
@@ -84,7 +82,7 @@ hermes                   # whatever your Hermes process is (TUI or daemon)
 Now message Hermes through Telegram or Discord. Foreman's Activity panel scrolls every MCP tool call live.
 
 - A normal `read_file("README.md")` → `✓ allowed · policy:N · Xms`
-- A phishing prompt's `read_file(".env")` → ⚠ approval modal with the path, risk score, and reasons. Press `d` to deny, `a` to allow once, `A` / `D` to allow / deny and remember it for every `read_file` from Hermes.
+- A phishing prompt's `read_file(".env")` → ⚠ approval modal with the path, risk score, and reasons. Press `d` to deny, `a` to allow once, `A` / `D` to allow / deny and remember it for that file. A high-risk allow, and `D`, ask for `y` first.
 
 ## 5. Audit afterwards
 

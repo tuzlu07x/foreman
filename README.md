@@ -130,19 +130,18 @@ needed. Your real agents, your files and your own Foreman home are never touched
 **Then set up your own:**
 
 ```bash
-foreman init            # identity key, default policy, audit DB
+foreman init            # identity, policy, encrypted secret store, audit DB
 foreman start           # guided setup on first run, then the live TUI
 ```
 
 Keep `foreman start` running: it is what shows approvals and sends them to your phone. A call
 that needs your approval waits, and is **denied** if nobody answers in time: 60 seconds for MCP
-agents (`FOREMAN_APPROVAL_TIMEOUT`, in seconds, changes it) and 10 minutes for Claude Code's
-hook. See [how approvals work](docs/tui.md#how-approvals-work).
+agents and 10 minutes for Claude Code's hook (`FOREMAN_APPROVAL_TIMEOUT`, in seconds, changes
+both). See [how approvals work](docs/tui.md#how-approvals-work).
 
 **Connect Claude Code.** Wire its MCP connection, then gate its built-in tools (Bash, Read,
 Write, WebFetch, …) with the PreToolUse hook:
 
-<!-- pending: #656/#657 -->
 ```bash
 foreman agent add claude-code            # MCP entry + identity token in ~/.claude.json
 foreman agent hook install claude-code

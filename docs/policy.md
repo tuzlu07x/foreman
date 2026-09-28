@@ -1,6 +1,6 @@
 # Policy reference (`policy.yaml`)
 
-`policy.yaml` is where you tell Foreman which tool calls to allow, which to ask you about and which to refuse. This page covers where the file lives, every field it accepts, how Foreman picks between rules that disagree, the rules Foreman adds for you, and how edits take effect.
+`policy.yaml` is where you tell Foreman which tool calls, and which hand-offs from one agent to another, to allow, to ask you about and to refuse. This page covers where the file lives, every field it accepts, how Foreman picks between rules that disagree, the rules Foreman adds for you, and how edits take effect.
 
 Foreman's risk engine runs next to the policy: it scores each call and can ask you even when a rule allows it. See [`detection.md`](detection.md) for the scoring.
 
@@ -21,30 +21,32 @@ foreman policy show            # the rules Foreman loaded, numbered
 foreman policy show --json     # the same with every condition, plus bucket overrides
 foreman policy edit            # open it in $EDITOR, then load it and report the rule count
 foreman policy reset           # overwrite it with the default template (asks first)
+foreman policy remembered list # the rules your "always" answers and block buttons made
+foreman policy remembered remove <id>
 ```
 
-`policy show` and `policy edit` validate the file. A mistake is reported with the field that's wrong, for example:
+`policy show`, `policy edit` and `foreman doctor` validate the file. A mistake is reported with the field that's wrong and, where Foreman can tell, the line, for example:
 
 ```
-error: ~/.config/foreman/policy.yaml failed to parse: rules.0.effect: Required
+error: ~/.config/foreman/policy.yaml failed to parse (line 63): rules.4.effect: Invalid enum value. Expected 'allow' | 'deny' | 'ask', received 'maybe'
 ```
 
 ## How a call is decided
 
-For every tool call an agent makes, Foreman goes through these steps in order and stops at the first one that decides:
+For every tool call an agent makes, and every hand-off from one agent to another (see [Hand-offs](#hand-offs-between-agents)), Foreman goes through these steps in order and stops at the first one that decides:
 
 1. **Blocked or disabled agent**: denied (`agent:blocked`, `agent:disabled`). See [`agent-lifecycle.md`](agent-lifecycle.md).
-2. **Rate limit** (`agents.<id>.rate_limits`): denied when the agent is over its limit.
+2. **Rate limits** (`agents.<id>.rate_limits`): denied when the agent is over its calls per minute or tokens per hour.
 3. **Policy rules**: the matching rules pick `allow`, `ask` or `deny` (see [Which rule wins](#which-rule-wins)). `deny` refuses the call here (`policy:<rule id>`).
 4. **Risk engine**: scores the call and puts it in a bucket: low (0–29), medium (30–59), high (60–84) or critical (85–100). By default low is allowed and the rest ask; [`buckets:`](#risk-buckets-buckets) can change that. A bucket set to `deny` refuses the call (`risk:<bucket>`), even when a rule allows it.
 5. **Your approval**: if the policy said `ask` *or* the risk engine did, the call waits for you (`user:tui`, `user:telegram`, …, or `approval-timeout` when nobody answered). See [How approvals work](tui.md#how-approvals-work).
-6. Otherwise the call is allowed. The label names the rule that allowed it (`policy:<rule id>`), or the fallback when no rule matched (`policy:hook:risk-based`, `policy:mcp.yaml:<server>`).
+6. Otherwise the call is allowed. The label names the rule that allowed it (`policy:<rule id>`), or the fallback when no rule matched (`policy:hook:risk-based`, `policy:mcp.yaml:<server>`, `policy:org.yaml` for a hand-off).
 
 So:
 
 - `deny` always refuses. Nothing later can lift it.
 - `ask` always asks, whatever the risk score (unless a bucket set to `deny` refuses the call first).
-- `allow` only means the policy won't ask. The risk engine still asks about a risky call (a `curl … | sh`, a secret-looking path, a call that was denied before).
+- `allow` only means the policy won't ask. The risk engine still asks about a risky call (a `curl … | sh`, a secret-looking path, a call you denied before).
 
 These labels (`policy:12`, `risk:critical`, `approval-timeout`, …) are what `foreman log tail` and the TUI's activity feed show after `allowed` or `denied`.
 
@@ -63,7 +65,7 @@ rules:
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `source` | yes | The agent id the rule applies to (as in `foreman agent list`), or `"*"` for every agent. |
-| `target` | yes | The call, matched exactly (no wildcards): `tool:<name>` for a tool call, `secret:<name>` for the MCP `secrets/get` tool, or `<agent>:<tool>` for a call from one agent to another (see [`agents:`](#per-agent-settings-agents)). |
+| `target` | yes | The call, matched exactly (no wildcards, but see [Tool-name aliases](#tool-name-aliases)): `tool:<name>` for a tool call, `secret:<name>` for the MCP `secrets/get` tool, or `<agent>:write` for handing work to another agent (see [Hand-offs](#hand-offs-between-agents)). |
 | `effect` | yes | `allow`, `ask` or `deny`. |
 | `conditions` | no | Narrows the rule; see below. Without conditions the rule applies to every call of that target. |
 
@@ -81,7 +83,20 @@ Rules use Foreman's name for a tool, which depends on how the agent reaches Fore
 | Codex | `tool:shell_exec` (commands), `tool:file_write` (file changes), `tool:permission_overlay` (permission requests) |
 | Hermes, OpenClaw, ZeroClaw (ACP) | `tool:shell_exec` (execute), `tool:file_write` (edit, delete, move), `tool:network_fetch` (fetch), `tool:read` (read); other kinds as they come (`search`, `think`, `other`) |
 
-That's why the default policy guards both `tool:write_file` and `tool:file_write`. `foreman log tail` shows the name each call arrived with.
+`foreman log tail` shows the name each call arrived with.
+
+### Tool-name aliases
+
+Transports use different names for the same kind of call, so Foreman treats these names as one group each:
+
+| Kind | Names |
+| --- | --- |
+| read a file | `read_file`, `read`, `read_text_file`, `read_multiple_files`, `read_media_file` |
+| write a file | `file_write`, `write_file`, `edit_file`, `write`, `edit`, `create_file`, `move_file` |
+| run a command | `shell_exec`, `execute`, `execute_code`, `run_command`, `run_shell`, `bash`, `sh`, `zsh`, `exec` |
+| fetch a URL | `network_fetch`, `fetch`, `fetch_url`, `web_fetch` |
+
+A `deny` or `ask` rule written for one name also applies to the others in its group: the default `.env` guard on `tool:read_file` also covers Hermes' `tool:read` and the MCP filesystem server's `read_text_file`. An `allow` rule covers only the name it was written for, so an alias never widens a permission.
 
 ### Conditions
 
@@ -114,7 +129,7 @@ When several rules match a call:
 1. A `deny` rule whose `source` is this agent's id always wins.
 2. Otherwise a rule **overrides** another when it is at least as specific on both counts, and more specific on one. The two counts: an exact `source` is more specific than `"*"`, and a rule with conditions is more specific than one without.
 3. Among the rules nothing overrides, the strictest wins: `deny`, then `ask`, then `allow`.
-4. If no rule matches, the call is asked about. Two exceptions: for Claude Code's hook the risk engine decides alone (it allows unless the score asks), and for MCP hub tools the server's `tools:` lists in `mcp.yaml` decide, with unlisted tools asking (see [`mcp-hub.md`](mcp-hub.md#mcpyaml)).
+4. If no rule matches, the call is asked about. Three exceptions: for Claude Code's hook the risk engine decides alone (it allows unless the score asks); for MCP hub tools the server's `tools:` lists in `mcp.yaml` decide, with unlisted tools asking (see [`mcp-hub.md`](mcp-hub.md#mcpyaml)); and a hand-off follows the org chart ([`org.md`](org.md)).
 
 With the default policy:
 
@@ -122,8 +137,9 @@ With the default policy:
 | --- | --- | --- |
 | any agent reads `README.md` | `* read_file allow` | allowed (unless the risk engine asks) |
 | any agent reads `.env` | `* read_file allow`, `* read_file ask` + `pathMatch` | ask: the conditional rule overrides the blanket one |
-| `hermes`, which you allowed "always" for `read_file`, reads `.env` | `hermes read_file allow`, `* read_file ask` + `pathMatch` | ask: neither overrides the other (one has the exact source, the other the conditions), so the stricter one wins |
+| `hermes`, with your own rule `source: hermes, target: tool:read_file, effect: allow`, reads `.env` | `hermes read_file allow`, `* read_file ask` + `pathMatch` | ask: neither overrides the other (one has the exact source, the other the conditions), so the stricter one wins |
 | `hermes` reads `README.md` | `hermes read_file allow`, `* read_file allow` | allowed |
+| Hermes (ACP) reads `.env` as `tool:read` | `* read_file ask` + `pathMatch` (alias) | ask |
 | an agent calls a tool no rule mentions | none | ask |
 
 ## Per-agent settings (`agents:`)
@@ -135,10 +151,11 @@ agents:
     cannot_access_secrets: [stripe-key]
     rate_limits:
       messages_per_minute: 30
+      tokens_per_hour: 100000
     can_call:
-      claude-code: [read_file, list_files]
+      claude-code: [write]
     cannot_call:
-      claude-code: [write_file, shell_exec]
+      codex: [write]
 ```
 
 | Field | Meaning |
@@ -146,12 +163,25 @@ agents:
 | `can_access_secrets` | Secrets the agent may fetch with the MCP `secrets/get` tool. Secret access is **deny by default**: only an explicit allow grants it. Becomes a `secret:<name>` allow rule. |
 | `cannot_access_secrets` | Secrets it may never fetch, even through a `"*"` allow. |
 | `rate_limits.messages_per_minute` | Once the agent has made this many calls in the last 60 seconds, further calls are denied (`policy:<rule id>`). It shows in `policy show` as `<agent> → * +cond ASK`. |
-| `rate_limits.tokens_per_hour` | Accepted and shown on the TUI's Policy page, but not enforced yet. |
-| `can_call` / `cannot_call` | `<agent>: [tools]` becomes `<agent>:<tool>` allow / deny rules for calls one agent makes to another through Foreman's mediator. None of the current transports (MCP, hook, wrap, ACP, Codex) sends such calls, so these rules don't affect any call today. Delegation between agents (`foreman write`, `assign`) is governed by [`org.yaml`](org.md) instead. |
+| `rate_limits.tokens_per_hour` | Once the tokens the agent used in the last hour reach this, further calls are denied the same way. Usage comes from Foreman's spend ledger (agent telemetry, task output, Foreman's own calls), so an agent that reports no usage isn't limited by it. |
+| `can_call` / `cannot_call` | What this agent may hand to another agent; see [Hand-offs](#hand-offs-between-agents). |
 
 To restrict an agent's **own** tool calls, use `rules:` with its id as `source` and `target: "tool:<name>"`.
 
+An unverified connection claiming the agent's id is counted against its rate limits too.
+
 Reserved secrets (agent identity tokens, MCP OAuth sessions) can't be fetched through `secrets/get` whatever the policy says.
+
+### Hand-offs between agents
+
+When an agent hands work to another agent (`/foreman write <agent> …`, `assign`, or `foreman write` from a shell Foreman spawned for it), Foreman decides the hand-off like a call: source the handing agent, target `<other agent>:write`, the task as its argument. It is checked before the task is queued, and shows in `foreman log tail` as `hermes → codex write(task="…")`.
+
+- `cannot_call: {codex: [write]}` becomes a `codex:write` deny rule: hermes can't hand codex work (`policy:<rule id>`).
+- `can_call: {claude-code: [write]}` becomes a `claude-code:write` allow rule, and makes the list for that agent exhaustive: once you list what hermes may do on claude-code, anything else on claude-code is denied (`policy:can_call`). Calls to agents you didn't list aren't affected.
+- You can write the same as `rules:` (`source: hermes`, `target: "codex:write"`), with any effect, including `ask`.
+- With no rule, the org chart decides (`policy:org.yaml`, see [`org.md`](org.md)), and the risk engine can still ask you.
+
+These rules bind agents only. You at the terminal, in the TUI console or in your own chat aren't an agent, so they don't apply to what you hand out.
 
 ## Unverified connections (`identity:`)
 
@@ -191,12 +221,12 @@ responsibility_policies:
   - responsibility: "code writing"
     cannot_access:                      # regexes; a matching path adds 60 points
       - "/\\.ssh/"
-    can_call_agents_with_responsibility: ["code review", "testing"]
+    can_call_agents_with_responsibility: ["code review", "testing"]   # not checked yet
     cannot_call_agents_with_responsibility: ["payment processing"]   # adds 50
     can_use_services: [github]          # other known services add 40
 ```
 
-The agent-to-agent and service fields apply to calls from one agent to another, so like `can_call` they don't affect today's calls.
+`cannot_call_agents_with_responsibility` is checked on [hand-offs](#hand-offs-between-agents), against the receiving agent's note. `can_call_agents_with_responsibility` is accepted but not checked yet. `can_use_services` only applies when the target is a service id (`telegram`, `github`, …), which no current call has.
 
 ## Session limits (`session_limits:`)
 
@@ -212,30 +242,39 @@ session_limits:
 
 ### "Always allow" and "Always deny" (`A` / `D`)
 
-In the TUI's approval view, `A` allows the call and remembers the decision, and `D` denies it and remembers. The remembered rule is:
+In the TUI's approval view, `A` allows the call and remembers the decision, and `D` denies it and remembers. Before you press either, the approval shows what it would remember (`remembers: hermes → read_file, only for "/p/.env"`); `D` then asks `y` to confirm, and so does `A` on a high- or critical-risk call. The remembered rule:
 
-- `source`: the agent's id; `target`: `tool:<name>`; `effect`: `allow` or `deny`; **no conditions**. `D` on a `read_file` of `~/.ssh/id_rsa` therefore denies every `read_file` from that agent, not just that path.
-- stored in Foreman's database, not in `policy.yaml`, and kept when the file is loaded again. `foreman policy show` lists it as `(remember-action)`.
-- ranked like any exact-source rule without conditions: an "always allow" beats a blanket `"*"` ask but not a targeted one (`.env` reads still ask), and the risk engine can still ask. An "always deny" wins over everything for that agent and tool.
+- covers the call you answered: the same agent, the same tool and, when the call names a file or a command, that exact file (a `pathMatch` on it) or that command (a `commandMatch`). Only a call with neither covers the whole tool, and the approval then says "every `<tool>` call from `<agent>`".
+- is stored in Foreman's database, not in `policy.yaml`, and kept when the file changes. `foreman policy show` lists it as `(remember-action)`.
+- ranks as an exact-source rule with conditions, so it overrides a `"*"` rule for that file or command. The risk engine can still ask about the call.
 
 "Always allow" isn't remembered for an unverified (`untrusted:`) connection; "always deny" is.
 
-To undo one, open the Policy page (`p` on the TUI's Home page), select the rule and press `d` to turn it off. There's no CLI command for it yet.
+List and remove them from the CLI:
+
+```bash
+foreman policy remembered list          # newest first; --json for scripts
+# #13  generic-mcp → tool:read_file  DENY  only when path matches ^/p/\.env$  2026-09-28T12:17:37.646Z
+foreman policy remembered remove 13     # asks first; --yes to skip
+```
+
+Rules from `policy.yaml` can't be removed this way; edit the file. You can also turn a remembered rule off on the TUI's Policy page (`d`).
 
 ### Block buttons in Telegram
 
-Some approval messages in Telegram carry a **block** button for the pattern that raised the risk (for example, this agent reading `.env` files). Tapping it denies the call and adds a `deny` rule with that condition. The rule is stored in the database and also appended to `policy.yaml` under a `# === Foreman approval-injected rule ===` comment. To remove it, delete that block from the file and turn off the matching `(remember-action)` rule on the Policy page.
+Some approval messages in Telegram carry a **block** button for the pattern that raised the risk (for example, this agent reading `.env` files). Tapping it denies the call and adds a `deny` rule with that condition to `rules:` in `policy.yaml`, under a `# === Foreman approval-injected rule ===` comment; the rest of the file keeps its comments and layout. The file is the rule's only copy (if `policy.yaml` is missing or doesn't parse, it is kept in the database instead), so deleting the entry from the file removes the rule. `foreman policy remembered list` shows block rules too, and `remove <id>` takes the entry out of the file.
 
 ## The TUI Policy page
 
-`p` on the Home page lists every loaded rule. `↑` `↓` select, `Enter` shows its details, `d` turns it on or off, and `e` opens `policy.yaml` in `$EDITOR` and loads it when you close the editor. Turning off a rule that comes from `policy.yaml` lasts until the file is loaded again; to drop it for good, edit the file.
+`p` on the Home page lists every loaded rule with its conditions. `↑` `↓` select, `Enter` shows its details, `d` turns it on or off, and `e` opens `policy.yaml` in `$EDITOR`. A rule from `policy.yaml` that you turn off stays off while the rule is unchanged in the file; to drop it for good, delete it from the file.
 
 ## How edits apply
 
-<!-- pending: #656/#657 -->
-Save `policy.yaml` and the change applies from the next call: a running `foreman start` and your agents' `foreman mcp-stdio` connections pick it up without a restart. Check an edit with `foreman policy show`, which prints the loaded rules or the first error.
+Save `policy.yaml` and the change applies from the next call, no restart: `foreman start`, every running `foreman mcp-stdio`, `foreman wrap` and the Claude Code hook check the file (at most every 250 ms) before each decision. Check an edit with `foreman policy show`, which prints the loaded rules or the first error.
 
-Rule numbers (`#12`, `policy:12`) are assigned when the file is loaded, so look them up with `foreman policy show` rather than keeping them.
+- **An edit that doesn't parse** isn't applied: processes already running keep the last policy that loaded, and report the error once (on stderr, or in the inbox for `foreman start`).
+- **A file that doesn't parse at startup** stops the process, with the file, line and reason: `foreman start`, a new `foreman mcp-stdio` connection and `foreman wrap` exit 1, and the Claude Code hook blocks the call. Nothing runs on a policy the file doesn't say.
+- **Rule ids are stable.** A rule you didn't change keeps its number, so `policy:12` in the audit log keeps pointing at the rule that decided. Only an edited rule gets a new one.
 
 ## Examples
 
@@ -289,6 +328,22 @@ agents:
     can_access_secrets: [github-pat]
     rate_limits:
       messages_per_minute: 20
+      tokens_per_hour: 200000
+```
+
+Let `hermes` hand work to `claude-code` but never to `codex`, and ask you before `openclaw` hands anything to `codex`:
+
+```yaml
+agents:
+  hermes:
+    can_call:
+      claude-code: [write]
+    cannot_call:
+      codex: [write]
+rules:
+  - source: openclaw
+    target: "codex:write"
+    effect: ask
 ```
 
 Refuse critical-risk calls outright, and quarantine agents that don't prove their identity:

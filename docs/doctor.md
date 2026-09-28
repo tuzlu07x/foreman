@@ -1,14 +1,14 @@
 # `foreman doctor` — environment + state diagnostics
 
-`foreman doctor` checks the Foreman home, database, identity key, policy file and registered agents, plus the optional configs (`notify.yaml`, `llm.yaml`, `voice.yaml`, `mcp.yaml`, `org.yaml`), agent identity tokens, the agent CLIs Foreman launches, the update cache and a few optional extras such as `chafa`. It is safe to run repeatedly and doesn't change your configuration. The one file it may write is the secret store's master key, `secrets.key`, which it creates when it doesn't exist yet. If you have secrets stored and `secrets.key` has gone missing, restore it from a backup before running doctor: a new key can't decrypt them.
+`foreman doctor` checks the Foreman home, database, identity key, secret store key, policy file and registered agents, plus the optional configs (`notify.yaml`, `llm.yaml`, `voice.yaml`, `mcp.yaml`, `org.yaml`), agent identity tokens, the CLIs of registered agents Foreman launches, the update cache and a few optional extras such as `chafa`. It is safe to run repeatedly and changes nothing: it creates no files (not even `secrets.key` or the database), never writes or removes a secret, and reads secrets without marking them accessed.
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
 | `0` | All checks passed. |
-| `1` | One or more warnings (no failures). Examples: no agents registered yet, an agent CLI not on your PATH, the optional `chafa` missing. |
-| `2` | One or more failures. Examples: corrupt database, missing identity key, FTS5 unavailable. |
+| `1` | One or more warnings (no failures). Examples: no agents registered yet, a registered agent's CLI not on your PATH, the optional `chafa` missing. |
+| `2` | One or more failures. Examples: corrupt database, missing identity key, `secrets.key` missing while secrets are stored, a `policy.yaml` that doesn't load, FTS5 unavailable. |
 
 The contract is deliberately permissive on exit code 1 — fresh installs warn rather than fail, so CI bootstrap scripts can run `foreman doctor` without their own status-parsing logic and tolerate the expected warnings.
 
@@ -25,8 +25,9 @@ Foreman doctor
   ✓ paths                config=~/.config/foreman · state=~/.local/state/foreman · cache=~/.cache/foreman
   ✓ foreman_home         ~/.config/foreman
   ✓ expected_files       identity.key, policy.yaml, foreman.db present
-  ✓ identity_key         ed25519:1ee8599e…
+  ✓ identity_key         ed25519:60b231f3…
   ✓ database             ~/.local/state/foreman/foreman.db opens; schema is at the latest migration
+  ✓ secrets_key          present; no secrets stored yet
   ✓ migrations           up to date (28 applied)
   ✓ fts5                 FTS5 available; requests_fts ready
   ✓ policy_yaml          parses and matches the policy schema
@@ -40,12 +41,7 @@ Foreman doctor
   ⚠ agents_registered    no agents registered yet
      → Add one with 'foreman agent add' or 'foreman registry list' to pick from the curated catalog.
   ✓ agent_tokens         no agents registered
-  ⚠ acp:hermes           Hermes declares acp_command="hermes" but the binary is not on PATH
-     → Install Hermes (see https://hermes-agent.nousresearch.com/) and confirm `hermes --version` works. Until then, `foreman write hermes ...` will fail.
-  ⚠ acp:openclaw         OpenClaw declares acp_command="openclaw" but the binary is not on PATH
-     → Install OpenClaw (see https://openclaw.ai/) and confirm `openclaw --version` works. Until then, `foreman write openclaw ...` will fail.
-  ⚠ acp:zeroclaw         ZeroClaw declares acp_command="zeroclaw" but the binary is not on PATH
-     → Install ZeroClaw (see https://github.com/zeroclaw-labs/zeroclaw) and confirm `zeroclaw --version` works. Until then, `foreman write zeroclaw ...` will fail.
+  ✓ acp-agents           no ACP-mediated agents registered
   ✓ provider_mapping     no agents with provider_mapping registered
   ✓ mcp_gateway          gateway instantiates cleanly (stdio transport ready)
   ✓ mcp_hub              no mcp.yaml — MCP hub not configured (try `foreman mcp catalog`)
@@ -55,10 +51,10 @@ Foreman doctor
   ⚠ chafa                chafa not found
      → Optional: 'brew install chafa' (macOS) or 'apt install chafa' (Debian/Ubuntu) for the higher-fidelity boot mascot.
 
-23 ok  ·  5 warning  (exit 1 — warnings only)
+25 ok  ·  2 warning  (exit 1 — warnings only)
 ```
 
-A few checks add a row per agent: the `acp:<id>` rows above, `agent_tokens:<id>` for an agent whose wiring doctor can't see, and `node_engines:<id>` when an agent needs a newer Node. The footer always names the exit code so you can match what you see to what your shell scripts will read.
+A few checks add a row per agent once agents are registered: `acp:<id>` for each registered Hermes, OpenClaw or ZeroClaw (it warns while that agent's CLI isn't on your PATH), `agent_tokens:<id>` for an agent whose wiring doctor can't see, and `node_engines:<id>` when an agent needs a newer Node. The footer always names the exit code so you can match what you see to what your shell scripts will read.
 
 ### JSON (`--json`)
 
@@ -86,8 +82,8 @@ The same checks, in order (shortened here):
     }
   ],
   "summary": {
-    "ok": 23,
-    "warn": 5,
+    "ok": 25,
+    "warn": 2,
     "fail": 0
   },
   "exitCode": 1
@@ -101,19 +97,32 @@ The same checks, in order (shortened here):
 **Fresh install:**
 ```
 agents_registered    warn   no agents registered yet
-acp:hermes           warn   Hermes declares acp_command="hermes" but the binary is not on PATH
-acp:openclaw         warn   OpenClaw declares acp_command="openclaw" but the binary is not on PATH
-acp:zeroclaw         warn   ZeroClaw declares acp_command="zeroclaw" but the binary is not on PATH
 chafa                warn   chafa not found
 (exit 1 — warnings only)
 ```
-Expected. Run `foreman setup` (the wizard) or `foreman agent add` to register the first agent. The `acp:*` rows cover every ACP agent in the bundled catalog, registered or not: each one warns until that agent's CLI is on your PATH, so you can ignore the ones for agents you don't use.
+Expected. Run `foreman setup` (the wizard) or `foreman agent add <registry-id>` to register the first agent.
 
 **Legacy home:**
 ```
 legacy_home          warn   legacy ~/.foreman/ still contains config or state files
+                            → Run 'foreman migrate-config' to move them into the platform-native dirs.
 ```
-An install from before the platform-native layout left files in `~/.foreman/`. Run `foreman migrate-config` to move them. The check looks at `~/.foreman/` even when `FOREMAN_HOME` is set, so if you set `FOREMAN_HOME=~/.foreman` on purpose, this warning is about your live home: don't run `migrate-config` in that case.
+An install from before the platform-native layout left files in `~/.foreman/`. Run `foreman migrate-config` to move them. If `~/.foreman/` is your live home (`FOREMAN_HOME=~/.foreman`), doctor doesn't warn, and `migrate-config` says "nothing to migrate".
+
+**Secret store key missing:**
+```
+secrets_key          fail   secrets.key is missing — 1 stored secret can't be decrypted
+                            → Restore secrets.key from your backup to ~/.config/foreman/secrets.key (mode 0600) before adding any secret: …
+(exit 2 — action required)
+```
+Restore `secrets.key` from a backup before you add any secret: adding one would create a new key the stored secrets can't use. If it's lost for good, remove and re-add each secret, and run `foreman agent rewire --all` for the agents' identity tokens. With no secrets stored the check is ok (`present; no secrets stored yet`).
+
+**Broken `policy.yaml`:**
+```
+policy_yaml          fail   ~/.config/foreman/policy.yaml failed to parse (line 63): rules.4.effect: Invalid enum value. Expected 'allow' | 'deny' | 'ask', received 'maybe'
+(exit 2 — action required)
+```
+Fix the line it names. Until then `foreman start` and new `foreman mcp-stdio` connections refuse to run, and the Claude Code hook blocks every call; processes already running keep the last policy that loaded. See [How edits apply](policy.md#how-edits-apply).
 
 **Agents without an identity token** (an install from before #618, or a
 custom agent never given one):

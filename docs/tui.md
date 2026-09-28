@@ -36,7 +36,7 @@ These work on every page, unless you are typing into a field:
 | `Tab` / `Shift+Tab` | next / previous page |
 | `n` | the [inbox](#inbox), except on Keys, Providers and Services, where `n` means "new" |
 | `Esc` | back to Home |
-| `q` | quit (while an approval is on screen, it asks first) |
+| `q` / `Ctrl-C` | quit: at once, or after a `y` / `n` question while approvals are waiting |
 
 On the Home page:
 
@@ -49,13 +49,13 @@ On the Home page:
 | `l` | Logs | `c` | Test (send a test call as an agent) |
 | `p` | Policy | `?` / `h` | help |
 
-`/` also opens the console on Home, and `Ctrl-C` asks before quitting.
+`/` also opens the console on Home.
 
 Keys on each page:
 
 | Page | Keys |
 | --- | --- |
-| Agents | `↑↓` select, `Enter` details, `d` / `e` disable / enable, `b` block / unblock, `N` note, `L` LLM, `o` login, `R` regenerate key, `r` remove. See [`agent-lifecycle.md`](agent-lifecycle.md#tui-flow). |
+| Agents | `↑↓` select, `Enter` details, `d` / `e` disable / enable, `b` block / unblock, `N` note, `L` LLM, `o` login, `r` regenerate key, `x` remove. See [`agent-lifecycle.md`](agent-lifecycle.md#tui-flow). |
 | Logs | `/` search (`Enter` keeps the filter, `Esc` clears it), `1`–`4` toggle allowed / denied / ask / errored, `↑↓` select, `Enter` details, `r` replay, `e` export |
 | Policy | `↑↓` select, `Enter` details, `d` turn the rule on / off, `e` edit `policy.yaml` in `$EDITOR`. See [`policy.md`](policy.md#the-tui-policy-page). |
 | Sessions | `↑↓` select, `Enter` details, `k` halt the session |
@@ -65,8 +65,7 @@ Keys on each page:
 | Settings | `↑↓` select, `Enter` open, `e` edit `SOUL.md`, `p` edit `policy.yaml`, `P` Policy page, `w` how to re-run the wizard |
 | Test | `←→` pick the source agent, `i` type a request, `Enter` send |
 
-<!-- pending: #656/#657 -->
-Removing an agent (`r`) and deleting a secret (`d` on Keys) ask you to confirm first.
+Regenerating an agent's key (`r`), removing an agent (`x`) and deleting a secret (`d` on Keys) ask first: `y` goes ahead, any other key cancels. The Keys page doesn't list agents' identity tokens; manage those with `foreman agent token rotate` and `foreman agent rewire`.
 
 ## Approvals
 
@@ -85,7 +84,7 @@ deadline first:
 | `t` | technical details |
 | `k` | halt the agent's session (shown when a loop is detected) |
 | `:` | open the console (`approve` / `deny` work there too) |
-| `q` | quit, after a `y` / `n` confirmation; the call keeps waiting until its deadline |
+| `q` / `Ctrl-C` | quit, after a `y` / `n` question; the call keeps waiting until its deadline |
 
 Each key applies to the approval that's on screen. For a moment after the
 approval on screen changes (a new one arrives, or one is decided), letter
@@ -113,8 +112,11 @@ work.**
 An approval nobody answers in time is **denied**. It shows as
 `approval-timeout` in `foreman log tail`, and the agent gets an error
 (`Denied by approval-timeout`). The same happens when `foreman start`
-isn't running: nothing shows the approval, no notification is sent, the
-inbox doesn't record it, and the call is denied when it times out.
+isn't running: nothing shows the approval, no notification is sent, and
+the call is denied when it times out. The next `foreman inbox` or
+`foreman start` records what was denied that way ("N approvals timed out
+while Foreman wasn't running"), and `foreman inbox` says when approvals
+are still waiting for an answer.
 
 How long a call waits:
 
@@ -122,7 +124,7 @@ How long a call waits:
 | --- | --- | --- |
 | MCP agents (`foreman mcp-stdio`), `foreman wrap` | 60 seconds | set `FOREMAN_APPROVAL_TIMEOUT` in that process's environment, e.g. in the `env` of the agent's `foreman` MCP entry |
 | tasks `foreman start` runs itself | 60 seconds | set `FOREMAN_APPROVAL_TIMEOUT` in the environment you start `foreman start` from |
-| Claude Code's hook (`foreman hook claude-code`) | 10 minutes | the hook's `--timeout-ms <ms>` option, on the `foreman hook claude-code` command in `~/.claude/settings.json`; it doesn't read `FOREMAN_APPROVAL_TIMEOUT`. Claude Code itself gives the hook 660 seconds, so a longer wait is cut short there. |
+| Claude Code's hook (`foreman hook claude-code`) | 10 minutes | set `FOREMAN_APPROVAL_TIMEOUT` in the environment Claude Code runs in, or add `--timeout-ms <ms>` (which wins) to the `foreman hook claude-code` command in `~/.claude/settings.json`. Claude Code itself gives the hook 660 seconds, so a longer wait is cut short there. |
 
 `FOREMAN_APPROVAL_TIMEOUT` is a whole number of **seconds** (`FOREMAN_APPROVAL_TIMEOUT=300` waits five minutes). Quitting the TUI doesn't decide anything: calls still waiting are denied when their time runs out.
 

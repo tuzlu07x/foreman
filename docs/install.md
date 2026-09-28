@@ -201,12 +201,12 @@ On a fresh machine Foreman says it isn't configured yet and offers:
   [q]     Quit
 ```
 
-Enter creates Foreman's home (identity key, default `policy.yaml`, `SOUL.md`, database) and starts the setup wizard. You can also run the wizard on its own with `foreman setup`. The wizard has five steps:
+Enter creates Foreman's home (identity key, secret store key, default `policy.yaml`, `SOUL.md`, database) and starts the setup wizard. You can also run the wizard on its own with `foreman setup`. The wizard has five steps:
 
 1. **Welcome.** Enter starts setup, `q` quits. You can quit later with Ctrl-C (except while agents are installing) and pick up where you left off with `foreman setup --resume`.
 2. **Step 1 of 5: LLM Providers.** Space toggles the providers you have (Anthropic, OpenAI, Google Gemini, local Ollama, a custom OpenAI-compatible endpoint), Enter confirms. For Anthropic and OpenAI you can sign in with your Claude or ChatGPT subscription instead of pasting a key. Otherwise paste each key at its prompt; a help URL is shown. You can confirm with nothing selected and add providers later.
 3. **Step 2 of 5: Foreman's brain.** Pick the LLM Foreman itself uses to check risky calls and write summaries: Anthropic, OpenAI or Google Gemini (rows you haven't configured in Step 1 are greyed out), or **Skip: heuristics only**. Local Ollama and OpenAI-compatible brains are listed as "coming in v0.2".
-4. **Step 3 of 5: Agents.** Space toggles the agents to install; Hermes and Claude Code are pre-checked when their LLM is configured, and agents whose LLM isn't configured are hidden. For each agent you pick its LLM, route and model and an optional responsibility note, then confirm.
+4. **Step 3 of 5: Agents.** Space toggles the agents to install; Hermes and Claude Code are pre-checked when their LLM is configured, and agents whose LLM isn't configured are hidden. For each agent you pick its LLM, route and model and an optional responsibility note, then confirm. On a re-run, unticking an agent unregisters it and leaves its binary installed; if Foreman installed it, `u` on the confirm screen uninstalls it too.
 5. **Step 4 of 5: Services** (optional). Tokens for Telegram, Discord, Slack, GitHub, Atlassian, … If two chat agents share a channel, you pick which one is primary.
 6. **Step 5 of 5: Install + Verify.** First the keys the chosen routes still need (paste or skip), then Foreman installs, configures and registers each agent.
 7. **Done.** A summary, then:
@@ -224,7 +224,7 @@ The dashboard shows your agents, the activity feed and today's numbers. The bott
 
 `foreman start` is also what answers approvals: keep it running while your agents work. See [How approvals work](tui.md#how-approvals-work).
 
-To start with the default policy only, press `s` at that prompt (Foreman remembers the choice and doesn't offer the wizard again) or run `foreman start --skip-setup` for a single run. `foreman setup` opens the wizard whenever you want it.
+To start with the default policy only, press `s` at that prompt or run `foreman start --skip-setup`. Either way Foreman remembers the choice and doesn't offer the wizard again; `foreman setup` opens it whenever you want it.
 
 ---
 
@@ -238,7 +238,7 @@ foreman agent list      # the agents you picked
 foreman secrets list    # the keys you entered
 ```
 
-On a fresh machine `doctor` warns that no agents are registered yet, that agent CLIs you haven't installed (Hermes, OpenClaw, ZeroClaw) aren't on your PATH, and that the optional `chafa` is missing. Exit code 2 is a real failure. See [`doctor.md`](doctor.md).
+On a fresh machine `doctor` warns that no agents are registered yet and that the optional `chafa` is missing. Exit code 2 is a real failure. See [`doctor.md`](doctor.md).
 
 ---
 
@@ -248,7 +248,6 @@ On a fresh machine `doctor` warns that no agents are registered yet, that agent 
 
 The wizard already installed and registered whatever you picked. Add another one later:
 
-<!-- pending: #656/#657 -->
 ```bash
 foreman registry list                     # the agents Foreman knows
 foreman agent add openclaw --auto-install # install it if missing, then register it
@@ -342,6 +341,6 @@ Keys Foreman projected into an agent's own files (for example `~/.hermes/.env`, 
 | An agent toggle didn't take in the wizard | Check the `Checked:` line above the list and the confirm screen (`Selected: …`). If your pick isn't there, Esc back, Space again, Enter. |
 | Telegram polling fails on Linux | Check that outbound TCP to `api.telegram.org` isn't blocked. The gateway prints `httpx.ConnectError: All connection attempts failed` in journalctl. |
 | Bot still says "Hermes Agent" instead of "Foreman" after registration | Run `hermes sessions prune --older-than 0 --yes`, then restart the gateway. The session prompt was cached before the SOUL write. |
-| `foreman doctor` exits 1 on a fresh machine | Normal: warnings only (no agents yet, agent CLIs not installed, `chafa` missing). Exit 2 is a real failure (missing identity key, corrupt database, malformed `policy.yaml`). |
+| `foreman doctor` exits 1 on a fresh machine | Normal: warnings only (no agents yet, `chafa` missing). Exit 2 is a real failure (missing identity key, missing `secrets.key` while secrets are stored, corrupt database, malformed `policy.yaml`). |
 
 Open an issue at `github.com/tuzlu07x/foreman/issues` if something here doesn't match what you see.

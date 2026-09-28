@@ -171,10 +171,10 @@ Three panels, responsive layout via `useLayout()`:
 | Page | Hotkey | What it does |
 | --- | --- | --- |
 | `dashboard` | (default) | the 3-panel overview |
-| `agents` | `a` | list registered agents incl. blocked, per-row block/unblock/regen-key/remove (PR #143) |
+| `agents` | `a` | list registered agents incl. blocked; per row `b` block/unblock, `d`/`e` disable/enable, `r` regenerate key and `x` remove (both ask y/N) |
 | `chat` | `c` | pick source agent → type tool name + JSON args → mediator returns decision (PR #146) |
 | `settings` | `g` | edit Foreman SOUL.md, edit policy.yaml, surface re-run-wizard command (PR #145) |
-| `secrets` | `k` | list stored secrets, reveal value 10 s, rotate inline, remove (PR #144) |
+| `secrets` | `k` | list stored secrets (not agent identity tokens), reveal value 10 s, rotate inline, delete (asks y/N) |
 | `logs` | `l` | audit log with FTS5 search, filters (allowed/denied/ask/errored), replay, export |
 | `policy` | `p` | view rules, `e` opens `$EDITOR` then reloads, `d` toggles enabled |
 | `sessions` | `s` | active + completed sessions, expand for full transcript, `k` halts active |
@@ -182,7 +182,7 @@ Three panels, responsive layout via `useLayout()`:
 | quit | `q` / Ctrl-C | exits; asks first while approvals are waiting |
 
 ### Approval modal
-Pops on any `approval:requested` event. Shows agent → target flow, indented tool call, ◆ risk reasons, 60 s countdown that colour-shifts at ≤30 s / ≤10 s. Hotkeys: `a` allow once / `A` always allow / `d` deny / `D` always deny / `r` remember rule / `i` inspect (request chain + full JSON).
+Pops on any `approval:requested` event. Shows agent → target flow, indented tool call, ◆ risk reasons, a countdown to the request's deadline that colour-shifts at ≤30 s / ≤10 s. Hotkeys: `a` allow once / `A` always allow / `d` deny / `D` always deny / `i` inspect (request chain + full JSON) / `t` technical / `k` halt session. `D`, and `a` / `A` on a high- or critical-risk call, wait for `y`. See [`tui.md`](tui.md#approvals).
 
 ### Modal pattern
 Pages with sub-input modes (Secrets page rotate, Chat page input) use the same shape: a boolean flag (`rotateMode`, `chatInputMode`). The page-level keyboard handler short-circuits to Esc-only when the flag is true; the `PasswordInput` / `TextInput` from `@inkjs/ui` owns the rest.

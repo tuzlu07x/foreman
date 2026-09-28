@@ -24,14 +24,12 @@ Foreman manages each agent from registration through removal. The same operation
 - **blocked** — refused the same way (`agent:blocked`), for an agent whose behaviour has gone off the rails. `unblock` makes it **active** again, even if it was disabled before.
 - **not registered** — after `remove`. Its keypair and identity token are revoked.
 
-<!-- pending: #656/#657 -->
-The agent's binary stays installed after `remove` unless you pass `--uninstall`.
+The agent's binary stays installed after `remove`. `--uninstall` also removes it, but only when Foreman installed it itself.
 
 An unverified connection that claims a blocked or disabled id is refused too (see [Agent identity tokens](#agent-identity-tokens)).
 
 ## CLI surface
 
-<!-- pending: #656/#657 (the `agent add <registry-id>` and `agent remove --uninstall` rows) -->
 | Command | Purpose |
 |---|---|
 | `foreman agent list` | registered agents (including disabled and blocked) and their status |
@@ -40,7 +38,7 @@ An unverified connection that claims a blocked or disabled id is refused too (se
 | `foreman agent add` | interactive: pick from the catalog |
 | `foreman agent show <name>` | the agent row (status, registry entry, transport, identity token) plus its MCP config snippet |
 | `foreman agent update [name]` | upgrade an agent's npm package (omit the name or pass `all` for every agent) |
-| `foreman agent remove <name> [--uninstall]` | unregister, revoke its keypair and identity token; `--uninstall` also uninstalls the binary |
+| `foreman agent remove <name> [--uninstall]` | unregister, revoke its keypair and identity token; `--uninstall` also uninstalls the binary if Foreman installed it |
 | `foreman agent rewire [<name>\|--all]` | give the agent its identity token and rewrite its MCP wiring (see [Agent identity tokens](#agent-identity-tokens)) |
 | `foreman agent token rotate <name>` | mint a new identity token and rewrite the wiring; the old token stops working at once |
 | `foreman agent regenerate-key <name>` | issue a new Ed25519 keypair (revokes the old one) |
@@ -51,8 +49,7 @@ An unverified connection that claims a blocked or disabled id is refused too (se
 | `foreman agent responsibility <agentId> [text...]` | set (or, with no text, clear) the responsibility note |
 | `foreman agent hook install\|uninstall claude-code` | add or remove Foreman's PreToolUse hook in Claude Code's settings |
 
-<!-- pending: #656/#657 -->
-`foreman agent add <registry-id>` (for example `foreman agent add claude-code`) uses the catalog entry with that id. Useful options: `--auto-install` installs the agent when its binary is missing, `--skip-config` leaves its config file alone, `--config-path <path>` writes a config at a non-default path, and `--token-out <file>` also writes its identity token to a file. `foreman agent add --help` lists them all.
+`foreman agent add <registry-id>` (for example `foreman agent add claude-code`) uses the catalog entry with that id. Any other name needs `--type <registry-id>`. Useful options: `--auto-install` installs the agent when its binary is missing, `--skip-config` leaves its config file alone, `--config-path <path>` writes a config at a non-default path, and `--token-out <file>` also writes its identity token to a file. `foreman agent add --help` lists them all.
 
 `foreman agents` is an alias for `foreman agent`.
 
@@ -78,12 +75,11 @@ Keys on this page:
 | `N` | edit the responsibility note |
 | `L` | change its LLM provider |
 | `o` | run its login (OAuth or interactive setup) |
-| `R` | regenerate its keypair; the new private key is shown once |
-| `r` | remove it (the registration and its identity token; the binary and the agent's config files are left alone) |
+| `r` | regenerate its keypair; the new private key is shown once |
+| `x` | remove it: unregister it and revoke its key and identity token (the binary and the agent's config files stay) |
 | `Esc` | back to Home |
 
-<!-- pending: #656/#657 -->
-`r` asks you to confirm before it removes anything.
+`r` and `x` ask first (`y` goes ahead; any other key cancels).
 
 The responsibility note is a free-text answer to "why did I install this agent again, 3 months later?" — it surfaces in audit logs, approval prompts, and the dashboard, and `responsibility_policies` in [`policy.yaml`](policy.md#responsibility_policies) check calls against it.
 
@@ -95,12 +91,20 @@ When you remove an agent, Foreman:
 2. Revokes its Ed25519 keypair and its identity token. The `foreman` MCP entry left in the agent's config now connects as `untrusted:<id>`, and a new install can't impersonate the removed agent.
 3. **Does not** remove the `foreman` MCP entry from the agent's config files (see the table under [Agent identity tokens](#agent-identity-tokens) for where it is), the Claude Code PreToolUse hook (run `foreman agent hook uninstall claude-code` first), keys Foreman [projected](#secret-projection-222--223) into the agent's own files, or anything in the agent's own state dir (`~/.hermes/`, `~/.openclaw/`, etc.).
 
-<!-- pending: #656/#657 -->
-4. Leaves the agent's binary installed. With `--uninstall`, it also runs the matching uninstall command (for example `npm uninstall -g @anthropic-ai/claude-code`). An agent installed by a script (like Hermes) can't be uninstalled automatically; Foreman prints a hint instead:
+4. Leaves the agent's binary installed, and says so. `--uninstall` also uninstalls it, but only a binary Foreman installed itself (with `agent add --auto-install` or the setup wizard); it runs the matching command, for example `npm uninstall -g @anthropic-ai/claude-code`. For an agent you installed yourself, `--uninstall` refuses before changing anything:
+
+```
+error: Foreman didn't install Codex, so it won't uninstall it (it may be your own install).
+  → Run 'foreman agent remove codex' to unregister it, then uninstall it yourself: npm uninstall -g @openai/codex
+```
+
+An agent Foreman installed with a script (like Hermes) can't be uninstalled automatically; `--uninstall` prints a hint instead:
 
 ```
 note: Hermes was installed via a script — Foreman can't auto-uninstall. Remove the hermes binary manually (try the installer's --uninstall flag).
 ```
+
+Unticking an agent in the setup wizard unregisters it the same way. When Foreman installed one of the unticked agents, the wizard's confirm screen also offers `u` to uninstall it.
 
 ## Agent identity tokens
 
