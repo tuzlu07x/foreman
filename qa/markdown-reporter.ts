@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative } from 'node:path'
-import type { File, Reporter, Task, Vitest } from 'vitest'
+import type { Reporter, SerializedError, TestModule, Vitest } from 'vitest/node'
 import { readQaMeta, type QaMeta } from './support/journey.js'
 
 // =============================================================================
@@ -35,12 +35,13 @@ export default class MarkdownReporter implements Reporter {
     this.startedAt = Date.now()
   }
 
-  onFinished(files: File[] = [], errors: unknown[] = []): void {
+  // Vitest 4+ reports the finished run as TestModules (onFinished is gone).
+  onTestRunEnd(modules: ReadonlyArray<TestModule>, errors: ReadonlyArray<SerializedError>): void {
     const root = this.ctx?.config.root ?? process.cwd()
-    const rows = collectRows(files, root)
+    const rows = collectRows(modules, root)
     const out = join(root, REPORT_PATH)
     mkdirSync(dirname(out), { recursive: true })
-    writeFileSync(out, render(rows, errors, Date.now() - this.startedAt, root))
+    writeFileSync(out, render(rows, [...errors], Date.now() - this.startedAt, root))
     const summary = count(rows)
     process.stdout.write(
       `\nQA report: ${relative(process.cwd(), out) || out} (${summary.PASS} passed, ${summary.FAIL} failed, ${summary.SKIP} skipped)\n`,
@@ -48,33 +49,33 @@ export default class MarkdownReporter implements Reporter {
   }
 }
 
-function collectRows(files: File[], root: string): Row[] {
+function collectRows(modules: ReadonlyArray<TestModule>, root: string): Row[] {
   const rows: Row[] = []
-  for (const file of [...files].sort((a, b) => a.filepath.localeCompare(b.filepath))) {
-    const tests = flatten(file.tasks)
-    const rel = relative(root, file.filepath)
+  for (const mod of [...modules].sort((a, b) => a.moduleId.localeCompare(b.moduleId))) {
+    const tests = [...mod.children.allTests()]
+    const rel = relative(root, mod.moduleId)
     if (tests.length === 0) {
       rows.push({
-        number: scenarioNumber(file.filepath),
+        number: scenarioNumber(mod.moduleId),
         file: rel,
-        title: basename(file.filepath),
-        outcome: file.result?.state === 'fail' ? 'FAIL' : 'SKIP',
-        durationMs: file.result?.duration ?? 0,
+        title: basename(mod.moduleId),
+        outcome: mod.state() === 'failed' ? 'FAIL' : 'SKIP',
+        durationMs: mod.diagnostic().duration,
         meta: null,
-        errors: (file.result?.errors ?? []).map((e) => e.message),
+        errors: mod.errors().map((e) => e.message),
       })
       continue
     }
     for (const test of tests) {
-      const state = test.result?.state
+      const result = test.result()
       rows.push({
-        number: scenarioNumber(file.filepath),
+        number: scenarioNumber(mod.moduleId),
         file: rel,
         title: test.name,
-        outcome: state === 'pass' ? 'PASS' : state === 'fail' ? 'FAIL' : 'SKIP',
-        durationMs: test.result?.duration ?? 0,
-        meta: readQaMeta(test.meta),
-        errors: (test.result?.errors ?? []).map((e) => e.message),
+        outcome: result.state === 'passed' ? 'PASS' : result.state === 'failed' ? 'FAIL' : 'SKIP',
+        durationMs: test.diagnostic()?.duration ?? 0,
+        meta: readQaMeta(test.meta()),
+        errors: result.state === 'failed' ? result.errors.map((e) => e.message) : [],
       })
     }
   }

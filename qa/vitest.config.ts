@@ -11,7 +11,9 @@ export default defineConfig({
     environment: 'node',
     include: ['qa/**/*.qa.ts'],
     pool: 'forks',
-    poolOptions: { forks: { singleFork: true } },
+    // One scenario at a time, one fork at a time (Vitest 4 replaced
+    // poolOptions.forks.singleFork with top-level options).
+    maxWorkers: 1,
     fileParallelism: false,
     testTimeout: 180_000,
     hookTimeout: 60_000,

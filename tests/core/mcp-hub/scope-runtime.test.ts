@@ -98,7 +98,7 @@ describe("scopeForAgent with mcp.yaml access", () => {
 describe("HubRuntime", () => {
   let dir: string;
   let clock: number;
-  let built: Array<{ config: HubConfig; close: Mock<[], Promise<undefined>> }>;
+  let built: Array<{ config: HubConfig; close: Mock<() => Promise<undefined>> }>;
   const mcp = () => join(dir, "mcp.yaml");
   const write = (text: string) => {
     // atomic like updateHubConfig, so the inode changes every time
