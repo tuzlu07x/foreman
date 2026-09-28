@@ -1,6 +1,7 @@
 import { Box, Text } from "ink";
 import type { JSX } from "react";
 import { secondsLeft, selectedIndex, type ApprovalQueueState } from "../approval-queue.js";
+import { safe } from "../format.js";
 import { riskColor, theme } from "../theme.js";
 
 /** "Approval 2 of 3" above the modal, with the other waiting calls and
@@ -33,7 +34,7 @@ export function ApprovalQueueStrip({
               <Text color={active ? theme.accent.primary : theme.fg.muted}>{active ? "▎" : " "}</Text>
               <Text color={riskColor(r.riskBucket)}>{theme.symbols.activeDot}</Text>
               <Text color={active ? theme.fg.emphasis : theme.fg.muted}>
-                {` ${r.sourceAgent}→${r.targetTool ?? r.targetAgent ?? "?"} ${secondsLeft(item, now)}s  `}
+                {` ${safe(r.sourceAgent)}→${safe(r.targetTool ?? r.targetAgent ?? "?")} ${secondsLeft(item, now)}s  `}
               </Text>
             </Text>
           );

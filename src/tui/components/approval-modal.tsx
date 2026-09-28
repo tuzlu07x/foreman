@@ -14,6 +14,7 @@ import type {
   ReportSource,
   SecurityReport,
 } from "../../core/security-report.js";
+import { safe } from "../format.js";
 import { explain } from "../reason-explanations.js";
 import { borderForRisk, riskColor, theme } from "../theme.js";
 
@@ -204,7 +205,7 @@ function ReportModal({
       <VerdictHeader report={report} color={color} />
 
       <Box marginTop={1}>
-        <Text>{report.oneLineSummary}</Text>
+        <Text>{safe(report.oneLineSummary)}</Text>
       </Box>
 
       {/* Layer 2 — Narrative */}
@@ -296,7 +297,7 @@ function NarrativeBlock({
     <Box flexDirection="column" marginTop={1}>
       <Text color={theme.fg.muted}>What's happening:</Text>
       <Box paddingLeft={2}>
-        <Text>{report.narrative.whatHappening}</Text>
+        <Text>{safe(report.narrative.whatHappening, { multiline: true })}</Text>
       </Box>
       <Box marginTop={1}>
         <Text color={theme.fg.muted}>Things to check:</Text>
@@ -304,7 +305,7 @@ function NarrativeBlock({
       {report.narrative.thingsToCheck.map((item, i) => (
         <Text key={`check-${i}`}>
           {"    "}
-          <Text color={color}>{theme.symbols.reason}</Text> {item}
+          <Text color={color}>{theme.symbols.reason}</Text> {safe(item)}
         </Text>
       ))}
     </Box>
@@ -344,7 +345,7 @@ function TechnicalBlock({
         <Box flexDirection="column" marginTop={1} paddingLeft={2}>
           {request.riskReasons.map((r) => (
             <Text key={r} color={theme.fg.muted}>
-              · {r}
+              · {safe(r)}
               {explain(r) ? <Text>{`  (${explain(r)})`}</Text> : null}
             </Text>
           ))}
@@ -361,7 +362,7 @@ function TechnicalBlock({
           <Text color={theme.fg.muted}>Context:</Text>
           <Text italic color={theme.fg.muted}>
             {'    "'}
-            {request.context}
+            {safe(request.context, { multiline: true })}
             {'"'}
           </Text>
         </Box>
@@ -404,11 +405,11 @@ function LegacyModal({
       />
       <Box marginTop={1}>
         <Text>
-          <Text color={theme.accent.primary}>{request.sourceAgent}</Text>
+          <Text color={theme.accent.primary}>{safe(request.sourceAgent)}</Text>
           {request.targetAgent ? (
             <>
               {"  →  "}
-              <Text color={theme.accent.primary}>{request.targetAgent}</Text>
+              <Text color={theme.accent.primary}>{safe(request.targetAgent)}</Text>
             </>
           ) : null}
         </Text>
@@ -417,7 +418,7 @@ function LegacyModal({
       <Box marginTop={1}>
         <Text>
           {"    "}
-          <Text bold>{request.targetTool ?? "(no tool)"}</Text>
+          <Text bold>{safe(request.targetTool ?? "(no tool)")}</Text>
           <Text>({renderArgs(request.args)})</Text>
         </Text>
       </Box>
@@ -439,7 +440,7 @@ function LegacyModal({
           {request.riskReasons.map((r) => (
             <Text key={r}>
               {"    "}
-              <Text color={borderColor}>{theme.symbols.reason}</Text> {r}
+              <Text color={borderColor}>{theme.symbols.reason}</Text> {safe(r)}
               {explain(r) ? (
                 <Text color={theme.fg.muted}>{`  (${explain(r)})`}</Text>
               ) : null}
@@ -453,7 +454,7 @@ function LegacyModal({
           <Text color={theme.fg.muted}>Context:</Text>
           <Text italic color={theme.fg.muted}>
             {'    "'}
-            {request.context}
+            {safe(request.context, { multiline: true })}
             {'"'}
           </Text>
         </Box>
@@ -571,11 +572,11 @@ function FactorLine({ factor }: { factor: RiskFactor }): JSX.Element {
           {sign}
           {factor.points.toString().padStart(3, " ")}
         </Text>{" "}
-        {factor.reason}
+        {safe(factor.reason)}
       </Text>
       {factor.evidence ? (
         <Text color={theme.fg.muted}>
-          {"         "}↳ {truncate(factor.evidence, 60)}
+          {"         "}↳ {truncate(safe(factor.evidence), 60)}
         </Text>
       ) : null}
     </Box>
@@ -661,16 +662,19 @@ function TimerLabel({
   );
 }
 
+/** Arguments as the modal shows them. Every hidden character is shown
+ *  visibly (#656): a path with `ESC[2K` + `CR` used to erase the start of
+ *  its own line, and SGR 8 hid the `.env` at its end. */
 function renderArgs(args: unknown): string {
   if (args === null || args === undefined) return "";
-  if (typeof args !== "object") return JSON.stringify(args);
+  if (typeof args !== "object") return safe(JSON.stringify(args) ?? String(args));
   const obj = args as Record<string, unknown>;
-  if (typeof obj.path === "string") return `"${obj.path}"`;
+  if (typeof obj.path === "string") return `"${safe(obj.path)}"`;
   if (typeof obj.text === "string") {
     const text = obj.text as string;
-    return text.length > 32 ? `"${text.slice(0, 31)}…"` : `"${text}"`;
+    return text.length > 32 ? `"${safe(text.slice(0, 31))}…"` : `"${safe(text)}"`;
   }
-  return JSON.stringify(obj);
+  return safe(JSON.stringify(obj));
 }
 
 function truncate(s: string, max: number): string {

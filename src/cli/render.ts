@@ -1,4 +1,5 @@
 import type { RegisteredAgent } from "../core/registry.js";
+import { terminalSafe as t } from "../core/terminal-text.js";
 import type { policies, Request } from "../db/schema.js";
 import { formatDuration, formatTime } from "../tui/format.js";
 import { dim, green, orange, red } from "./colors.js";
@@ -12,13 +13,13 @@ export function renderRequestLine(row: Request): string {
       : row.decision === "denied"
         ? red("✗")
         : orange("⚠");
-  const target = row.targetAgent
-    ? `${row.sourceAgent} → ${row.targetAgent}`
-    : row.sourceAgent;
-  const tool = row.targetTool ? row.targetTool : "(no tool)";
+  // Agent-supplied fields are shown with hidden characters made visible
+  // (#656), before any colour codes of ours are added.
+  const target = t(row.targetAgent ? `${row.sourceAgent} → ${row.targetAgent}` : row.sourceAgent);
+  const tool = t(row.targetTool ? row.targetTool : "(no tool)");
   const duration =
     row.durationMs !== null ? ` · ${formatDuration(row.durationMs)}` : "";
-  return `${dim(`[${formatTime(row.createdAt)}]`)} ${orange(target)} ${tool} ${status} ${dim(`${row.decision}${row.decidedBy ? ` · ${row.decidedBy}` : ""}${duration}`)}`;
+  return `${dim(`[${formatTime(row.createdAt)}]`)} ${orange(target)} ${tool} ${status} ${dim(`${row.decision}${row.decidedBy ? ` · ${t(row.decidedBy)}` : ""}${duration}`)}`;
 }
 
 export function renderRequestJson(row: Request): unknown {
@@ -54,10 +55,10 @@ export function renderRequestDetail(row: Request): string {
     row.decidedAt
       ? `${orange("decided")}       ${formatTime(row.decidedAt)}${row.durationMs !== null ? ` (${formatDuration(row.durationMs)})` : ""}`
       : `${dim("decided       (pending)")}`,
-    `${orange("source")}        ${row.sourceAgent}`,
-    row.targetAgent ? `${orange("target")}        ${row.targetAgent}` : null,
-    row.targetTool ? `${orange("tool")}          ${row.targetTool}` : null,
-    `${orange("decision")}      ${row.decision}${row.decidedBy ? ` (${row.decidedBy})` : ""}`,
+    `${orange("source")}        ${t(row.sourceAgent)}`,
+    row.targetAgent ? `${orange("target")}        ${t(row.targetAgent)}` : null,
+    row.targetTool ? `${orange("tool")}          ${t(row.targetTool)}` : null,
+    `${orange("decision")}      ${row.decision}${row.decidedBy ? ` (${t(row.decidedBy)})` : ""}`,
     `${orange("risk")}          ${row.riskScore}/100${row.riskBucket ? ` · ${row.riskBucket}` : ""}`,
     row.riskFactors
       ? `${orange("factors")}       ${formatFactors(row.riskFactors)}`
@@ -74,14 +75,14 @@ export function renderRequestDetail(row: Request): string {
       : null,
     "",
     orange("args"),
-    indent(prettyJson(row.args)),
+    indent(t(prettyJson(row.args), { multiline: true })),
   ];
   if (row.securityReport) {
     const summary = formatSecurityReport(row.securityReport);
     if (summary) lines.push("", orange("security report"), indent(summary));
   }
   if (row.result) {
-    lines.push("", orange("result"), indent(prettyJson(row.result)));
+    lines.push("", orange("result"), indent(t(prettyJson(row.result), { multiline: true })));
   }
   return lines.filter((l) => l !== null).join("\n");
 }
@@ -94,7 +95,7 @@ export function renderAgentLine(agent: RegisteredAgent): string {
         ? red("●")
         : dim("○");
   const last = agent.lastSeenAt ? formatTime(agent.lastSeenAt) : "never";
-  return `${dot} ${orange(agent.id)}  ${dim(agent.displayName)}  ${dim(`(${agent.transport})`)}  ${dim(`status=${agent.status} last=${last}`)}`;
+  return `${dot} ${orange(t(agent.id))}  ${dim(t(agent.displayName))}  ${dim(`(${agent.transport})`)}  ${dim(`status=${agent.status} last=${last}`)}`;
 }
 
 export function renderAgentJson(agent: RegisteredAgent): unknown {
@@ -123,7 +124,7 @@ export function renderPolicyLine(row: PolicyRow): string {
   // (e.g. two `read_file` rules — one ASK for .env paths, one ALLOW for
   // everything else). Use `--json` to inspect the full condition body.
   const condTag = hasConditions(row.conditions) ? dim(" +cond") : "";
-  return `${dim(`#${row.id}`)}  ${orange(row.sourceAgent)} ${dim("→")} ${row.target}${condTag}  ${effect}${enabled}  ${dim(`(${row.createdBy})`)}`;
+  return `${dim(`#${row.id}`)}  ${orange(t(row.sourceAgent))} ${dim("→")} ${t(row.target)}${condTag}  ${effect}${enabled}  ${dim(`(${row.createdBy})`)}`;
 }
 
 function hasConditions(raw: string | null): boolean {
@@ -173,8 +174,8 @@ function indent(text: string, n = 2): string {
 
 function formatList(json: string): string {
   const parsed = safeParse(json);
-  if (Array.isArray(parsed)) return parsed.join(", ");
-  return json;
+  if (Array.isArray(parsed)) return t(parsed.join(", "));
+  return t(json);
 }
 
 function formatSecurityReport(json: string): string | null {
@@ -190,14 +191,15 @@ function formatSecurityReport(json: string): string | null {
     };
     source?: unknown;
   };
+  // The report quotes the call (paths, commands): #656.
   const out: string[] = [];
   if (r.verdict && typeof r.verdict.label === "string") {
     const icon = typeof r.verdict.icon === "string" ? `${r.verdict.icon} ` : "";
-    out.push(`${icon}${r.verdict.label}`);
+    out.push(t(`${icon}${r.verdict.label}`));
   }
-  if (typeof r.oneLineSummary === "string") out.push(r.oneLineSummary);
+  if (typeof r.oneLineSummary === "string") out.push(t(r.oneLineSummary));
   if (r.narrative && typeof r.narrative.whatHappening === "string") {
-    out.push("", "what's happening:", indent(r.narrative.whatHappening));
+    out.push("", "what's happening:", indent(t(r.narrative.whatHappening, { multiline: true })));
   }
   if (r.narrative && Array.isArray(r.narrative.thingsToCheck)) {
     const items = r.narrative.thingsToCheck.filter(
@@ -205,13 +207,13 @@ function formatSecurityReport(json: string): string | null {
     );
     if (items.length > 0) {
       out.push("", "things to check:");
-      for (const item of items) out.push(`  · ${item}`);
+      for (const item of items) out.push(`  · ${t(item)}`);
     }
   }
   if (r.narrative && typeof r.narrative.recommendation === "string") {
-    out.push("", `foreman → ${r.narrative.recommendation}`);
+    out.push("", `foreman → ${t(r.narrative.recommendation)}`);
   }
-  if (typeof r.source === "string") out.push(dim(`source: ${r.source}`));
+  if (typeof r.source === "string") out.push(dim(`source: ${t(r.source)}`));
   return out.length > 0 ? out.join("\n") : null;
 }
 
@@ -221,10 +223,10 @@ function formatFactors(json: string): string {
   return parsed
     .map((f) => {
       const obj = f as { rule?: unknown; points?: unknown; reason?: unknown };
-      const rule = typeof obj.rule === "string" ? obj.rule : "?";
+      const rule = typeof obj.rule === "string" ? t(obj.rule) : "?";
       const points = typeof obj.points === "number" ? obj.points : 0;
       const sign = points >= 0 ? "+" : "";
-      const reason = typeof obj.reason === "string" ? ` — ${obj.reason}` : "";
+      const reason = typeof obj.reason === "string" ? ` — ${t(obj.reason)}` : "";
       return `${sign}${points} ${rule}${reason}`;
     })
     .join("\n               ");

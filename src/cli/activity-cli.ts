@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { Command } from "commander";
+import { jsonForTerminal, terminalSafe } from "../core/terminal-text.js";
 import {
   buildAgentActivityDigest,
   type AgentActivityDigest,
@@ -99,7 +100,8 @@ export async function runReport(options: {
     if (!options.narrate) {
       // JSON is the default when --narrate isn't set. --json explicit
       // is the same path (kept for symmetry with other Foreman CLIs).
-      console.log(JSON.stringify(digest, null, 2));
+      // Agent ids and tool names come from agents (#656).
+      console.log(jsonForTerminal(digest, 2));
       return 0;
     }
 
@@ -166,7 +168,7 @@ async function narrate(
       console.error(red("error: ") + "LLM returned an empty response.");
       return 1;
     }
-    console.log(text);
+    console.log(terminalSafe(text, { multiline: true }));
     return 0;
   } catch (err) {
     console.error(
