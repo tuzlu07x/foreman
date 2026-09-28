@@ -249,6 +249,12 @@ export interface ForemanEventMap {
      *  TUI activity log as `via hermes (agent)` so the operator can see
      *  which agent's chat the user typed `/approve` into. */
     routedBy?: string;
+    /** Who decided on a shared chat channel (Slack, Discord), by the
+     *  platform's user id (e.g. `U0BOSS`). Several allowed people can
+     *  decide there, so the audit log names the person:
+     *  `decidedBy: user:<via>:<userId>`. Only ids that pass
+     *  `chatDeciderId` (approval.ts) are carried. */
+    userId?: string;
   };
   /** #426 — Primary chat agent switched for a messaging channel.
    *  Fired by `ChatPrimaryService.set/unset`. TUI Settings + CLI

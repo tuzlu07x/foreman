@@ -6,6 +6,19 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **The audit log names who decided an approval in Slack or Discord.**
+  With several people in `allowed_user_ids`, `requests.decided_by` only
+  said `user:slack` and the inbox said "by you via Slack", whoever tapped.
+  It is now `user:slack:<member id>` / `user:discord:<user id>` (e.g.
+  `user:slack:U0BOSS`), carried across processes in a new
+  `pending_approvals.resolved_user` column (migration 0029), and the inbox
+  says "by U0BOSS via Slack". TUI and Telegram decisions are unchanged
+  (`user:tui`, `user:telegram`); readers that match the `user` prefix
+  (log filters, the previously-denied risk rule, the inbox) need no change
+  ([docs/notifications.md](docs/notifications.md#3a-two-way-slack-and-discord)).
+
 ## [2.1.1] - 2026-09-28
 
 A security fix for the shell risk rules. Upgrade if you run 2.1.0: some

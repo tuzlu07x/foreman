@@ -240,6 +240,24 @@ describe('NotificationBridge — channel decision → bus.emit(approval:resolved
     expect(resolvedEvents[0]!.remember).toBe('deny')
   })
 
+  it('does not name a person for Telegram: one private chat decides there', async () => {
+    await bridge.start()
+    bus.emit('approval:requested', approvalEvent())
+    await tick()
+    await channel.listenHandler!({
+      notificationId: '',
+      requestId: 'r-1',
+      decision: 'deny',
+      decidedBy: 'telegram:777',
+      decidedAt: Date.now(),
+      channel: 'telegram',
+      userId: '777',
+    })
+    expect(resolvedEvents).toHaveLength(1)
+    expect(resolvedEvents[0]).toMatchObject({ requestId: 'r-1', decision: 'denied', via: 'telegram' })
+    expect(resolvedEvents[0]!.userId).toBeUndefined()
+  })
+
   it('ignores decisions for unknown notifications', async () => {
     await bridge.start()
     await channel.listenHandler!({

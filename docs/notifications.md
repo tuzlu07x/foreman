@@ -183,6 +183,11 @@ is refused. After a decision, the buttons are replaced with the outcome.
 A button whose approval is no longer open (decided elsewhere, or re-sent after
 a restart) says so instead of deciding anything.
 
+Several people can be allowed, so the audit log names who decided:
+`decided_by` is `user:slack:<member id>` or `user:discord:<user id>` (for
+example `user:slack:U0123ABCD`), and the inbox says "Allowed … by U0123ABCD
+via Slack". A decision in the TUI stays `user:tui`.
+
 ### Slack (Socket Mode)
 
 You need the Slack channel set up first (webhook or bot, see

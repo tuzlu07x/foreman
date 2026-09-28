@@ -138,6 +138,11 @@ export interface UserDecision {
   requestId?: string;
   /** Channel that received the decision, for the audit trail. */
   channel?: ChannelId;
+  /** The platform's id for the person who tapped (a Slack member id, a
+   *  Discord user id), when the channel knows it. On Slack and Discord,
+   *  where several allowed people can decide, it is carried into
+   *  `decided_by` (`user:slack:<id>`). */
+  userId?: string;
 }
 
 /** Thrown by the decision handler for a button whose approval was already

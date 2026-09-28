@@ -288,7 +288,7 @@ it('A company on Slack: department channels, approvals, budgets and integrations
     expect(JSON.stringify(outcome.body.blocks)).not.toContain('foreman_allow')
     ev(`reply on response_url: replace_original, "${String(outcome.body.text)}", buttons gone`)
     const row = await sb.row<Decision>('the requests row', 'SELECT decision, decided_by FROM requests WHERE id = ?', first.requestId)
-    expect(row.decision).toBe('allowed')
+    expect(row).toEqual({ decision: 'allowed', decided_by: `user:slack:${BOSS}` })
     ev(`requests ${first.requestId}: allowed, decided_by=${row.decided_by}`)
 
     const second = await riskyCall(agent, 'finance/.aws/credentials')
@@ -307,10 +307,11 @@ it('A company on Slack: department channels, approvals, budgets and integrations
     const denyOutcome = await slack.hook('the deny outcome', deny.path)
     expect(denyOutcome.body).toMatchObject({ replace_original: true, text: `Denied ✗ by <@${TEAMMATE}>` })
     const row2 = await sb.row<Decision>('the requests row', 'SELECT decision, decided_by FROM requests WHERE id = ?', second.requestId)
-    expect(row2.decision).toBe('denied')
+    expect(row2).toEqual({ decision: 'denied', decided_by: `user:slack:${TEAMMATE}` })
     ev(`${TEAMMATE} taps Deny: agent error "${denied.error?.message}"; response_url: "${String(denyOutcome.body.text)}"; requests: denied, decided_by=${row2.decided_by}`)
 
-    // requests.decided_by only says "user:slack"; the audit log names the person.
+    // requests.decided_by names the person (user:slack:<member id>), and so
+    // does the approval:channel-decision audit event.
     const decisions = await waitFor('two channel decisions', () => {
       const e = sb.events<{ requestId: string; channel: string; decidedBy: string; decision: string }>('approval:channel-decision')
       return e.length >= 2 ? e : null
@@ -412,8 +413,8 @@ it('A company on Slack: department channels, approvals, budgets and integrations
 
   await j.step('(g) the audit trail has all of it: `foreman log tail --json`, audit events and the inbox', async (ev) => {
     const log = sb.json<Array<{ id: string; toolName: string; decision: string; decidedBy: string; agentId?: string; sourceAgent?: string }>>(['log', 'tail', '--json', '-n', '20'])
-    expect(log.find((r) => r.id === allowedId)).toMatchObject({ decision: 'allowed' })
-    expect(log.find((r) => r.id === deniedId)).toMatchObject({ decision: 'denied' })
+    expect(log.find((r) => r.id === allowedId)).toMatchObject({ decision: 'allowed', decidedBy: `user:slack:${BOSS}` })
+    expect(log.find((r) => r.id === deniedId)).toMatchObject({ decision: 'denied', decidedBy: `user:slack:${TEAMMATE}` })
     ev(`log tail --json: ${allowedId} ${log.find((r) => r.id === allowedId)?.decision} by ${log.find((r) => r.id === allowedId)?.decidedBy}; ${deniedId} ${log.find((r) => r.id === deniedId)?.decision} by ${log.find((r) => r.id === deniedId)?.decidedBy}`)
 
     const fromSlack = sb.events<CommandEvent>('foreman:command').filter((e) => e.sourceAgent === 'slack')
@@ -439,8 +440,8 @@ it('A company on Slack: department channels, approvals, budgets and integrations
     for (const title of ['Marketing is over its monthly budget', `github disabled from Slack by ${BOSS}`]) {
       expect(inbox.some((i) => i.title === title)).toBe(true)
     }
-    expect(inbox.some((i) => i.requestId === allowedId && i.title.startsWith('Allowed'))).toBe(true)
-    expect(inbox.some((i) => i.requestId === deniedId && i.title.startsWith('Denied'))).toBe(true)
+    expect(inbox.some((i) => i.requestId === allowedId && i.title.startsWith('Allowed') && i.body === `by ${BOSS} via Slack`)).toBe(true)
+    expect(inbox.some((i) => i.requestId === deniedId && i.title.startsWith('Denied') && i.body === `by ${TEAMMATE} via Slack`)).toBe(true)
     ev(`inbox: ${inbox.filter((i) => i.requestId === allowedId || i.requestId === deniedId).map((i) => `"${i.title}" / "${i.body}"`).join('; ')}`)
   })
 

@@ -94,7 +94,7 @@ describe('SlackSocketListener', () => {
     const socket = await server.connection(1)
     socket.receive(blockActions(OWNER, encodeApprovalButton('req-9', 'allow', sign)))
     await waitFor(() => responses(api.calls).length > 0)
-    expect(decisions).toMatchObject([{ requestId: 'req-9', decision: 'allow', decidedBy: `slack:${OWNER}`, channel: 'slack' }])
+    expect(decisions).toMatchObject([{ requestId: 'req-9', decision: 'allow', decidedBy: `slack:${OWNER}`, channel: 'slack', userId: OWNER }])
     const [reply] = responses(api.calls)
     expect(reply!.replace_original).toBe(true)
     const blocks = reply!.blocks as Array<{ type: string }>
@@ -293,7 +293,7 @@ describe('SlackChannel two-way rendering', () => {
 })
 
 describe('Slack end to end: agent call → Slack button → agent unblocked', () => {
-  it('a button press allows the waiting call, audited as user:slack; a second press is stale', async () => {
+  it('a button press allows the waiting call, audited as user:slack:<member id>; a second press is stale', async () => {
     const { BusApprovalService } = await import('../../../src/core/approval.js')
     const { EventBus } = await import('../../../src/core/event-bus.js')
     const { MediatorService } = await import('../../../src/core/mediator.js')
@@ -347,7 +347,8 @@ describe('Slack end to end: agent call → Slack button → agent unblocked', ()
       socket.receive(blockActions(OWNER, allow))
       const result = await call
       expect(result.decision).toBe('allowed')
-      expect(result.decidedBy).toBe('user:slack')
+      // Several people may be allowed: the audit row names who pressed.
+      expect(result.decidedBy).toBe(`user:slack:${OWNER}`)
       // The same button pressed again (another device, a double tap).
       socket.receive(blockActions(OWNER, allow))
       await waitFor(() => responses(api.calls).length === 2)

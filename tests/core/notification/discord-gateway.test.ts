@@ -95,7 +95,7 @@ describe('DiscordGatewayListener', () => {
     handshake(socket)
     socket.receive(button(OWNER, encodeApprovalButton('req-7', 'deny_always', sign)))
     await waitFor(() => api.calls.some((c) => c.url.includes('/interactions/')))
-    expect(decisions).toMatchObject([{ requestId: 'req-7', decision: 'deny_always', decidedBy: `discord:${OWNER}`, channel: 'discord' }])
+    expect(decisions).toMatchObject([{ requestId: 'req-7', decision: 'deny_always', decidedBy: `discord:${OWNER}`, channel: 'discord', userId: OWNER }])
     const callback = api.calls.find((c) => c.url.includes('/interactions/'))!
     expect(callback.url).toBe(`https://discord.com/api/v10/interactions/333333333333333333/${TOKEN}/callback`)
     expect(callback.body).toMatchObject({ type: 7, data: { components: [], content: `Denied ✗ (always) by <@${OWNER}>` } })

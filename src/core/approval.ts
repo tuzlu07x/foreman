@@ -61,6 +61,10 @@ export interface ApprovalDecision {
     | "slack"
     | "webhook"
     | "agent_mcp";
+  /** Who decided on Slack or Discord, by the platform's user id: several
+   *  allowed people can decide there, so `decidedBy` names the person
+   *  (`user:slack:U0BOSS`). Undefined everywhere else. */
+  userId?: string;
   /** Nobody answered before the deadline; the default (deny) applied. */
   timedOut?: boolean;
   /** The requester went away (MCP client disconnected) before anyone
@@ -128,6 +132,32 @@ export interface ApprovalService {
   /** Stop taking approvals: waiting requests are cancelled (denied) and new
    *  ones are denied without ever reaching the TUI or Telegram. */
   close?(): void;
+}
+
+/** Shared chat channels where several allowed people can decide. */
+const MULTI_USER_VIA: ReadonlySet<string> = new Set(["slack", "discord"]);
+/** A Slack member id (U…/W…) or a Discord snowflake: letters and digits
+ *  only, so it is safe in `decided_by`, the log and the TUI. The same
+ *  shape notify.yaml accepts for owner_user_ids. */
+const CHAT_USER_ID = /^[A-Za-z0-9]{1,40}$/;
+
+/** The person's id to record for a decision made on `via`, or undefined
+ *  when the surface has a single decider (TUI, Telegram, an agent relay)
+ *  or the id isn't a plain platform id. */
+export function chatDeciderId(
+  via: ApprovalDecision["via"] | null | undefined,
+  userId: string | null | undefined,
+): string | undefined {
+  if (!via || !MULTI_USER_VIA.has(via) || !userId) return undefined;
+  return CHAT_USER_ID.test(userId) ? userId : undefined;
+}
+
+/** `decided_by` for a person's answer: `user`, `user:<via>`, or on Slack /
+ *  Discord `user:<via>:<userId>`. Readers match on the `user` prefix. */
+export function userDecidedBy(decision: Pick<ApprovalDecision, "via" | "userId">): string {
+  if (!decision.via) return "user";
+  const who = chatDeciderId(decision.via, decision.userId);
+  return who ? `user:${decision.via}:${who}` : `user:${decision.via}`;
 }
 
 export class DenyAllApprovalService implements ApprovalService {
@@ -246,7 +276,13 @@ export class BusApprovalService implements ApprovalService {
       let settled = false;
       const off = this.bus.on("approval:resolved", (e) => {
         if (e.requestId !== req.requestId) return;
-        finish({ decision: e.decision, remember: e.remember, via: e.via });
+        const userId = chatDeciderId(e.via, e.userId);
+        finish({
+          decision: e.decision,
+          remember: e.remember,
+          via: e.via,
+          ...(userId ? { userId } : {}),
+        });
       });
       const timer = setTimeout(() => {
         finish({ decision: "denied" }, true);
@@ -408,6 +444,7 @@ export class DbApprovalService implements ApprovalService {
           decision: row.decision ?? "denied",
           ...(row.remember ? { remember: row.remember } : {}),
           ...(viaOf(row) ? { via: viaOf(row)! } : {}),
+          ...(userOf(row) ? { userId: userOf(row)! } : {}),
           ...(this.cancelled.delete(req.requestId) || row.resolvedBy === "cancelled"
             ? { cancelled: true }
             : row.resolvedBy === "timeout"
@@ -715,6 +752,7 @@ export class ApprovalBridge {
           remember: e.remember ?? null,
           resolvedBy: e.resolvedBy,
           resolvedVia: e.via ?? null,
+          resolvedUser: chatDeciderId(e.via, e.userId) ?? null,
           resolvedAt: Date.now(),
         })
         .where(
@@ -835,6 +873,7 @@ export class ApprovalBridge {
           ...(row.remember ? { remember: row.remember } : {}),
           resolvedBy: row.resolvedBy ?? "timeout",
           ...(viaOf(row) ? { via: viaOf(row)! } : {}),
+          ...(userOf(row) ? { userId: userOf(row)! } : {}),
         });
       }
       // Rows that vanished entirely (pruned) are simply forgotten.
@@ -1004,4 +1043,15 @@ function pad(text: string, width: number): string {
 function viaOf(row: { resolvedBy: string | null; resolvedVia: ApprovalDecision["via"] | null }): ApprovalDecision["via"] {
   if (row.resolvedBy !== "user" && row.resolvedBy !== "agent") return undefined;
   return row.resolvedVia ?? (row.resolvedBy === "agent" ? "agent_mcp" : undefined);
+}
+
+/** The person who decided a stored approval on Slack / Discord (see
+ *  chatDeciderId). Rows from before the `resolved_user` column have none. */
+function userOf(row: {
+  resolvedBy: string | null;
+  resolvedVia: ApprovalDecision["via"] | null;
+  resolvedUser: string | null;
+}): string | undefined {
+  if (row.resolvedBy !== "user") return undefined;
+  return chatDeciderId(row.resolvedVia, row.resolvedUser);
 }
