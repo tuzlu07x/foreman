@@ -1,8 +1,11 @@
 import {
   chmodSync,
+  closeSync,
   existsSync,
+  fstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   rmSync,
   statSync,
@@ -28,6 +31,17 @@ import {
   type ServiceManager,
   type ServiceSpec,
 } from '../../src/core/service.js'
+
+/** Mode and content through one descriptor (no stat-then-read of a path). */
+function readWithMode(path: string): { mode: number; text: string } {
+  const fd = openSync(path, 'r')
+  try {
+    return { mode: fstatSync(fd).mode & 0o777, text: readFileSync(fd, 'utf-8') }
+  } finally {
+    closeSync(fd)
+  }
+}
+
 
 // `foreman service` hands `foreman daemon --service` to launchd or systemd.
 // Nothing here touches the real ~/Library/LaunchAgents or systemd: every
@@ -163,7 +177,7 @@ describe('service: writing the file', () => {
     const file = serviceFilePath('systemd', home)
     expect(writeServiceFile(file, 'x\n', home)).toBe(false)
     expect(readFileSync(file, 'utf-8')).toBe('x\n')
-    expect(statSync(file).mode & 0o777).toBe(0o644)
+    expect(readWithMode(file).mode).toBe(0o644)
     expect(writeServiceFile(file, 'y\n', home)).toBe(true)
     expect(readFileSync(file, 'utf-8')).toBe('y\n')
   })
@@ -258,8 +272,8 @@ describe('service: install, status, uninstall (fake launchctl / systemctl)', () 
     const r = installService(c, program, env)
     const file = join(home, 'Library', 'LaunchAgents', 'dev.foreman.daemon.plist')
     expect(r).toMatchObject({ file, replaced: false, loadedWith: 'launchctl bootstrap' })
-    expect(statSync(file).mode & 0o777).toBe(0o644)
-    const text = readFileSync(file, 'utf-8')
+    const { mode, text } = readWithMode(file)
+    expect(mode).toBe(0o644)
     expect(parseServiceFile('launchd', text)).toEqual({
       program,
       env: { PATH: '/usr/bin', FOREMAN_HOME: join(home, 'fm') },
@@ -303,8 +317,9 @@ describe('service: install, status, uninstall (fake launchctl / systemctl)', () 
     const r = installService(c, program, env)
     const file = join(home, '.config', 'systemd', 'user', 'foreman-daemon.service')
     expect(r).toMatchObject({ file, replaced: false, logPath: null })
-    expect(statSync(file).mode & 0o777).toBe(0o644)
-    expect(parseServiceFile('systemd', readFileSync(file, 'utf-8'))).toEqual({
+    const unit = readWithMode(file)
+    expect(unit.mode).toBe(0o644)
+    expect(parseServiceFile('systemd', unit.text)).toEqual({
       program,
       env: { PATH: '/usr/bin', FOREMAN_HOME: join(home, 'fm') },
       logPath: null,
