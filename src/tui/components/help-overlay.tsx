@@ -56,6 +56,8 @@ const NAV_SECTIONS: HelpSection[] = [
     rows: [
       { key: "a / d", label: "allow once / deny" },
       { key: "A / D", label: "always allow / deny" },
+      // Mirrors needsSecondKey() and the `D` branch in app.tsx.
+      { key: "then y", label: "confirm a / A on high/critical risk, and D" },
       { key: "← → / [ ]", label: "next approval in queue" },
       { key: "i", label: "inspect details" },
       { key: "t", label: "toggle technical" },

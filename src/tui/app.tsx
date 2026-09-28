@@ -3,6 +3,8 @@ import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import type { ApprovalRequest } from "../core/approval.js";
 import { loadOrg } from "../core/org/org.js";
 import { revokeAgentToken } from "../core/agent-token.js";
+import { unwireAgent } from "../core/agent-wiring.js";
+import { findAgent, loadActiveRegistry, type AgentEntry } from "../core/registry-catalog.js";
 import { isUntrustedSource } from "../core/agent-identity.js";
 import { rememberScope } from "../core/remember-scope.js";
 import type { BootInfo } from "./boot-info.js";
@@ -703,22 +705,37 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     });
   }, [registry, agentsSelectedIdx]);
 
-  // Removing here only unregisters: the agent's binary and its own config
-  // stay where they are (`foreman agent remove --uninstall` is the only
-  // way Foreman uninstalls anything).
+  // Removing here unregisters and takes Foreman's own wiring (its MCP
+  // entry, the Claude Code hook) out of the agent's config; the binary
+  // and the rest of its config stay (`foreman agent remove --uninstall` is
+  // the only way Foreman uninstalls anything).
   const onAgentRemove = useCallback((): void => {
     const target = registry.listAll()[agentsSelectedIdx];
     if (!target) return;
     const id = target.id;
+    const registryId =
+      typeof target.metadata?.registryId === "string" ? target.metadata.registryId : null;
     setPendingConfirm({
-      question: `Remove agent "${id}"? Foreman unregisters it and revokes its key and identity token. Its binary and config files stay installed.`,
+      question: `Remove agent "${id}"? Foreman unregisters it, revokes its key and identity token and removes its foreman MCP entry. Its binary stays installed.`,
       yesLabel: "remove",
       run: () => {
         try {
           registry.remove(id);
           // A removed agent's identity token must not keep proving it (#618).
           if (secretStore) revokeAgentToken(secretStore, id);
-          setAgentsNotice(`✓ ${id} removed (binary left installed)`);
+          // Best-effort: never blocks the removal, only reports.
+          let entry: AgentEntry | null = null;
+          try {
+            entry = registryId ? findAgent(loadActiveRegistry().doc, registryId) : null;
+          } catch {
+            entry = null;
+          }
+          const unwired = unwireAgent(id, entry);
+          setAgentsNotice(
+            `✓ ${id} removed (binary left installed)` +
+              (unwired.removed.length > 0 ? ` · removed ${unwired.removed.join(", ")}` : "") +
+              (unwired.notes.length > 0 ? ` · note: ${unwired.notes.join("; ")}` : ""),
+          );
           setAgentsSelectedIdx((idx) => Math.max(0, idx - 1));
         } catch (err) {
           setAgentsNotice(

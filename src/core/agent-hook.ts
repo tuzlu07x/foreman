@@ -79,7 +79,7 @@ export interface InstallHookResult {
   matcher: string;
 }
 
-interface ClaudeSettings {
+export interface ClaudeSettings {
   hooks?: {
     PreToolUse?: HookGroup[];
     [k: string]: HookGroup[] | undefined;
@@ -144,13 +144,31 @@ export function uninstallPreToolUseHook(
   settingsPath: string,
   opts: { dryRun?: boolean } = {},
 ): UninstallHookResult {
-  const existing = readSettings(settingsPath);
+  const next = stripForemanHooks(readSettings(settingsPath));
+  if (next === null) {
+    return { settingsPath, removed: false };
+  }
+  if (!opts.dryRun) {
+    writeFileSync(settingsPath, JSON.stringify(next, null, 2) + "\n", "utf-8");
+  }
+  return { settingsPath, removed: true };
+}
+
+/** Pure: `existing` without its Foreman-managed PreToolUse hook entries,
+ *  or null when it has none. With `agentId`, only the entries whose
+ *  command runs the hook for that agent (`foreman hook <agentId>`,
+ *  `foreman-hook <agentId>`) go. User-added entries always stay. */
+export function stripForemanHooks(
+  existing: ClaudeSettings,
+  agentId?: string,
+): ClaudeSettings | null {
   const groups = existing.hooks?.PreToolUse ?? [];
+  if (!Array.isArray(groups)) return null;
   const filteredGroups: HookGroup[] = [];
   let removed = false;
   for (const group of groups) {
     const remainingHooks = (group.hooks ?? []).filter((h) => {
-      if (h.managed_by === FOREMAN_HOOK_MARKER) {
+      if (h.managed_by === FOREMAN_HOOK_MARKER && (agentId === undefined || hookRunsFor(h, agentId))) {
         removed = true;
         return false;
       }
@@ -161,22 +179,21 @@ export function uninstallPreToolUseHook(
     }
     // A group that ONLY had a Foreman hook drops out entirely.
   }
-  if (!removed) {
-    return { settingsPath, removed: false };
-  }
-  const next: ClaudeSettings = {
+  if (!removed) return null;
+  // Empty PreToolUse array stays in place — harmless + lets the user see
+  // there WAS a hook. The hooks object stays.
+  return {
     ...existing,
     hooks: {
       ...(existing.hooks ?? {}),
       PreToolUse: filteredGroups,
     },
   };
-  // Empty PreToolUse array stays in place — harmless + lets the user see
-  // there WAS a hook. The hooks object stays.
-  if (!opts.dryRun) {
-    writeFileSync(settingsPath, JSON.stringify(next, null, 2) + "\n", "utf-8");
-  }
-  return { settingsPath, removed };
+}
+
+/** The hook command's last argument names the agent it runs for. */
+function hookRunsFor(hook: HookEntry, agentId: string): boolean {
+  return typeof hook.command === "string" && hook.command.trim().split(/\s+/).at(-1) === agentId;
 }
 
 /** Pure merge helper. Exposed for tests so they can poke the logic

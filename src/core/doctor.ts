@@ -796,7 +796,7 @@ export function checkSecretSlotDuplicates(): CheckResult {
     return {
       name: "secret_slots",
       status: "warn",
-      message: `${duplicates.length} legacy provider slot${duplicates.length === 1 ? "" : "s"} alongside canonical (#342): ${labels}`,
+      message: `${duplicates.length} legacy provider slot${duplicates.length === 1 ? " duplicates a canonical slot" : "s duplicate canonical slots"}: ${labels}`,
       remediation: `Run \`foreman secrets dedupe-providers --dry-run\` to preview, then \`--yes\` to remove.`,
     };
   } catch (err) {

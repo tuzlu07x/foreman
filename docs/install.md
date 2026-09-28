@@ -309,9 +309,12 @@ for f in ~/.hermes/SOUL.md ~/.codex/AGENTS.md; do
   [ -f "$f.pre-foreman.bak" ] && mv "$f.pre-foreman.bak" "$f"
 done
 
-# 4. Remove the `foreman` MCP server entry from each agent's config.
-#    `foreman agent remove` doesn't do this; see docs/agent-lifecycle.md
-#    for where each agent keeps it (e.g. mcpServers.foreman in ~/.claude.json).
+# 4. Remove each agent: this unregisters it, revokes its token and removes
+#    the `foreman` MCP server entry from its config (e.g. mcpServers.foreman
+#    in ~/.claude.json) and, for Claude Code, Foreman's hook. It prints what
+#    it removed and what it had to leave (see docs/agent-lifecycle.md).
+foreman agent list
+foreman agent remove <id> --yes   # once per agent
 
 # 5. Remove the package (whichever way you installed it).
 npm uninstall -g foreman-agent

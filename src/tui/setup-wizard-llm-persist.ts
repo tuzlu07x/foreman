@@ -1,5 +1,6 @@
 import type { LlmConfig, ProviderId } from "../core/llm/config.js";
 import type { ProviderEntry } from "../core/registry-catalog.js";
+import { deriveDefaultModelId } from "../core/provider-resolver.js";
 
 // =============================================================================
 // Wizard → llm.yaml persistence (#289)
@@ -56,12 +57,20 @@ const CATALOG_ID_TO_PROVIDER: Record<string, ProviderId> = {
 // existing `model` belongs to a different provider (#340). Picked to be cheap
 // + production-suitable; user can override in llm.yaml afterwards.
 const PROVIDER_DEFAULT_MODEL: Record<ProviderId, string> = {
-  anthropic: "claude-haiku-4-5-20251001",
-  openai: "gpt-4o-mini",
-  gemini: "gemini-2.0-flash",
-  ollama: "llama3",
-  openai_compatible: "gpt-4o-mini",
+  anthropic: providerDefault("anthropic", "claude-haiku-4-5"),
+  openai: providerDefault("openai", "gpt-6-luna"),
+  gemini: providerDefault("gemini", "gemini-3.5-flash-lite"),
+  ollama: providerDefault("ollama", "llama3.2"),
+  // An OpenAI-compatible endpoint serves whatever it hosts; start from
+  // OpenAI's default, the user sets theirs in llm.yaml.
+  openai_compatible: providerDefault("openai", "gpt-6-luna"),
 };
+
+/** registry/providers.json's default_model, or `fallback` if it can't be read. */
+function providerDefault(provider: string, fallback: string): string {
+  const id = deriveDefaultModelId(provider);
+  return id === "default" ? fallback : id;
+}
 
 // Catalog of every model name we recognise as a default for SOME provider.
 // `belongsToProvider(model)` returns which provider that model is native to,

@@ -21,7 +21,7 @@ Foreman keeps this **opt-in** because (a) it costs money, (b) it adds latency, (
 ```yaml
 enabled: false # global kill-switch
 provider: anthropic # which provider Foreman calls
-model: claude-haiku-4-5-20251001 # cheapest current Claude
+model: claude-haiku-4-5 # fast and cheap; see registry/providers.json model_tiers
 
 features:
   verification: false # C8 — second-opinion on heuristic-flagged calls
@@ -112,7 +112,7 @@ foreman llm usage --limit 100 --json
 Foreman LLM features
 
   global              ✓ enabled
-  provider            anthropic (claude-haiku-4-5-20251001)
+  provider            anthropic (claude-haiku-4-5)
   budget              $0.32 / $5.00 (6%) — resets in 18 days
 
   Auth:

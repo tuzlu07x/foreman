@@ -587,7 +587,7 @@ export async function handleMessage(
         {
           name: "org_post",
           description:
-            "Message your colleagues through Foreman (department channels, #630). `to` is a department (e.g. `marketing`), a role (`cto`), `leadership`, `all`, or `boss` (the human who owns the company). The org chart applies: you can reach your own department, your manager and your reports; other departments go through the department heads. Everything is logged, may be mirrored to Slack / Discord, and your boss can read it. Keep messages short and concrete.",
+            "Message your colleagues through Foreman (department channels). `to` is a department (e.g. `marketing`), a role (`cto`), `leadership`, `all`, or `boss` (the human who owns the company). The org chart applies: you can reach your own department, your manager and your reports; other departments go through the department heads. Everything is logged, may be mirrored to Slack / Discord, and your boss can read it. Keep messages short and concrete.",
           inputSchema: {
             type: "object",
             required: ["to", "text"],
@@ -639,7 +639,7 @@ export async function handleMessage(
         {
           name: "org_recommend",
           description:
-            "Answer a Foreman review request (#623): when one of your direct reports is waiting for the human to approve a low- or medium-risk call, Foreman sends you a `[review]` message with a review_id, the tool, the arguments (sensitive values masked) and the risk. Recommend `allow` or `deny` with a short reason. This is advice only: the human sees it next to the approval and still decides; it never approves, denies or changes the approval. Only the requester's manager can recommend, once per review.",
+            "Answer a Foreman review request: when one of your direct reports is waiting for the human to approve a low- or medium-risk call, Foreman sends you a `[review]` message with a review_id, the tool, the arguments (sensitive values masked) and the risk. Recommend `allow` or `deny` with a short reason. This is advice only: the human sees it next to the approval and still decides; it never approves, denies or changes the approval. Only the requester's manager can recommend, once per review.",
           inputSchema: {
             type: "object",
             required: ["review_id", "recommendation", "reason"],

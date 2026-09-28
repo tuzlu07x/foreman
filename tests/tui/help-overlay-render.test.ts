@@ -52,6 +52,14 @@ describe('HelpOverlay — new 3-column grid layout', () => {
     expect(out).toContain('detail')
   })
 
+  it('explains the second key (y) for high/critical allows and D', () => {
+    // The label wraps inside its column here; the one-line form is
+    // pinned in the 200-column test below.
+    expect(out).toContain('then y')
+    expect(out).toContain('confirm a / A on')
+    expect(out).toContain('high/critical')
+  })
+
   it('says q / Ctrl-C ask first while an approval is open', () => {
     expect(out).toContain('quit (asks first)')
   })
@@ -69,6 +77,7 @@ describe('HelpOverlay — fits the terminal', () => {
   it('uses two columns at 80 and keeps every line inside the frame', () => {
     const lines = helpLines(80).map(text)
     for (const l of lines) expect(l.length).toBeLessThanOrEqual(74)
+    expect(lines.some((l) => /then y\s+confirm a \/ A on/.test(l))).toBe(true)
     expect(lines.find((l) => l.includes('Everywhere'))).toContain('Pages')
     expect(lines.find((l) => l.includes('Everywhere'))).not.toContain('Approval modal')
   })
@@ -78,6 +87,7 @@ describe('HelpOverlay — fits the terminal', () => {
     expect(wide.find((l) => l.includes('Everywhere'))).toContain('Approval modal')
     expect(wide.some((l) => /n\s+inbox \(notifications\)/.test(l))).toBe(true)
     expect(wide.some((l) => /o\s+login \(OAuth \/ interactive\)/.test(l))).toBe(true)
+    expect(wide.some((l) => /then y\s+confirm a \/ A on high\/critical risk, and D$/.test(l))).toBe(true)
     expect(wide.length).toBeLessThan(helpLines(80).length)
   })
 

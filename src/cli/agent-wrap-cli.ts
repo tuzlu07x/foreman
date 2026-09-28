@@ -69,7 +69,7 @@ export const agentWrapCommand = new Command('agent-wrap')
       process.stderr.write(
         red('error: ') +
           `agent "${agentId}" cannot be wrap-launched: its catalog entry has no \`input_protocol\` block.\n` +
-          `       See #445 for the schema. If this agent ships a programmable bidirectional transport (e.g. codex exec-server),\n` +
+          `       If this agent ships a programmable bidirectional transport (e.g. codex exec-server),\n` +
           `       configure \`approval_adapter\` instead.\n`,
       )
       process.exit(1)

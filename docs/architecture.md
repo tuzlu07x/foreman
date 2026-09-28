@@ -1,4 +1,4 @@
-# Foreman v0.1.0 — Architecture report
+# Foreman architecture
 
 A single-document tour of how Foreman is built. Skim the headlines for the shape; dive into a section when you're about to touch that area.
 
@@ -36,7 +36,7 @@ Every subcommand lives in its own file under `src/cli/`. The root `src/cli/index
 | Command | What it does |
 | --- | --- |
 | `foreman init` | Seeds the Foreman home: `identity.key` (Ed25519), `policy.yaml` (smart-default rules), `SOUL.md` (Foreman identity persona), `foreman.db` (SQLite). Idempotent. |
-| `foreman setup` | Interactive Ink wizard — API keys → agents → install → policy review. Re-runnable with `--resume` / `--reset`. |
+| `foreman setup` | Interactive Ink wizard — LLM providers → Foreman's brain → agents → services (optional) → install + verify; policy review is offered on the Done screen. Re-runnable with `--resume` / `--reset`. |
 | `foreman start` | Detects fresh installs and runs the wizard inline, then mounts the gateway + TUI dashboard. `--no-onboarding` skips the wizard. |
 | `foreman mcp-stdio --source <agent>` | Acts as an MCP server over stdio for the partner runtime. JSON-RPC `tools/list` + `tools/call` go through the mediator. The agent proves its id with `FOREMAN_AGENT_TOKEN`; without it the connection is `untrusted:<agent>`. |
 | `foreman wrap --name <id> -- <cmd>` | Spawns a child process under Foreman; intercepts its MCP-framed stdout, signs responses, audits every call. |
@@ -188,13 +188,19 @@ Pops on any `approval:requested` event. Shows agent → target flow, indented to
 Pages with sub-input modes (Secrets page rotate, Chat page input) use the same shape: a boolean flag (`rotateMode`, `chatInputMode`). The page-level keyboard handler short-circuits to Esc-only when the flag is true; the `PasswordInput` / `TextInput` from `@inkjs/ui` owns the rest.
 
 ### Setup wizard
-The same Ink tree used both by `foreman setup` and `foreman start` (when `looksLikeFreshInstall()` returns true). Four steps:
-1. **API keys** — MultiSelect with the five common secrets pre-checked (PR #148) + help URL per secret in the value prompt (PR #135).
-2. **Agents** — MultiSelect with `hermes` + `claude-code` pre-checked on fresh install; `Checked: …` label in accent colour above the picker, following the live toggles (PR #142).
-3. **Install** — Prints a `Selected agents: … / Will install: …` summary, then runs `runInstallStep` to install / register / inject MCP snippet / write Foreman identity per agent.
-4. **Policy** — Optional `$EDITOR` review of `policy.yaml`.
+The same Ink tree used both by `foreman setup` and `foreman start` (when `looksLikeFreshInstall()` returns true). The root is `src/tui/setup-wizard.tsx`; each step lives in `src/tui/setup-wizard/`. A Welcome screen previews five numbered steps (`WELCOME_STEPS` in `welcome.tsx`), and every screen's "Step N of 5" progress bar is derived from that list (`progress.ts`):
 
-`runInstallStep` is exported and unit-tested (6 cases).
+1. **LLM Providers** (`providers`) — pick the LLM providers your agents use and paste their keys; Anthropic and OpenAI also offer a subscription (OAuth) sign-in.
+2. **Foreman's brain** (`foreman-llm`) — pick the LLM Foreman itself uses to verify risky calls and write summaries (a cloud model or a local one). This is Foreman's own usage, separate from the agents' providers.
+3. **Agents** (`agents`) — pick which agents to install, then set each one's LLM provider, model and responsibility note, and confirm.
+4. **Services** (`services`, optional) — pick services (Telegram, Discord, Slack, GitHub, Atlassian, Notion) and paste their secrets. The **chat-primary** sub-screen follows when two or more selected chat-capable agents share a messaging channel (Telegram, Discord, Slack): you pick which agent answers on it. Otherwise it is skipped.
+5. **Install + Verify** — first the **required-setup** sub-screen: from the agent, provider and service picks it works out which keys each agent still needs, asks for each missing key once (shared keys are asked once for all agents), and queues OAuth sign-ins for later. Then `install` runs `runInstallStep` (`install-runner.ts`) to install, register, write MCP wiring and push the Foreman identity per agent, and advances to Done on its own.
+
+The resumable step list is `STEPS` in `src/tui/setup-state.ts`: `welcome`, `providers`, `foreman-llm`, `agents`, `services`, `chat-primary`, `required-setup`, `install`, `done`. `foreman setup --resume` restarts at the first step not yet completed.
+
+**Done** reports what was installed, the identity push and the policy rule count, and offers follow-ups: `[y]` run the queued OAuth sign-ins, `[d]` run `foreman doctor`, `[p]` review `policy.yaml` in `$EDITOR`, `[l]` show the install log. Policy review is no longer a step of its own.
+
+`runInstallStep` is exported and unit-tested (`tests/tui/setup-install-*.test.ts`).
 
 ---
 

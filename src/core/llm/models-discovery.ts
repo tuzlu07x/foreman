@@ -252,7 +252,10 @@ function hashApiKey(key: string): string {
 function isOpenAiChatModel(id: string): boolean {
   // Chat-completion-capable. We exclude embedding/audio/tts/vision-only
   // models because the wizard's "Foreman's brain" picker needs text-out.
-  if (/^(gpt-4|gpt-5|gpt-3\.5|chatgpt-)/.test(id)) return true
+  // Any gpt-<n> generation counts (gpt-6-luna included), minus the
+  // audio / realtime / image / speech variants.
+  if (/(audio|realtime|transcribe|tts|image|search|embedding)/.test(id)) return false
+  if (/^(gpt-\d|gpt-3\.5|chatgpt-)/.test(id)) return true
   if (/^o[1-9](-|$)/.test(id)) return true
   return false
 }
@@ -275,8 +278,19 @@ function geminiFamily(id: string): string {
 }
 
 function preferRecent(a: string, b: string): number {
-  // Heuristic: ids with higher version numbers float to the top. Anthropic
-  // and Gemini use embedded version (claude-opus-4.7, gemini-2.5);
-  // descending alphabetical sort approximates "newest first".
-  return b.localeCompare(a)
+  // Newest first by the version numbers in the id (claude-opus-5-5 before
+  // claude-sonnet-5 before claude-haiku-4-5, gpt-6-sol before gpt-5.4,
+  // gemini-3.8-flash before gemini-2.5-pro); plain reverse-alphabetical put
+  // claude-fable-* below haiku. Dates (8 digits) don't count as versions.
+  const va = versionOf(a)
+  const vb = versionOf(b)
+  for (let i = 0; i < Math.max(va.length, vb.length); i++) {
+    const d = (vb[i] ?? -1) - (va[i] ?? -1)
+    if (d !== 0) return d
+  }
+  return a.localeCompare(b)
+}
+
+function versionOf(id: string): number[] {
+  return (id.match(/\d+/g) ?? []).filter((n) => n.length < 6).map(Number)
 }

@@ -38,7 +38,7 @@ An unverified connection that claims a blocked or disabled id is refused too (se
 | `foreman agent add` | interactive: pick from the catalog |
 | `foreman agent show <name>` | the agent row (status, registry entry, transport, identity token) plus its MCP config snippet |
 | `foreman agent update [name]` | upgrade an agent's npm package (omit the name or pass `all` for every agent) |
-| `foreman agent remove <name> [--uninstall]` | unregister, revoke its keypair and identity token; `--uninstall` also uninstalls the binary if Foreman installed it |
+| `foreman agent remove <name> [--uninstall]` | unregister, revoke its keypair and identity token, remove Foreman's MCP entry (and Claude Code hook) from the agent's config; `--uninstall` also uninstalls the binary if Foreman installed it |
 | `foreman agent rewire [<name>\|--all]` | give the agent its identity token and rewrite its MCP wiring (see [Agent identity tokens](#agent-identity-tokens)) |
 | `foreman agent token rotate <name>` | mint a new identity token and rewrite the wiring; the old token stops working at once |
 | `foreman agent regenerate-key <name>` | issue a new Ed25519 keypair (revokes the old one) |
@@ -76,7 +76,7 @@ Keys on this page:
 | `L` | change its LLM provider |
 | `o` | run its login (OAuth or interactive setup) |
 | `r` | regenerate its keypair; the new private key is shown once |
-| `x` | remove it: unregister it and revoke its key and identity token (the binary and the agent's config files stay) |
+| `x` | remove it: unregister it, revoke its key and identity token, and take Foreman's MCP entry (and Claude Code hook) out of its config, as [`remove`](#what-gets-cleaned-up-on-remove) does (the binary stays) |
 | `Esc` | back to Home |
 
 `r` and `x` ask first (`y` goes ahead; any other key cancels).
@@ -88,10 +88,15 @@ The responsibility note is a free-text answer to "why did I install this agent a
 When you remove an agent, Foreman:
 
 1. Deletes the agent's row from the database (with its per-agent settings such as the LLM provider and responsibility note).
-2. Revokes its Ed25519 keypair and its identity token. The `foreman` MCP entry left in the agent's config now connects as `untrusted:<id>`, and a new install can't impersonate the removed agent.
-3. **Does not** remove the `foreman` MCP entry from the agent's config files (see the table under [Agent identity tokens](#agent-identity-tokens) for where it is), the Claude Code PreToolUse hook (run `foreman agent hook uninstall claude-code` first), keys Foreman [projected](#secret-projection-222--223) into the agent's own files, or anything in the agent's own state dir (`~/.hermes/`, `~/.openclaw/`, etc.).
+2. Revokes its Ed25519 keypair and its identity token, so a new install can't impersonate the removed agent.
+3. Takes its wiring back out of the agent's own config, and prints each thing it removed:
+   - the `foreman` MCP server entry that runs `foreman mcp-stdio --source <id>`, from the file in the table under [Agent identity tokens](#agent-identity-tokens). For ZeroClaw this is the `[[mcp.servers]]` entry named `foreman`; the `[mcp_bundles.foreman]` bundle and the `"foreman"` grant in each `[agents.<alias>]` go too, unless you added your own servers to that bundle.
+   - for Claude Code, Foreman's PreToolUse hook in `~/.claude/settings.json` (the one that runs `foreman hook <id>`).
 
-4. Leaves the agent's binary installed, and says so. `--uninstall` also uninstalls it, but only a binary Foreman installed itself (with `agent add --auto-install` or the setup wizard); it runs the matching command, for example `npm uninstall -g @anthropic-ai/claude-code`. For an agent you installed yourself, `--uninstall` refuses before changing anything:
+   Other MCP servers, hooks you added and every other key stay, and each file keeps its permissions. A `foreman` entry wired for another agent id (the last agent you rewired against the same file) is left in place and reported. This step never blocks the removal: a config that is missing, doesn't parse or is a symlink (Foreman never writes through one) is left as it is, with a note. A YAML or TOML config loses its comments when Foreman rewrites it, as it does when it adds the entry. An entry you wired to another file with `--config-path` isn't found; remove it by hand.
+4. **Does not** remove keys Foreman [projected](#secret-projection-222--223) into the agent's own files, or anything in the agent's own state dir (`~/.hermes/`, `~/.openclaw/`, etc.).
+
+5. Leaves the agent's binary installed, and says so. `--uninstall` also uninstalls it, but only a binary Foreman installed itself (with `agent add --auto-install` or the setup wizard); it runs the matching command, for example `npm uninstall -g @anthropic-ai/claude-code`. For an agent you installed yourself, `--uninstall` refuses before changing anything:
 
 ```
 error: Foreman didn't install Codex, so it won't uninstall it (it may be your own install).
@@ -104,7 +109,7 @@ An agent Foreman installed with a script (like Hermes) can't be uninstalled auto
 note: Hermes was installed via a script — Foreman can't auto-uninstall. Remove the hermes binary manually (try the installer's --uninstall flag).
 ```
 
-Unticking an agent in the setup wizard unregisters it the same way. When Foreman installed one of the unticked agents, the wizard's confirm screen also offers `u` to uninstall it.
+Unticking an agent in the setup wizard unregisters it the same way, including removing its Foreman wiring. When Foreman installed one of the unticked agents, the wizard's confirm screen also offers `u` to uninstall it.
 
 ## Agent identity tokens
 
@@ -179,7 +184,8 @@ policy rules and org role.
 - `foreman agent show` says whether the agent has a token (and when it was
   issued) and shows the snippet with a placeholder. `foreman secrets show`
   refuses agent tokens, and so does the MCP `secrets/get` tool.
-- `foreman agent remove` revokes the token.
+- `foreman agent remove` revokes the token and removes the `foreman` entry
+  that carried it from the agent's config.
 
 **Quarantine or relax untrusted connections** in `policy.yaml`:
 
