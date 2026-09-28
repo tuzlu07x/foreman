@@ -36,7 +36,7 @@ For every tool call an agent makes, Foreman goes through these steps in order an
 1. **Blocked or disabled agent**: denied (`agent:blocked`, `agent:disabled`). See [`agent-lifecycle.md`](agent-lifecycle.md).
 2. **Rate limit** (`agents.<id>.rate_limits`): denied when the agent is over its limit.
 3. **Policy rules**: the matching rules pick `allow`, `ask` or `deny` (see [Which rule wins](#which-rule-wins)). `deny` refuses the call here (`policy:<rule id>`).
-4. **Risk engine**: scores the call and puts it in a bucket: low (0–29), medium (30–59), high (60–84) or critical (85–100). By default low is allowed and the rest ask; [`buckets:`](#buckets) can change that. A bucket set to `deny` refuses the call (`risk:<bucket>`), even when a rule allows it.
+4. **Risk engine**: scores the call and puts it in a bucket: low (0–29), medium (30–59), high (60–84) or critical (85–100). By default low is allowed and the rest ask; [`buckets:`](#risk-buckets-buckets) can change that. A bucket set to `deny` refuses the call (`risk:<bucket>`), even when a rule allows it.
 5. **Your approval**: if the policy said `ask` *or* the risk engine did, the call waits for you (`user:tui`, `user:telegram`, …, or `approval-timeout` when nobody answered). See [How approvals work](tui.md#how-approvals-work).
 6. Otherwise the call is allowed. The label names the rule that allowed it (`policy:<rule id>`), or the fallback when no rule matched (`policy:hook:risk-based`, `policy:mcp.yaml:<server>`).
 
@@ -46,7 +46,7 @@ So:
 - `ask` always asks, whatever the risk score (unless a bucket set to `deny` refuses the call first).
 - `allow` only means the policy won't ask. The risk engine still asks about a risky call (a `curl … | sh`, a secret-looking path, a call that was denied before).
 
-The label in brackets is what `foreman log tail` and the TUI's activity feed show after `allowed` or `denied`.
+These labels (`policy:12`, `risk:critical`, `approval-timeout`, …) are what `foreman log tail` and the TUI's activity feed show after `allowed` or `denied`.
 
 ## Rules (`rules:`)
 
@@ -147,7 +147,7 @@ agents:
 | `cannot_access_secrets` | Secrets it may never fetch, even through a `"*"` allow. |
 | `rate_limits.messages_per_minute` | Once the agent has made this many calls in the last 60 seconds, further calls are denied (`policy:<rule id>`). It shows in `policy show` as `<agent> → * +cond ASK`. |
 | `rate_limits.tokens_per_hour` | Accepted and shown on the TUI's Policy page, but not enforced yet. |
-| `can_call` / `cannot_call` | `<agent>: [tools]` becomes `<agent>:<tool>` allow / deny rules for calls one agent makes to another through Foreman's mediator. None of the current transports (MCP, hook, wrap, ACP, Codex) sends such calls, so these rules don't affect any call today. Delegation between agents (`foreman write`, `assign`) follows [`org.yaml`](org.md) instead. |
+| `can_call` / `cannot_call` | `<agent>: [tools]` becomes `<agent>:<tool>` allow / deny rules for calls one agent makes to another through Foreman's mediator. None of the current transports (MCP, hook, wrap, ACP, Codex) sends such calls, so these rules don't affect any call today. Delegation between agents (`foreman write`, `assign`) is governed by [`org.yaml`](org.md) instead. |
 
 To restrict an agent's **own** tool calls, use `rules:` with its id as `source` and `target: "tool:<name>"`.
 
