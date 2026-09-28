@@ -71,6 +71,9 @@ export interface AgentConfig {
    *  claude-opus-4-7). Optional; falls back to the variant default. */
   modelVersion?: string;
   responsibilityNote?: string;
+  /** Install the agent's PreToolUse hook so its own built-in tools (Bash,
+   *  Edit, Read…) go through Foreman too. Unset means yes (the default). */
+  preToolUseHook?: boolean;
 }
 
 export type AgentConfigsMap = Record<string, AgentConfig | undefined>;
