@@ -83,7 +83,7 @@ npm install -g foreman-agent                              # Node >= 22.12
 
 | Variable / flag          | Effect                                                     |
 | ------------------------ | ---------------------------------------------------------- |
-| `FOREMAN_VERSION=2.0.0`  | Pin a specific release                                     |
+| `FOREMAN_VERSION=2.1.0`  | Pin a specific release                                     |
 | `FOREMAN_INSTALL_PREFIX` | Use a non-default npm prefix                               |
 | `FOREMAN_SKIP_NVM=1`     | Refuse the nvm bootstrap path                              |
 | `--uninstall`            | Remove the global package (Foreman's data is left in place) |
