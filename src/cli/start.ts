@@ -38,7 +38,13 @@ import {
 } from "../core/foreman-pidfile.js";
 import { defaultLlmConfig, saveLlmConfig } from "../core/llm/config.js";
 import { ForemanCommandRouter, registerBuiltinCommands } from "../core/foreman-command.js";
-import { InboxRecorder, InboxService, oneLineSummary, recordDelegationOutcome } from "../core/inbox.js";
+import {
+  InboxRecorder,
+  InboxService,
+  oneLineSummary,
+  recordDelegationOutcome,
+  recordMissedApprovals,
+} from "../core/inbox.js";
 import { auditAgentTokens, describeTokenAudit } from "../core/agent-wiring.js";
 import { responsibilityLookup } from "../core/mediator-stack.js";
 import { OrchestratorChat } from "../core/orchestrator-chat.js";
@@ -270,6 +276,12 @@ export function startForeman(
   // with read state so the TUI shows what happened while you were away —
   // with or without external channels configured.
   const inbox = new InboxService(db, bus);
+  // Approvals that timed out while Foreman wasn't running (#657).
+  try {
+    recordMissedApprovals(db, inbox);
+  } catch {
+    /* best-effort, like the rest of the inbox */
+  }
   const inboxRecorder = new InboxRecorder(db, inbox, { bus });
   reportPolicyError = (message) => {
     inbox.add({

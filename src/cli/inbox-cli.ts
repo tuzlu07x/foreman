@@ -1,7 +1,13 @@
 import { existsSync } from "node:fs";
 import { Command } from "commander";
-import { InboxService, stripControl } from "../core/inbox.js";
-import { closeDb, getDb } from "../db/client.js";
+import { readForemanPid } from "../core/foreman-pidfile.js";
+import {
+  InboxService,
+  recordMissedApprovals,
+  stripControl,
+  waitingApprovalCount,
+} from "../core/inbox.js";
+import { closeDb, getDb, type ForemanDb } from "../db/client.js";
 import { relativeTime } from "../tui/format.js";
 import { getForemanPaths } from "../utils/config.js";
 import { bold, dim, green, orange, red } from "./colors.js";
@@ -24,14 +30,25 @@ inboxCommand
   .option("--limit <n>", "how many items", (v) => Number.parseInt(v, 10), 20)
   .option("--json", "machine-readable output")
   .action((opts: { unread?: boolean; limit: number; json?: boolean }) => {
-    withInbox((inbox) => {
+    withInbox((inbox, db) => {
+      // Approvals that timed out with no `foreman start` to show them (#657).
+      recordMissedApprovals(db, inbox);
       const items = inbox.list({ limit: opts.limit, unreadOnly: opts.unread === true });
       if (opts.json) {
         console.log(JSON.stringify(items, null, 2));
         return;
       }
       const unread = inbox.unreadCount();
-      console.log(`${orange(bold("Inbox"))}  ${unread > 0 ? orange(`${unread} unread`) : green("all caught up")}`);
+      const waiting = waitingApprovalCount(db);
+      const status =
+        unread > 0 ? orange(`${unread} unread`) : waiting > 0 ? "" : green("all caught up");
+      console.log(`${orange(bold("Inbox"))}  ${status}`.trimEnd());
+      if (waiting > 0) {
+        const where = readForemanPid(getForemanPaths().configDir)
+          ? "answer in the `foreman start` window"
+          : "run `foreman start` to answer before they time out";
+        console.log(orange(`  ⚠ ${waiting} approval${waiting === 1 ? "" : "s"} waiting — ${where}`));
+      }
       if (items.length === 0) {
         console.log(dim("  Nothing here yet."));
         return;
@@ -58,14 +75,15 @@ inboxCommand
     });
   });
 
-function withInbox(run: (inbox: InboxService) => void): void {
+function withInbox(run: (inbox: InboxService, db: ForemanDb) => void): void {
   const paths = getForemanPaths();
   if (!existsSync(paths.root)) {
     console.error(`${red("error:")} Foreman is not initialised. Run 'foreman init' first.`);
     process.exit(1);
   }
   try {
-    run(new InboxService(getDb()));
+    const db = getDb();
+    run(new InboxService(db), db);
   } finally {
     closeDb();
   }
