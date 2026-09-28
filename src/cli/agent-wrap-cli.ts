@@ -33,7 +33,7 @@ interface AgentWrapOptions {
 
 export const agentWrapCommand = new Command('agent-wrap')
   .description(
-    'Wrap a chat-only daemon agent: own its Telegram polling + inject Foreman directives into its input stream (see #445).',
+    'Wrap a chat-only daemon agent: own its Telegram polling + inject Foreman directives into its input stream.',
   )
   .argument(
     '<agent-id>',

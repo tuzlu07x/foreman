@@ -84,8 +84,25 @@ export function runInit(options: InitOptions = {}): InitResult {
   };
 }
 
+/** Where `init` writes on this machine, for `init --help` (#657): the
+ *  platform's default dirs (XDG on Linux, Library on macOS), or
+ *  FOREMAN_HOME when set. */
+export function initPathsHelp(): string {
+  const paths = getForemanPaths();
+  const where = process.env.FOREMAN_HOME
+    ? "FOREMAN_HOME is set, so everything goes in one directory:"
+    : "Where, on this machine (set FOREMAN_HOME to use one directory instead):";
+  return [
+    "",
+    where,
+    `  config  ${paths.configDir}  (identity.key, policy.yaml, SOUL.md, secrets.key)`,
+    `  state   ${paths.stateDir}  (foreman.db)`,
+  ].join("\n");
+}
+
 export const initCommand = new Command("init")
-  .description("Initialise ~/.foreman/ (identity, policy, database)")
+  .description("Create Foreman's home: identity, policy, database and secrets key")
+  .addHelpText("after", () => initPathsHelp())
   .option(
     "--reset-policy",
     "overwrite policy.yaml with the smart-default template",

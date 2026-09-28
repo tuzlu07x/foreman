@@ -121,7 +121,7 @@ agentsCommand
   )
   .option(
     "--skip-projection",
-    "do not write Foreman-stored secrets into the agent's env/config files (#222 / #223)",
+    "do not write Foreman-stored secrets into the agent's env/config files",
   )
   .option(
     "--auto-install",
@@ -689,7 +689,7 @@ agentsCommand
   .command("permissions <agentId>")
   .description(
     "Apply Foreman's default shell-tool permission allowlist for the agent " +
-      "(Faz 1: claude-code only — see #517 for the roadmap).",
+      "(Claude Code only for now).",
   )
   .option(
     "--dry-run",
@@ -874,7 +874,7 @@ const hookSub = agentsCommand
   .command("hook")
   .description(
     "Install / uninstall Foreman's PreToolUse hook in the agent's settings " +
-      "(#517 Faz 4 — claude-code only).",
+      "(Claude Code only).",
   );
 
 hookSub

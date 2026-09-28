@@ -1198,7 +1198,7 @@ export function checkUpdate(): CheckResult {
         status: "warn",
         message: `installed ${APP_VERSION}, latest ${raw.latest}`,
         remediation:
-          "npm install -g foreman-agent@latest  (or 'brew upgrade foreman' if you tapped it)",
+          "npm install -g foreman-agent@latest  (or 'brew upgrade foreman-agent' if you installed it with Homebrew)",
       };
     }
     return {

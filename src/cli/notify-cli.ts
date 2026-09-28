@@ -245,11 +245,11 @@ notifyCommand
 notifyCommand
   .command('summary')
   .description('Build a digest of recent activity and (optionally) send it now')
-  .option('--now', 'Send the digest immediately on every enabled channel', false)
+  .option('--now', "Send the digest now to the channels routed for `summary` in notify.yaml", false)
   .option('--hours <n>', 'Window in hours (1-8760, default 12)', (v) => parseInt(v, 10), 12)
   .option(
     '--smart',
-    'Run the LLM narrator if enabled (otherwise template body — #306)',
+    'Run the LLM narrator if enabled (otherwise the plain template)',
     false,
   )
   .action(async (options: { now?: boolean; hours: number; smart?: boolean }) => {

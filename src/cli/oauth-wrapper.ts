@@ -227,7 +227,7 @@ function sleep(ms: number): Promise<void> {
 
 export const codexLoginCommand = new Command("codex-login")
   .description(
-    "Run Codex's OAuth flow and persist the result for Foreman (#408 phase 5)",
+    "Run Codex's OAuth flow and persist the result for Foreman",
   )
   .option(
     "--variant <id>",
@@ -245,7 +245,7 @@ export const codexLoginCommand = new Command("codex-login")
 
 export const claudeLoginCommand = new Command("claude-login")
   .description(
-    "Run Claude Code's OAuth flow and persist the result for Foreman (#408 phase 5)",
+    "Run Claude Code's OAuth flow and persist the result for Foreman",
   )
   .option(
     "--variant <id>",

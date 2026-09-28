@@ -41,7 +41,7 @@ import { red } from "./colors.js";
 
 export const reportCommand = new Command("report")
   .alias("activity")
-  .description("LLM-narrated digest of recent agent activity (#435)")
+  .description("LLM-narrated digest of recent agent activity")
   .option(
     "--since <Nd|Nh|Nm>",
     "Window length (e.g. 1h, 30m, 24h). Default 1h.",

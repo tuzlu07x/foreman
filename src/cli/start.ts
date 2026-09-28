@@ -1575,6 +1575,14 @@ async function runOnboardingWizard(): Promise<boolean> {
   return quit;
 }
 
+/** `--skip-setup` is the prompt's [s] as a flag, and like [s] it is
+ *  remembered, so later runs don't ask again (#657). A setup already
+ *  started or finished is left as it is. */
+export function rememberSetupSkipped(): void {
+  const state = loadSetupState();
+  if (!hasUserOptedOut(state)) saveSetupState(markSetupSkipped(state));
+}
+
 export type StartChoice = "setup" | "skip" | "quit";
 
 // Maps an answer line (trimmed, lowercased) to a fresh-install choice.
@@ -1763,6 +1771,7 @@ export const startCommand = new Command("start")
     } else if (flagSkip) {
       // --no-onboarding / --skip-setup needs the home to exist.
       seedHomeIfMissing();
+      if (options.skipSetup) rememberSetupSkipped();
     }
     let started: StartedForeman;
     try {
