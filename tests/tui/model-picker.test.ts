@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { pickerOptions } from '../../src/tui/components/model-picker.js'
+import { liveListNote, pickerOptions } from '../../src/tui/components/model-picker.js'
 import { mountApp, type MountedApp } from '../support/tui-app.js'
 
 describe('model picker options', () => {
@@ -60,5 +60,17 @@ describe('model picker in the TUI', () => {
     expect(m.frame()).toContain("codex's model (openai)")
     await m.press('\u001B', 150)
     expect(m.frame()).not.toContain("codex's model")
+  })
+})
+
+describe('the note when the live list is unavailable', () => {
+  it('says it in words, not "fetch failed"', () => {
+    expect(liveListNote('fetch failed', 'anthropic')).toBe(
+      "couldn't reach anthropic for its full model list — showing the usual models",
+    )
+    expect(liveListNote('HTTP 401 Unauthorized', 'openai')).toBe(
+      'openai rejected the stored key (HTTP 401) — showing the usual models',
+    )
+    expect(liveListNote('something odd', 'gemini')).toBe('no full model list (something odd) — showing the usual models')
   })
 })
