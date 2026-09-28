@@ -47,6 +47,32 @@ describe('department channels (#630)', () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
+  // QA #657 L26 — `org messages boss` (and `you`) showed #all-hands, a
+  // role filter (`cto`) missed that role's threads, and an unknown channel
+  // said "No messages yet".
+  it('reads your inbox, a role\'s threads, and refuses unknown channels', () => {
+    comms.post({ from: 'hermes', to: 'boss', text: 'weekly report' })
+    comms.post({ from: 'claude-code', to: 'engineer', text: 'please add tests' })
+    comms.post({ from: 'claude-code', to: 'engineering', text: 'standup at 10' })
+    comms.post({ from: BOSS, asOwner: true, to: 'cto', text: 'ship it' })
+    comms.post({ from: BOSS, asOwner: true, to: 'all', text: 'holiday friday' })
+    comms.post({ from: 'gemini', to: 'marketing', text: 'draft ready' })
+    const texts = (channel: string) =>
+      comms.read({ viewer: BOSS, asOwner: true, channel }).map((m) => m.text)
+
+    for (const alias of ['boss', 'you', 'me']) {
+      expect(texts(alias)).toEqual(['weekly report', 'ship it'])
+    }
+    expect(texts('cto')).toEqual(['please add tests', 'standup at 10', 'ship it'])
+    expect(texts('claude-code')).toEqual(texts('cto'))
+    expect(texts('engineering')).toEqual(['standup at 10'])
+    expect(texts('all')).toEqual(['holiday friday'])
+    expect(comms.readError({ viewer: BOSS, asOwner: true, channel: 'nosuch' })).toMatch(/no department, role or agent called 'nosuch'/)
+    expect(comms.readError({ viewer: BOSS, asOwner: true, channel: 'boss' })).toBeNull()
+    // An agent reading a role still sees its own thread with it.
+    expect(comms.read({ viewer: 'codex', channel: 'cto' }).map((m) => m.text)).toEqual(['please add tests'])
+  })
+
   it('follows the org chart for who may post where', () => {
     const post = (from: string, to: string) => comms.post({ from, to, text: 'hi' })
     // Own department, manager, report, all-hands, the boss.

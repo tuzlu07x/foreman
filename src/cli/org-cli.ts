@@ -406,6 +406,8 @@ orgCommand
     const paths = getForemanPaths();
     const comms = new OrgComms(getDb(), { orgConfigPath: paths.orgConfigPath });
     try {
+      const problem = channel ? comms.readError({ viewer: BOSS, asOwner: true, channel }) : null;
+      if (problem) fail(problem);
       const read = (since?: number) =>
         comms.read({ viewer: BOSS, asOwner: true, ...(channel ? { channel } : {}), limit: opts.limit, ...(since ? { since } : {}) });
       let messages = read();

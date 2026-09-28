@@ -601,6 +601,8 @@ function commsHandler(args: string[], ctx: ForemanCommandContext): ForemanComman
   const limitArg = args.find((a) => /^\d+$/.test(a));
   const channel = args.find((a) => a !== limitArg);
   const comms = new OrgComms(ctx.db, { orgConfigPath: join(ctx.configDir, "org.yaml") });
+  const problem = channel ? comms.readError({ viewer: BOSS, asOwner: true, channel }) : null;
+  if (problem) return { ok: false, text: problem };
   const messages = comms.read({
     viewer: BOSS,
     asOwner: true,

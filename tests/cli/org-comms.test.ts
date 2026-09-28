@@ -63,6 +63,11 @@ describe('foreman org channel / tell / messages (#630)', () => {
     expect(messages.stdout).toContain('#marketing · you: launch is Friday')
     expect(messages.stdout).toContain('#all-hands · you [announcement]: welcome aboard')
     expect(run('org', 'messages', 'marketing').stdout).not.toContain('welcome aboard')
+    // QA #657 L26 — `boss` is your inbox, not all-hands; a typo is an error.
+    expect(run('org', 'messages', 'boss').stdout).not.toContain('welcome aboard')
+    const typo = run('org', 'messages', 'markting')
+    expect(typo.status).toBe(1)
+    expect(typo.stderr).toContain("no department, role or agent called 'markting'")
     expect(run('org', 'tell', 'legal', 'x').stderr).toContain("no department, role or agent called 'legal'")
   })
 })
