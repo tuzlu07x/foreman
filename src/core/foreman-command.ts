@@ -143,6 +143,9 @@ export interface ForemanCommandContext {
 
 export interface ForemanCommandResult {
   ok: boolean;
+  /** Not a command: the input went to Foreman's LLM as a question (#657).
+   *  The TUI console says so, so free text isn't mistaken for a command. */
+  answeredByLlm?: boolean;
   /** Text body to send back to the user. Multi-line is fine; channels
    *  fit ~4000 chars on Telegram, less on Discord. Keep replies tight. */
   text: string;
@@ -243,7 +246,7 @@ export class ForemanCommandRouter {
         question,
         focusAgentId,
       });
-      return renderChatOutcome(outcome);
+      return { ...renderChatOutcome(outcome), answeredByLlm: true };
     }
     return {
       ok: false,
@@ -365,9 +368,23 @@ function renderChatOutcome(
   }
   return {
     ok: false,
-    text: `Foreman LLM call failed: ${outcome.reason}`,
+    text: `Foreman LLM call failed: ${describeLlmFailure(outcome.reason)}`,
     errorCode: "NOT_AVAILABLE",
   };
+}
+
+/** "Anthropic fetch failed: fetch failed" said the same thing twice and
+ *  nothing about what to do (#657). A network failure names the provider
+ *  and the likely fix; anything else passes through. */
+export function describeLlmFailure(reason: string): string {
+  const network = /^(\w[\w ]*?) fetch failed: (.*)$/s.exec(reason);
+  if (!network) return reason;
+  const detail = network[2]!.trim();
+  return (
+    `couldn't reach ${network[1]}` +
+    (detail && detail !== "fetch failed" ? ` (${detail})` : "") +
+    ". Check the network connection, then try again (`foreman llm status` shows the provider)."
+  );
 }
 
 // =============================================================================

@@ -1414,6 +1414,28 @@ credentials:
       );
     });
 
+    // QA #657 L10 — the TUI console needs to know free text went to the
+    // LLM, and a network failure said "Anthropic fetch failed: fetch failed".
+    it("marks a free-form answer as the LLM's, and explains a network failure", async () => {
+      const ok = await router.dispatch("foo", ["bar"], {
+        ...ctx,
+        orchestratorChat: makeStubChat() as unknown as NonNullable<ForemanCommandContext["orchestratorChat"]>,
+      });
+      expect(ok.answeredByLlm).toBe(true);
+      const failed = await router.dispatch("foo", ["bar"], {
+        ...ctx,
+        orchestratorChat: makeStubChat({
+          outcome: { status: "failed", reason: "Anthropic fetch failed: fetch failed" },
+        }) as unknown as NonNullable<ForemanCommandContext["orchestratorChat"]>,
+      });
+      expect(failed.answeredByLlm).toBe(true);
+      expect(failed.text).toBe(
+        "Foreman LLM call failed: couldn't reach Anthropic. Check the network connection, then try again (`foreman llm status` shows the provider).",
+      );
+      const status = await router.dispatch("status", [], ctx);
+      expect(status.answeredByLlm).toBeUndefined();
+    });
+
     it("unknown verb returns UNKNOWN_COMMAND when chat is disabled", async () => {
       const chat = makeStubChat({ enabled: false });
       const result = await router.dispatch("nonsense-verb", [], {
