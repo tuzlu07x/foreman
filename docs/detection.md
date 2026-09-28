@@ -72,7 +72,7 @@ Organised into 8 categories. Each match emits a `secret_path` factor with catego
 | Foreman + partners | `identity.key`, `foreman.db`, `.hermes/.env`, `.codex/auth.json` | 60–80 |
 | Misc certs | `*.pfx`, `*.p12`, `*.pem`, `*.kdbx`, `*.key`, `*.gpg` | 30–80 |
 
-### Content shape patterns — 16 secret SHAPES inside args
+### Content shape patterns — 21 secret SHAPES inside args
 
 Scans the JSON-stringified args for recognisable secret formats — fires a `secret_shape` factor at **60 pts** for each distinct type detected:
 
@@ -88,6 +88,11 @@ Scans the JSON-stringified args for recognisable secret formats — fires a `sec
 | PEM private key | `-----BEGIN [RSA…] PRIVATE KEY-----` |
 | Database URL with creds | `postgres://user:pass@host/db` |
 | Google API key | `AIza…` |
+| Stripe live secret / restricted key | `sk_live_…`, `rk_live_…` |
+| npm access token | `npm_…` |
+| Notion integration secret | `secret_…`, `ntn_…` |
+| Discord bot token | `<bot id>.<timestamp>.<hmac>` |
+| Foreman agent token | `fat_…` |
 
 **Redaction**: The reason string shows a `shortFingerprint(secret)` like `sk-ant-a…TAIL` — never the full value. The factor's `evidence` field holds only the secret type label (e.g. `"Anthropic API key"`), not the secret itself. The approval modal and audit log can both surface the factor without leaking the secret to disk or to the user.
 
