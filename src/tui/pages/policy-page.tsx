@@ -2,7 +2,7 @@ import { Box, Text } from "ink";
 import { type JSX, useEffect, useState } from "react";
 import type { policies } from "../../db/schema.js";
 import { useDashboardServices } from "../dashboard-context.js";
-import { formatTime } from "../format.js";
+import { formatTime, safe } from "../format.js";
 import { roundBorder, theme } from "../theme.js";
 import { EmptyState } from "../components/empty-state.js";
 import { PageHeader } from "../components/typography.js";
@@ -131,9 +131,12 @@ function RuleRow({
   const effectColor = effectTone(row.effect);
   const enabled = row.enabled === 1;
   const conditionsSummary = describeConditions(row.conditions);
+  // On the row itself (#657): "read_file ASK" next to "read_file ALLOW"
+  // looked contradictory until you opened each rule.
+  const when = conditionsSummary === "none" ? null : conditionsSummary;
   return (
     <Box flexDirection="column">
-      <Text>
+      <Text wrap="truncate-end">
         <Text color={selected ? theme.accent.primary : theme.fg.muted}>
           {selected ? "▸ " : "  "}
         </Text>
@@ -143,6 +146,7 @@ function RuleRow({
         <Text color={effectColor} bold>
           {row.effect.toUpperCase()}
         </Text>
+        {when ? <Text color={theme.fg.default}>{` if ${when}`}</Text> : null}
         {!enabled && <Text color={theme.fg.muted}> · DISABLED</Text>}
         <Text color={theme.fg.muted}>
           {" · "}
@@ -172,24 +176,29 @@ function effectTone(effect: "allow" | "deny" | "ask"): string {
   return theme.accent.warning;
 }
 
-function describeConditions(conditions: string | null): string {
+/** A rule's conditions in words, e.g. `path ~ /\.env$/, not path ~ /tmp/`.
+ *  "none" when it has none. Exported for tests. */
+export function describeConditions(conditions: string | null): string {
   if (!conditions) return "none";
   try {
-    const parsed = JSON.parse(conditions) as {
+    const c = JSON.parse(conditions) as {
+      pathMatch?: string[];
       pathNotMatch?: string;
+      commandMatch?: string[];
+      toolPattern?: string;
+      argContains?: string;
       rateLimits?: { messagesPerMinute?: number; tokensPerHour?: number };
     };
     const parts: string[] = [];
-    if (parsed.pathNotMatch)
-      parts.push(`pathNotMatch=/${parsed.pathNotMatch}/`);
-    if (parsed.rateLimits?.messagesPerMinute) {
-      parts.push(`mpm=${parsed.rateLimits.messagesPerMinute}`);
-    }
-    if (parsed.rateLimits?.tokensPerHour) {
-      parts.push(`tph=${parsed.rateLimits.tokensPerHour}`);
-    }
-    return parts.length > 0 ? parts.join(", ") : "none";
+    if (c.pathMatch?.length) parts.push(`path ~ ${c.pathMatch.map((p) => `/${p}/`).join(" or ")}`);
+    if (c.pathNotMatch) parts.push(`path !~ /${c.pathNotMatch}/`);
+    if (c.commandMatch?.length) parts.push(`command has ${c.commandMatch.map((m) => JSON.stringify(m)).join(" or ")}`);
+    if (c.toolPattern) parts.push(`tool ~ /${c.toolPattern}/`);
+    if (c.argContains) parts.push(`args contain ${JSON.stringify(c.argContains)}`);
+    if (c.rateLimits?.messagesPerMinute) parts.push(`over ${c.rateLimits.messagesPerMinute} calls/min`);
+    if (c.rateLimits?.tokensPerHour) parts.push(`over ${c.rateLimits.tokensPerHour} tokens/h`);
+    return parts.length > 0 ? safe(parts.join(", ")) : "none";
   } catch {
-    return conditions;
+    return safe(conditions);
   }
 }
