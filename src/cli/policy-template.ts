@@ -1,9 +1,10 @@
 // Smart defaults shipped by `foreman init`. Aim: a user gets meaningful
-// protection without writing a single rule. See FOREMAN.md §3.7 for the
-// full schema; this file is intentionally short (well under 80 lines) so
-// it reads as a single screen on first encounter.
-export const DEFAULT_POLICY_YAML = `# Foreman default policy — edit and re-run 'foreman start' to apply.
-# Schema reference: FOREMAN.md §3.7
+// protection without writing a single rule. The schema is documented in
+// docs/policy.md (linked from the header, since docs/ isn't in the npm
+// package); this file stays short so it reads as a single screen.
+export const DEFAULT_POLICY_YAML = `# Foreman default policy. Edits apply on the next call: a running
+# 'foreman start' and your agents' connections pick them up, no restart.
+# Schema reference: https://github.com/tuzlu07x/foreman/blob/main/docs/policy.md
 
 rules:
   # Ask before any agent reads files that look like secrets.
@@ -79,21 +80,23 @@ rules:
 # identity:
 #   untrusted: ask
 
-# Per-agent rules and rate limits go here. Example:
+# Per-agent rules and rate limits go here. can_call / cannot_call cover
+# what one agent does to another: handing it work is "write". Example:
 #
 # agents:
 #   hermes:
 #     can_call:
-#       claude-code: [read_file, list_files]
+#       claude-code: [write]
 #     cannot_call:
-#       claude-code: [write_file, shell_exec]
+#       codex: [write]
 #     rate_limits:
 #       messages_per_minute: 30
 #       tokens_per_hour: 100000
 
 # Responsibility-based policies — orthogonal to the agent rules above.
 # Foreman checks every tool call against the source agent's responsibility
-# note (set in 'foreman setup' or 'foreman agent edit'). If the action is
+# note (set in 'foreman setup', on the TUI Agents page with N, or with
+# 'foreman agent responsibility <id> "<note>"'). If the action is
 # outside the declared role, the risk score is bumped and the approval
 # modal calls out the role mismatch.
 #

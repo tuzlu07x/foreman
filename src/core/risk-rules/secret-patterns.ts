@@ -471,6 +471,25 @@ const CONTENT_PATTERNS: ContentPattern[] = [
     pattern: /\bAIza[0-9A-Za-z_-]{35}/,
     label: 'Google API key',
   },
+  {
+    // Stripe is a curated hub server: live secret and restricted keys.
+    pattern: /\b(?:sk|rk)_live_[0-9A-Za-z]{24,247}/,
+    label: 'Stripe live key',
+  },
+  {
+    pattern: /\bnpm_[A-Za-z0-9]{36}(?![A-Za-z0-9])/,
+    label: 'npm access token',
+  },
+  {
+    // Notion integration secrets: the older `secret_` form and `ntn_`.
+    pattern: /\b(?:secret_[A-Za-z0-9]{43}|ntn_[A-Za-z0-9]{40,60})(?![A-Za-z0-9])/,
+    label: 'Notion integration secret',
+  },
+  {
+    // Discord bot token: base64 bot id, 6-char timestamp, HMAC part.
+    pattern: /(?<![A-Za-z0-9_-])[MNO][A-Za-z0-9_-]{23,27}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,40}(?![A-Za-z0-9_-])/,
+    label: 'Discord bot token',
+  },
 ]
 
 // =============================================================================

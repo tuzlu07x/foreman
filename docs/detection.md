@@ -72,7 +72,7 @@ Organised into 8 categories. Each match emits a `secret_path` factor with catego
 | Foreman + partners | `identity.key`, `foreman.db`, `.hermes/.env`, `.codex/auth.json` | 60–80 |
 | Misc certs | `*.pfx`, `*.p12`, `*.pem`, `*.kdbx`, `*.key`, `*.gpg` | 30–80 |
 
-### Content shape patterns — 16 secret SHAPES inside args
+### Content shape patterns — 21 secret SHAPES inside args
 
 Scans the JSON-stringified args for recognisable secret formats — fires a `secret_shape` factor at **60 pts** for each distinct type detected:
 
@@ -88,6 +88,11 @@ Scans the JSON-stringified args for recognisable secret formats — fires a `sec
 | PEM private key | `-----BEGIN [RSA…] PRIVATE KEY-----` |
 | Database URL with creds | `postgres://user:pass@host/db` |
 | Google API key | `AIza…` |
+| Stripe live secret / restricted key | `sk_live_…`, `rk_live_…` |
+| npm access token | `npm_…` |
+| Notion integration secret | `secret_…`, `ntn_…` |
+| Discord bot token | `<bot id>.<timestamp>.<hmac>` |
+| Foreman agent token | `fat_…` |
 
 **Redaction**: The reason string shows a `shortFingerprint(secret)` like `sk-ant-a…TAIL` — never the full value. The factor's `evidence` field holds only the secret type label (e.g. `"Anthropic API key"`), not the secret itself. The approval modal and audit log can both surface the factor without leaking the secret to disk or to the user.
 
@@ -305,7 +310,7 @@ buckets:
   low:      allow  # (default, explicit)
 ```
 
-Read by [`PolicyEngine.getBucketOverrides()`](../src/core/policy-engine.ts) on every YAML reload; threaded into the scorer via the `bucketOverrides` callback so a hot reload takes effect without restarting `foreman start`. Confirm what's active with:
+Read by [`PolicyEngine.getBucketOverrides()`](../src/core/policy-engine.ts) and threaded into the scorer via the `bucketOverrides` callback. `foreman start`, every running `foreman mcp-stdio`, `foreman wrap` and the Claude Code hook follow `policy.yaml`: they check it (one `stat`, at most every 250 ms) before each decision and apply an edit on the next call, no restart needed. An edit that doesn't parse is not applied: the last good policy stays in force, and the error is reported once (stderr for `mcp-stdio`, `wrap` and the hook; the inbox for `foreman start`). Rules that didn't change keep their ids, so `policy:<id>` in the audit log keeps pointing at the rule that decided. Confirm what's active with:
 
 ```bash
 foreman policy show --json   # → { rules: [...], bucketOverrides: { critical: "deny" } }

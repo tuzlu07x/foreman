@@ -6,6 +6,7 @@ import {
   formatDuration,
   relativeTime,
   statusIconFor,
+  safe,
   summariseTool,
   targetLabel,
 } from "../format.js";
@@ -126,7 +127,7 @@ function ActivityRow({ request }: { request: Request }): JSX.Element {
         {"  "}
         <Text color={faded ? toneColor : theme.fg.muted}>{status.icon}</Text>{" "}
         <Text color={theme.fg.muted}>
-          {request.decision} · {request.decidedBy ?? "pending"}
+          {request.decision} · {safe(request.decidedBy ?? "pending")}
           {request.durationMs !== null
             ? ` · ${formatDuration(request.durationMs)}`
             : ""}
@@ -163,9 +164,9 @@ function ControlRow({ command }: { command: ControlCommand }): JSX.Element {
         <Text color={theme.fg.muted}>{relativeTime(command.createdAt)}</Text>
         <Text color={theme.fg.muted}> · </Text>
         <Text color={faded ? theme.accent.primary : theme.fg.muted}>
-          {command.sourceAgent}
+          {safe(command.sourceAgent ?? "")}
         </Text>{" "}
-        <Text bold={faded}>{summary}</Text>
+        <Text bold={faded}>{safe(summary)}</Text>
       </Text>
       <Text>
         {"  "}
@@ -235,8 +236,8 @@ function PendingRow({
     <Box flexDirection="row" gap={1}>
       <Spinner />
       <Text color={theme.accent.info}>
-        {pending.sourceAgent}
-        {pending.targetTool ? ` → ${pending.targetTool}` : ""}{" "}
+        {safe(pending.sourceAgent)}
+        {pending.targetTool ? ` → ${safe(pending.targetTool)}` : ""}{" "}
         <Text color={theme.fg.muted}>…</Text>
       </Text>
     </Box>

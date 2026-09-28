@@ -51,6 +51,49 @@ describe('redactSecretShapes', () => {
     expect(redactSecretShapes(text)).toEqual({ text, count: 0, labels: [] })
   })
 
+  // Built at runtime so the literal fixtures don't look like leaked keys.
+  const STRIPE_SECRET = ['sk', 'live', 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4'].join('_')
+  const STRIPE_RESTRICTED = ['rk', 'live', 'Z9y8X7w6V5u4T3s2R1q0P9o8n7M6'].join('_')
+  const NPM = `npm_${'aB3'.repeat(12)}`
+  const NOTION_LEGACY = `secret_${'Q'.repeat(20)}${'7'.repeat(23)}`
+  const NOTION = `ntn_${'4'.repeat(11)}${'x'.repeat(35)}`
+  const DISCORD = `${'M'}${'Tk'.repeat(12)}.${'Gh7_Kq'}.${'aZ-'.repeat(13)}`
+
+  it.each([
+    ['Stripe live secret key', STRIPE_SECRET, 'Stripe live key'],
+    ['Stripe restricted key', STRIPE_RESTRICTED, 'Stripe live key'],
+    ['npm token', NPM, 'npm access token'],
+    ['Notion secret_ token', NOTION_LEGACY, 'Notion integration secret'],
+    ['Notion ntn_ token', NOTION, 'Notion integration secret'],
+    ['Discord bot token', DISCORD, 'Discord bot token'],
+  ])('masks a %s in tool results', (_name, secret, label) => {
+    const out = redactSecretShapes(`{"result":"token is ${secret} ok"}`)
+    expect(out.text).not.toContain(secret)
+    expect(out.text).toContain(`[REDACTED ${label}]`)
+    expect(out.labels).toContain(label)
+  })
+
+  it('flags the new shapes as secrets in call arguments too', () => {
+    const factors = secretPatternRule.evaluate(
+      { sourceAgent: 'x', targetTool: 'post', args: { body: `${STRIPE_SECRET} ${DISCORD}` } },
+      { db: undefined as never },
+    )
+    const reasons = factors.map((f) => f.reason).join(' | ')
+    expect(reasons).toContain('Stripe live key')
+    expect(reasons).toContain('Discord bot token')
+  })
+
+  it('leaves look-alikes alone (test keys, short prefixes, plain words)', () => {
+    for (const text of [
+      ['sk', 'test', 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4'].join('_'),
+      'npm_install and npm_config_cache',
+      'secret_key = os.environ["X"]',
+      'v1.2.3 and example.com.au',
+    ]) {
+      expect(redactSecretShapes(text).count).toBe(0)
+    }
+  })
+
   it('deep-redacts nested args', () => {
     const out = redactSecretsDeep({ headers: [{ auth: `Bearer ${GITHUB}` }], n: 3 })
     expect(JSON.stringify(out)).not.toContain(GITHUB)

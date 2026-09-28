@@ -136,3 +136,37 @@ describe('foreman notify test — channel validation (#264)', () => {
     expect(r.stderr).not.toMatch(/notify enable bogus/i)
   })
 })
+
+describe('foreman notify ntfy-setup — server URL (#656)', () => {
+  let tmpHome: string
+  let fakeHome: string
+  let env: NodeJS.ProcessEnv
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), 'foreman-nf-'))
+    fakeHome = mkdtempSync(join(tmpdir(), 'foreman-nf-h-'))
+    env = { ...process.env, FOREMAN_HOME: tmpHome, HOME: fakeHome }
+    runFm(['init'], env)
+  })
+
+  afterEach(() => {
+    rmSync(tmpHome, { recursive: true, force: true })
+    rmSync(fakeHome, { recursive: true, force: true })
+  })
+
+  it('refuses plain http to another host, javascript: and credentials, and writes nothing', () => {
+    for (const server of ['http://ntfy.example.com', 'javascript:alert(1)', 'https://me:hunter2@ntfy.example.com']) {
+      const r = runFm(['notify', 'ntfy-setup', '--server', server], env)
+      expect(r.exit, server).toBe(1)
+      expect(r.stderr).toMatch(/ntfy server URL/)
+      expect(r.stderr).not.toContain('hunter2')
+    }
+    const path = join(tmpHome, 'notify.yaml')
+    if (existsSync(path)) expect(readFileSync(path, 'utf-8')).not.toContain('ntfy.example.com')
+  })
+
+  it('still accepts https and a loopback http server', () => {
+    expect(runFm(['notify', 'ntfy-setup', '--server', 'https://ntfy.example.com'], env).exit).toBe(0)
+    expect(runFm(['notify', 'ntfy-setup', '--server', 'http://127.0.0.1:8080'], env).exit).toBe(0)
+  })
+})

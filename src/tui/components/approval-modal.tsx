@@ -14,6 +14,7 @@ import type {
   ReportSource,
   SecurityReport,
 } from "../../core/security-report.js";
+import { safe } from "../format.js";
 import { explain } from "../reason-explanations.js";
 import { borderForRisk, riskColor, theme } from "../theme.js";
 
@@ -31,6 +32,14 @@ export interface ApprovalModalProps {
   technicalExpanded?: boolean;
   /** Manager agents' advice (#623). Shown only; the keys still decide. */
   recommendations?: ApprovalRecommendation[];
+  /** What `A` / `D` remember for this call (#656), shown next to the keys. */
+  rememberScope?: string;
+  /** A decision waiting for `y` (#656): replaces the key hints. */
+  confirm?: string | null;
+  /** Rows the modal may use. A long request is clipped inside the frame
+   *  (the keys and the timer always show; [i] shows everything) instead
+   *  of pushing the header off a small terminal (#656). */
+  maxRows?: number;
 }
 
 const CATEGORY_ORDER: RiskCategory[] = [
@@ -107,7 +116,15 @@ export function ApprovalModal({
   remainingSeconds,
   technicalExpanded = false,
   recommendations = [],
+  rememberScope,
+  confirm = null,
+  maxRows,
 }: ApprovalModalProps): JSX.Element {
+  const keys = { ...(rememberScope ? { rememberScope } : {}), confirm };
+  // On a short terminal the call line keeps its start and its end (the
+  // file name) on one row, instead of wrapping its tail out of the frame.
+  const fit: Fit =
+    maxRows !== undefined ? { maxHeight: Math.max(10, maxRows), compact: maxRows < 30 } : {};
   // Prefer the 3-layer security report when available; fall back to the
   // legacy factor-grouped view for cross-process / pre-#232 requests.
   if (request.securityReport) {
@@ -118,6 +135,8 @@ export function ApprovalModal({
         remainingSeconds={remainingSeconds}
         technicalExpanded={technicalExpanded}
         recommendations={recommendations}
+        keys={keys}
+        fit={fit}
       />
     );
   }
@@ -126,6 +145,8 @@ export function ApprovalModal({
       request={request}
       remainingSeconds={remainingSeconds}
       recommendations={recommendations}
+      keys={keys}
+      fit={fit}
     />
   );
 }
@@ -174,18 +195,29 @@ export function RecommendationBlock({
 // 3-layer (SecurityReport) modal — #232 / C9
 // =============================================================================
 
+interface KeyHints {
+  rememberScope?: string;
+  confirm: string | null;
+}
+
+type Fit = { maxHeight?: number; compact?: boolean };
+
 function ReportModal({
   request,
   report,
   remainingSeconds,
   technicalExpanded,
   recommendations,
+  keys,
+  fit,
 }: {
   request: ApprovalRequest;
   report: SecurityReport;
   remainingSeconds: number;
   technicalExpanded: boolean;
   recommendations: ApprovalRecommendation[];
+  keys: KeyHints;
+  fit: Fit;
 }): JSX.Element {
   const color = severityColor(report);
   // Border style now tracks severity (#234 UX-6): bold frame for critical
@@ -199,12 +231,15 @@ function ReportModal({
       borderColor={color}
       paddingX={2}
       paddingY={0}
+      {...(fit.maxHeight !== undefined ? { maxHeight: fit.maxHeight } : {})}
     >
+      <Box flexDirection="column" flexShrink={1} overflowY="hidden">
+      <Box flexDirection="column" flexShrink={0}>
       {/* Layer 1 — Verdict */}
       <VerdictHeader report={report} color={color} />
 
       <Box marginTop={1}>
-        <Text>{report.oneLineSummary}</Text>
+        <Text wrap={fit.compact ? "truncate-middle" : "wrap"}>{safe(report.oneLineSummary)}</Text>
       </Box>
 
       {/* Layer 2 — Narrative */}
@@ -228,7 +263,10 @@ function ReportModal({
       </Box>
 
       <RecommendationBlock recommendations={recommendations} />
+      </Box>
+      </Box>
 
+      <Box flexDirection="column" flexShrink={0}>
       <Box marginTop={1}>
         <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>
       </Box>
@@ -240,10 +278,12 @@ function ReportModal({
         }
         showTechnicalToggle
         technicalExpanded={technicalExpanded}
+        keys={keys}
       />
 
       <Box marginTop={1} justifyContent="flex-end">
         <TimerLabel remainingSeconds={remainingSeconds} />
+      </Box>
       </Box>
     </Box>
   );
@@ -296,7 +336,7 @@ function NarrativeBlock({
     <Box flexDirection="column" marginTop={1}>
       <Text color={theme.fg.muted}>What's happening:</Text>
       <Box paddingLeft={2}>
-        <Text>{report.narrative.whatHappening}</Text>
+        <Text>{safe(report.narrative.whatHappening, { multiline: true })}</Text>
       </Box>
       <Box marginTop={1}>
         <Text color={theme.fg.muted}>Things to check:</Text>
@@ -304,7 +344,7 @@ function NarrativeBlock({
       {report.narrative.thingsToCheck.map((item, i) => (
         <Text key={`check-${i}`}>
           {"    "}
-          <Text color={color}>{theme.symbols.reason}</Text> {item}
+          <Text color={color}>{theme.symbols.reason}</Text> {safe(item)}
         </Text>
       ))}
     </Box>
@@ -344,7 +384,7 @@ function TechnicalBlock({
         <Box flexDirection="column" marginTop={1} paddingLeft={2}>
           {request.riskReasons.map((r) => (
             <Text key={r} color={theme.fg.muted}>
-              · {r}
+              · {safe(r)}
               {explain(r) ? <Text>{`  (${explain(r)})`}</Text> : null}
             </Text>
           ))}
@@ -361,7 +401,7 @@ function TechnicalBlock({
           <Text color={theme.fg.muted}>Context:</Text>
           <Text italic color={theme.fg.muted}>
             {'    "'}
-            {request.context}
+            {safe(request.context, { multiline: true })}
             {'"'}
           </Text>
         </Box>
@@ -378,10 +418,14 @@ function LegacyModal({
   request,
   remainingSeconds,
   recommendations,
+  keys,
+  fit,
 }: {
   request: ApprovalRequest;
   remainingSeconds: number;
   recommendations: ApprovalRecommendation[];
+  keys: KeyHints;
+  fit: Fit;
 }): JSX.Element {
   const bucket: RiskBucket = request.riskBucket ?? "medium";
   const borderColor = bucketColor(bucket);
@@ -396,7 +440,10 @@ function LegacyModal({
       borderColor={borderColor}
       paddingX={2}
       paddingY={0}
+      {...(fit.maxHeight !== undefined ? { maxHeight: fit.maxHeight } : {})}
     >
+      <Box flexDirection="column" flexShrink={1} overflowY="hidden">
+      <Box flexDirection="column" flexShrink={0}>
       <LegacyHeader
         bucket={bucket}
         bucketColor={borderColor}
@@ -404,20 +451,20 @@ function LegacyModal({
       />
       <Box marginTop={1}>
         <Text>
-          <Text color={theme.accent.primary}>{request.sourceAgent}</Text>
+          <Text color={theme.accent.primary}>{safe(request.sourceAgent)}</Text>
           {request.targetAgent ? (
             <>
               {"  →  "}
-              <Text color={theme.accent.primary}>{request.targetAgent}</Text>
+              <Text color={theme.accent.primary}>{safe(request.targetAgent)}</Text>
             </>
           ) : null}
         </Text>
       </Box>
 
       <Box marginTop={1}>
-        <Text>
+        <Text wrap={fit.compact ? "truncate-middle" : "wrap"}>
           {"    "}
-          <Text bold>{request.targetTool ?? "(no tool)"}</Text>
+          <Text bold>{safe(request.targetTool ?? "(no tool)")}</Text>
           <Text>({renderArgs(request.args)})</Text>
         </Text>
       </Box>
@@ -439,7 +486,7 @@ function LegacyModal({
           {request.riskReasons.map((r) => (
             <Text key={r}>
               {"    "}
-              <Text color={borderColor}>{theme.symbols.reason}</Text> {r}
+              <Text color={borderColor}>{theme.symbols.reason}</Text> {safe(r)}
               {explain(r) ? (
                 <Text color={theme.fg.muted}>{`  (${explain(r)})`}</Text>
               ) : null}
@@ -453,14 +500,17 @@ function LegacyModal({
           <Text color={theme.fg.muted}>Context:</Text>
           <Text italic color={theme.fg.muted}>
             {'    "'}
-            {request.context}
+            {safe(request.context, { multiline: true })}
             {'"'}
           </Text>
         </Box>
       ) : null}
 
       <RecommendationBlock recommendations={recommendations} />
+      </Box>
+      </Box>
 
+      <Box flexDirection="column" flexShrink={0}>
       <Box marginTop={1}>
         <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>
       </Box>
@@ -470,10 +520,12 @@ function LegacyModal({
           Boolean(request.sessionId) &&
           (request.riskFactors ?? []).some((f) => f.category === "loop")
         }
+        keys={keys}
       />
 
       <Box marginTop={1} justifyContent="flex-end">
         <TimerLabel remainingSeconds={remainingSeconds} />
+      </Box>
       </Box>
     </Box>
   );
@@ -571,11 +623,11 @@ function FactorLine({ factor }: { factor: RiskFactor }): JSX.Element {
           {sign}
           {factor.points.toString().padStart(3, " ")}
         </Text>{" "}
-        {factor.reason}
+        {safe(factor.reason)}
       </Text>
       {factor.evidence ? (
         <Text color={theme.fg.muted}>
-          {"         "}↳ {truncate(factor.evidence, 60)}
+          {"         "}↳ {truncate(safe(factor.evidence), 60)}
         </Text>
       ) : null}
     </Box>
@@ -586,11 +638,34 @@ function HotkeyRow({
   showHalt,
   showTechnicalToggle = false,
   technicalExpanded = false,
+  keys,
 }: {
   showHalt: boolean;
   showTechnicalToggle?: boolean;
   technicalExpanded?: boolean;
+  keys: KeyHints;
 }): JSX.Element {
+  if (keys.confirm) {
+    return (
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold color={theme.accent.warning} wrap="wrap">
+          {" "}
+          {safe(keys.confirm)}
+        </Text>
+        <Text>
+          {" "}[
+          <Text color={theme.accent.primary} bold>
+            y
+          </Text>
+          ] yes · [
+          <Text color={theme.accent.primary} bold>
+            n
+          </Text>
+          ] no, go back
+        </Text>
+      </Box>
+    );
+  }
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text>
@@ -639,6 +714,12 @@ function HotkeyRow({
         </Text>
         ]eny always
       </Text>
+      {keys.rememberScope ? (
+        <Text color={theme.fg.muted} wrap="truncate-middle">
+          {"   remembers: "}
+          {safe(keys.rememberScope)}
+        </Text>
+      ) : null}
     </Box>
   );
 }
@@ -661,16 +742,19 @@ function TimerLabel({
   );
 }
 
+/** Arguments as the modal shows them. Every hidden character is shown
+ *  visibly (#656): a path with `ESC[2K` + `CR` used to erase the start of
+ *  its own line, and SGR 8 hid the `.env` at its end. */
 function renderArgs(args: unknown): string {
   if (args === null || args === undefined) return "";
-  if (typeof args !== "object") return JSON.stringify(args);
+  if (typeof args !== "object") return safe(JSON.stringify(args) ?? String(args));
   const obj = args as Record<string, unknown>;
-  if (typeof obj.path === "string") return `"${obj.path}"`;
+  if (typeof obj.path === "string") return `"${safe(obj.path)}"`;
   if (typeof obj.text === "string") {
     const text = obj.text as string;
-    return text.length > 32 ? `"${text.slice(0, 31)}…"` : `"${text}"`;
+    return text.length > 32 ? `"${safe(text.slice(0, 31))}…"` : `"${safe(text)}"`;
   }
-  return JSON.stringify(obj);
+  return safe(JSON.stringify(obj));
 }
 
 function truncate(s: string, max: number): string {

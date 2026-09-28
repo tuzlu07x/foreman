@@ -31,6 +31,17 @@ export class SecretAlreadyExistsError extends Error {
  *  `*Reserved` methods. */
 export const RESERVED_SECRET_PREFIX = "foreman-agent-token:";
 
+/** What a secret name you choose may look like: the same charset
+ *  `${secret:<name>}` references accept in mcp.yaml (letters, digits, '.',
+ *  '_', '-'; starting with a letter or digit; at most 128). Names land in
+ *  config files, audit rows and terminal output. */
+export const SECRET_NAME_PATTERN = "[A-Za-z0-9][A-Za-z0-9._-]{0,127}";
+const SECRET_NAME_RE = new RegExp(`^${SECRET_NAME_PATTERN}$`);
+
+export function isValidSecretName(name: string): boolean {
+  return SECRET_NAME_RE.test(name);
+}
+
 export function isReservedSecretName(name: string): boolean {
   return name.startsWith(RESERVED_SECRET_PREFIX);
 }

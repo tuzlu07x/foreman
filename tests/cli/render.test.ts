@@ -288,3 +288,37 @@ describe('renderPolicyJson', () => {
     expect(out.conditions.pathNotMatch).toBe('\\.env$')
   })
 })
+
+describe('agent-supplied text is shown, not executed (#656)', () => {
+  const ESC = String.fromCodePoint(0x1b)
+  const RLO = String.fromCodePoint(0x202e)
+  const hostile = `evil${ESC}]0;PWNED${String.fromCodePoint(7)}${ESC}[2Jx`
+  const raw = (s: string): boolean => s.includes(`${ESC}]`) || s.includes(`${ESC}[2J`) || s.includes(RLO)
+
+  it('agent list', () => {
+    const out = renderAgentLine({ ...sampleAgent, id: hostile, displayName: `n${RLO}` })
+    expect(raw(out)).toBe(false)
+    expect(stripAnsi(out)).toContain('evil␛]0;PWNED␇␛[2Jx')
+  })
+
+  it('log show: fields, args and the security report', () => {
+    const row: Request = {
+      ...sampleRequest,
+      sourceAgent: hostile,
+      targetTool: `read${RLO}file`,
+      args: JSON.stringify({ path: `x${ESC}[2K\rdocs/README.md${ESC}[8m/.env`, c1: String.fromCodePoint(0x9b) }),
+      securityReport: JSON.stringify({
+        oneLineSummary: `qa-bot wants read_file("${ESC}[2K\r.env")`,
+        narrative: { whatHappening: `reads ${RLO}vne.`, thingsToCheck: [`${ESC}[8mhidden`], recommendation: 'ask' },
+      }),
+      riskFactors: JSON.stringify([{ rule: 'secret_path', points: 60, reason: `.env ${ESC}[8m` }]),
+    }
+    const out = renderRequestDetail(row)
+    expect(raw(out)).toBe(false)
+    expect(out).not.toContain(`${ESC}[8m`)
+    expect(out).not.toContain(`${ESC}[2K`)
+    expect(out).not.toContain(String.fromCodePoint(0x9b))
+    expect(stripAnsi(out)).toContain('⟨U+202E⟩vne.')
+    expect(raw(renderRequestLine(row))).toBe(false)
+  })
+})

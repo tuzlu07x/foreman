@@ -98,6 +98,29 @@ export interface ForemanCommandContext {
    *  Only in-process owner surfaces set this; the MCP path never does,
    *  and nothing an agent sends can turn it on. */
   trustedOwner?: boolean;
+  /** The owner allowed this exact command in a Foreman approval (#656): a
+   *  command an agent relayed that changes Foreman. Satisfies the owner
+   *  check that `source_user` used to (an agent can send any id it
+   *  likes); org, budget and runaway checks still apply to the relaying
+   *  agent. Only mcp-stdio sets it, and only after that approval. */
+  ownerConfirmed?: boolean;
+  /** The relaying agent hands out work as itself (#656): `write`, `assign`
+   *  and `<agent> <task>` from a verified agent are its delegation, not
+   *  yours. No owner check and no owner attribution; the org chart,
+   *  department budgets and the runaway guard decide, exactly as for
+   *  `foreman write` run from a shell Foreman spawned for the agent. Only
+   *  honoured for `write`. */
+  agentDelegation?: boolean;
+  /** Mediates a hand-off from `sourceAgent` to another agent before it is
+   *  queued (#656): the call `sourceAgent → <target>:write` goes through
+   *  policy.yaml (`agents.<id>.can_call` / `cannot_call`, `rules:` with an
+   *  `<agent>:write` target), the risk engine and, when either asks, you.
+   *  Set by the transports an agent delegates through; the owner surfaces
+   *  leave it unset. */
+  authorizeDelegation?: (
+    targetAgent: string,
+    task: string,
+  ) => Promise<{ ok: true } | { ok: false; reason: string }>;
   /** #432 — Foreman's own LLM, gated on `features.orchestrator_chat`.
    *  When provided + enabled, `/foreman report me`, `/foreman <agent>
    *  ne yapıyor`, and unknown free-form verbs go through the LLM.
@@ -153,6 +176,10 @@ export class ForemanCommandRouter {
     const key = verb.toLowerCase();
     this.handlers.set(key, handler);
     this.descriptions.set(key, description);
+  }
+
+  has(verb: string): boolean {
+    return this.handlers.has(verb.toLowerCase());
   }
 
   listVerbs(): Array<{ verb: string; description: string }> {
@@ -226,6 +253,66 @@ export class ForemanCommandRouter {
       errorCode: "UNKNOWN_COMMAND",
     };
   }
+}
+
+// =============================================================================
+// What a relayed command may do on its own (#656)
+// =============================================================================
+//
+// `submit_command` comes from an agent. It can relay what you typed in its
+// chat, but it can't prove you typed it (`source_user` is whatever the
+// agent sends). So:
+//   - commands that only read run at once;
+//   - handing out work (`write`, `assign`, `<agent> <task>`) runs as the
+//     agent's own delegation, under the org chart, never as you;
+//   - anything else that changes Foreman (stop, model or LLM changes,
+//     sign-ins) runs only after you allow it in a Foreman approval.
+// New verbs are "change" until listed here.
+
+/** Verbs that only read state. `report` / free-form questions may spend
+ *  Foreman's LLM budget, which has its own cap. */
+const READ_VERBS: ReadonlySet<string> = new Set([
+  "help",
+  "status",
+  "agent",
+  "agents",
+  "activity",
+  "org",
+  "spend",
+  "report",
+]);
+
+/** Owner-surface verbs refuse themselves unless `trustedOwner` is set
+ *  (TUI, Slack, Discord), so there is nothing to confirm. */
+const OWNER_SURFACE_VERBS: ReadonlySet<string> = new Set(["tell", "comms"]);
+
+/** The tool a hand-off from one agent to another is mediated as (#656):
+ *  policy targets it as `<agent>:write`. */
+export const DELEGATION_TOOL = "write";
+
+/** Verbs that hand work to another agent. */
+const DELEGATION_VERBS: ReadonlySet<string> = new Set(["write", "assign"]);
+
+export type RelayedCommandAccess = "read" | "delegate" | "change" | "owner-surface";
+
+export function relayedCommandAccess(
+  router: Pick<ForemanCommandRouter, "has">,
+  registry: Pick<RegistryService, "findByCommandToken">,
+  command: string,
+  args: readonly string[],
+): RelayedCommandAccess {
+  const verb = command.trim().toLowerCase();
+  if (READ_VERBS.has(verb)) return "read";
+  if (OWNER_SURFACE_VERBS.has(verb)) return "owner-surface";
+  if (DELEGATION_VERBS.has(verb)) return "delegate";
+  if (verb === "llm") return (args[0] ?? "status").toLowerCase() === "status" ? "read" : "change";
+  if (verb === "model" || verb === "models") return args.length === 0 ? "read" : "change";
+  if (router.has(verb)) return "change";
+  // Not a verb: `<agent> <task>` hands out work (a `write`); anything else
+  // is a question for Foreman's LLM.
+  const lookup = registry.findByCommandToken(command);
+  const task = stripLeadingPunctuation(args.join(" ")).trim();
+  return lookup.kind === "match" && task.length > 0 ? "delegate" : "read";
 }
 
 // #524 — Strip a single run of leading punctuation right after the agent
@@ -369,7 +456,7 @@ function orgHandler(_args: string[], ctx: ForemanCommandContext): ForemanCommand
   return { ok: true, text: renderOrgLines(org.doc, registered).join("\n") };
 }
 
-function assignHandler(args: string[], ctx: ForemanCommandContext): ForemanCommandResult {
+async function assignHandler(args: string[], ctx: ForemanCommandContext): Promise<ForemanCommandResult> {
   const target = args[0]?.trim();
   const task = args.slice(1).join(" ").trim();
   if (!target || !task) {
@@ -390,7 +477,7 @@ function assignHandler(args: string[], ctx: ForemanCommandContext): ForemanComma
     };
   }
   const role = org.doc.roles[roleId]!;
-  const result = writeHandler([role.agent, task], ctx);
+  const result = await writeHandler([role.agent, task], ctx);
   return { ...result, text: `→ ${roleId} (${role.title}) · ${role.agent}\n${result.text}` };
 }
 
@@ -949,10 +1036,10 @@ function stopHandler(
 // for the start-side drain handler to deliver via Telegram + optional
 // inbound_dir file write. Returns the queued id; user sees the
 // formatted Foreman → <agent> post in their chat ~1.5s later.
-function writeHandler(
+async function writeHandler(
   args: string[],
   ctx: ForemanCommandContext,
-): ForemanCommandResult {
+): Promise<ForemanCommandResult> {
   const targetAgent = args[0]?.toLowerCase().trim();
   const message = args.slice(1).join(" ").trim();
   if (!targetAgent || !message) {
@@ -1055,6 +1142,19 @@ function writeHandler(
     }
   }
 
+  // The hand-off itself is a call from one agent to another (#656):
+  // `can_call` / `cannot_call` and `<agent>:write` rules apply to it.
+  if (ctx.authorizeDelegation && !ctx.trustedOwner && !ctx.ownerConfirmed && !isHumanSource(ctx.sourceAgent)) {
+    const verdict = await ctx.authorizeDelegation(targetAgent, message);
+    if (!verdict.ok) {
+      return {
+        ok: false,
+        text: `Not handed to ${targetAgent}: ${verdict.reason}.`,
+        errorCode: "ORG_POLICY",
+      };
+    }
+  }
+
   // PR D — when the target agent declares task_command_template,
   // the drain handler will spawn it and post the output back to chat.
   // Tailor the success text so users know to wait for the follow-up
@@ -1134,11 +1234,22 @@ function enqueueMutating(
   // definition wrong. Treat it the same as missing — fall back to
   // telegram-chat-id rather than rejecting with NOT_AUTHORIZED.
   // The TUI command bar is the owner at the host: no Telegram id to check.
-  let effectiveSourceUser = ctx.trustedOwner ? (ctx.sourceUser ?? "owner") : ctx.sourceUser;
+  // A relayed command you allowed in Foreman (#656) is yours too; the
+  // agent's `source_user` is not trusted for attribution.
+  // An agent's own delegation (#656) needs no owner and claims none.
+  const delegation = command === "write" && ctx.agentDelegation === true && !ctx.trustedOwner;
+  let effectiveSourceUser = ctx.trustedOwner
+    ? (ctx.sourceUser ?? "owner")
+    : ctx.ownerConfirmed
+      ? ownerIdOr(ctx.ownerStore, "owner")
+      : delegation
+        ? undefined
+        : ctx.sourceUser;
+  const ownerChecked = ctx.trustedOwner === true || ctx.ownerConfirmed === true || delegation;
   const isNumericUserId = (s: string | undefined): s is string =>
     typeof s === "string" && s.trim().length > 0 && /^\d+$/.test(s.trim());
   if (
-    !ctx.trustedOwner &&
+    !ownerChecked &&
     !isNumericUserId(effectiveSourceUser) &&
     ctx.ownerStore?.exists("telegram-chat-id")
   ) {
@@ -1149,7 +1260,7 @@ function enqueueMutating(
     }
   }
   if (
-    !ctx.trustedOwner &&
+    !ownerChecked &&
     (!ctx.ownerStore || !isOwner(ctx.ownerStore, { sourceUser: effectiveSourceUser }))
   ) {
     // QA round 10: distinguish "no source_user was sent" (agent's LLM
@@ -1197,6 +1308,14 @@ function enqueueMutating(
       ? `${opts.successText} (tracking id=${enq.id})`
       : opts.successText,
   };
+}
+
+function ownerIdOr(store: OwnerStore | undefined, fallback: string): string {
+  try {
+    return store?.exists("telegram-chat-id") ? store.get("telegram-chat-id") : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function llmSubrouterHandler(

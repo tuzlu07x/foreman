@@ -97,5 +97,12 @@ Known limits, which we track as roadmap items rather than hide:
   with a key separate from relay tokens, so button values readable in chat
   history can't be replayed through `submit_approval`.
   Commands typed there run as the owner, like the TUI, and are audited.
+  A `/foreman` command relayed by an agent (`submit_command`) can't prove
+  you typed it, and the `source_user` it carries is the agent's word, so
+  only read-only verbs run at once. Handing out work (`write`, `assign`)
+  runs as the agent's own delegation under the org chart, never as you.
+  Anything else that changes Foreman (stop, model and LLM changes,
+  sign-ins) waits for your OK on Foreman's own approval prompt (TUI or a
+  tagged button) and is refused, and audited, otherwise.
 - **Pre-execution only.** Foreman decides before a call runs; it does not
   roll back side effects of calls you approved.

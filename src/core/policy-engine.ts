@@ -1,9 +1,10 @@
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { and, eq, gte, inArray, like, sql } from "drizzle-orm";
-import { parse as parseYaml } from "yaml";
+import { isSeq, parse as parseYaml, parseDocument, YAMLSeq } from "yaml";
 import { z } from "zod";
 import type { ForemanDb } from "../db/client.js";
-import { pendingApprovals, policies, requests } from "../db/schema.js";
+import { agentUsage, pendingApprovals, policies, requests } from "../db/schema.js";
+import { writeConfigAtomically } from "./agent-config-injector.js";
 import { claimedAgentOf, isUntrustedSource } from "./agent-identity.js";
 import {
   bus as defaultBus,
@@ -227,6 +228,13 @@ export class PolicyRuleNotFoundError extends Error {
   }
 }
 
+export class NotRememberedRuleError extends Error {
+  constructor(public readonly ruleId: number) {
+    super(`Policy rule ${ruleId} comes from policy.yaml; edit the file to change it`);
+    this.name = "NotRememberedRuleError";
+  }
+}
+
 export class PolicyEngine {
   // Held in memory only — re-populated on every loadYamlText. The mediator
   // reads via getBucketOverrides() each call so a YAML reload takes effect
@@ -242,6 +250,14 @@ export class PolicyEngine {
   // accessor so YAML reload applies without a restart.
   private sessionLimits: SessionLimits = { ...DEFAULT_SESSION_LIMITS };
   private untrustedMode: UntrustedMode = DEFAULT_UNTRUSTED_MODE;
+  /** The policy.yaml this engine follows (#656), see watchFile(). */
+  private watched: {
+    path: string;
+    stamp: string | null;
+    checkedAt: number;
+    reportedError: string | null;
+    onError: (message: string) => void;
+  } | null = null;
 
   constructor(
     private readonly db: ForemanDb,
@@ -249,12 +265,62 @@ export class PolicyEngine {
   ) {}
 
   loadFromYaml(path: string): { rulesAdded: number } {
-    return this.loadYamlText(readFileSync(path, "utf-8"));
+    const result = this.loadYamlText(readFileSync(path, "utf-8"));
+    if (this.watched?.path === path) {
+      this.watched.stamp = fileStamp(path);
+      this.watched.reportedError = null;
+    }
+    return result;
   }
 
-  // Replaces every previously-yaml-loaded rule with the doc's contents.
-  // The swap runs inside a single transaction so concurrent evaluators
-  // never observe the empty-policy window mid-reload.
+  /**
+   * Follow `path` for the life of this process (#656): load it now, then
+   * re-read it whenever it changes (one `stat` per evaluation, at most
+   * every WATCH_INTERVAL_MS), so `foreman start` and every running
+   * `foreman mcp-stdio` apply an edit on their next call. A file that
+   * doesn't parse is not applied: the last good policy stays in force (the
+   * rules already in the database) and `onError` hears about it once per
+   * broken version. Never throws.
+   */
+  watchFile(path: string, onError: (message: string) => void = () => {}): void {
+    this.watched = { path, stamp: null, checkedAt: 0, reportedError: null, onError };
+    this.refreshWatched(true);
+  }
+
+  private refreshWatched(force = false): void {
+    const w = this.watched;
+    if (!w) return;
+    const now = Date.now();
+    if (!force && now - w.checkedAt < WATCH_INTERVAL_MS) return;
+    w.checkedAt = now;
+    const stamp = fileStamp(w.path);
+    if (stamp === w.stamp) return;
+    w.stamp = stamp;
+    if (stamp === null) return; // deleted: keep what is loaded
+    try {
+      this.loadYamlText(readFileSync(w.path, "utf-8"));
+      w.reportedError = null;
+    } catch (err) {
+      const message =
+        `${w.path} could not be applied (${describePolicyError(err)}); ` +
+        "the last good policy stays in force until the file is fixed";
+      if (w.reportedError !== message) {
+        w.reportedError = message;
+        try {
+          w.onError(message);
+        } catch {
+          // reporting is best-effort; enforcement must not depend on it
+        }
+      }
+    }
+  }
+
+  // Replaces the yaml-loaded rules with the doc's contents. Rules that are
+  // unchanged keep their row, and so their id (#656): audit rows such as
+  // `allowed (policy:5)` keep pointing at the rule that decided them, in
+  // every process and across restarts. Only removed rules are deleted and
+  // only new ones inserted, inside one transaction so concurrent
+  // evaluators never observe a partial policy.
   loadYamlText(text: string): { rulesAdded: number } {
     const parsed = parseYaml(text);
     const doc = parsed === null ? {} : PolicyDocSchema.parse(parsed);
@@ -323,9 +389,37 @@ export class PolicyEngine {
     }
 
     this.db.transaction((tx) => {
-      tx.delete(policies).where(eq(policies.createdBy, "user")).run();
-      if (rows.length > 0) {
-        tx.insert(policies).values(rows).run();
+      const existing = new Map<string, number[]>();
+      for (const row of tx.select().from(policies).where(eq(policies.createdBy, "user")).orderBy(policies.id).all()) {
+        const key = ruleKey(row);
+        existing.set(key, [...(existing.get(key) ?? []), row.id]);
+      }
+      const fresh: (typeof policies.$inferInsert)[] = [];
+      for (const row of rows) {
+        const ids = existing.get(ruleKey(row));
+        if (ids && ids.length > 0) ids.shift();
+        else fresh.push(row);
+      }
+      const stale = [...existing.values()].flat();
+      if (stale.length > 0) tx.delete(policies).where(inArray(policies.id, stale)).run();
+      if (fresh.length > 0) tx.insert(policies).values(fresh).run();
+      // Block rules used to be stored twice, in the database and appended
+      // to policy.yaml (#656). The file's copy is the one that counts:
+      // drop the database copy of any block rule the file still has, so
+      // deleting it from the file removes it.
+      const inFile = approvalIdsInYaml(text, rows);
+      if (inFile.size > 0) {
+        const duplicates = tx
+          .select()
+          .from(policies)
+          .where(eq(policies.createdBy, "remember-action"))
+          .all()
+          .filter((r) => {
+            const id = approvalIdOf(r.conditions);
+            return id !== null && inFile.has(id);
+          })
+          .map((r) => r.id);
+        if (duplicates.length > 0) tx.delete(policies).where(inArray(policies.id, duplicates)).run();
       }
     });
     return { rulesAdded: rows.length };
@@ -337,6 +431,7 @@ export class PolicyEngine {
     sourceAgent: string,
     secretName: string,
   ): Evaluation & { decidedBy: string } {
+    this.refreshWatched();
     const target = secretTarget(secretName);
     const candidates = this.db
       .select()
@@ -399,23 +494,29 @@ export class PolicyEngine {
   }
 
   evaluate(req: EvaluateRequest): Evaluation {
+    this.refreshWatched();
     const target = this.requestTarget(req);
     if (!target) return { decision: "ask" };
 
     const rateLimitDecision = this.checkRateLimits(req);
     if (rateLimitDecision) return rateLimitDecision;
 
+    // Another transport's name for the same tool (ACP's `read` for
+    // read_file, …) still meets the restrictions written for it (#656);
+    // an allow rule only ever covers the name it was written for.
+    const aliases = targetAliases(target);
     const candidates = this.db
       .select()
       .from(policies)
       .where(
         and(
           inArray(policies.sourceAgent, [req.sourceAgent, "*"]),
-          eq(policies.target, target),
+          inArray(policies.target, aliases),
           eq(policies.enabled, 1),
         ),
       )
-      .all();
+      .all()
+      .filter((r) => r.target === target || r.effect !== "allow");
 
     const matching = candidates.filter((rule) => this.conditionsPass(rule, req));
     // An explicit deny aimed at this agent always wins.
@@ -423,6 +524,8 @@ export class PolicyEngine {
       (r) => r.sourceAgent === req.sourceAgent && r.effect === "deny",
     );
     if (exactDeny) return { decision: "deny", matchedRuleId: exactDeny.id };
+    const unlisted = this.outsideCanCall(req, target);
+    if (unlisted) return unlisted;
     // A rule overrides another only when it is more specific on one axis
     // (exact source, conditions) and no less specific on the other. Among
     // the rules nothing overrides, the strictest decides. So "always allow
@@ -445,7 +548,30 @@ export class PolicyEngine {
     return this.withUntrustedMode(req, this.withClaimedRestrictions(req, target, result));
   }
 
+  /** `agents.<id>.can_call.<target>` is an allowlist (#656): once an
+   *  agent's calls to another agent are listed, a call to anything else on
+   *  that agent is denied. Holds for an unverified connection claiming
+   *  the id too. */
+  private outsideCanCall(req: EvaluateRequest, target: string): Evaluation | null {
+    if (!req.targetAgent || !req.targetTool) return null;
+    const prefix = `${req.targetAgent}:`;
+    const sources = [...new Set([req.sourceAgent, claimedAgentOf(req.sourceAgent)])];
+    for (const source of sources) {
+      const listed = this.db
+        .select()
+        .from(policies)
+        .where(and(eq(policies.sourceAgent, source), eq(policies.effect, "allow"), eq(policies.enabled, 1)))
+        .all()
+        .filter((r) => r.target.startsWith(prefix));
+      if (listed.length === 0) continue;
+      const covered = listed.some((r) => r.target === target && this.conditionsPass(r, { ...req, sourceAgent: source }));
+      if (!covered) return { decision: "deny", label: "can_call" };
+    }
+    return null;
+  }
+
   getUntrustedMode(): UntrustedMode {
+    this.refreshWatched();
     return this.untrustedMode;
   }
 
@@ -466,7 +592,7 @@ export class PolicyEngine {
     const restrictions = this.db
       .select()
       .from(policies)
-      .where(and(eq(policies.sourceAgent, claimed), eq(policies.target, target), eq(policies.enabled, 1)))
+      .where(and(eq(policies.sourceAgent, claimed), inArray(policies.target, targetAliases(target)), eq(policies.enabled, 1)))
       .all()
       .filter((r) => r.effect !== "allow" && this.conditionsPass(r, { ...req, sourceAgent: claimed }))
       .sort((a, b) => EFFECT_ORDER[a.effect] - EFFECT_ORDER[b.effect] || a.id - b.id);
@@ -532,6 +658,24 @@ export class PolicyEngine {
         ...(input.reason ? { reason: input.reason } : {}),
       },
     };
+    // One copy (#656): with a policy.yaml the rule lives in the file only
+    // (and so in the rules loaded from it), where you can read, edit or
+    // delete it; deleting it there removes it. Without a usable file it is
+    // kept in the database, as a remembered rule.
+    if (input.policyYamlPath) {
+      const fromYaml = this.addApprovalRuleToYaml(input.policyYamlPath, input, conditions, now);
+      if (fromYaml !== null) {
+        this.bus.emit("policy:changed", {
+          ruleId: fromYaml,
+          sourceAgent: input.sourceAgent,
+          target: input.target,
+          effect: "deny",
+          createdBy: "user",
+          changedAt: now,
+        });
+        return fromYaml;
+      }
+    }
     const result = this.db
       .insert(policies)
       .values({
@@ -553,25 +697,88 @@ export class PolicyEngine {
       createdBy: "remember-action",
       changedAt: now,
     });
-    // Best-effort YAML append — if the caller passed a path we keep the
-    // file in sync so the next `loadFromYaml` doesn't lose the rule, AND
-    // the user can grep / edit / delete by hand. Failure to write is
-    // logged-only; the DB insert already happened so the rule is live.
-    if (input.policyYamlPath) {
-      try {
-        appendApprovalRuleToYaml(input.policyYamlPath, input, now);
-      } catch {
-        // best-effort; DB persistence is the source of truth
-      }
-    }
     return ruleId;
+  }
+
+  /** Add the rule to policy.yaml's `rules:` and load the file. Nothing is
+   *  written unless the result parses. Returns the loaded rule's id, or
+   *  null when the file can't take it (unreadable, or already broken). */
+  private addApprovalRuleToYaml(
+    path: string,
+    input: AddPredicateRuleInput,
+    conditions: RuleConditions,
+    addedAt: number,
+  ): number | null {
+    let next: string;
+    try {
+      const existing = readPolicyText(path) ?? "";
+      next = withApprovalRule(existing, input, conditions, addedAt);
+      this.loadYamlText(next);
+      writeConfigAtomically(path, next);
+      if (this.watched?.path === path) this.watched.stamp = fileStamp(path);
+    } catch {
+      return null;
+    }
+    const row = this.db
+      .select()
+      .from(policies)
+      .where(and(eq(policies.createdBy, "user"), eq(policies.sourceAgent, input.sourceAgent), eq(policies.target, input.target)))
+      .all()
+      .find((r) => approvalIdOf(r.conditions) === input.approvalId);
+    return row?.id ?? null;
   }
 
   list(): (typeof policies.$inferSelect)[] {
     return this.db.select().from(policies).all();
   }
 
+  /** Rules made from your answers ("always allow", "deny always", block
+   *  buttons), newest first: `foreman policy remembered list`. Block rules
+   *  that live in policy.yaml are included. */
+  listRemembered(): (typeof policies.$inferSelect)[] {
+    return this.db
+      .select()
+      .from(policies)
+      .orderBy(sql`${policies.id} desc`)
+      .all()
+      .filter((r) => r.createdBy === "remember-action" || approvalIdOf(r.conditions) !== null);
+  }
+
+  /** Forget one remembered rule, everywhere it is kept: the database row,
+   *  and for a block rule its entry in policy.yaml. Other policy.yaml rules
+   *  are edited in the file, so they are refused. Returns the removed row. */
+  removeRemembered(ruleId: number, opts: { policyYamlPath?: string } = {}): typeof policies.$inferSelect {
+    const row = this.db.select().from(policies).where(eq(policies.id, ruleId)).get();
+    if (!row) throw new PolicyRuleNotFoundError(ruleId);
+    const approvalId = approvalIdOf(row.conditions);
+    if (row.createdBy !== "remember-action" && approvalId === null) throw new NotRememberedRuleError(ruleId);
+    const text = approvalId !== null && opts.policyYamlPath ? readPolicyText(opts.policyYamlPath) : null;
+    if (approvalId !== null && opts.policyYamlPath && text !== null) {
+      const next = withoutApprovalRule(text, approvalId);
+      if (next !== null) {
+        this.loadYamlText(next);
+        writeConfigAtomically(opts.policyYamlPath, next);
+        if (this.watched?.path === opts.policyYamlPath) this.watched.stamp = fileStamp(opts.policyYamlPath);
+      } else if (row.createdBy !== "remember-action") {
+        throw new NotRememberedRuleError(ruleId);
+      }
+    } else if (row.createdBy !== "remember-action") {
+      throw new NotRememberedRuleError(ruleId);
+    }
+    this.db.delete(policies).where(eq(policies.id, ruleId)).run();
+    this.bus.emit("policy:changed", {
+      ruleId,
+      sourceAgent: row.sourceAgent,
+      target: row.target,
+      effect: row.effect,
+      createdBy: row.createdBy,
+      changedAt: Date.now(),
+    });
+    return row;
+  }
+
   getBucketOverrides(): BucketOverrides {
+    this.refreshWatched();
     return { ...this.bucketOverrides };
   }
 
@@ -580,6 +787,7 @@ export class PolicyEngine {
   // takes effect without a process restart. Returns a shallow copy so the
   // caller can't mutate engine state.
   getResponsibilityPolicies(): ResponsibilityPolicy[] {
+    this.refreshWatched();
     return this.responsibilityPolicies.map((p) => ({ ...p }));
   }
 
@@ -589,6 +797,7 @@ export class PolicyEngine {
    *  YAML reload takes effect mid-session. Returns a shallow copy so
    *  callers can't mutate engine state by accident. */
   getSessionLimits(): SessionLimits {
+    this.refreshWatched();
     return { ...this.sessionLimits };
   }
 
@@ -742,20 +951,39 @@ export class PolicyEngine {
       if (!rule.conditions) continue;
       const cond = this.parseConditions(rule.conditions);
       const limit = cond?.rateLimits?.messagesPerMinute;
-      if (!limit) continue;
-
-      const row = this.db
-        .select({ count: sql<number>`count(*)` })
-        .from(requests)
-        .where(
-          and(
-            inArray(requests.sourceAgent, counted),
-            gte(requests.createdAt, since),
-          ),
-        )
-        .get();
-      if ((row?.count ?? 0) >= limit) {
-        return { decision: "deny", matchedRuleId: rule.id };
+      if (limit) {
+        const row = this.db
+          .select({ count: sql<number>`count(*)` })
+          .from(requests)
+          .where(
+            and(
+              inArray(requests.sourceAgent, counted),
+              gte(requests.createdAt, since),
+            ),
+          )
+          .get();
+        if ((row?.count ?? 0) >= limit) {
+          return { decision: "deny", matchedRuleId: rule.id };
+        }
+      }
+      // #656 — tokens the agent used in the last hour, as the spend ledger
+      // has them (telemetry, task output, Foreman's own calls). Ledger ids
+      // are lower-case.
+      const tokenLimit = cond?.rateLimits?.tokensPerHour;
+      if (tokenLimit) {
+        const used = this.db
+          .select({ total: sql<number>`coalesce(sum(${agentUsage.totalTokens}), 0)` })
+          .from(agentUsage)
+          .where(
+            and(
+              inArray(agentUsage.agentId, [...new Set(counted.map((id) => id.trim().toLowerCase()))]),
+              gte(agentUsage.ts, Date.now() - 3_600_000),
+            ),
+          )
+          .get();
+        if ((used?.total ?? 0) >= tokenLimit) {
+          return { decision: "deny", matchedRuleId: rule.id };
+        }
       }
     }
     return untrusted ? this.checkUntrustedFlood(since) : null;
@@ -806,6 +1034,60 @@ export class PolicyEngine {
   }
 }
 
+/** Names different transports use for the same kind of tool call (#656).
+ *  A deny / ask rule written for one name also applies to the others, so
+ *  the default `.env` guard on `tool:read_file` covers ACP agents'
+ *  `tool:read` and the MCP filesystem server's read tools. */
+const TOOL_ALIAS_GROUPS: ReadonlyArray<ReadonlyArray<string>> = [
+  ["read_file", "read", "read_text_file", "read_multiple_files", "read_media_file"],
+  ["file_write", "write_file", "edit_file", "write", "edit", "create_file", "move_file"],
+  ["shell_exec", "execute", "execute_code", "run_command", "run_shell", "bash", "sh", "zsh", "exec"],
+  ["network_fetch", "fetch", "fetch_url", "web_fetch"],
+];
+
+const TOOL_ALIASES: ReadonlyMap<string, ReadonlyArray<string>> = new Map(
+  TOOL_ALIAS_GROUPS.flatMap((group) => group.map((name) => [name, group] as const)),
+);
+
+/** Every spelling of a rule target (`tool:<name>` or `<agent>:<name>`)
+ *  whose tool name belongs to an alias group; itself otherwise. */
+export function targetAliases(target: string): string[] {
+  const at = target.lastIndexOf(":");
+  if (at < 0) return [target];
+  const prefix = target.slice(0, at + 1);
+  const group = TOOL_ALIASES.get(target.slice(at + 1));
+  return group ? [target, ...group.map((name) => `${prefix}${name}`).filter((t) => t !== target)] : [target];
+}
+
+/** How often a watched policy.yaml is stat'ed at most (#656). */
+const WATCH_INTERVAL_MS = 250;
+
+/** Changes whenever the file's content can have changed. */
+function fileStamp(path: string): string | null {
+  try {
+    const st = statSync(path);
+    return `${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Identity of a yaml rule: same source, target, effect and conditions. */
+function ruleKey(row: { sourceAgent: string; target: string; effect: string; conditions?: string | null }): string {
+  return JSON.stringify([row.sourceAgent, row.target, row.effect, row.conditions ?? null]);
+}
+
+function describePolicyError(err: unknown): string {
+  if (err instanceof z.ZodError) {
+    return err.issues
+      .slice(0, 3)
+      .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+      .join("; ");
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return message.split("\n")[0]!.slice(0, 200);
+}
+
 export function secretTarget(secretName: string): string {
   return `secret:${secretName}`;
 }
@@ -841,72 +1123,80 @@ export interface AddPredicateRuleInput {
   policyYamlPath?: string;
 }
 
-/** #526 — Best-effort YAML append for an approval-injected rule. The
- *  file may be empty or have an existing `rules:` block; we handle both
- *  cases by appending a self-contained YAML list item with a comment
- *  block above it. We do NOT round-trip the existing YAML through the
- *  yaml lib (would lose comments + formatting); the append is plain
- *  text that the loader parses fine because it's valid YAML on its own.
- *
- *  When the file doesn't exist, the function creates it with a `rules:`
- *  block so the appended item is anchored correctly. */
-function appendApprovalRuleToYaml(
-  path: string,
-  input: AddPredicateRuleInput,
-  addedAt: number,
-): void {
-  const block = renderApprovalRuleYamlBlock(input, addedAt);
-  if (!existsSync(path)) {
-    writeFileSync(path, `rules:\n${block}`, "utf-8");
-    return;
-  }
-  const existing = readFileSync(path, "utf-8");
-  // If the file already has a `rules:` key, append to that block.
-  // Otherwise, append a fresh `rules:` block at the end. Both paths
-  // keep existing comments / formatting intact because we never
-  // re-serialize what's already there.
-  const hasRulesBlock = /^rules:\s*$/m.test(existing) || /^rules:\s*\n/m.test(existing);
-  const sep = existing.endsWith("\n") ? "" : "\n";
-  if (hasRulesBlock) {
-    appendFileSync(path, `${sep}${block}`, "utf-8");
-  } else {
-    appendFileSync(path, `${sep}\nrules:\n${block}`, "utf-8");
+/** The approval a block rule came from, from its conditions' provenance. */
+function approvalIdOf(conditions: string | null): string | null {
+  if (!conditions) return null;
+  try {
+    const parsed = JSON.parse(conditions) as RuleConditions;
+    return parsed.source?.kind === "approval" && typeof parsed.source.approvalId === "string"
+      ? parsed.source.approvalId
+      : null;
+  } catch {
+    return null;
   }
 }
 
-function renderApprovalRuleYamlBlock(
+const APPROVAL_COMMENT_RE = /Added from approval (\S+)/g;
+
+/** Approvals whose block rule is in this policy.yaml: from the rules'
+ *  provenance, and from the comment older versions wrote above them. */
+function approvalIdsInYaml(text: string, rows: ReadonlyArray<{ conditions?: string | null }>): Set<string> {
+  const ids = new Set<string>();
+  for (const row of rows) {
+    const id = approvalIdOf(row.conditions ?? null);
+    if (id) ids.add(id);
+  }
+  for (const m of text.matchAll(APPROVAL_COMMENT_RE)) ids.add(m[1]!);
+  return ids;
+}
+
+/** policy.yaml with a block rule added to `rules:` (comments and layout
+ *  kept), with its provenance in the rule and a comment above it. */
+function withApprovalRule(
+  text: string,
   input: AddPredicateRuleInput,
+  conditions: RuleConditions,
   addedAt: number,
 ): string {
-  const iso = new Date(addedAt).toISOString();
-  const lines: string[] = [];
-  lines.push(`# === Foreman approval-injected rule ===`);
-  lines.push(`# Added from approval ${input.approvalId} at ${iso}`);
-  if (input.reason) {
-    lines.push(`# Reason: ${input.reason}`);
+  const doc = parseDocument(text);
+  if (doc.errors.length > 0) throw doc.errors[0]!;
+  let rules = doc.get("rules", true);
+  if (!isSeq(rules)) {
+    rules = new YAMLSeq();
+    doc.set("rules", rules);
   }
-  lines.push(
-    `# Edit / delete this rule by removing this entire block; Foreman won't re-add it.`,
-  );
-  lines.push(`  - source: ${input.sourceAgent}`);
-  lines.push(`    target: ${input.target}`);
-  lines.push(`    effect: deny`);
-  lines.push(`    conditions:`);
-  if (input.predicate.pathMatch && input.predicate.pathMatch.length > 0) {
-    lines.push(`      pathMatch:`);
-    for (const p of input.predicate.pathMatch) {
-      // Pattern strings may contain regex metachars + backslashes; YAML
-      // double-quote handles them with the standard escape rules.
-      lines.push(`        - ${JSON.stringify(p)}`);
-    }
-  }
-  if (input.predicate.toolPattern) {
-    lines.push(`      toolPattern: ${JSON.stringify(input.predicate.toolPattern)}`);
-  }
-  if (input.predicate.argContains) {
-    lines.push(`      argContains: ${JSON.stringify(input.predicate.argContains)}`);
-  }
-  return `${lines.join("\n")}\n`;
+  const node = doc.createNode({
+    source: input.sourceAgent,
+    target: input.target,
+    effect: "deny",
+    conditions,
+  });
+  node.commentBefore = [
+    " === Foreman approval-injected rule ===",
+    ` Added from approval ${input.approvalId} at ${new Date(addedAt).toISOString()}`,
+    ...(input.reason ? [` Reason: ${input.reason.replace(/[\r\n]+/g, " ")}`] : []),
+    " Delete this entry (or run `foreman policy remembered list` / `remove <id>`) to drop the rule.",
+  ].join("\n");
+  (rules as YAMLSeq).items.push(node);
+  return doc.toString();
+}
+
+/** policy.yaml without the block rule from `approvalId`, or null when the
+ *  file has no such entry (edited by hand). */
+function withoutApprovalRule(text: string, approvalId: string): string | null {
+  const doc = parseDocument(text);
+  if (doc.errors.length > 0) return null;
+  const rules = doc.get("rules", true);
+  if (!isSeq(rules)) return null;
+  const index = rules.items.findIndex((item) => {
+    const value = (item as { toJSON?: () => unknown }).toJSON?.() as { conditions?: RuleConditions } | undefined;
+    if (value?.conditions?.source?.approvalId === approvalId) return true;
+    const comment = (item as { commentBefore?: string | null }).commentBefore ?? "";
+    return comment.includes(`Added from approval ${approvalId} `) || comment.endsWith(`Added from approval ${approvalId}`);
+  });
+  if (index < 0) return null;
+  rules.items.splice(index, 1);
+  return doc.toString();
 }
 
 /** Path patterns match case-insensitively by default (macOS and Windows
@@ -925,7 +1215,7 @@ function testPattern(pattern: string, input: string, flags = "i"): boolean | "in
  *  MCP shell tools use `command` (+ `args`), some use `script`; a call that
  *  carries several is judged on all of them, so a decoy `cmd` can't hide
  *  the `command` that actually runs. */
-function extractCommands(args: unknown): string[] {
+export function extractCommands(args: unknown): string[] {
   if (typeof args !== "object" || args === null) return [];
   const obj = args as { command?: unknown; args?: unknown; cmd?: unknown; script?: unknown };
   const out: string[] = [];
@@ -1000,4 +1290,15 @@ function normalisePath(p: string): string {
     else parts.push(seg);
   }
   return `${absolute ? "/" : ""}${parts.join("/")}`;
+}
+
+/** policy.yaml's text, or null when the file doesn't exist. Read, not
+ *  checked-then-read, so there is no window between the two. */
+function readPolicyText(path: string): string | null {
+  try {
+    return readFileSync(path, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
 }

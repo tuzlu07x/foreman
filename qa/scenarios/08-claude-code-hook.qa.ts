@@ -152,11 +152,15 @@ it('Claude Code PreToolUse hook: install, allow, approve and deny in the TUI, fa
       return { run, requestId: pending.request_id }
     }
 
-    await j.step('a risky call (Read <work>/.env) waits for approval; `a` in the TUI lets it run', async (ev) => {
+    await j.step('a risky call (Read <work>/.env) waits for approval; `a`, then `y`, in the TUI lets it run', async (ev) => {
       const { run, requestId } = await riskyCall('qa-hook-approve', join(sb.cwd, '.env'), ev)
       // Letter keys are ignored for a moment after the approval on screen changes.
       await sleep(KEY_SETTLE_MS)
+      // A high-risk call takes a second key (#656): `a` asks, `y` allows.
+      const asked = tui.mark()
       tui.press('a')
+      await tui.waitForText('Allow this HIGH-risk call', { from: asked })
+      tui.press('y')
       const res = await run
       expect(res.status, res.stderr).toBe(0)
       expect(res.stderr).toContain('Read allowed')

@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
+import { SECRET_NAME_PATTERN } from "../secret-store.js";
 
 // =============================================================================
 // MCP Hub config — `<configDir>/mcp.yaml`
@@ -29,7 +30,7 @@ export function isMcpOAuthSecretName(name: string): boolean {
   return name.startsWith(MCP_OAUTH_SECRET_PREFIX);
 }
 
-const SECRET_REF_RE = /\$\{secret:([A-Za-z0-9][A-Za-z0-9._-]{0,127})\}/g;
+const SECRET_REF_RE = new RegExp(`\\$\\{secret:(${SECRET_NAME_PATTERN})\\}`, "g");
 
 const GlobListSchema = z.array(z.string().min(1).max(200)).max(200);
 

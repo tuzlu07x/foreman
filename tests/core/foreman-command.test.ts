@@ -11,6 +11,7 @@ import {
 import {
   ForemanCommandRouter,
   registerBuiltinCommands,
+  relayedCommandAccess,
   type ForemanCommandContext,
 } from "../../src/core/foreman-command.js";
 import { RegistryService } from "../../src/core/registry.js";
@@ -1810,5 +1811,118 @@ credentials:
       const bad = await router.dispatch("tell", ["legal", "x"], owner);
       expect(bad.ok).toBe(false);
     });
+  });
+});
+
+describe("relayedCommandAccess (#656)", () => {
+  let db: ForemanDb;
+  let sqlite: Database.Database;
+  let registry: RegistryService;
+  let router: ForemanCommandRouter;
+
+  beforeEach(() => {
+    const handle = createInMemoryDb();
+    db = handle.db;
+    sqlite = handle.sqlite;
+    registry = new RegistryService(db, new EventBus<ForemanEventMap>());
+    registry.register({ id: "openclaw", displayName: "OpenClaw", transport: "stdio" });
+    router = new ForemanCommandRouter();
+    registerBuiltinCommands(router);
+  });
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it.each([
+    ["help", []],
+    ["STATUS", []],
+    ["agents", []],
+    ["org", []],
+    ["spend", ["marketing", "week"]],
+    ["activity", ["5"]],
+    ["report", ["me"]],
+    ["llm", []],
+    ["llm", ["status"]],
+    ["model", []],
+    ["how", ["is", "codex", "doing?"]],
+    ["openclaw", []],
+  ])("%s %j only reads", (command, args) => {
+    expect(relayedCommandAccess(router, registry, command, args)).toBe("read");
+  });
+
+  it.each([
+    ["write", ["openclaw", "build", "it"]],
+    ["assign", ["marketing", "draft", "a", "post"]],
+    ["OpenClaw", ["todo", "app", "yap"]],
+    ["openclaw", [", build a todo app"]],
+  ])("%s %j hands out work: the agent's own delegation", (command, args) => {
+    expect(relayedCommandAccess(router, registry, command, args)).toBe("delegate");
+  });
+
+  it.each([
+    ["stop", []],
+    ["model", ["claude-opus-4"]],
+    ["models", ["codex", "gpt-5"]],
+    ["llm", ["switch", "openai", "gpt-5"]],
+    ["llm", ["budget", "500"]],
+    ["llm", ["login", "anthropic"]],
+    ["llm", ["callback", "http://localhost/?code=x"]],
+    ["llm", ["bogus"]],
+  ])("%s %j changes Foreman", (command, args) => {
+    expect(relayedCommandAccess(router, registry, command, args)).toBe("change");
+  });
+
+  it("owner-surface verbs refuse themselves, so there is nothing to confirm", () => {
+    expect(relayedCommandAccess(router, registry, "tell", ["all", "hi"])).toBe("owner-surface");
+    expect(relayedCommandAccess(router, registry, "comms", [])).toBe("owner-surface");
+  });
+
+  it("a verb registered later is a change until it is listed as read-only", () => {
+    router.register("frobnicate", () => ({ ok: true, text: "" }), "test verb");
+    expect(relayedCommandAccess(router, registry, "frobnicate", [])).toBe("change");
+  });
+
+  it("an owner-confirmed relay passes the owner check without a Telegram id, attributed to the owner", async () => {
+    const channel = new ControlChannel(db);
+    const ctx: ForemanCommandContext = {
+      db,
+      registry,
+      llmConfigPath: join(tmpdir(), "no-llm.yaml"),
+      configDir: tmpdir(),
+      sourceAgent: "hermes",
+      sourceUser: "not-the-owner",
+      controlChannel: channel,
+      ownerStore: makeOwnerStore({}),
+      ownerConfirmed: true,
+    };
+    const result = await router.dispatch("stop", [], ctx);
+    expect(result.ok).toBe(true);
+    const [row] = channel.recent(1);
+    expect(row).toMatchObject({ command: "stop", sourceAgent: "hermes", sourceUser: "owner" });
+    // Without the confirmation the same call is refused, and a delegation
+    // flag can't stand in for it.
+    const unconfirmed = await router.dispatch("stop", [], { ...ctx, ownerConfirmed: false });
+    expect(unconfirmed.errorCode).toBe("NOT_AUTHORIZED");
+    const smuggled = await router.dispatch("stop", [], { ...ctx, ownerConfirmed: false, agentDelegation: true });
+    expect(smuggled.errorCode).toBe("NOT_AUTHORIZED");
+  });
+
+  it("an agent's delegation needs no owner and is never attributed to one", async () => {
+    registry.register({ id: "codex", displayName: "Codex", transport: "stdio" });
+    const channel = new ControlChannel(db);
+    const result = await router.dispatch("write", ["codex", "write", "the", "tests"], {
+      db,
+      registry,
+      llmConfigPath: join(tmpdir(), "no-llm.yaml"),
+      configDir: mkdtempSync(join(tmpdir(), "foreman-deleg-")),
+      sourceAgent: "hermes",
+      sourceUser: "4242",
+      controlChannel: channel,
+      ownerStore: makeOwnerStore({ "telegram-chat-id": "4242" }),
+      agentDelegation: true,
+    });
+    expect(result.ok).toBe(true);
+    const [row] = channel.recent(1);
+    expect(row).toMatchObject({ command: "write", sourceAgent: "hermes", sourceUser: null });
   });
 });

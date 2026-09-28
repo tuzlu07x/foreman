@@ -165,7 +165,14 @@ export function startForeman(
     ? new BusApprovalService({ bus })
     : new ReadlineApprovalService({ bus });
   const policy = new PolicyEngine(db, bus);
-  if (existsSync(paths.policyPath)) policy.loadFromYaml(paths.policyPath);
+  // Followed for the life of the process (#656): edits apply on the next
+  // call, and a broken edit keeps the last good policy. Errors wait for
+  // the inbox, which is set up below.
+  const earlyPolicyErrors: string[] = [];
+  let reportPolicyError = (message: string): void => {
+    earlyPolicyErrors.push(message);
+  };
+  policy.watchFile(paths.policyPath, (message) => reportPolicyError(message));
   const daemonManager = new AgentDaemonManager({
     paths,
     registry,
@@ -264,6 +271,16 @@ export function startForeman(
   // with or without external channels configured.
   const inbox = new InboxService(db, bus);
   const inboxRecorder = new InboxRecorder(db, inbox, { bus });
+  reportPolicyError = (message) => {
+    inbox.add({
+      level: "warning",
+      kind: "system",
+      title: "policy.yaml has an error: the last good policy stays in force",
+      body: message,
+      dedupeKey: `policy-error:${message}`,
+    });
+  };
+  for (const message of earlyPolicyErrors.splice(0)) reportPolicyError(message);
   inboxRecorder.start();
   warnAboutAgentTokens(registry, secretStore, inbox, withTui);
 

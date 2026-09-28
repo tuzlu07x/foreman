@@ -154,6 +154,15 @@ function argsFor(tool: AcpToolCall): Record<string, unknown> {
     return args
   }
 
+  // read — the file comes in locations[0].path; surface it as `path` so
+  // path rules (the default `.env` guard) see it (#656).
+  if (tool.kind === 'read') {
+    return {
+      ...raw,
+      ...(firstLocation && typeof raw.path !== 'string' ? { path: firstLocation } : {}),
+    }
+  }
+
   // Everything else — pass rawInput through unchanged so a future
   // risk rule that opts into reading raw shape still works.
   return { ...raw }

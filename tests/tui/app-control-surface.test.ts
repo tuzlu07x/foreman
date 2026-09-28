@@ -255,9 +255,11 @@ describe('TUI key settle guard', () => {
 
   it('a repeated key never decides the next approval in the queue', async () => {
     const now = Date.now()
-    bus.emit('approval:requested', approval('q1', 'codex', 'shell_exec', now + 60_000))
-    bus.emit('approval:requested', approval('q2', 'hermes', 'write_file', now + 70_000))
-    bus.emit('approval:requested', approval('q3', 'claude-code', 'read_file', now + 80_000))
+    // Medium risk: one key decides (high and critical take a second key, #656).
+    const medium = (r: ApprovalRequest): ApprovalRequest => ({ ...r, riskBucket: 'medium', riskScore: 40 })
+    bus.emit('approval:requested', medium(approval('q1', 'codex', 'shell_exec', now + 60_000)))
+    bus.emit('approval:requested', medium(approval('q2', 'hermes', 'write_file', now + 70_000)))
+    bus.emit('approval:requested', medium(approval('q3', 'claude-code', 'read_file', now + 80_000)))
     await tick(350)
     // A triple tap of "always allow".
     app.stdin.write('A')

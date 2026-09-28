@@ -65,7 +65,7 @@ describe('foreman mcp-stdio lifecycle', () => {
     await new Promise((r) => child.on('exit', r))
   }, 20_000)
 
-  it('drops malformed JSON-RPC input without replying, echoing it, or dying', async () => {
+  it('answers non-JSON input with a -32700 parse error (id null), echoes nothing and stays up (#656)', async () => {
     const shaped = `ghp_${'c'.repeat(36)}`
     const child = spawn('node', [FM_BIN, 'mcp-stdio', '--source', 'tester'], { env })
     let stdout = ''
@@ -101,11 +101,46 @@ describe('foreman mcp-stdio lifecycle', () => {
     const replies = stdout
       .split('\n')
       .filter((l) => l.length > 0)
-      .map((l) => JSON.parse(l) as { jsonrpc: string; id: number })
+      .map((l) => JSON.parse(l) as { jsonrpc: string; id: number | null; error?: { code: number } })
     expect(replies.every((r) => r.jsonrpc === '2.0')).toBe(true)
-    expect(replies.map((r) => r.id).sort((a, b) => a - b)).toEqual([1, 10])
+    // The two lines that aren't JSON get a parse error each; JSON that
+    // isn't a valid message is still dropped.
+    const parseErrors = replies.filter((r) => r.id === null)
+    expect(parseErrors).toHaveLength(2)
+    expect(parseErrors.every((r) => r.error?.code === -32700)).toBe(true)
+    expect(
+      replies
+        .map((r) => r.id)
+        .filter((id): id is number => id !== null)
+        .sort((a, b) => a - b),
+    ).toEqual([1, 10])
     expect(stdout).not.toContain(shaped)
     expect(stderr).not.toContain(shaped)
+  }, 20_000)
+
+  it('answers ping with an empty result (#656)', async () => {
+    const child = spawn('node', [FM_BIN, 'mcp-stdio', '--source', 'tester'], { env })
+    let stdout = ''
+    const got = new Promise<void>((resolveGot, reject) => {
+      const timer = setTimeout(() => reject(new Error(`no ping reply; stdout=${stdout}`)), 8_000)
+      child.stdout.on('data', (d: Buffer) => {
+        stdout += d.toString()
+        if (stdout.includes('"id":5')) {
+          clearTimeout(timer)
+          resolveGot()
+        }
+      })
+    })
+    child.stdin.write(frame(INIT) + frame({ jsonrpc: '2.0', id: 5, method: 'ping' }))
+    await got
+    child.stdin.end()
+    await new Promise((r) => child.on('exit', r))
+    const pong = stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as { id: number; result?: unknown; error?: unknown })
+      .find((r) => r.id === 5)
+    expect(pong).toEqual({ jsonrpc: '2.0', id: 5, result: {} })
   }, 20_000)
 
   it('audits a pending call when the client disconnects, then exits cleanly', async () => {

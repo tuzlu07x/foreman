@@ -115,7 +115,7 @@ export const REASON_EXPLANATIONS: Record<string, string> = {
   loop_token_budget: 'session is close to / past its token budget — likely runaway',
   first_agent_to_agent: 'first cross-agent call in the last hour for this pair',
   previously_denied_pattern:
-    'a similar request from this source was denied before',
+    'you denied the same request from this source before',
 }
 
 export function explain(reason: string): string | undefined {

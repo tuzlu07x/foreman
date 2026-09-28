@@ -297,11 +297,12 @@ describe('RiskScorer', () => {
   })
 
   describe('previously_denied_pattern (+30, structural)', () => {
-    it('fires when the same source/tool was denied before', () => {
+    it('fires when the user denied the same source/tool before', () => {
       seedRequest(db, {
         sourceAgent: 'hermes',
         targetTool: 'read_file',
         decision: 'denied',
+        decidedBy: 'user:tui',
       })
       const assessment = scorer.assess({
         sourceAgent: 'hermes',
@@ -336,12 +337,47 @@ describe('RiskScorer', () => {
         targetTool: 'shell_exec',
         args: JSON.stringify({ cmd: 'terraform destroy' }),
         decision: 'denied',
-        decidedBy: 'policy:p1',
+        decidedBy: 'user:telegram',
       })
       const other = scorer.assess({ sourceAgent: 'claude-code', targetTool: 'shell_exec', args: { cmd: 'ls -la' } })
       expect(ruleNames(other.factors)).not.toContain('previously_denied_pattern')
       const same = scorer.assess({ sourceAgent: 'claude-code', targetTool: 'shell_exec', args: { cmd: 'terraform destroy' } })
       expect(ruleNames(same.factors)).toContain('previously_denied_pattern')
+    })
+
+    it.each([
+      ['approval-timeout'],
+      ['approval-cancelled'],
+      ['agent:blocked'],
+      ['policy:5'],
+      ['risk:critical'],
+      [null],
+    ])('does not count a denial nobody made by hand (decidedBy=%s)', (decidedBy) => {
+      seedRequest(db, {
+        sourceAgent: 'hubbot',
+        targetTool: 'stub__echo',
+        args: JSON.stringify({ text: 'hi' }),
+        decision: 'denied',
+        decidedBy,
+      })
+      const { factors } = scorer.assess({ sourceAgent: 'hubbot', targetTool: 'stub__echo', args: { text: 'hi' } })
+      expect(ruleNames(factors)).not.toContain('previously_denied_pattern')
+    })
+
+    it('counts a plain `user` denial and keeps matching on the same arguments', () => {
+      seedRequest(db, {
+        sourceAgent: 'hubbot',
+        targetTool: 'stub__echo',
+        args: JSON.stringify({ text: 'hi' }),
+        decision: 'denied',
+        decidedBy: 'user',
+      })
+      expect(
+        ruleNames(scorer.assess({ sourceAgent: 'hubbot', targetTool: 'stub__echo', args: { text: 'hi' } }).factors),
+      ).toContain('previously_denied_pattern')
+      expect(
+        ruleNames(scorer.assess({ sourceAgent: 'hubbot', targetTool: 'stub__echo', args: { text: 'bye' } }).factors),
+      ).not.toContain('previously_denied_pattern')
     })
 
     it('does not fire when prior calls were allowed', () => {

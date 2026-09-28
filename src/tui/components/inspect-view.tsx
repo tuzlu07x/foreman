@@ -9,6 +9,7 @@ import {
   type InspectLine,
   type LineColor,
 } from '../inspect-content.js'
+import { safe } from '../format.js'
 import { borderForRisk, riskColor, theme } from '../theme.js'
 import { Divider } from './typography.js'
 
@@ -52,10 +53,10 @@ export function InspectView({
   // approval modal so the user reads severity consistently.
   const border = borderForRisk(request.riskBucket ?? 'medium')
   // One-line header summarising the call: source → target · tool · score.
-  const target = request.targetAgent
-    ? `${request.sourceAgent} → ${request.targetAgent}`
-    : request.sourceAgent
-  const tool = request.targetTool ?? '(no tool)'
+  const target = safe(
+    request.targetAgent ? `${request.sourceAgent} → ${request.targetAgent}` : request.sourceAgent,
+  )
+  const tool = safe(request.targetTool ?? '(no tool)')
   return (
     <Box
       flexDirection="column"
@@ -109,7 +110,7 @@ function InspectRow({ line }: { line: InspectLine }): JSX.Element {
   const color = colorFor(line.color)
   return (
     <Text color={color} bold={line.bold} italic={line.italic}>
-      {line.text === '' ? ' ' : line.text}
+      {line.text === '' ? ' ' : safe(line.text)}
     </Text>
   )
 }

@@ -8,7 +8,8 @@ import {
   type ForemanEventMap,
 } from "./event-bus.js";
 import type { PolicyEngine } from "./policy-engine.js";
-import { type RiskScorer } from "./risk-scorer.js";
+import { rememberScope } from "./remember-scope.js";
+import { composeAssessment, type RiskScorer } from "./risk-scorer.js";
 import type {
   LlmVerification,
   RiskAssessment,
@@ -48,6 +49,12 @@ export interface MediatorInput {
    *  tool rules from mcp.yaml here, so policy.yaml always wins and the risk
    *  engine still escalates risky calls even when the fallback allows. */
   policyFallback?: { effect: "allow" | "ask" | "deny"; source: string };
+  /** Only a person may allow this call (#656), e.g. a `/foreman` command
+   *  an agent relays that changes Foreman. The factor is added to the risk
+   *  assessment so the prompt says why. Policy and the risk engine can
+   *  still deny it; nothing allows it without an approval (no allow rule,
+   *  no low score), and the decision is never remembered. */
+  requireHuman?: { factor: RiskFactor };
 }
 
 export interface MediatorOutput {
@@ -203,13 +210,20 @@ export class MediatorService {
       });
     }
 
-    const heuristic = this.deps.risk.assess({
+    const scored = this.deps.risk.assess({
       sourceAgent: input.sourceAgent,
       targetAgent: input.targetAgent,
       targetTool: input.targetTool,
       args: this.argsFromMessage(input.message),
       sessionId: input.sessionId,
     });
+    const heuristic = input.requireHuman
+      ? composeAssessment(
+          [...scored.factors, input.requireHuman.factor],
+          this.deps.policy.getBucketOverrides(),
+          scored.llmVerification,
+        )
+      : scored;
 
     // Optional LLM verification pass — short-circuits gracefully when off /
     // below threshold / over budget / cached. Combine folds the verdict back
@@ -267,7 +281,9 @@ export class MediatorService {
 
     const riskReasons = assessment.factors.map((f) => f.rule);
     const needsApproval =
-      policyResult.decision === "ask" || assessment.recommendation === "ask";
+      policyResult.decision === "ask" ||
+      assessment.recommendation === "ask" ||
+      input.requireHuman !== undefined;
 
     if (needsApproval) {
       // #525 — Stamp the absolute auto-resolve deadline on the event so
@@ -319,15 +335,20 @@ export class MediatorService {
       // "Always allow" is keyed to the source id; for an unverified
       // connection that would hand the rule to anyone who claims it.
       const rememberable =
-        approval.remember === "deny" || !isUntrustedSource(input.sourceAgent);
+        input.requireHuman === undefined &&
+        (approval.remember === "deny" || !isUntrustedSource(input.sourceAgent));
       if (approval.remember && rememberable && input.targetTool) {
         const target = input.targetAgent
           ? `${input.targetAgent}:${input.targetTool}`
           : `tool:${input.targetTool}`;
+        // The call you answered, not the whole tool (#656): the same file
+        // or command, as the prompt showed before you confirmed.
+        const scope = rememberScope(input.sourceAgent, input.targetTool, this.argsFromMessage(input.message));
         this.deps.policy.remember({
           sourceAgent: input.sourceAgent,
           target,
           effect: approval.remember,
+          ...(scope.conditions ? { conditions: scope.conditions } : {}),
         });
       }
     } else {
@@ -466,12 +487,18 @@ export class MediatorService {
     });
   }
 
+  /** Ids are compared ignoring case and surrounding space (#656), so
+   *  `--source QA-BOT` can't dodge a block on `qa-bot`. Blocked wins over
+   *  disabled when several spellings are registered. */
   private quarantineStatus(sourceAgent: string): "blocked" | "disabled" | null {
+    let found: "blocked" | "disabled" | null = null;
     for (const id of new Set([sourceAgent, claimedAgentOf(sourceAgent)])) {
-      const status = this.deps.registry.get(id)?.status;
-      if (status === "blocked" || status === "disabled") return status;
+      for (const agent of this.deps.registry.findByIdLoose(id)) {
+        if (agent.status === "blocked") return "blocked";
+        if (agent.status === "disabled") found = "disabled";
+      }
     }
-    return null;
+    return found;
   }
 
   private authenticate(input: MediatorInput): boolean {

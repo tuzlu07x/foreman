@@ -1,6 +1,11 @@
 import { existsSync } from "node:fs";
 import { Command } from "commander";
+import { DbApprovalService } from "../core/approval.js";
+import { AuditLogger } from "../core/audit.js";
 import { ControlChannel } from "../core/control-channel.js";
+import { DELEGATION_TOOL } from "../core/foreman-command.js";
+import { createMediatorStack } from "../core/mediator-stack.js";
+import type { JSONRPCMessage } from "../mcp/types.js";
 import { cliDelegationSource, isHumanSource, orgBudgetBlock, orgDelegationVerdict } from "../core/org/guard.js";
 import { EventBus, type ForemanEventMap } from "../core/event-bus.js";
 import { readForemanPid } from "../core/foreman-pidfile.js";
@@ -85,6 +90,13 @@ export async function runWrite(
         console.error(red("error: ") + `paused by budget: ${overBudget}. Ask the user to raise it (foreman org budget).`);
         return 2;
       }
+      // The hand-off is a call from one agent to another (#656):
+      // policy.yaml's can_call / cannot_call and the risk engine see it.
+      const verdict = await mediateDelegation(db, paths.policyPath, source, targetAgent, message);
+      if (verdict) {
+        console.error(red("error: ") + `not handed to ${targetAgent}: denied by ${verdict}.`);
+        return 2;
+      }
     }
     const channel = new ControlChannel(db);
     const enq = channel.enqueue({
@@ -115,5 +127,41 @@ export async function runWrite(
     return 0;
   } finally {
     closeDb();
+  }
+}
+
+/** `source → target:write` through the mediator, as mcp-stdio does for
+ *  `submit_command write`. Returns why it was denied, or null. */
+async function mediateDelegation(
+  db: ReturnType<typeof getDb>,
+  policyPath: string,
+  source: string,
+  targetAgent: string,
+  task: string,
+): Promise<string | null> {
+  const bus = new EventBus<ForemanEventMap>();
+  const audit = new AuditLogger(db, bus);
+  try {
+    const { mediator } = createMediatorStack({
+      db,
+      bus,
+      approval: new DbApprovalService(db, { bus }),
+      policyPath,
+      onPolicyError: (m) => process.stderr.write(`foreman write: ${m}\n`),
+    });
+    const outcome = await mediator.handleRequest({
+      sourceAgent: source,
+      targetAgent,
+      targetTool: DELEGATION_TOOL,
+      message: {
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { name: DELEGATION_TOOL, arguments: { task } },
+      } as JSONRPCMessage,
+      policyFallback: { effect: "allow", source: "org.yaml" },
+    });
+    return outcome.decision === "allowed" ? null : outcome.decidedBy;
+  } finally {
+    audit.dispose();
   }
 }

@@ -85,6 +85,108 @@ describe('MediatorService — unit', () => {
     expect(approval.request).not.toHaveBeenCalled()
   })
 
+  it.each([['QA-BOT'], ['Qa-Bot'], ['untrusted:QA-BOT'], ['untrusted:qa-bot']])(
+    'a block on qa-bot holds for %s: ids are compared ignoring case (#656)',
+    async (sourceAgent) => {
+      registry.register({ id: 'qa-bot', displayName: 'Q', transport: 'stdio' })
+      registry.block('qa-bot')
+      const mediator = new MediatorService({ registry, policy, risk, approval, bus })
+      const result = await mediator.handleRequest({
+        sourceAgent,
+        targetTool: 'list_files',
+        message: callMessage(1, 'list_files', { path: '.' }),
+      })
+      expect(result.decidedBy).toBe('agent:blocked')
+      expect(approval.request).not.toHaveBeenCalled()
+    },
+  )
+
+  it('a pause holds whatever the case, and a block on any spelling wins (#656)', async () => {
+    registry.register({ id: 'Codex', displayName: 'C', transport: 'stdio' })
+    registry.disable('Codex')
+    const mediator = new MediatorService({ registry, policy, risk, approval, bus })
+    const paused = await mediator.handleRequest({
+      sourceAgent: 'codex',
+      targetTool: 'list_files',
+      message: callMessage(1, 'list_files', { path: '.' }),
+    })
+    expect(paused.decidedBy).toBe('agent:disabled')
+    registry.register({ id: 'CODEX', displayName: 'C2', transport: 'stdio' })
+    registry.block('CODEX')
+    const blocked = await mediator.handleRequest({
+      sourceAgent: 'codex',
+      targetTool: 'list_files',
+      message: callMessage(2, 'list_files', { path: '.' }),
+    })
+    expect(blocked.decidedBy).toBe('agent:blocked')
+  })
+
+  describe('remembered answers cover the call, not the whole tool (#656)', () => {
+    const call = (id: number, path: string) => ({
+      sourceAgent: 'qa-bot',
+      targetTool: 'read_file',
+      message: callMessage(id, 'read_file', { path }),
+    })
+
+    it('"deny always" on one file denies that file only', async () => {
+      const denyAlways = vi.fn(async (): Promise<ApprovalDecision> => ({ decision: 'denied', remember: 'deny', via: 'tui' }))
+      const mediator = new MediatorService({ registry, policy, risk, approval: { request: denyAlways }, bus })
+      await mediator.handleRequest(call(1, '/home/u/.ssh/id_rsa'))
+      const again = await mediator.handleRequest(call(2, '/home/u/.ssh/id_rsa'))
+      expect(again.decidedBy).toMatch(/^policy:\d+$/)
+      const readme = await mediator.handleRequest(call(3, 'README.md'))
+      expect(readme.decidedBy).not.toMatch(/^policy:/)
+      expect(denyAlways).toHaveBeenCalledTimes(2)
+    })
+
+    it('"always allow" is scoped the same way', async () => {
+      const allowAlways = vi.fn(async (): Promise<ApprovalDecision> => ({ decision: 'allowed', remember: 'allow', via: 'tui' }))
+      policy.loadYamlText('rules:\n  - source: "*"\n    target: tool:read_file\n    effect: ask\n')
+      const mediator = new MediatorService({ registry, policy, risk, approval: { request: allowAlways }, bus })
+      await mediator.handleRequest(call(1, 'docs/a.md'))
+      expect((await mediator.handleRequest(call(2, 'docs/a.md'))).decidedBy).toMatch(/^policy:\d+$/)
+      await mediator.handleRequest(call(3, 'docs/b.md'))
+      expect(allowAlways).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  describe('requireHuman (#656)', () => {
+    const factor = { rule: 'relayed_command', category: 'structural' as const, points: 60, reason: 'relays /foreman stop' }
+
+    it('asks even when policy allows and the score is low, and never remembers the answer', async () => {
+      policy.remember({ sourceAgent: 'hermes', target: 'tool:foreman_command', effect: 'allow' })
+      const allow = vi.fn(async (): Promise<ApprovalDecision> => ({ decision: 'allowed', remember: 'allow', via: 'tui' }))
+      const mediator = new MediatorService({ registry, policy, risk, approval: { request: allow }, bus })
+      const before = policy.list().length
+      const result = await mediator.handleRequest({
+        sourceAgent: 'hermes',
+        targetTool: 'foreman_command',
+        message: callMessage(1, 'foreman_command', { command: 'stop', args: [] }),
+        requireHuman: { factor },
+      })
+      expect(allow).toHaveBeenCalledOnce()
+      const asked = (allow.mock.calls[0] as unknown as [{ riskBucket: string; riskReasons: string[] }])[0]
+      expect(asked.riskReasons).toContain('relayed_command')
+      expect(asked.riskBucket).toBe('high')
+      expect(result).toMatchObject({ decision: 'allowed', decidedBy: 'user:tui' })
+      expect(policy.list()).toHaveLength(before)
+    })
+
+    it('a policy deny still wins without asking', async () => {
+      policy.remember({ sourceAgent: 'hermes', target: 'tool:foreman_command', effect: 'deny' })
+      const mediator = new MediatorService({ registry, policy, risk, approval, bus })
+      const result = await mediator.handleRequest({
+        sourceAgent: 'hermes',
+        targetTool: 'foreman_command',
+        message: callMessage(1, 'foreman_command', { command: 'stop', args: [] }),
+        requireHuman: { factor },
+      })
+      expect(result.decision).toBe('denied')
+      expect(result.decidedBy).toMatch(/^policy:/)
+      expect(approval.request).not.toHaveBeenCalled()
+    })
+  })
+
   it('denies calls from a paused (disabled) agent', async () => {
     registry.register({ id: 'codex', displayName: 'C', transport: 'stdio' })
     registry.disable('codex')

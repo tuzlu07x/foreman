@@ -4,6 +4,7 @@ import {
   projectSecretsForAgent,
   type WrittenFile,
 } from "../core/agent-secrets-projector.js";
+import { AuditLogger } from "../core/audit.js";
 import { ChatPrimaryService } from "../core/chat-primary.js";
 import { EventBus, type ForemanEventMap } from "../core/event-bus.js";
 import {
@@ -13,6 +14,7 @@ import {
 import { loadActiveRegistry } from "../core/registry-catalog.js";
 import { RegistryService } from "../core/registry.js";
 import {
+  isValidSecretName,
   ReservedSecretError,
   SecretAlreadyExistsError,
   SecretNotFoundError,
@@ -118,6 +120,25 @@ function readAllStdin(): Promise<string> {
   });
 }
 
+/** A value passed as `--value` sits in the shell history and, while the
+ *  command runs, in the process list. Say so, once, on stderr. */
+function warnValueFlag(): void {
+  process.stderr.write(
+    orange("warning: ") +
+      "--value leaves the secret in your shell history and the process list. " +
+      "Omit it to be prompted, or pipe the value on stdin.\n",
+  );
+}
+
+/** Record that a secret's value was printed. The name only, never the value. */
+function auditReveal(db: ForemanDb, name: string, ok: boolean): void {
+  const audit = new AuditLogger(db, new EventBus<ForemanEventMap>());
+  try {
+    audit.logEvent("secret:revealed", { name, ok, via: "cli" });
+  } finally {
+    audit.dispose();
+  }
+}
 
 export const secretsCommand = new Command("secrets").description(
   "Encrypted secret store (add / list / show / remove / rotate)",
@@ -128,8 +149,18 @@ secretsCommand
   .description("Store a new secret (prompts for value)")
   .option("--value <value>", "supply value via flag instead of prompting")
   .action(async (name: string, options: AddOptions) => {
+    // Names land in config files, audit rows and terminal output; the
+    // invalid one is not echoed back.
+    if (!isValidSecretName(name)) {
+      console.error(
+        red("error: ") +
+          "invalid secret name: use letters, digits, '.', '_' or '-', starting with a letter or digit (at most 128)",
+      );
+      process.exit(1);
+    }
     const store = getStore();
     try {
+      if (options.value !== undefined) warnValueFlag();
       const value =
         options.value ?? (await readSecretValueFromStdin(`Value for ${name}: `));
       if (value.length === 0) {
@@ -190,7 +221,15 @@ secretsCommand
       process.exit(1);
     }
     try {
-      const value = store.get(name);
+      let value: string;
+      try {
+        value = store.get(name);
+      } catch (err) {
+        auditReveal(getDb(), name, false);
+        throw err;
+      }
+      // Audited before it is printed: if the audit write fails, nothing is shown.
+      auditReveal(getDb(), name, true);
       if (options.json) {
         process.stdout.write(JSON.stringify({ name, value }, null, 2) + "\n");
       } else {
@@ -398,6 +437,7 @@ secretsCommand
   .action(async (name: string, options: RotateOptions) => {
     const store = getStore();
     try {
+      if (options.value !== undefined) warnValueFlag();
       const value =
         options.value ??
         (await readSecretValueFromStdin(`New value for ${name}: `));

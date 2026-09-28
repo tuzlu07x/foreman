@@ -311,4 +311,34 @@ describe("foreman hook claude-code — Faz 4 (#517)", () => {
     expect(r.exit).toBe(2);
     expect(r.stderr).toMatch(/denied|blocked/i);
   });
+
+  it("honours FOREMAN_APPROVAL_TIMEOUT when --timeout-ms is not given (#656)", () => {
+    // Without it the hook waited the full 10-minute default while Claude
+    // Code blocked on it; here the approval has to time out in ~1 s.
+    const payload = {
+      session_id: "sess-env-timeout",
+      tool_name: "Bash",
+      tool_input: { command: "curl https://pastebin.com/raw/abc123" },
+    };
+    const started = Date.now();
+    const r = spawnSync("node", [FM_BIN, "hook", "claude-code"], {
+      env: { ...env, FOREMAN_APPROVAL_TIMEOUT: "1" },
+      encoding: "utf-8",
+      input: JSON.stringify(payload),
+      timeout: 15_000,
+    });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/approval-timeout/);
+    expect(Date.now() - started).toBeLessThan(12_000);
+  }, 20_000);
+});
+
+describe("hookTimeoutMs (#656)", () => {
+  it("prefers --timeout-ms, then FOREMAN_APPROVAL_TIMEOUT seconds, then 10 minutes", async () => {
+    const { hookTimeoutMs } = await import("../../src/cli/hook-cli.js");
+    expect(hookTimeoutMs(250, { FOREMAN_APPROVAL_TIMEOUT: "3" })).toBe(250);
+    expect(hookTimeoutMs(undefined, { FOREMAN_APPROVAL_TIMEOUT: "3" })).toBe(3_000);
+    expect(hookTimeoutMs(undefined, { FOREMAN_APPROVAL_TIMEOUT: "nope" })).toBe(600_000);
+    expect(hookTimeoutMs(undefined, {})).toBe(600_000);
+  });
 });

@@ -165,7 +165,7 @@ export function findAgentByToken(store: AgentTokenStore, presented: string): str
   return owner;
 }
 
-export type IdentityReason = "token" | "no-token" | "invalid-token" | "token-mismatch";
+export type IdentityReason = "token" | "no-token" | "invalid-token" | "token-mismatch" | "unregistered";
 
 export interface ResolvedIdentity {
   /** The id every check sees: the verified agent, or `untrusted:<claimed>`. */
@@ -188,6 +188,10 @@ export function resolveAgentIdentity(input: {
   claimed?: string | undefined;
   token?: string | undefined;
   store: AgentTokenStore;
+  /** Is the agent still registered? A token left behind by a removed
+   *  agent proves nothing (#656): the connection runs untrusted and no
+   *  registry row is created for it. */
+  isRegistered?: (agentId: string) => boolean;
 }): ResolvedIdentity {
   const claimed = input.claimed?.trim() || DEFAULT_CLAIMED_SOURCE;
   const untrusted = (reason: IdentityReason): ResolvedIdentity => ({
@@ -206,7 +210,18 @@ export function resolveAgentIdentity(input: {
   }
   if (owner === null || isHumanSource(owner) || isUntrustedSource(owner)) return untrusted("invalid-token");
   if (input.claimed !== undefined && input.claimed.trim() !== owner) return untrusted("token-mismatch");
+  if (input.isRegistered && !stillRegistered(input.isRegistered, owner)) {
+    return { source: untrustedSource(owner), claimed: input.claimed?.trim() || owner, trusted: false, reason: "unregistered" };
+  }
   return { source: owner, claimed: input.claimed?.trim() || owner, trusted: true, reason: "token" };
+}
+
+function stillRegistered(isRegistered: (agentId: string) => boolean, agentId: string): boolean {
+  try {
+    return isRegistered(agentId);
+  } catch {
+    return false; // a registry error means untrusted, never trusted
+  }
 }
 
 /** Still the same agent? A verified identity whose token was rotated or
@@ -217,9 +232,16 @@ export function recheckAgentIdentity(
   identity: ResolvedIdentity,
   token: string,
   store: AgentTokenStore,
+  isRegistered?: (agentId: string) => boolean,
 ): ResolvedIdentity {
-  if (!identity.trusted || verifyAgentToken(store, identity.source, token)) return identity;
-  return { source: untrustedSource(identity.source), claimed: identity.source, trusted: false, reason: "invalid-token" };
+  if (!identity.trusted) return identity;
+  if (!verifyAgentToken(store, identity.source, token)) {
+    return { source: untrustedSource(identity.source), claimed: identity.source, trusted: false, reason: "invalid-token" };
+  }
+  if (isRegistered && !stillRegistered(isRegistered, identity.source)) {
+    return { source: untrustedSource(identity.source), claimed: identity.source, trusted: false, reason: "unregistered" };
+  }
+  return identity;
 }
 
 /** One line for stderr, the inbox and `doctor`. Never includes the token. */
@@ -229,12 +251,16 @@ export function describeUntrustedIdentity(identity: ResolvedIdentity): string {
       ? `no ${AGENT_TOKEN_ENV} was passed`
       : identity.reason === "invalid-token"
         ? `its ${AGENT_TOKEN_ENV} matches no agent (rotated or revoked?)`
-        : `its ${AGENT_TOKEN_ENV} belongs to a different agent`;
+        : identity.reason === "unregistered"
+          ? "that agent is no longer registered (removed?)"
+          : `its ${AGENT_TOKEN_ENV} belongs to a different agent`;
   const claimed = displayAgentId(identity.claimed);
   const fix =
     identity.claimed === DEFAULT_CLAIMED_SOURCE
       ? "Fix: register it with `foreman agent add` so its MCP wiring carries a token"
-      : `Fix: foreman agent rewire ${claimed}`;
+      : identity.reason === "unregistered"
+        ? `Fix: foreman agent add ${claimed}, if you want it back`
+        : `Fix: foreman agent rewire ${claimed}`;
   return (
     `'${claimed}' connected without proof of identity (${why}), so it runs as ` +
     `${displayAgentId(identity.source)}, without that agent's allow rules, org role or MCP hub servers. ${fix}`

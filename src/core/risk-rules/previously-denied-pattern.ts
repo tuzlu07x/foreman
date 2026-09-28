@@ -1,4 +1,4 @@
-import { and, eq, isNull, notLike, or, sql } from 'drizzle-orm'
+import { and, eq, like, notLike, or, sql } from 'drizzle-orm'
 import { requests } from '../../db/schema.js'
 import { redactSecretsDeep } from './secret-patterns.js'
 import type { RiskFactor, RiskRule } from './types.js'
@@ -21,10 +21,15 @@ export const previouslyDeniedPattern: RiskRule = {
           eq(requests.targetTool, req.targetTool),
           eq(requests.decision, 'denied'),
           eq(requests.args, sameArgs),
+          // Only a person saying no counts (`user`, `user:tui`,
+          // `user:telegram`, …). An approval nobody answered in time, a
+          // requester that disconnected, a policy rule or a quarantine
+          // says nothing about this call, and once you allow the tool it
+          // shouldn't keep asking.
+          or(eq(requests.decidedBy, 'user'), like(requests.decidedBy, 'user:%')),
           // A call the MCP hub withheld (a changed tool definition, #635)
-          // says nothing about the agent; once you trust the server again
-          // it shouldn't keep costing points.
-          or(isNull(requests.decidedBy), notLike(requests.decidedBy, 'mcp:withheld:%')),
+          // says nothing about the agent either.
+          notLike(requests.decidedBy, 'mcp:withheld:%'),
         ),
       )
       .get()

@@ -6,8 +6,10 @@ import { AuditLogger } from "../core/audit.js";
 import { ControlChannel } from "../core/control-channel.js";
 import { bus } from "../core/event-bus.js";
 import {
+  DELEGATION_TOOL,
   ForemanCommandRouter,
   registerBuiltinCommands,
+  relayedCommandAccess,
 } from "../core/foreman-command.js";
 import { defaultLlmConfig, loadLlmConfig } from "../core/llm/config.js";
 import {
@@ -110,16 +112,19 @@ export const mcpStdioCommand = new Command("mcp-stdio")
       process.exit(1);
     }
     const services = bootServices();
+    // `--source QA-BOT` claims the registered `qa-bot` (#656): one spelling
+    // per agent, so its block, pause and deny rules can't be dodged by case.
     const identity = resolveAgentIdentity({
-      claimed: options.source,
+      claimed: options.source === undefined ? undefined : services.registry.canonicalId(options.source),
       token,
       store: services.secretStore,
+      isRegistered: (id) => services.registry.get(id) !== null,
     });
     announceIdentity(services, identity);
     services.hubScope = scopeForAgent(paths.orgConfigPath, identity.source, warn);
-    // Only a verified agent gets a registry row; an unverified connection
-    // must not be able to create identities.
-    if (identity.trusted) autoRegisterSource(services.registry, identity.source);
+    // No connection creates a registry row (#656): agents are added with
+    // `foreman agent add`, and a removed agent stays removed when its
+    // client reconnects.
     runMcpLoop(services, identity, token ?? "");
   });
 
@@ -177,6 +182,7 @@ function bootServices(): Services {
       bus,
       approval,
       policyPath: paths.policyPath,
+      onPolicyError: warn,
       secretStore,
     });
   policyEngine = policy;
@@ -254,18 +260,6 @@ function announceIdentity(services: Services, identity: ResolvedIdentity): void 
   }
 }
 
-function autoRegisterSource(
-  registry: RegistryService,
-  sourceAgent: string,
-): void {
-  if (registry.get(sourceAgent)) return;
-  registry.register({
-    id: sourceAgent,
-    displayName: sourceAgent,
-    transport: "stdio",
-  });
-}
-
 /** How long a closing client may keep in-flight calls alive before we
  *  cancel their pending approvals and exit. */
 const SHUTDOWN_GRACE_MS = 5_000;
@@ -276,7 +270,7 @@ function runMcpLoop(services: Services, initial: ResolvedIdentity, token: string
   // Re-checked before every message, so `foreman agent token rotate` (or
   // removing the agent) takes a running session down to untrusted at once.
   const currentSource = (): string => {
-    const next = recheckAgentIdentity(identity, token, services.secretStore);
+    const next = recheckAgentIdentity(identity, token, services.secretStore, (id) => services.registry.get(id) !== null);
     if (next !== identity) {
       identity = next;
       services.hubScope = scopeForAgent(paths.orgConfigPath, identity.source, warn);
@@ -289,7 +283,10 @@ function runMcpLoop(services: Services, initial: ResolvedIdentity, token: string
   let shuttingDown = false;
   process.stdin.setEncoding("utf-8");
   process.stdin.on("data", (chunk) => {
-    const { messages } = decoder.push(chunk);
+    const { messages, parseErrors } = decoder.push(chunk);
+    // Not JSON at all: JSON-RPC's parse error, id null, without echoing the
+    // input (it may hold a secret). The connection stays up.
+    for (let i = 0; i < parseErrors; i++) writeFrame(PARSE_ERROR_FRAME);
     // Each message is handled independently: a `tools/call` waiting on a
     // human approval must not hold up a `ping` or a second call behind it.
     for (const message of messages) {
@@ -332,8 +329,14 @@ async function respond(
     );
   }
   if (!response) return;
+  writeFrame(encodeMessage(response));
+}
+
+const PARSE_ERROR_FRAME = `${JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } })}\n`;
+
+function writeFrame(frame: string): void {
   try {
-    process.stdout.write(encodeMessage(response));
+    process.stdout.write(frame);
   } catch {
     // The client is gone; the stdout "error" handler drives the shutdown.
   }
@@ -393,6 +396,8 @@ export async function handleMessage(
     }
   }
 
+  // MCP's required liveness utility: an empty result.
+  if (method === "ping") return reply(id, {});
   if (method === "initialize") {
     return reply(id, {
       protocolVersion: PROTOCOL_VERSION,
@@ -453,7 +458,7 @@ export async function handleMessage(
         {
           name: "submit_command",
           description:
-            "Submit a /foreman orchestrator command relayed from the user's chat. Call this when a user message in your chat is `/foreman <verb> [args...]` (e.g. `/foreman status`, `/foreman help`, `/foreman llm status`). Pass the verb as `command`, the rest of the message tokens as `args` (string array). Do NOT call on your own initiative — only when the user types the literal `/foreman ...` command. The returned text is the response to post back to the user verbatim.",
+            "Submit a /foreman orchestrator command relayed from the user's chat. Call this when a user message in your chat is `/foreman <verb> [args...]` (e.g. `/foreman status`, `/foreman help`, `/foreman llm status`). Pass the verb as `command`, the rest of the message tokens as `args` (string array). Do NOT call on your own initiative — only when the user types the literal `/foreman ...` command. Commands that only read (help, status, org, spend, activity, report, `llm status`, `model` with no arguments) answer at once. `write`, `assign` and `<agent> <task>` hand out work as YOUR delegation (the org chart decides), never as the user. Anything else that changes Foreman (stop, `model <x>`, `llm switch|budget|login|callback`, …) waits until the user allows it on Foreman's own approval prompt (the TUI, or a Foreman button, whose signed tag no agent can forge) and is refused otherwise. The returned text is the response to post back to the user verbatim.",
           inputSchema: {
             type: "object",
             required: ["command"],
@@ -472,7 +477,7 @@ export async function handleMessage(
               source_user: {
                 type: "string",
                 description:
-                  "ALWAYS pass the messaging-platform user id of the person who typed the command (Telegram numeric `from.id`, Discord snowflake, Slack user id, …). For Telegram: this is the `from.id` field on the incoming update — NOT the chat id, though for 1:1 chats they're the same. Foreman owner-gates state-mutating verbs (`write`, `stop`, …) against this value, so omitting it WILL cause those commands to fail with NOT_AUTHORIZED. Audit-only commands still record it. When you genuinely can't get the user id (synthetic / scripted invocation), explicitly pass empty string \"\" — never just leave it off.",
+                  "The messaging-platform user id of the person who typed the command (Telegram numeric `from.id`, Discord snowflake, Slack user id, …). Recorded in the audit log. It does not authorize anything: commands that change Foreman need the user's OK in Foreman itself. Pass empty string \"\" when you can't get it.",
               },
             },
           },
@@ -1057,6 +1062,28 @@ export async function handleMessage(
           "submit_command requires args.command (string)",
         );
       }
+      // An agent relays commands but can't prove you typed them (#656):
+      // one that changes Foreman runs only after you allow it.
+      const access = relayedCommandAccess(services.commandRouter, services.registry, command, argList);
+      let confirmedBy: string | null = null;
+      if (access === "change") {
+        const confirmation = await confirmRelayedCommand(services, sourceAgent, command, argList);
+        if (confirmation.decision !== "allowed") {
+          services.audit.logEvent("foreman:command-refused", {
+            command,
+            args: argList,
+            sourceAgent,
+            sourceUser: sourceUser ?? null,
+            requestId: confirmation.requestId,
+            decidedBy: confirmation.decidedBy,
+          });
+          return reply(id, {
+            content: [{ type: "text", text: relayedCommandRefusal(command, confirmation.decidedBy) }],
+            isError: true,
+          });
+        }
+        confirmedBy = confirmation.decidedBy;
+      }
       const result = await services.commandRouter.dispatch(command, argList, {
         db: getDb(),
         registry: services.registry,
@@ -1068,6 +1095,10 @@ export async function handleMessage(
         controlChannel: services.controlChannel,
         ownerStore: services.secretStore,
         secretStore: services.secretStore,
+        ...(confirmedBy ? { ownerConfirmed: true } : {}),
+        ...(access === "delegate"
+          ? { agentDelegation: true, authorizeDelegation: delegationAuthorizer(services, sourceAgent) }
+          : {}),
       });
       services.audit.logEvent("foreman:command", {
         command,
@@ -1076,6 +1107,7 @@ export async function handleMessage(
         sourceUser: sourceUser ?? null,
         ok: result.ok,
         errorCode: result.errorCode ?? null,
+        ...(confirmedBy ? { confirmedBy } : {}),
       });
       return reply(id, {
         content: [{ type: "text", text: result.text }],
@@ -1286,6 +1318,88 @@ export async function handleMessage(
   return null;
 }
 
+/** Tool name under which a relayed command waits for your OK (#656). */
+export const RELAYED_COMMAND_TOOL = "foreman_command";
+
+/** Ask the person whether a relayed command that changes Foreman may run.
+ *  Mediated like any tool call (policy can deny `foreman_command`, the
+ *  risk engine scores the text, the audit log keeps the row), but only an
+ *  approval allows it: the TUI, or a Foreman button whose HMAC tag the
+ *  relay can't forge. */
+async function confirmRelayedCommand(
+  services: Services,
+  sourceAgent: string,
+  command: string,
+  args: string[],
+): Promise<{ decision: "allowed" | "denied"; decidedBy: string; requestId: string }> {
+  const text = `/foreman ${[command, ...args].join(" ")}`.slice(0, 200);
+  const outcome = await trackRequest(services, (requestId) =>
+    services.mediator.handleRequest({
+      requestId,
+      sourceAgent,
+      targetTool: RELAYED_COMMAND_TOOL,
+      message: {
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { name: RELAYED_COMMAND_TOOL, arguments: { command, args } },
+      } as JSONRPCMessage,
+      requireHuman: {
+        factor: {
+          rule: "relayed_command",
+          category: "structural",
+          points: 60,
+          reason: `${sourceAgent} relays "${text}", which changes Foreman: it runs only if you allow it`,
+        },
+      },
+    }),
+  );
+  return { decision: outcome.decision, decidedBy: outcome.decidedBy, requestId: outcome.requestId };
+}
+
+/** A hand-off from this agent to another, mediated as the call
+ *  `<source> → <target>:write` (#656): `can_call` / `cannot_call`, rules
+ *  on `<agent>:write`, the risk engine (the task text is scored) and, when
+ *  either asks, you. With no rule for it, the org chart (already checked)
+ *  decides. */
+export function delegationAuthorizer(
+  services: Pick<Services, "mediator" | "pendingRequestIds">,
+  sourceAgent: string,
+): (targetAgent: string, task: string) => Promise<{ ok: true } | { ok: false; reason: string }> {
+  return async (targetAgent, task) => {
+    const outcome = await trackRequest(services, (requestId) =>
+      services.mediator.handleRequest({
+        requestId,
+        sourceAgent,
+        targetAgent,
+        targetTool: DELEGATION_TOOL,
+        message: {
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: { name: DELEGATION_TOOL, arguments: { task } },
+        } as JSONRPCMessage,
+        policyFallback: { effect: "allow", source: "org.yaml" },
+      }),
+    );
+    return outcome.decision === "allowed" ? { ok: true } : { ok: false, reason: `denied by ${outcome.decidedBy}` };
+  };
+}
+
+function relayedCommandRefusal(command: string, decidedBy: string): string {
+  const why =
+    decidedBy === "approval-timeout"
+      ? "nobody allowed it in time"
+      : decidedBy === "approval-cancelled"
+        ? "the request was cancelled"
+        : decidedBy.startsWith("user")
+          ? "it was denied"
+          : `it was refused (${decidedBy})`;
+  return (
+    `Not run: \`/foreman ${command}\` changes Foreman, so it needs the user's OK in Foreman, and ${why}. ` +
+    "Relay this reply as is. The user can allow it on Foreman's approval prompt (TUI or approval button), " +
+    "or run it in the Foreman TUI console or CLI."
+  );
+}
+
 /** `/foreman` verbs that only read, which an unverified connection may
  *  still relay. Everything else changes state or spends money. */
 const READ_ONLY_COMMANDS: ReadonlySet<string> = new Set([
@@ -1416,7 +1530,7 @@ async function handleHubCall(
 /** Run a mediated call under an explicit request id and remember it while
  *  it is in flight (see Services.pendingRequestIds). */
 async function trackRequest<T>(
-  services: Services,
+  services: Pick<Services, "pendingRequestIds">,
   run: (requestId: string) => Promise<T>,
 ): Promise<T> {
   const requestId = ulid();

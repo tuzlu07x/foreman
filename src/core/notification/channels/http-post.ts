@@ -12,6 +12,35 @@ export interface HttpFetch {
 
 export const defaultFetch: HttpFetch = (url, init) => fetch(url, init) as never;
 
+/** Why an outbound notification URL is refused, or null when it's fine
+ *  (#636, #656). Payloads describe tool calls, so they only travel over
+ *  https, except to this machine. A URL never carries a user name or
+ *  password, and the message never repeats the URL: it is usually a
+ *  stored secret (a webhook URL is the credential). */
+export function outboundUrlProblem(raw: string, what: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return `${what} is not a valid URL`;
+  }
+  if (url.username || url.password) {
+    return `${what} must not include a user name or password (put credentials in a secret, not in the URL)`;
+  }
+  if (url.protocol === "https:") return null;
+  if (url.protocol === "http:" && isLoopbackHost(url.hostname)) return null;
+  return url.protocol === "http:"
+    ? `${what} uses plain http:// — use https:// (http is only allowed to localhost)`
+    : `${what} must be https:// (got ${url.protocol.replace(/[^a-z0-9+.-]/gi, "")})`;
+}
+
+/** `localhost`, `::1` and 127.0.0.0/8 (the URL parser already turned
+ *  `127.1` or `2130706433` into dotted form). */
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return host === "localhost" || host === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+
 export class ChannelDeliveryError extends Error {
   constructor(
     public readonly channel: string,
@@ -32,6 +61,8 @@ export async function postWithTimeout(args: {
   timeoutMs: number;
   method?: "POST" | "PATCH";
 }): Promise<string> {
+  const refused = outboundUrlProblem(args.url, "the URL");
+  if (refused) throw new ChannelDeliveryError(args.channel, 0, refused);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), args.timeoutMs);
   let res;

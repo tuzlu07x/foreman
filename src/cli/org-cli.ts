@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { Command } from "commander";
+import { jsonForTerminal, terminalSafe } from "../core/terminal-text.js";
 import { isMap, parseDocument } from "yaml";
 import { EventBus, type ForemanEventMap } from "../core/event-bus.js";
 import { loadActiveRegistry } from "../core/registry-catalog.js";
@@ -216,10 +217,11 @@ orgCommand
       if (!resolved) fail(`'${target}' is not a department, role or agent — see \`foreman org show\``);
       const report = buildOrgReport(db, org, resolved, p);
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+        process.stdout.write(`${jsonForTerminal(report, 2)}\n`);
         return;
       }
-      const [title, ...rest] = renderOrgReport(report).split("\n");
+      // Task excerpts and agent ids come from agents (#656).
+      const [title, ...rest] = terminalSafe(renderOrgReport(report), { multiline: true }).split("\n");
       console.log(orange(bold(title ?? "")));
       for (const line of rest) console.log(line);
     } finally {

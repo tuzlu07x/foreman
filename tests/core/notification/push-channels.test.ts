@@ -167,4 +167,49 @@ describe('channel factory', () => {
     )
     expect(built).toMatchObject({ problem: expect.stringMatching(/foreman secrets add hook-signing/) })
   })
+
+  it('refuses plain-http Slack, Discord and ntfy URLs except to this machine (#656)', () => {
+    const vals = secrets({
+      'slack-http': 'http://hooks.example.com/services/x',
+      'slack-local': 'http://127.0.0.1:9000/hook',
+      'discord-http': 'http://discord.example/api/webhooks/1/x',
+      'ntfy-topic': 'foreman-abc',
+    })
+    expect(buildChannel('slack', { enabled: true, webhook_url_ref: 'slack-http' }, { secrets: vals })).toMatchObject({
+      problem: expect.stringMatching(/Slack webhook URL uses plain http/),
+    })
+    expect(buildChannel('slack', { enabled: true, webhook_url_ref: 'slack-local' }, { secrets: vals })).toHaveProperty('channel')
+    expect(buildChannel('discord', { enabled: true, webhook_url_ref: 'discord-http' }, { secrets: vals })).toMatchObject({
+      problem: expect.stringMatching(/Discord webhook URL uses plain http/),
+    })
+    for (const server of ['http://ntfy.example', 'javascript:alert(1)', 'ftp://ntfy.example']) {
+      expect(buildChannel('ntfy', { enabled: true, topic_ref: 'ntfy-topic', server }, { secrets: vals })).toMatchObject({
+        problem: expect.stringMatching(/ntfy server URL/),
+      })
+    }
+    expect(
+      buildChannel('ntfy', { enabled: true, topic_ref: 'ntfy-topic', server: 'http://localhost:8080' }, { secrets: vals }),
+    ).toHaveProperty('channel')
+  })
+
+  it('never repeats a URL that carries credentials (#656)', () => {
+    const creds = 'http://user:pw@127.0.0.1:9/hook'
+    const vals = secrets({ 'hook-url': creds, 'slack-webhook': 'https://u:p@hooks.slack.com/x' })
+    for (const [channel, ref] of [['webhook', 'hook-url'], ['slack', 'slack-webhook']] as const) {
+      const built = buildChannel(channel, { enabled: true, webhook_url_ref: ref }, { secrets: vals })
+      expect(built).toMatchObject({ problem: expect.stringMatching(/must not include a user name or password/) })
+      expect(JSON.stringify(built)).not.toMatch(/user:pw|u:p@|127\.0\.0\.1|hooks\.slack/)
+    }
+  })
+
+  it('refuses to post to an insecure URL even when a channel is built directly (#656)', async () => {
+    const r = recorder()
+    const slack = new SlackChannel({ target: { kind: 'webhook', url: 'http://hooks.example.com/x' }, fetchImpl: r.fetchImpl })
+    expect(await slack.isReady()).toBe(false)
+    await expect(slack.send(approval)).rejects.toThrow(ChannelDeliveryError)
+    const ntfy = new NtfyChannel({ server: 'http://ntfy.example', topic: 't', fetchImpl: r.fetchImpl })
+    expect(await ntfy.isReady()).toBe(false)
+    await expect(ntfy.send(approval)).rejects.toThrow(/plain http/)
+    expect(r.calls).toHaveLength(0)
+  })
 })

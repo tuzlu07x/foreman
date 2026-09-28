@@ -93,6 +93,8 @@ describe('MessageDecoder streaming', () => {
       '{"jsonrpc":"1.0","method":"x"}',
       'not-json',
     ])
+    // Only the line that isn't JSON counts as a parse error (#656).
+    expect(result.parseErrors).toBe(1)
   })
 
   it('ignores blank lines between messages', () => {
@@ -129,6 +131,7 @@ describe('createDecoder — frame size cap', () => {
     const out = decoder.push('x'.repeat(1_500))
     expect(out.messages).toEqual([])
     expect(out.rejected[0]).toMatch(/larger than 1000/)
+    expect(out.parseErrors).toBe(1)
     expect(decoder.remainder()).toBe('')
     // The stream recovers for the next well-formed frame.
     const next = decoder.push(encodeMessage({ jsonrpc: '2.0', id: 1, method: 'ping' } as never))

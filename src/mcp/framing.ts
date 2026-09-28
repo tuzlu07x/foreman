@@ -11,6 +11,9 @@ export interface DecodeResult {
   messages: JSONRPCMessage[]
   /** Lines that parsed as JSON but failed schema validation (for logging). */
   rejected: string[]
+  /** How many frames were not JSON at all (or too large to read). JSON-RPC
+   *  answers each with a -32700 parse error, id null. */
+  parseErrors: number
 }
 
 export interface MessageDecoder {
@@ -32,10 +35,11 @@ export function createDecoder(maxFrameChars: number = MAX_FRAME_CHARS): MessageD
       buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
       const messages: JSONRPCMessage[] = []
       const rejected: string[] = []
+      let parseErrors = 0
       if (buffer.length > maxFrameChars && buffer.indexOf('\n') === -1) {
         rejected.push(`<frame larger than ${maxFrameChars} chars dropped>`)
         buffer = ''
-        return { messages, rejected }
+        return { messages, rejected, parseErrors: 1 }
       }
       let newlineAt: number
       while ((newlineAt = buffer.indexOf('\n')) !== -1) {
@@ -47,13 +51,14 @@ export function createDecoder(maxFrameChars: number = MAX_FRAME_CHARS): MessageD
           parsed = JSON.parse(line)
         } catch {
           rejected.push(line)
+          parseErrors++
           continue
         }
         const validated = safeParseMessage(parsed)
         if (validated) messages.push(validated)
         else rejected.push(line)
       }
-      return { messages, rejected }
+      return { messages, rejected, parseErrors }
     },
     remainder() {
       return buffer

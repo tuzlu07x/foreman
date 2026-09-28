@@ -3,9 +3,10 @@ import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 import { waitFor } from './sandbox.js'
 
 // A local webhook endpoint (127.0.0.1 only) that records what Foreman's
-// WebhookChannel posts and verifies `X-Foreman-Signature` the way the docs
-// tell receivers to: "sha256=" + HMAC-SHA256(secret, raw body), compared in
-// constant time.
+// WebhookChannel posts and verifies it the way docs/notifications.md tells
+// receivers to: `X-Foreman-Timestamp` within 5 minutes, and
+// `X-Foreman-Signature` = "sha256=" + HMAC-SHA256(secret, "<timestamp>.<raw
+// body>"), compared in constant time.
 
 export interface WebhookPayload {
   schema: string
@@ -27,9 +28,13 @@ export interface Delivery {
   signatureValid: boolean
 }
 
-export function verifySignature(secret: string, raw: string, header: string | string[] | undefined): boolean {
-  const given = Buffer.from(Array.isArray(header) ? (header[0] ?? '') : (header ?? ''))
-  const expected = Buffer.from(`sha256=${createHmac('sha256', secret).update(raw).digest('hex')}`)
+const one = (h: string | string[] | undefined): string => (Array.isArray(h) ? (h[0] ?? '') : (h ?? ''))
+
+export function verifySignature(secret: string, raw: string, headers: IncomingHttpHeaders): boolean {
+  const ts = one(headers['x-foreman-timestamp'])
+  if (!/^\d+$/.test(ts) || Math.abs(Date.now() / 1000 - Number(ts)) > 300) return false
+  const given = Buffer.from(one(headers['x-foreman-signature']))
+  const expected = Buffer.from(`sha256=${createHmac('sha256', secret).update(`${ts}.${raw}`).digest('hex')}`)
   return given.length === expected.length && timingSafeEqual(given, expected)
 }
 
@@ -47,7 +52,7 @@ export class WebhookReceiver {
       req.on('data', (c: Buffer) => chunks.push(c))
       req.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf-8')
-        const signatureValid = verifySignature(secret, raw, req.headers['x-foreman-signature'])
+        const signatureValid = verifySignature(secret, raw, req.headers)
         try {
           deliveries.push({ path: req.url ?? '', headers: req.headers, raw, payload: JSON.parse(raw) as WebhookPayload, signatureValid })
         } catch {

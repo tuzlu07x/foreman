@@ -1,4 +1,9 @@
 import type { Request } from "../db/schema.js";
+import { terminalSafe } from "../core/terminal-text.js";
+
+/** Agent-supplied text as the TUI shows it (#656): control, escape, bidi
+ *  and zero-width characters become visible stand-ins. */
+export const safe = terminalSafe;
 
 export interface DecisionStats {
   allowed: number;
@@ -54,14 +59,14 @@ export function summariseTool(tool: string | null, argsJson: string): string {
   if (!tool) return "(no tool)";
   const args = parseArgs(argsJson);
   const inline = formatArgsInline(args);
-  return `${tool}(${inline})`;
+  return terminalSafe(`${tool}(${inline})`);
 }
 
 export function targetLabel(
   sourceAgent: string,
   targetAgent: string | null,
 ): string {
-  return targetAgent ? `${sourceAgent} → ${targetAgent}` : sourceAgent;
+  return terminalSafe(targetAgent ? `${sourceAgent} → ${targetAgent}` : sourceAgent);
 }
 
 export function aggregateStats(

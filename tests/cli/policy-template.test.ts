@@ -26,6 +26,15 @@ describe("DEFAULT_POLICY_YAML", () => {
     expect(engine.list().length).toBeGreaterThan(0);
   });
 
+  it("points at a schema reference and commands that exist, and says edits apply live (#656)", () => {
+    const header = DEFAULT_POLICY_YAML.split("\n").slice(0, 4).join("\n");
+    expect(header).toContain("https://github.com/tuzlu07x/foreman/blob/main/docs/policy.md");
+    expect(header).toMatch(/Edits apply on the next call/);
+    expect(header).not.toMatch(/re-run 'foreman start'|FOREMAN\.md/);
+    expect(DEFAULT_POLICY_YAML).not.toContain("foreman agent edit");
+    expect(DEFAULT_POLICY_YAML).toContain(`foreman agent responsibility <id> "<note>"`);
+  });
+
   it("stays compact (acceptance: readable in a short scroll)", () => {
     // Bumped from 80 → 150 in #299 to make room for the
     // responsibility_policies starter block, which is high-signal content
