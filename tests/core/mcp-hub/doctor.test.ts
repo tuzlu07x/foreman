@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -41,6 +41,9 @@ describe('doctor: mcp_hub check', () => {
     const result = checkMcpHub()
     expect(result.status).toBe('warn')
     expect(result.message).toContain('gh: github-pat')
+    // Read-only: no database or key is created to answer (#657).
+    expect(existsSync(join(home, 'foreman.db'))).toBe(false)
+    expect(existsSync(join(home, 'secrets.key'))).toBe(false)
   })
 
   it('reports OAuth servers that need login, and stored sessions without their tokens', () => {

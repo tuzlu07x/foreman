@@ -243,6 +243,18 @@ function doctorSecretStore(db: ForemanDb): SecretStore {
   return new DoctorSecretStore(db, loadSecretsMasterKey() ?? randomBytes(32));
 }
 
+/** The secret store, or an empty one when there is no database yet: no
+ *  secret is stored then, and doctor must not create the database. */
+function withDoctorSecretStore<T>(run: (store: SecretStore) => T): T {
+  if (existsSync(getForemanPaths().dbPath)) return run(doctorSecretStore(getDb()));
+  const empty = createInMemoryDb();
+  try {
+    return run(new DoctorSecretStore(empty.db, randomBytes(32)));
+  } finally {
+    empty.sqlite.close();
+  }
+}
+
 export function checkSecretsKey(): CheckResult {
   const paths = getForemanPaths();
   if (!existsSync(paths.dbPath)) {
@@ -1513,27 +1525,23 @@ export function checkMcpHub(): CheckResult {
     };
   }
   const enabled = enabledServers(config);
-  let exists: (name: string) => boolean = () => true;
-  let store: SecretStore | null = null;
-  try {
-    if (existsSync(paths.dbPath)) {
-      const opened = doctorSecretStore(getDb());
-      store = opened;
-      exists = (name) => opened.exists(name);
-    }
-  } catch {
-    // secret store unavailable — the database check reports it
-  }
-  const missing = enabled.flatMap(([name]) =>
-    missingSecrets(config, name, exists).map((s) => `${name}: ${s}`),
-  );
+  let missing: string[] = [];
   const oauthNotes: string[] = [];
   const needsLogin: string[] = [];
-  for (const [name, server] of enabled) {
-    if (server.auth !== "oauth" || !store) continue;
-    const status = mcpOAuthStatus(store, name, server.url);
-    if (status.state === "needs-login") needsLogin.push(name);
-    oauthNotes.push(`${name}: ${describeMcpOAuthStatus(name, status)}`);
+  try {
+    withDoctorSecretStore((store) => {
+      missing = enabled.flatMap(([name]) =>
+        missingSecrets(config, name, (secret) => store.exists(secret)).map((s) => `${name}: ${s}`),
+      );
+      for (const [name, server] of enabled) {
+        if (server.auth !== "oauth") continue;
+        const status = mcpOAuthStatus(store, name, server.url);
+        if (status.state === "needs-login") needsLogin.push(name);
+        oauthNotes.push(`${name}: ${describeMcpOAuthStatus(name, status)}`);
+      }
+    });
+  } catch {
+    // secret store unavailable — the database / secrets_key checks report it
   }
   const oauthSuffix = oauthNotes.length > 0 ? `; OAuth — ${oauthNotes.join(", ")}` : "";
   if (missing.length > 0) {
