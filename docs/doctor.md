@@ -27,7 +27,7 @@ Foreman doctor
   ✓ database             … opens; schema is at the latest migration
   ✓ migrations           up to date (5 applied)
   ✓ fts5                 FTS5 available; requests_fts ready
-  ✓ policy_yaml          parses
+  ✓ policy_yaml          parses and matches the policy schema
   ✓ agents_registered    1 registered (1 active)
   ✓ agent_tokens         1 agent proves its identity with a token
   ✓ mcp_gateway          gateway instantiates cleanly (stdio transport ready)

@@ -169,7 +169,7 @@ Three panels, responsive layout via `useLayout()`:
 | `policy` | `p` | view rules, `e` opens `$EDITOR` then reloads, `d` toggles enabled |
 | `sessions` | `s` | active + completed sessions, expand for full transcript, `k` halts active |
 | help | `?` | overlay listing every hotkey grouped by page |
-| quit | `q` / Ctrl-C | confirm modal then exit |
+| quit | `q` / Ctrl-C | exits; asks first while approvals are waiting |
 
 ### Approval modal
 Pops on any `approval:requested` event. Shows agent → target flow, indented tool call, ◆ risk reasons, 60 s countdown that colour-shifts at ≤30 s / ≤10 s. Hotkeys: `a` allow once / `A` always allow / `d` deny / `D` always deny / `r` remember rule / `i` inspect (request chain + full JSON).
