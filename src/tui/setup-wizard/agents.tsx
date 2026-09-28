@@ -2,6 +2,7 @@ import { ConfirmInput, MultiSelect } from "@inkjs/ui";
 import { Box, Text } from "ink";
 import type { JSX } from "react";
 import { WizardProgress } from "../components/wizard-progress.js";
+import { foremanInstallRecord } from "../../core/agent-add-flow.js";
 import { computeAgentLlmStatuses } from "../setup-wizard-agent-llm-gating.js";
 import { theme } from "../theme.js";
 import { renderAgentConfigStep } from "./agent-config.js";
@@ -12,7 +13,7 @@ import {
 } from "./agents-logic.js";
 import type { WizardContext } from "./context.js";
 import { stepProgress } from "./progress.js";
-import { configuredProviderIds, DEFAULT_AGENTS } from "./shared.js";
+import { configuredProviderIds } from "./shared.js";
 
 // Step 3 — Agents: picker → per-agent config (agent-config.tsx) → confirm.
 // Returns null when no agents phase renders (e.g. "running"), so the root
@@ -72,13 +73,12 @@ export function renderAgentsStep(ctx: WizardContext): JSX.Element | null {
         label: `${a.name}${installedSuffix} — ${a.tagline}`,
       };
     });
-    const compatibleDefaults = (
-      initialRegistered.length > 0 ? initialRegistered : DEFAULT_AGENTS
-    ).filter((id) => {
-      const status = gatingStatuses.get(id);
-      return status?.state !== "needs-llm";
-    });
-    const defaults = compatibleDefaults;
+    // Pre-checked: your last pick (#657), so Esc back from the per-agent
+    // screens or the confirm screen keeps what you checked instead of
+    // re-ticking the defaults. On the first visit that is the resumed
+    // session's pick, the registered agents, or the default set.
+    const visibleIds = new Set(visibleAgents.map((a) => a.id));
+    const defaults = agentsSelected.filter((id) => visibleIds.has(id));
     // Mirrors the MultiSelect's live toggles, not just the pre-checked
     // defaults ("Pre-checked: hermes" stayed up after Hermes was unticked).
     const checked = agentsPickerChecked ?? defaults;
@@ -88,8 +88,8 @@ export function renderAgentsStep(ctx: WizardContext): JSX.Element | null {
         <Text color={theme.fg.muted}>
           ↑↓ move · <Text bold>Space toggle</Text> · Enter confirm. Defaults
           are pre-checked — toggle off any you don't want, toggle on any you
-          do. Newly-checked agents are installed; previously-installed agents
-          you uncheck are uninstalled.
+          do. Newly-checked agents are installed; registered agents you
+          uncheck are unregistered (their binaries stay installed).
         </Text>
         {/* #393 — Hidden-agent notice removed entirely. Round-3 user
             kept reading it as \"Foreman is defaulting to Claude\" when
@@ -146,6 +146,8 @@ export function renderAgentsStep(ctx: WizardContext): JSX.Element | null {
       agentsSelected,
       initialRegistered,
     );
+    const uninstallable = uninstallCandidates(ctx, toRemove);
+    const { uninstallRemoved } = ctx.state;
     const noChanges = toAdd.length === 0 && toRemove.length === 0;
     const nothingSelected = agentsSelected.length === 0;
     return (
@@ -162,7 +164,16 @@ export function renderAgentsStep(ctx: WizardContext): JSX.Element | null {
         )}
         {toRemove.length > 0 && (
           <Text color={theme.accent.warning}>
-            ▸ Will remove: {toRemove.join(", ")}
+            ▸ Will unregister: {toRemove.join(", ")}
+            {uninstallRemoved && uninstallable.length > 0
+              ? ` · and uninstall ${uninstallable.join(", ")}`
+              : " (binaries stay installed)"}
+          </Text>
+        )}
+        {uninstallable.length > 0 && (
+          <Text color={theme.fg.muted}>
+            [u] {uninstallRemoved ? "☑" : "☐"} also uninstall what Foreman
+            installed: {uninstallable.join(", ")}
           </Text>
         )}
         {nothingSelected ? (
@@ -206,6 +217,24 @@ export function renderAgentsStep(ctx: WizardContext): JSX.Element | null {
     );
   }
   return null;
+}
+
+/** Unticked agents whose binary Foreman installed itself: the only ones
+ *  the wizard may uninstall, and only after `u` on the confirm screen. */
+function uninstallCandidates(ctx: WizardContext, toRemove: string[]): string[] {
+  return toRemove.filter(
+    (id) => foremanInstallRecord(ctx.services.registry.get(id)?.metadata) !== null,
+  );
+}
+
+/** `u` on the agents confirm screen toggles uninstalling (#657). */
+export function handleAgentsConfirmInput(ctx: WizardContext, input: string): boolean {
+  if (ctx.currentStep !== "agents" || ctx.state.agentsPhase !== "confirm") return false;
+  if (input !== "u") return false;
+  const { toRemove } = computeAgentDiff(ctx.state.agentsSelected, ctx.initialRegistered);
+  if (uninstallCandidates(ctx, toRemove).length === 0) return false;
+  ctx.set.setUninstallRemoved((on) => !on);
+  return true;
 }
 
 // Esc back-navigation for the agents step (#153).

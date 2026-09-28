@@ -634,10 +634,14 @@ function scoreTool(tool: HubTool, terms: string[]): number {
 
 function unavailableMessage(tool: HubTool): string {
   const why = tool.reasons.join("; ") || tool.status;
+  // A plain `trust` accepts a changed definition but keeps a tool the
+  // scanner flagged withheld; that needs --include-flagged (#657).
+  const flagged = tool.reasons.some((r) => r.startsWith("suspicious definition"));
+  const trust = `foreman mcp trust ${tool.server}${flagged ? " --include-flagged" : ""}`;
   const hint =
     tool.status === "denied"
       ? "Remove it from tools.deny in mcp.yaml to enable it."
-      : `Review it with \`foreman mcp tools ${tool.server} --refresh\`, then \`foreman mcp trust ${tool.server}\` if you accept it.`;
+      : `Review it with \`foreman mcp tools ${tool.server} --refresh\`, then \`${trust}\` if you accept it.`;
   return `Foreman withheld '${tool.exposedName}': ${why}. ${hint}`;
 }
 

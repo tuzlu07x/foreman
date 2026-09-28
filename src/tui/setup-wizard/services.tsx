@@ -6,13 +6,16 @@ import { osc8 } from "../osc8.js";
 import { persistVoiceConfig } from "../setup-wizard-voice-persist.js";
 import { theme } from "../theme.js";
 import type { WizardContext } from "./context.js";
+import { servicePasteWarning } from "./paste-checks.js";
 import { stepProgress } from "./progress.js";
 import {
   applyServicesPickerSubmit,
   applyServiceValueSubmit,
   buildServicePromptList,
   consumingAgentsFor,
+  notifyWiringNames,
   persistNotifyConfigFromWizardState,
+  servicesPreChecked,
 } from "./services-logic.js";
 
 // Step 4 — Services: picker → per-secret value prompts → summary.
@@ -60,6 +63,7 @@ if (servicesPhase === "picker") {
       </Text>
       <MultiSelect
         options={options}
+        defaultValue={servicesPreChecked(servicesSelected, serviceCatalog, services.secretStore)}
         onSubmit={(values) => {
           const result = applyServicesPickerSubmit(values);
           setServicesSelected(result.selected);
@@ -93,6 +97,7 @@ if (servicesPhase === "values") {
     return <Text>…</Text>;
   }
   const progress = `(${serviceIdx + 1}/${servicePrompts.length})`;
+  const alreadyStored = services.secretStore.exists(prompt.secretName);
   const headerLabel =
     prompt.kind === "extra"
       ? `${service.name} — ${prompt.secretName}`
@@ -136,7 +141,9 @@ if (servicesPhase === "values") {
         </Box>
       )}
       <Text color={theme.fg.muted}>
-        (Enter to save · Enter on empty input to skip)
+        {alreadyStored
+          ? "(already stored — Enter on empty input keeps it · type a new value to replace it)"
+          : "(Enter to save · Enter on empty input to skip)"}
       </Text>
       {servicesWarning && (
         <Text color={theme.accent.warning}>⚠ {servicesWarning}</Text>
@@ -151,8 +158,13 @@ if (servicesPhase === "values") {
             value,
             currentIdx: serviceIdx,
             totalSelected: servicePrompts.length,
+            alreadyStored,
           });
-          if (result.shouldSave) {
+          if (result.keepStored) {
+            setServicesSaved((prev) =>
+              prev.includes(prompt.secretName) ? prev : [...prev, prompt.secretName],
+            );
+          } else if (result.shouldSave) {
             try {
               if (!services.secretStore.exists(prompt.secretName)) {
                 services.secretStore.add(prompt.secretName, value);
@@ -179,7 +191,10 @@ if (servicesPhase === "values") {
                 : [...prev, prompt.secretName],
             );
           }
-          setServicesWarning(result.warning);
+          setServicesWarning(
+            (result.shouldSave ? servicePasteWarning(prompt.secretName, value) : null) ??
+              result.warning,
+          );
           setServiceIdx(result.nextIdx);
           setServicesPhase(result.nextPhase);
         }}
@@ -202,6 +217,12 @@ if (servicesPhase === "summary") {
   const telegramSkippedWithoutSave =
     servicesSelected.includes("telegram") &&
     !servicesSaved.some((n) => n.startsWith("telegram-"));
+  const wiringNames = notifyWiringNames(
+    servicesSelected,
+    servicesSaved,
+    serviceCatalog,
+    services.secretStore,
+  );
   return (
     <Box flexDirection="column" gap={1} paddingY={1}>
       <WizardProgress {...stepProgress("services")} label="Services" phase="summary" />
@@ -235,6 +256,9 @@ if (servicesPhase === "summary") {
           ))}
         </Box>
       )}
+      {servicesWarning ? (
+        <Text color={theme.accent.warning}>⚠ {servicesWarning}</Text>
+      ) : null}
       {telegramSkippedWithoutSave ? (
         <Box flexDirection="column">
           <Text color={theme.accent.warning} bold>
@@ -251,14 +275,14 @@ if (servicesPhase === "summary") {
       <Text>Continue to install? (y/n)</Text>
       <ConfirmInput
         onConfirm={() => {
-          persistNotifyConfigFromWizardState(services, serviceCatalog, servicesSaved);
+          persistNotifyConfigFromWizardState(services, serviceCatalog, wiringNames);
           // #305 — seed voice.yaml alongside notify.yaml so ForemanVoice
           // + pattern detection have a config to read on first boot.
           persistVoiceConfig(services.voiceConfigPath, servicesSaved);
           advance("services");
         }}
         onCancel={() => {
-          persistNotifyConfigFromWizardState(services, serviceCatalog, servicesSaved);
+          persistNotifyConfigFromWizardState(services, serviceCatalog, wiringNames);
           persistVoiceConfig(services.voiceConfigPath, servicesSaved);
           advance("services");
         }}

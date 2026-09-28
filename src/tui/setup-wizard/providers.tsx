@@ -298,6 +298,10 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
             Providers page)
           </Text>
         )}
+        {/* The last prompt's paste warning would otherwise never show. */}
+        {providersWarning && (
+          <Text color={theme.accent.warning}>⚠ {providersWarning}</Text>
+        )}
         {providersSignedIn.length > 0 && (
           <Box flexDirection="column">
             <Text color={theme.accent.primary}>

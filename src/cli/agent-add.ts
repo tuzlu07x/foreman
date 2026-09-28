@@ -16,7 +16,7 @@ import {
   runInstall,
   runPostConfigCommands,
 } from "../core/agent-install.js";
-import { buildMcpSnippet } from "../core/agent-mcp-snippet.js";
+import { buildMcpSnippet, snippetForDisplay } from "../core/agent-mcp-snippet.js";
 import {
   AGENT_TOKEN_ENV,
   ensureAgentToken,
@@ -104,6 +104,8 @@ export async function runAgentAddScripted(
     smokeTest: true,
   });
   const manualInstallCmd = preferredInstallCommand(entry.install);
+  // Set only when Foreman itself ran the installer (#657).
+  let installedByForeman: string | undefined;
   if (!detection.found) {
     if (detection.brokenAt) {
       log(
@@ -141,6 +143,7 @@ export async function runAgentAddScripted(
         );
         return 1;
       }
+      installedByForeman = manualInstallCmd;
     } else if (manualInstallCmd) {
       log(
         orange("note: ") +
@@ -284,6 +287,7 @@ export async function runAgentAddScripted(
       agentId,
       entry,
       registry: deps.registry,
+      installedByForeman,
     });
     handlePrivateKey(result.privateKey, options.keyOut, log);
     if (entry.identity_path) {
@@ -474,11 +478,11 @@ export function logWiring(
       break;
     case "unsupported":
       log(orange("note: ") + `${path} has an unsupported format. Paste this manually:`);
-      log(buildMcpSnippet(agentId, entry).yaml);
+      log(snippetForDisplay(buildMcpSnippet(agentId, entry), null).text);
       break;
     case "none":
       log(orange("note: ") + NO_CONFIG_PATH_NOTE);
-      log(buildMcpSnippet(agentId, entry).yaml);
+      log(snippetForDisplay(buildMcpSnippet(agentId, entry), null).text);
       break;
   }
   if (wiring.note) log(orange("note: ") + wiring.note);

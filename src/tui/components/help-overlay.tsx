@@ -1,5 +1,5 @@
-import { Box, Text } from "ink";
-import type { JSX } from "react";
+import { Box, Text, useInput, useStdout } from "ink";
+import { type JSX, useState } from "react";
 import { doubleBorder, theme } from "../theme.js";
 
 // =============================================================================
@@ -30,7 +30,7 @@ const NAV_SECTIONS: HelpSection[] = [
       { key: "n", label: "inbox (notifications)" },
       { key: "h / ?", label: "open / close help" },
       { key: "Esc", label: "back to Home" },
-      { key: "q / Ctrl-C", label: "quit (with confirm)" },
+      { key: "q / Ctrl-C", label: "quit" },
     ],
   },
   {
@@ -59,6 +59,7 @@ const NAV_SECTIONS: HelpSection[] = [
       { key: "i", label: "inspect details" },
       { key: "t", label: "toggle technical" },
       { key: "k", label: "halt session" },
+      { key: "q / Ctrl-C", label: "quit (asks first)" },
     ],
   },
 ];
@@ -81,8 +82,8 @@ const PAGE_SECTIONS: HelpSection[] = [
       { key: "o", label: "login (OAuth / interactive)" },
       { key: "N / L", label: "edit note / change LLM" },
       { key: "d / e", label: "disable / enable" },
-      { key: "b / r", label: "block / remove" },
-      { key: "R", label: "regen key" },
+      { key: "b", label: "block / unblock" },
+      { key: "r / x", label: "regen key / remove" },
     ],
   },
   {
@@ -104,7 +105,7 @@ const EXTRA_SECTIONS: HelpSection[] = [
     rows: [
       { key: "↑ ↓ / Enter", label: "select / expand" },
       { key: "n", label: "add custom secret" },
-      { key: "v / r / d", label: "reveal / rotate / remove" },
+      { key: "v / r / d", label: "reveal / rotate / delete" },
     ],
   },
   {
@@ -126,79 +127,136 @@ const EXTRA_SECTIONS: HelpSection[] = [
   },
 ];
 
-export function HelpOverlay(): JSX.Element {
+const ALL_SECTIONS: HelpSection[] = [...NAV_SECTIONS, ...PAGE_SECTIONS, ...EXTRA_SECTIONS];
+
+/** A styled run of text; one help line is a list of these. */
+interface Seg {
+  text: string;
+  color?: string;
+  bold?: boolean;
+}
+type Line = Seg[];
+
+const KEY_WIDTH = 12;
+const COLUMN_GAP = 3;
+
+function wrapWords(text: string, width: number): string[] {
+  const out: string[] = [];
+  let line = "";
+  for (const word of text.split(/\s+/)) {
+    if (line.length === 0) line = word;
+    else if (line.length + 1 + word.length <= width) line += ` ${word}`;
+    else {
+      out.push(line);
+      line = word;
+    }
+  }
+  if (line.length > 0) out.push(line);
+  return out.length > 0 ? out : [""];
+}
+
+function sectionLines(section: HelpSection, width: number): Line[] {
+  const lines: Line[] = [
+    [{ text: section.title, color: theme.fg.emphasis, bold: true }],
+    [{ text: "─".repeat(Math.min(section.title.length, width)), color: theme.fg.muted }],
+  ];
+  const labelWidth = Math.max(8, width - KEY_WIDTH - 1);
+  for (const row of section.rows) {
+    wrapWords(row.label, labelWidth).forEach((part, i) => {
+      lines.push([
+        { text: `${(i === 0 ? row.key : "").padEnd(KEY_WIDTH)} `, color: theme.accent.primary },
+        { text: part, color: theme.fg.default },
+      ]);
+    });
+  }
+  return lines;
+}
+
+function lineLength(line: Line): number {
+  return line.reduce((n, seg) => n + seg.text.length, 0);
+}
+
+/** The help as lines for a terminal `width` columns wide: as many section
+ *  columns as fit (1 to 3), each as wide as the space allows, so labels
+ *  don't wrap needlessly on a wide terminal (#657). Exported for tests. */
+export function helpLines(width: number): Line[] {
+  const inner = Math.max(24, width - 6);
+  const cols = inner >= 3 * 34 + 2 * COLUMN_GAP ? 3 : inner >= 2 * 34 + COLUMN_GAP ? 2 : 1;
+  const colWidth = Math.floor((inner - COLUMN_GAP * (cols - 1)) / cols);
+  const out: Line[] = [];
+  for (let i = 0; i < ALL_SECTIONS.length; i += cols) {
+    const group = ALL_SECTIONS.slice(i, i + cols).map((sec) => sectionLines(sec, colWidth));
+    const height = Math.max(...group.map((g) => g.length));
+    if (out.length > 0) out.push([]);
+    for (let r = 0; r < height; r++) {
+      const line: Line = [];
+      group.forEach((g, c) => {
+        const cell = g[r] ?? [];
+        line.push(...cell);
+        if (c < group.length - 1) line.push({ text: " ".repeat(colWidth - lineLength(cell) + COLUMN_GAP) });
+      });
+      out.push(line);
+    }
+  }
+  return out;
+}
+
+export interface HelpOverlayProps {
+  /** Terminal columns. */
+  width?: number;
+  /** Rows the overlay may use (border included); it scrolls beyond that. */
+  height?: number;
+}
+
+/** Title, footer, border and their margins. */
+const CHROME_ROWS = 6;
+
+export function HelpOverlay({ width, height }: HelpOverlayProps): JSX.Element {
+  const { stdout } = useStdout();
+  const lines = helpLines(width ?? stdout.columns ?? 100);
+  const visible = height === undefined ? lines.length : Math.max(3, height - CHROME_ROWS);
+  const maxOffset = Math.max(0, lines.length - visible);
+  const [offset, setOffset] = useState(0);
+  const top = Math.min(offset, maxOffset);
+  // At 80x24 the whole help doesn't fit: it scrolls (#657).
+  useInput((_input, key) => {
+    if (key.upArrow) setOffset(Math.max(0, top - 1));
+    else if (key.downArrow) setOffset(Math.min(maxOffset, top + 1));
+    else if (key.pageUp) setOffset(Math.max(0, top - visible));
+    else if (key.pageDown) setOffset(Math.min(maxOffset, top + visible));
+  });
+  const shown = lines.slice(top, top + visible);
+  const scrolls = maxOffset > 0;
   return (
     <Box
       flexDirection="column"
       borderStyle={doubleBorder()}
       borderColor={theme.accent.primary}
       paddingX={2}
-      paddingY={1}
     >
       <Box justifyContent="center" marginBottom={1}>
         <Text bold color={theme.accent.primary}>
           {theme.symbols.activeDot} Foreman Help
         </Text>
       </Box>
-
-      <ColumnRow sections={NAV_SECTIONS} />
-      <Box marginTop={1}>
-        <ColumnRow sections={PAGE_SECTIONS} />
-      </Box>
-      <Box marginTop={1}>
-        <ColumnRow sections={EXTRA_SECTIONS} />
-      </Box>
-
+      {shown.map((line, i) => (
+        <Text key={`${top + i}`} wrap="truncate-end">
+          {line.length === 0
+            ? " "
+            : line.map((seg, j) => (
+                <Text key={j} color={seg.color} bold={seg.bold}>
+                  {seg.text}
+                </Text>
+              ))}
+        </Text>
+      ))}
       <Box marginTop={1} justifyContent="center">
-        <Text color={theme.fg.muted}>
-          docs: github.com/tuzlu07x/foreman {theme.symbols.bullet} press h / ? /
-          Esc to close
+        <Text color={theme.fg.muted} wrap="truncate-end">
+          {scrolls
+            ? `↑↓ PgUp/PgDn scroll (${top + 1}–${Math.min(top + visible, lines.length)} of ${lines.length}) ${theme.symbols.bullet} h / ? / Esc close`
+            : `docs: github.com/tuzlu07x/foreman ${theme.symbols.bullet} press h / ? / Esc to close`}
         </Text>
       </Box>
     </Box>
   );
-}
-
-function ColumnRow({ sections }: { sections: HelpSection[] }): JSX.Element {
-  // Fixed-width columns so ink's flex layout doesn't collapse cells when the
-  // terminal is narrow (which made labels wrap character-by-character).
-  // 32 cols x 3 = 96 cols + paddings → fits comfortably in 100+ wide terms.
-  return (
-    <Box flexDirection="row">
-      {sections.map((section, i) => (
-        <Box
-          key={section.title}
-          flexDirection="column"
-          width={32}
-          paddingRight={i === sections.length - 1 ? 0 : 2}
-        >
-          <SectionColumn section={section} />
-        </Box>
-      ))}
-    </Box>
-  );
-}
-
-function SectionColumn({ section }: { section: HelpSection }): JSX.Element {
-  return (
-    <Box flexDirection="column">
-      <Text bold color={theme.fg.emphasis}>
-        {section.title}
-      </Text>
-      <Text color={theme.fg.muted}>{"─".repeat(section.title.length)}</Text>
-      {section.rows.map((row) => (
-        <Box key={row.key}>
-          <Text>
-            <Text color={theme.accent.primary}>{padRight(row.key, 12)}</Text>{" "}
-            <Text color={theme.fg.default}>{row.label}</Text>
-          </Text>
-        </Box>
-      ))}
-    </Box>
-  );
-}
-
-function padRight(s: string, width: number): string {
-  if (s.length >= width) return s;
-  return s + " ".repeat(width - s.length);
 }

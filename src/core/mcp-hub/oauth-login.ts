@@ -62,10 +62,27 @@ async function login(opts: McpOAuthLoginOptions, secrets: string[]): Promise<Mcp
   const serverUrl = assertSecureEndpoint(opts.serverUrl, "MCP server URL");
   const fetchFn = hardenedOAuthFetch(opts.fetchFn);
 
-  const info = await discoverOAuthServerInfo(serverUrl, { fetchFn });
+  // Discovery swallows network errors and reports "no metadata"; keep the
+  // first one, so an offline login says so instead of blaming the server
+  // (#657).
+  let unreachable: unknown = null;
+  const discoveryFetch: typeof fetchFn = async (url, init) => {
+    try {
+      return await fetchFn(url, init);
+    } catch (err) {
+      if (!(err instanceof McpOAuthError)) unreachable ??= err;
+      throw err;
+    }
+  };
+  const info = await discoverOAuthServerInfo(serverUrl, { fetchFn: discoveryFetch });
   const authServerUrl = assertSecureEndpoint(info.authorizationServerUrl, "authorization server URL");
   const metadata = info.authorizationServerMetadata;
   if (!metadata) {
+    if (unreachable !== null) {
+      throw new McpOAuthError(
+        `couldn't reach ${authServerUrl.origin} (${networkReason(unreachable)}) — check the network connection and try again`,
+      );
+    }
     throw new McpOAuthError(
       `no OAuth authorization-server metadata found for ${authServerUrl.origin} — the server may not support MCP OAuth`,
     );
@@ -312,4 +329,13 @@ function constantTimeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
   return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+
+/** "fetch failed" plus the system error behind it (ENOTFOUND, …). */
+function networkReason(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  if (err.name === "TimeoutError") return "timed out";
+  const cause = (err as { cause?: { code?: unknown; message?: unknown } }).cause;
+  const code = typeof cause?.code === "string" ? cause.code : null;
+  return code ? `${err.message}: ${code}` : err.message;
 }

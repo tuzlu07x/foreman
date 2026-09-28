@@ -143,10 +143,9 @@ export class OrgComms {
     const limit = Math.min(Math.max(opts.limit ?? 30, 1), 200);
     let scope;
     if (opts.channel) {
-      const target = resolveTarget(org, viewer, opts.channel);
-      if ("error" in target) return [];
-      if (!canRead(org, viewer, target.channel)) return [];
-      scope = eq(orgMessages.channel, target.channel);
+      const filter = readFilter(org, viewer, opts.channel);
+      if ("error" in filter) return [];
+      scope = filter.scope;
     } else if (!viewer.isBoss) {
       const own = eq(orgMessages.fromAgent, viewer.agent);
       const visible = visibleChannels(org, viewer);
@@ -165,6 +164,14 @@ export class OrgComms {
       .limit(limit)
       .all();
     return rows.reverse();
+  }
+
+  /** Why `channel` can't be read by this viewer (unknown, not theirs), or
+   *  null. Callers say so instead of printing "No messages yet" (#657). */
+  readError(opts: { viewer: string; asOwner?: boolean; channel: string }): string | null {
+    const org = this.orgDoc();
+    const filter = readFilter(org, senderOf(org, opts.viewer, opts.asOwner === true), opts.channel);
+    return "error" in filter ? filter.error : null;
   }
 
   orgDoc(): OrgDoc | null {
@@ -251,6 +258,33 @@ export function resolveTarget(org: OrgDoc | null, sender: Sender, to: string): {
   }
   const known = [...Object.keys(org.departments), ...Object.keys(org.roles)].slice(0, 12).join(", ");
   return { error: `no department, role or agent called '${to}' (try: all, leadership, boss, ${known})` };
+}
+
+type ReadScope = ReturnType<typeof eq> | ReturnType<typeof or>;
+
+/** Which messages a `channel` filter selects for `viewer` (#657). Reading
+ *  differs from posting in two places, both for you: `boss` (you, me) is
+ *  your inbox — reports to you and your direct threads — not all-hands,
+ *  where a post to "boss" from you goes; and a role is everything in that
+ *  role's direct threads plus what it posted, not only your thread with
+ *  it. An agent reading a role sees its own thread with that role. */
+function readFilter(org: OrgDoc | null, viewer: Sender, channel: string): { scope: ReadScope } | { error: string } {
+  const word = channel.trim().toLowerCase().replace(/^[#@]/, "");
+  const inThreadOf = (role: string) => [
+    sql`${orgMessages.channel} LIKE ${`dm:${role}|%`}`,
+    sql`${orgMessages.channel} LIKE ${`dm:%|${role}`}`,
+  ];
+  if (viewer.isBoss) {
+    if (ALIASES[word] === BOSS) return { scope: or(eq(orgMessages.channel, BOSS), ...inThreadOf(BOSS))! };
+    const role = org && Object.hasOwn(org.roles, word) ? word : org ? rolesForAgent(org, word)[0] : undefined;
+    if (role && !(org && Object.hasOwn(org.departments, word))) {
+      return { scope: or(eq(orgMessages.fromRole, role), ...inThreadOf(role))! };
+    }
+  }
+  const target = resolveTarget(org, viewer, channel);
+  if ("error" in target) return target;
+  if (!canRead(org, viewer, target.channel)) return { error: `you can't read ${channelLabel(target.channel, viewer.isBoss)}` };
+  return { scope: eq(orgMessages.channel, target.channel) };
 }
 
 export function dmChannel(a: string, b: string): string {

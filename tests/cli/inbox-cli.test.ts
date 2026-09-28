@@ -41,3 +41,47 @@ describe('foreman inbox (#613)', () => {
     expect(run('inbox', '--unread', '--json').stdout.trim()).toBe('[]')
   })
 })
+
+// QA #657 M2 — an approval that timed out with no `foreman start` running
+// left no trace, and the inbox said "all caught up".
+describe('foreman inbox after approvals nobody could answer', () => {
+  let home: string
+  let env: NodeJS.ProcessEnv
+  const run = (...args: string[]) => spawnSync('node', [FM_BIN, ...args], { env, encoding: 'utf-8' })
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'foreman-inbox-missed-'))
+    env = { ...process.env, FOREMAN_HOME: home, NO_COLOR: '1' }
+    expect(run('init').status).toBe(0)
+  })
+  afterEach(() => rmSync(home, { recursive: true, force: true }))
+
+  it('reports timed-out approvals instead of "all caught up"', () => {
+    const db = new Database(join(home, 'foreman.db'))
+    db.prepare(
+      `INSERT INTO requests (id, source_agent, target_tool, args, risk_score, decision, decided_by, created_at)
+       VALUES ('req-1', 'qa-bot', 'shell_exec', '{}', 70, 'denied', 'approval-timeout', ?)`,
+    ).run(Date.now() - 5_000)
+    db.close()
+    const out = run('inbox', '--unread')
+    expect(out.status).toBe(0)
+    expect(out.stdout).not.toContain('all caught up')
+    expect(out.stdout).toContain("1 approval timed out while Foreman wasn't running; start `foreman start` to approve")
+    expect(out.stdout).toContain('1 unread')
+    // Only reported once.
+    expect(run('inbox', 'read').stdout).toContain('marked 1 item read')
+    expect(run('inbox').stdout).toContain('all caught up')
+  })
+
+  it('says approvals are waiting instead of "all caught up"', () => {
+    const db = new Database(join(home, 'foreman.db'))
+    db.prepare(
+      `INSERT INTO pending_approvals (request_id, source_agent, args, risk_score, risk_reasons, status, requested_at, deadline_ms)
+       VALUES ('req-2', 'qa-bot', '{}', 70, '[]', 'pending', ?, ?)`,
+    ).run(Date.now(), Date.now() + 600_000)
+    db.close()
+    const out = run('inbox')
+    expect(out.stdout).not.toContain('all caught up')
+    expect(out.stdout).toContain('1 approval waiting — run `foreman start` to answer before they time out')
+  })
+})

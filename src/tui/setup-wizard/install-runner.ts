@@ -1,5 +1,6 @@
 import {
   checkSecrets,
+  foremanInstallRecord,
   pickMcpConfigPath,
   registerAgent,
 } from "../../core/agent-add-flow.js";
@@ -24,7 +25,7 @@ import {
   resolveInstallerNodeVersion,
 } from "../../core/node-engines.js";
 import { ensureAgentToken, revokeAgentToken } from "../../core/agent-token.js";
-import { buildMcpSnippet } from "../../core/agent-mcp-snippet.js";
+import { buildMcpSnippet, snippetForDisplay } from "../../core/agent-mcp-snippet.js";
 import { NO_CONFIG_PATH_NOTE, tokenHandoffHint } from "../../core/agent-wiring.js";
 import {
   autoRegisterMcp,
@@ -49,8 +50,15 @@ import type {
   WizardServices,
 } from "./types.js";
 
+/** What happens to an unticked agent's binary (#657). */
+export interface RemoveOptions {
+  /** Also uninstall the binaries Foreman installed itself. Off by default:
+   *  unticking an agent only unregisters it. */
+  uninstall?: boolean;
+}
+
 // Exported for tests. The wizard's core diff loop: install + register the
-// newly-checked agents, uninstall + remove the previously-checked-now-unchecked
+// newly-checked agents, unregister the previously-checked-now-unchecked
 // ones. Idempotent — running it twice with the same toAdd/toRemove no-ops.
 export async function runInstallStep(
   toAdd: string[],
@@ -63,6 +71,7 @@ export async function runInstallStep(
     providersSelected: [],
     servicesSelected: [],
   },
+  removeOptions: RemoveOptions = {},
 ): Promise<InstallStepSummary> {
   const summary: InstallStepSummary = {
     registered: [],
@@ -80,7 +89,8 @@ export async function runInstallStep(
   // cross-provider required_secrets per the user's per-agent llmProvider.
   const providerCatalog = loadActiveProviders().doc.providers;
 
-  // --- Process unchecks first: uninstall the binary, remove the row -----
+  // --- Process unchecks first: remove the row (and, only when asked, the
+  // binary Foreman installed) --------------------------------------------
   for (const id of toRemove) {
     const existing = services.registry.get(id);
     if (!existing) continue;
@@ -89,12 +99,18 @@ export async function runInstallStep(
         ? existing.metadata.registryId
         : null;
     const entry = registryId ? safeFind(doc, registryId) : null;
+    const installedByForeman = foremanInstallRecord(existing.metadata) !== null;
     log(`▸ Removing ${existing.displayName}`);
     services.registry.remove(id);
     revokeAgentToken(services.secretStore, id);
     summary.removed.push(id);
     log(`  ✓ unregistered "${id}"`);
-    if (entry) {
+    if (!removeOptions.uninstall || !installedByForeman) {
+      log(
+        `  ◦ ${entry?.name ?? existing.displayName} left installed` +
+          (removeOptions.uninstall ? " (Foreman didn't install it)" : ""),
+      );
+    } else if (entry) {
       // #357 — pick uninstall command by *detected* source, not registry
       // hints, so brew-installed binaries (OpenClaw at /opt/homebrew/bin/)
       // actually get `brew uninstall` instead of a silent npm no-op.
@@ -134,6 +150,8 @@ export async function runInstallStep(
     // failures degrade to a warning. Binary install can pause for user
     // input via onFailure (#177); register always runs at the end.
     let skipThisAgent = false;
+    // Set when Foreman itself ran the installer (#657).
+    let installedByForeman: string | undefined;
     while (true) {
       // #458 — Smoke-test the discovered binary so broken shims (the
       // wiped-venv crash QA hit) trigger a reinstall instead of being
@@ -190,7 +208,10 @@ export async function runInstallStep(
         install: entry.install,
         onLine: (l) => log(`  ${l}`),
       });
-      if (result.ok) break;
+      if (result.ok) {
+        installedByForeman = installCmd;
+        break;
+      }
       log(`  ⚠ install failed (exit ${result.exitCode})`);
       log(`    run manually: ${result.manualCommand}`);
       if (!onFailure) break;
@@ -377,6 +398,7 @@ export async function runInstallStep(
         providerVariant: cfg?.providerVariant,
         modelVersion: cfg?.modelVersion,
         responsibilityNote: cfg?.responsibilityNote,
+        installedByForeman,
       });
       summary.registered.push(id);
       log(`  ✓ registered as "${id}"`);
@@ -397,7 +419,7 @@ export async function runInstallStep(
       // it, as `foreman agent add` does. The snippet has a placeholder.
       if (!pickMcpConfigPath(entry) && !registerHint?.wrapper) {
         log(`  ◦ ${NO_CONFIG_PATH_NOTE}`);
-        for (const line of buildMcpSnippet(id, entry).yaml.trimEnd().split("\n")) log(`      ${line}`);
+        for (const line of snippetForDisplay(buildMcpSnippet(id, entry), null).text.split("\n")) log(`      ${line}`);
         log(`  ◦ ${tokenHandoffHint(id)}`);
         summary.tokenToWire.push(id);
       }

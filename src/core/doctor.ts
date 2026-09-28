@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { delimiter } from "node:path";
 import { FOREMAN_VERSION } from "../version.js";
 import { parse as parseYaml } from "yaml";
-import { createInMemoryDb, getDb } from "../db/client.js";
+import { createInMemoryDb, getDb, type ForemanDb } from "../db/client.js";
 import { getMigrationStatus } from "../db/migration-status.js";
 import { derivePublicKey } from "../identity/keypair.js";
 import { sign, verify } from "../identity/signing.js";
@@ -16,7 +17,7 @@ import { loadLlmConfig } from "./llm/config.js";
 import { hasRuntimeClient } from "./llm/factory.js";
 import { isOAuthProviderId } from "./llm/oauth/oauth-providers.js";
 import { loadOAuthTokens } from "./llm/oauth/token-store.js";
-import { loadActiveProviders, loadActiveRegistry } from "./registry-catalog.js";
+import { agentAddCommand, loadActiveProviders, loadActiveRegistry } from "./registry-catalog.js";
 import { detectProviderByPrefix } from "./key-prefix-detect.js";
 import { loadVoiceConfig } from "./notification/voice-config.js";
 import { buildEnabledChannels } from "./notification/channel-factory.js";
@@ -26,8 +27,9 @@ import { missingSecrets } from "./mcp-hub/manage.js";
 import { describeMcpOAuthStatus, mcpOAuthStatus } from "./mcp-hub/oauth-store.js";
 import { loadOrg, OrgValidationError } from "./org/org.js";
 import { findDuplicateSlots } from "./secret-slot-migration.js";
-import { SecretStore } from "./secret-store.js";
-import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
+import { validatePolicyText } from "./policy-load.js";
+import { isReservedSecretName, SecretDecryptError, SecretStore } from "./secret-store.js";
+import { loadSecretsMasterKey, MasterKeyError } from "../identity/master-key.js";
 import { RegistryService } from "./registry.js";
 import {
   checkNodeEngine,
@@ -210,6 +212,119 @@ export function checkIdentityKey(): CheckResult {
   }
 }
 
+// -----------------------------------------------------------------------------
+// Secret store (#657): doctor never creates secrets.key and never writes a
+// secret. It used to mint a fresh key, which hid a lost one: every stored
+// secret was then undecryptable and nothing said why.
+// -----------------------------------------------------------------------------
+
+/** Reads only, never records an access. Without secrets.key a throwaway
+ *  key still answers exists() / list(); reading a value fails, and the
+ *  secrets_key check explains why. */
+class DoctorSecretStore extends SecretStore {
+  override add(): void {
+    throw new Error("foreman doctor never writes secrets");
+  }
+  override rotate(): void {
+    throw new Error("foreman doctor never writes secrets");
+  }
+  override putReserved(): void {
+    throw new Error("foreman doctor never writes secrets");
+  }
+  override remove(): void {
+    throw new Error("foreman doctor never writes secrets");
+  }
+  override get(name: string): string {
+    return super.get(name, { touch: false });
+  }
+}
+
+function doctorSecretStore(db: ForemanDb): SecretStore {
+  return new DoctorSecretStore(db, loadSecretsMasterKey() ?? randomBytes(32));
+}
+
+/** The secret store, or an empty one when there is no database yet: no
+ *  secret is stored then, and doctor must not create the database. */
+function withDoctorSecretStore<T>(run: (store: SecretStore) => T): T {
+  if (existsSync(getForemanPaths().dbPath)) return run(doctorSecretStore(getDb()));
+  const empty = createInMemoryDb();
+  try {
+    return run(new DoctorSecretStore(empty.db, randomBytes(32)));
+  } finally {
+    empty.sqlite.close();
+  }
+}
+
+export function checkSecretsKey(): CheckResult {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.dbPath)) {
+    return { name: "secrets_key", status: "ok", message: "no database yet" };
+  }
+  let key: Buffer | null;
+  try {
+    key = loadSecretsMasterKey();
+  } catch (err) {
+    return {
+      name: "secrets_key",
+      status: "fail",
+      message: err instanceof MasterKeyError ? err.message : `secrets.key unreadable: ${String(err)}`,
+      remediation: `Restore the original secrets.key to ${paths.secretsKeyPath} (mode 0600).`,
+    };
+  }
+  let names: string[];
+  try {
+    names = new DoctorSecretStore(getDb(), key ?? randomBytes(32)).list().map((r) => r.name);
+  } catch (err) {
+    return {
+      name: "secrets_key",
+      status: "warn",
+      message: `couldn't read the secret store: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  const lost =
+    `If it is lost for good, remove each secret ('foreman secrets list', then 'foreman secrets remove <name> --yes') ` +
+    "and add it again; rewire agents ('foreman agent rewire --all') for their tokens.";
+  if (!key) {
+    if (names.length === 0) {
+      return { name: "secrets_key", status: "ok", message: "no secrets stored yet (secrets.key is created with the first one)" };
+    }
+    return {
+      name: "secrets_key",
+      status: "fail",
+      message: `secrets.key is missing — ${names.length} stored secret${names.length === 1 ? "" : "s"} can't be decrypted`,
+      remediation:
+        `Restore secrets.key from your backup to ${paths.secretsKeyPath} (mode 0600) before adding any secret: ` +
+        `adding one now would create a new key the stored secrets can't use. ${lost}`,
+    };
+  }
+  const store = new DoctorSecretStore(getDb(), key);
+  const undecryptable = names.filter((name) => {
+    try {
+      if (isReservedSecretName(name)) store.getReserved(name);
+      else store.get(name);
+      return false;
+    } catch (err) {
+      return err instanceof SecretDecryptError;
+    }
+  });
+  if (undecryptable.length > 0) {
+    return {
+      name: "secrets_key",
+      status: "fail",
+      message: `secrets.key can't decrypt ${undecryptable.length} of ${names.length} stored secret${names.length === 1 ? "" : "s"} (it isn't the key they were stored with)`,
+      remediation: `Restore the original secrets.key to ${paths.secretsKeyPath} (mode 0600). ${lost}`,
+    };
+  }
+  return {
+    name: "secrets_key",
+    status: "ok",
+    message:
+      names.length === 0
+        ? "present; no secrets stored yet"
+        : `decrypts all ${names.length} stored secret${names.length === 1 ? "" : "s"}`,
+  };
+}
+
 export function checkDatabase(): CheckResult {
   const paths = getForemanPaths();
   if (!existsSync(paths.dbPath)) {
@@ -281,33 +396,33 @@ export function checkPolicyYaml(): CheckResult {
       remediation: "Run 'foreman init' to write the default template.",
     };
   }
+  let text: string;
   try {
-    const text = readFileSync(paths.policyPath, "utf-8");
-    const parsed = parseYaml(text);
-    if (
-      parsed !== null &&
-      (typeof parsed !== "object" || Array.isArray(parsed))
-    ) {
-      return {
-        name: "policy_yaml",
-        status: "fail",
-        message: "policy.yaml top-level must be an object (or empty)",
-        remediation: `Edit ${paths.policyPath} — see the comments in the template for shape.`,
-      };
-    }
-    return {
-      name: "policy_yaml",
-      status: "ok",
-      message: "parses",
-    };
+    text = readFileSync(paths.policyPath, "utf-8");
   } catch (err) {
     return {
       name: "policy_yaml",
       status: "fail",
-      message: `policy.yaml failed to parse: ${err instanceof Error ? err.message : String(err)}`,
-      remediation: `Open ${paths.policyPath} and fix the syntax (YAML validators online help).`,
+      message: `policy.yaml unreadable: ${err instanceof Error ? err.message : String(err)}`,
+      remediation: `Check the permissions of ${paths.policyPath}.`,
     };
   }
+  // The same checks `foreman start` applies, plus patterns that would never
+  // match (#657): syntax, the policy schema, regexes in rule conditions.
+  const problem = validatePolicyText(paths.policyPath, text);
+  if (problem) {
+    return {
+      name: "policy_yaml",
+      status: "fail",
+      message: problem.message,
+      remediation: `Open ${paths.policyPath}${problem.line !== null ? ` at line ${problem.line}` : ""} and fix it; \`foreman start\` refuses to run on it until then.`,
+    };
+  }
+  return {
+    name: "policy_yaml",
+    status: "ok",
+    message: "parses and matches the policy schema",
+  };
 }
 
 // Notification config — best-effort lint. Doesn't require a working bot.
@@ -539,8 +654,11 @@ export function checkLlmCredentials(): CheckResult {
     };
   }
   try {
+    if (!existsSync(getForemanPaths().dbPath)) {
+      return { name: "llm_credentials", status: "warn", message: "no database yet — run 'foreman init'" };
+    }
     const db = getDb();
-    const store = new SecretStore(db, loadOrCreateSecretsMasterKey());
+    const store = doctorSecretStore(db);
     for (const slot of [secretName, slots.endpointSecret]) {
       if (slot && !store.exists(slot)) {
         return {
@@ -606,8 +724,11 @@ function checkOAuthCredentials(providerId: string): CheckResult {
     };
   }
   try {
+    if (!existsSync(getForemanPaths().dbPath)) {
+      return { name: "llm_credentials", status: "warn", message: "no database yet — run 'foreman init'" };
+    }
     const db = getDb();
-    const store = new SecretStore(db, loadOrCreateSecretsMasterKey());
+    const store = doctorSecretStore(db);
     const tokens = loadOAuthTokens(store, providerId);
     if (!tokens) {
       return {
@@ -659,7 +780,7 @@ export function checkSecretSlotDuplicates(): CheckResult {
   }
   try {
     const db = getDb();
-    const store = new SecretStore(db, loadOrCreateSecretsMasterKey());
+    const store = doctorSecretStore(db);
     const names = store.list().map((r) => r.name);
     const duplicates = findDuplicateSlots(names);
     if (duplicates.length === 0) {
@@ -715,6 +836,9 @@ export function checkLlmBudget(): CheckResult {
     };
   }
   try {
+    if (!existsSync(getForemanPaths().dbPath)) {
+      return { name: "llm_budget", status: "ok", message: "no database yet — nothing spent" };
+    }
     const db = getDb();
     const status = getBudgetStatus(db, config);
     const pctLabel = `${status.spentPct.toFixed(0)}%`;
@@ -859,7 +983,7 @@ export function checkAgentTokens(): CheckResult | CheckResult[] {
     if (agents.length === 0) {
       return { name: "agent_tokens", status: "ok", message: "no agents registered" };
     }
-    const store = new SecretStore(db, loadOrCreateSecretsMasterKey());
+    const store = doctorSecretStore(db);
     let doc: ReturnType<typeof loadActiveRegistry>["doc"] | null = null;
     try {
       doc = loadActiveRegistry().doc;
@@ -920,7 +1044,7 @@ export function checkProviderMapping(): CheckResult {
     const registry = new RegistryService(db, new EventBus<ForemanEventMap>());
     const allRows = registry.listAll();
     const registryDoc = loadActiveRegistry();
-    const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
+    const secretStore = doctorSecretStore(db);
     const lines: string[] = [];
     const remediations: string[] = [];
     let anyFail = false;
@@ -1086,7 +1210,7 @@ export function checkUpdate(): CheckResult {
         status: "warn",
         message: `installed ${APP_VERSION}, latest ${raw.latest}`,
         remediation:
-          "npm install -g foreman-agent@latest  (or 'brew upgrade foreman' if you tapped it)",
+          "npm install -g foreman-agent@latest  (or 'brew upgrade foreman-agent' if you installed it with Homebrew)",
       };
     }
     return {
@@ -1172,11 +1296,13 @@ export function checkChafa(env: NodeJS.ProcessEnv = process.env): CheckResult {
  * PATH. The registry declares Hermes / OpenClaw / ZeroClaw with
  * `approval_adapter='acp-stdio-v1'` + `acp_command`, but `foreman
  * write <agent>` won't actually run if the binary isn't installed.
- * Each ACP agent gets its own check row so the operator sees
- * exactly which one is missing.
+ * Each registered ACP agent gets its own check row so the operator sees
+ * exactly which one is missing; agents you never added are not checked
+ * (a fresh box warned about all three, #657).
  */
 export function checkAcpAgents(
   env: NodeJS.ProcessEnv = process.env,
+  registeredIds: readonly string[] = registeredRegistryIds(),
 ): CheckResult[] {
   let doc: ReturnType<typeof loadActiveRegistry>["doc"] | null = null;
   try {
@@ -1187,14 +1313,17 @@ export function checkAcpAgents(
     return [];
   }
   const acpAgents = doc.agents.filter(
-    (a) => a.approval_adapter === "acp-stdio-v1" && a.acp_command,
+    (a) =>
+      a.approval_adapter === "acp-stdio-v1" &&
+      a.acp_command &&
+      registeredIds.includes(a.id),
   );
   if (acpAgents.length === 0) {
     return [
       {
         name: "acp-agents",
         status: "ok",
-        message: "no ACP-mediated agents declared",
+        message: "no ACP-mediated agents registered",
       },
     ];
   }
@@ -1320,7 +1449,7 @@ export function checkNotifyChannels(): CheckResult {
     get: () => "",
   };
   try {
-    secrets = new SecretStore(getDb(), loadOrCreateSecretsMasterKey());
+    if (existsSync(paths.dbPath)) secrets = doctorSecretStore(getDb());
   } catch {
     // database check reports DB problems
   }
@@ -1396,25 +1525,23 @@ export function checkMcpHub(): CheckResult {
     };
   }
   const enabled = enabledServers(config);
-  let exists: (name: string) => boolean = () => true;
-  let store: SecretStore | null = null;
-  try {
-    const opened = new SecretStore(getDb(), loadOrCreateSecretsMasterKey());
-    store = opened;
-    exists = (name) => opened.exists(name);
-  } catch {
-    // secret store unavailable — the database check reports it
-  }
-  const missing = enabled.flatMap(([name]) =>
-    missingSecrets(config, name, exists).map((s) => `${name}: ${s}`),
-  );
+  let missing: string[] = [];
   const oauthNotes: string[] = [];
   const needsLogin: string[] = [];
-  for (const [name, server] of enabled) {
-    if (server.auth !== "oauth" || !store) continue;
-    const status = mcpOAuthStatus(store, name, server.url);
-    if (status.state === "needs-login") needsLogin.push(name);
-    oauthNotes.push(`${name}: ${describeMcpOAuthStatus(name, status)}`);
+  try {
+    withDoctorSecretStore((store) => {
+      missing = enabled.flatMap(([name]) =>
+        missingSecrets(config, name, (secret) => store.exists(secret)).map((s) => `${name}: ${s}`),
+      );
+      for (const [name, server] of enabled) {
+        if (server.auth !== "oauth") continue;
+        const status = mcpOAuthStatus(store, name, server.url);
+        if (status.state === "needs-login") needsLogin.push(name);
+        oauthNotes.push(`${name}: ${describeMcpOAuthStatus(name, status)}`);
+      }
+    });
+  } catch {
+    // secret store unavailable — the database / secrets_key checks report it
   }
   const oauthSuffix = oauthNotes.length > 0 ? `; OAuth — ${oauthNotes.join(", ")}` : "";
   if (missing.length > 0) {
@@ -1471,7 +1598,9 @@ export function checkOrg(): CheckResult {
   if (!org) return { name: "org", status: "ok", message: "no org.yaml" };
   let registered = new Set<string>();
   try {
-    registered = new Set(new RegistryService(getDb()).listAll().map((a) => a.id));
+    if (existsSync(paths.dbPath)) {
+      registered = new Set(new RegistryService(getDb()).listAll().map((a) => a.id));
+    }
   } catch {
     // database check reports DB problems
   }
@@ -1483,7 +1612,7 @@ export function checkOrg(): CheckResult {
       name: "org",
       status: "warn",
       message: `${org.company}: roles use unregistered agents — ${missing.join(", ")}`,
-      remediation: "Register them with `foreman agent add <id>` or change the role's agent in org.yaml.",
+      remediation: `Register them (${missing.map(agentAddCommand).join(" · ")}) or change the role's agent in org.yaml.`,
     };
   }
   // Department channels mirrored to a platform need that platform's bot.
@@ -1525,6 +1654,7 @@ const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkExpectedFiles,
   checkIdentityKey,
   checkDatabase,
+  checkSecretsKey,
   checkMigrations,
   checkFts5,
   checkPolicyYaml,

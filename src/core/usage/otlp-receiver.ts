@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { agentForUsageKey } from "./agent-key.js";
 import type { UsageEntry, UsageLedger } from "./ledger.js";
 
 // =============================================================================
@@ -50,6 +51,7 @@ export class OtlpReceiver {
   private server: Server | null = null;
   private boundPort: number | null = null;
   private readonly taskKeys = new Map<string, { agentId: string; taskRef: string; timer: NodeJS.Timeout | null }>();
+
 
   constructor(private readonly opts: OtlpReceiverOptions) {}
 
@@ -132,23 +134,27 @@ export class OtlpReceiver {
     reply(200, { partialSuccess: {} });
   }
 
-  /** "install", the task a per-task key belongs to, or null. */
-  private caller(header: string | string[] | undefined): "install" | { agentId: string; taskRef: string } | null {
+  /** "install", the agent (and task) a key belongs to, or null. */
+  private caller(header: string | string[] | undefined): "install" | { agentId: string; taskRef: string | null } | null {
     const raw = Array.isArray(header) ? (header[0] ?? "") : (header ?? "");
     const given = Buffer.from(raw);
     const install = Buffer.from(this.opts.key);
     if (given.length === install.length && timingSafeEqual(given, install)) return "install";
+    // A per-agent key from `foreman usage env` (#657).
+    const agentId = agentForUsageKey(this.opts.key, raw);
+    if (agentId) return { agentId, taskRef: null };
     // Task keys are random 48-hex strings; a Map lookup leaks nothing useful.
     const task = this.taskKeys.get(raw);
     return task ? { agentId: task.agentId, taskRef: task.taskRef } : null;
   }
 
   /** Record the usage events in an OTLP logs payload; returns how many.
-   *  With `task`, every entry is booked to that agent and task. */
-  ingestLogs(payload: unknown, task?: { agentId: string; taskRef: string }): number {
+   *  With `task`, every entry is booked to that agent (and task, when the
+   *  key is a task's). */
+  ingestLogs(payload: unknown, task?: { agentId: string; taskRef: string | null }): number {
     let recorded = 0;
     for (const entry of usageEntriesFromLogs(payload)) {
-      const booked = task ? { ...entry, agentId: task.agentId, taskRef: task.taskRef } : entry;
+      const booked = task ? { ...entry, agentId: task.agentId, taskRef: task.taskRef ?? entry.taskRef } : entry;
       if (this.opts.ledger.record(booked)) recorded += 1;
     }
     if (recorded > 0) this.opts.onRecorded?.();

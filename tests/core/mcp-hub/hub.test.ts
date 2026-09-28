@@ -100,6 +100,10 @@ describe('McpHub against a real stdio MCP server', () => {
     expect(add.reasons.join(' ')).toMatch(/suspicious definition/)
     const resolution = await hub(config({}, 'poisoned')).resolveCall('demo__add', { a: 1, b: 2 })
     expect(resolution?.kind).toBe('unavailable')
+    // QA #657 L16 — plain `trust` keeps a flagged tool withheld; the hint
+    // has to say --include-flagged.
+    if (resolution?.kind !== 'unavailable') return
+    expect(resolution.message).toContain('`foreman mcp trust demo --include-flagged`')
   })
 
   it('detects a rug pull: a changed definition is withheld until trusted', async () => {
@@ -114,6 +118,12 @@ describe('McpHub against a real stdio MCP server', () => {
     await expect(h.call(resolution.tool, resolution.args)).rejects.toBeInstanceOf(HubToolUnavailableError)
     const fresh = await hub(changed).inventory({ refresh: true })
     expect(fresh.find((t) => t.name === 'echo')!.reasons.join(' ')).toMatch(/rug pull/)
+    const stillWithheld = await hub(changed).resolveCall('demo__echo', { text: 'x' })
+    if (stillWithheld?.kind === 'unavailable') {
+      // A changed (not flagged) definition: plain trust is enough.
+      expect(stillWithheld.message).toContain('`foreman mcp trust demo`')
+      expect(stillWithheld.message).not.toContain('--include-flagged')
+    }
     await hub(changed).trust('demo')
     const trusted = await hub(changed).inventory({ refresh: true })
     expect(trusted.find((t) => t.name === 'echo')!.status).toBe('available')

@@ -212,7 +212,21 @@ export async function executeCommand(
   if (local) return await local.run(args, env, context);
   try {
     const result = await env.dispatch(head, args);
-    return { ok: result.ok, lines: stripMarkdown(result.text).split("\n") };
+    const lines = stripMarkdown(result.text).split("\n");
+    // Free text isn't a command: say who answers it (#657).
+    if (result.answeredByLlm) {
+      return { ok: result.ok, lines: ["Not a command, so Foreman's LLM answers (`help` lists the commands):", ...lines] };
+    }
+    if (result.errorCode === "UNKNOWN_COMMAND") {
+      return {
+        ok: false,
+        lines: [
+          `Unknown command "${head}". Type \`help\` for the list.`,
+          "Free-form questions go to Foreman's LLM once it is on: `foreman llm enable orchestrator_chat`.",
+        ],
+      };
+    }
+    return { ok: result.ok, lines };
   } catch (err) {
     return { ok: false, lines: [`Failed: ${err instanceof Error ? err.message : String(err)}`] };
   }

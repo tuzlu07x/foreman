@@ -9,6 +9,7 @@ import { parseOrgText } from '../../../src/core/org/org.js'
 import { BudgetWatcher } from '../../../src/core/usage/budget-watcher.js'
 import { UsageLedger } from '../../../src/core/usage/ledger.js'
 import { OtlpReceiver, USAGE_KEY_HEADER, usageEntriesFromLogs } from '../../../src/core/usage/otlp-receiver.js'
+import { agentForUsageKey, agentUsageKey } from '../../../src/core/usage/agent-key.js'
 import { buildOrgReport, parsePeriod } from '../../../src/core/usage/report.js'
 import { loadOrCreateUsageKey } from '../../../src/core/usage/telemetry-env.js'
 import { createInMemoryDb, type ForemanDb } from '../../../src/db/client.js'
@@ -95,6 +96,33 @@ describe('spend and budgets — review fixes', () => {
       // Oversize bodies get a proper 413.
       const big = await post('i'.repeat(48), 'x'.repeat(1_100_000)).catch(() => null)
       expect(big?.status).toBe(413)
+    } finally {
+      await receiver.stop()
+    }
+  })
+
+  // QA #657 L28 — `usage env` printed the same key for every agent, so an
+  // agent you started yourself could report its spend as any other.
+  it("books a per-agent key's usage to that agent, whatever the payload claims", async () => {
+    const install = 'i'.repeat(48)
+    const receiver = new OtlpReceiver({ ledger, key: install, port: 0 })
+    const port = await receiver.start()
+    const post = (key: string, body: string) =>
+      fetch(`http://127.0.0.1:${port}/v1/logs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', [USAGE_KEY_HEADER]: key },
+        body,
+      })
+    try {
+      const codexKey = agentUsageKey(install, 'codex')
+      expect(codexKey).not.toBe(agentUsageKey(install, 'claude-code'))
+      expect((await post(codexKey, payload('writer-bot', 2))).status).toBe(200)
+      expect(db.select().from(agentUsage).all().at(-1)!.agentId).toBe('codex')
+      // Another install's key, or a key edited to name another agent, is refused.
+      expect((await post(agentUsageKey('j'.repeat(48), 'codex'), payload('codex', 1))).status).toBe(401)
+      const forged = codexKey.replace('.codex.', '.writer-bot.')
+      expect((await post(forged, payload('writer-bot', 1))).status).toBe(401)
+      expect(agentForUsageKey(install, codexKey)).toBe('codex')
     } finally {
       await receiver.stop()
     }

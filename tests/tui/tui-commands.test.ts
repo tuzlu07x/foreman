@@ -57,6 +57,26 @@ describe('executeCommand (#612)', () => {
     expect(e.dispatched).toEqual([['codex', ['fix', 'the', 'build']]])
   })
 
+  // QA #657 L10 — free text went to Foreman's LLM without a word, and an
+  // unknown command pointed at `/foreman help` (chat syntax).
+  it("says when free text was answered by Foreman's LLM", async () => {
+    const e = env({ dispatch: vi.fn(async () => ({ ok: true, text: 'All quiet.', answeredByLlm: true })) })
+    expect(await executeCommand('foo bar', e)).toEqual({
+      ok: true,
+      lines: ["Not a command, so Foreman's LLM answers (`help` lists the commands):", 'All quiet.'],
+    })
+  })
+
+  it('says "unknown command" when no LLM takes free text', async () => {
+    const e = env({
+      dispatch: vi.fn(async () => ({ ok: false, text: 'Unknown command "foo".', errorCode: 'UNKNOWN_COMMAND' as const })),
+    })
+    const out = await executeCommand('foo bar', e)
+    expect(out.ok).toBe(false)
+    expect(out.lines[0]).toBe('Unknown command "foo". Type `help` for the list.')
+    expect(out.lines[1]).toContain('foreman llm enable orchestrator_chat')
+  })
+
   it('approves or denies exactly the approval on screen', async () => {
     const e = env()
     const allowed = await executeCommand('approve', e)

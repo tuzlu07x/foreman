@@ -122,4 +122,35 @@ describe("planMigration + executeMigration", () => {
     rmSync(join(legacyDir, "policy.yaml"));
     expect(legacyHasInterestingFiles(fakeHome)).toBe(false);
   });
+
+  // QA #657 M13 — with FOREMAN_HOME=~/.foreman (the path the README and
+  // `init --help` advertised), doctor warned about a "legacy" home, and
+  // `migrate-config --force` "migrated" the live files onto themselves.
+  it("treats ~/.foreman as the live home when FOREMAN_HOME points at it", () => {
+    process.env.FOREMAN_HOME = legacyDir;
+    writeFileSync(join(legacyDir, "policy.yaml"), "rules: [live]\n");
+    writeFileSync(join(legacyDir, "foreman.db"), "live-db");
+    expect(legacyHasInterestingFiles(fakeHome)).toBe(false);
+    const plan = planMigration({ homeDir: fakeHome });
+    expect(plan.status).toBe("live-home");
+    expect(plan.moves).toEqual([]);
+  });
+
+  it("never moves a file onto itself, even with force", () => {
+    writeFileSync(join(legacyDir, "policy.yaml"), "rules: [live]\n");
+    const self = join(legacyDir, "policy.yaml");
+    const result = executeMigration(
+      {
+        legacyRoot: legacyDir,
+        configDir: legacyDir,
+        stateDir: legacyDir,
+        cacheDir: join(legacyDir, "cache"),
+        moves: [{ from: self, to: join(legacyDir, ".", "policy.yaml"), destDir: "config" }],
+        destinationHasData: true,
+      },
+      { force: true },
+    );
+    expect(result).toEqual({ movedCount: 0, skippedCount: 1 });
+    expect(readFileSync(self, "utf8")).toBe("rules: [live]\n");
+  });
 });

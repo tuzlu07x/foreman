@@ -7,6 +7,7 @@ import {
   resolveAgentProviderConfig,
 } from "../core/provider-resolver.js";
 import {
+  agentAddCommand,
   findAgent,
   loadActiveRegistry,
   AgentNotInRegistryError,
@@ -195,7 +196,7 @@ async function applySwitch(
   if (!registered) {
     console.error(
       red("error: ") +
-        `agent "${agentId}" is not registered with Foreman. Run 'foreman agent add ${agentId}' first.`,
+        `agent "${agentId}" is not registered with Foreman. Run '${agentAddCommand(agentId)}' first.`,
     );
     closeDb();
     return 1;

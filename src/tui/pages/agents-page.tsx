@@ -128,8 +128,8 @@ export function AgentsPage({
       </Box>
       <Text color={theme.fg.muted}>
         [↑↓] move · [Enter] expand · [o] login · [N] edit note · [L] change LLM
-        · [d] disable · [e] enable · [b] block/unblock · [r] remove · [R]
-        regen-key · [Esc] back
+        · [d] disable · [e] enable · [b] block/unblock · [r] regen key · [x]
+        remove · [Esc] back
       </Text>
     </Box>
   );

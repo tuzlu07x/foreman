@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { agentUsageKey } from '../../src/core/usage/agent-key.js'
 
 const FM_BIN = resolve(dirname(fileURLToPath(import.meta.url)), '../..', 'dist/cli/index.js')
 
@@ -99,8 +100,10 @@ describe('foreman org / usage (#629)', () => {
     const claude = run('usage', 'env', 'claude-code')
     expect(claude.stdout).toContain('export CLAUDE_CODE_ENABLE_TELEMETRY=1')
     expect(claude.stdout).toContain('export OTEL_EXPORTER_OTLP_PROTOCOL=http/json')
+    // A key of the agent's own, derived from the install key (#657).
     const key = readFileSync(join(home, 'usage.key'), 'utf-8').trim()
-    expect(claude.stdout).toContain(`x-foreman-usage-key=${key}`)
+    expect(claude.stdout).toContain(`x-foreman-usage-key=${agentUsageKey(key, 'claude-code')}`)
+    expect(claude.stdout).not.toContain(`x-foreman-usage-key=${key}\n`)
     expect(run('usage', 'env', 'codex').stdout).toContain('[otel]')
   })
 })

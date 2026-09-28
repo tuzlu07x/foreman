@@ -31,6 +31,8 @@ const ERROR_DECIDED_BY = ["auth-failure", "route-error"];
 export interface LogQueryResult {
   rows: Request[];
   total: number;
+  /** Set when the search text couldn't be run; `rows` is then empty. */
+  error?: string;
 }
 
 export function queryLogs(
@@ -50,10 +52,15 @@ export function queryLogs(
   }
 
   let joinSql = "";
-  if (search && search.trim().length > 0) {
+  const searchText = search?.trim() ?? "";
+  const searching = searchText.length > 0;
+  if (searching) {
+    const match = toFtsQuery(searchText);
+    // Only punctuation: nothing in the index can match it.
+    if (match === null) return { rows: [], total: 0 };
     joinSql = "JOIN requests_fts ON requests_fts.request_id = requests.id";
     where.push("requests_fts MATCH ?");
-    params.push(toFtsQuery(search.trim()));
+    params.push(match);
   }
 
   const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
@@ -66,17 +73,26 @@ export function queryLogs(
   `;
   params.push(limit);
 
-  const rows = sqlite.prepare(sql).all(...params) as RawRow[];
+  let rows: RawRow[];
+  try {
+    rows = sqlite.prepare(sql).all(...params) as RawRow[];
+  } catch (err) {
+    // The search box and `foreman log search` must never crash on what
+    // the user typed.
+    if (!searching) throw err;
+    return { rows: [], total: 0, error: `invalid search: ${err instanceof Error ? err.message : String(err)}` };
+  }
   return { rows: rows.map(rowToRequest), total: rows.length };
 }
 
-export function toFtsQuery(text: string): string {
-  const safe = text.replace(/[^a-zA-Z0-9_.\-]/g, " ").trim();
-  if (!safe) return text;
-  return safe
-    .split(/\s+/)
-    .map((token) => (token.includes(".") ? `"${token}"` : `${token}*`))
-    .join(" ");
+/** Each word becomes a quoted FTS5 string with a prefix star, so hyphens,
+ *  quotes and FTS5 operators (`-`, `*`, `AND`, `NOT`, `:`) are searched
+ *  for, never parsed as query syntax. Words with no letter or digit match
+ *  nothing and are dropped; null when none is left. */
+export function toFtsQuery(text: string): string | null {
+  const words = text.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w));
+  if (words.length === 0) return null;
+  return words.map((w) => `"${w.replace(/"/g, '""')}"*`).join(" ");
 }
 
 export function buildFilterClause(

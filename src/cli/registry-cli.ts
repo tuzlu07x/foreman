@@ -157,7 +157,7 @@ registryCommand
 registryCommand
   .command("status")
   .description(
-    "Show the registry source URL, cache state, public key config, and rollback availability (#421)",
+    "Show the registry source URL, cache state, public key config, and rollback availability",
   )
   .option("--json", "machine-parseable JSON output")
   .action((options: { json?: boolean }) => {
@@ -196,7 +196,7 @@ registryCommand
 registryCommand
   .command("rollback")
   .description(
-    "Restore the previous registry cache from .bak (one-deep rollback) (#421)",
+    "Restore the previous registry cache from .bak (one-deep rollback)",
   )
   .action(() => {
     const result = rollbackRegistry();

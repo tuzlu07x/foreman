@@ -437,6 +437,81 @@ export class InboxRecorder {
   }
 }
 
+// -----------------------------------------------------------------------------
+// Approvals nobody could see (#657)
+// -----------------------------------------------------------------------------
+
+/** How far back a missed approval is still news. */
+const MISSED_APPROVALS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Approvals that timed out while no `foreman start` was running: no TUI
+ * announced them (no `approval:<id>:requested` item) and no recorder saw
+ * how they ended. Without this they were denied without a trace, and
+ * `foreman inbox` said "all caught up". Each one gets a (read) item of its
+ * own, plus one unread summary saying what to do. Idempotent: an approval
+ * is only counted once. Returns how many were found.
+ */
+export function recordMissedApprovals(db: ForemanDb, inbox: InboxService, now = Date.now()): number {
+  const rows = db.all<{
+    id: string;
+    sourceAgent: string;
+    targetAgent: string | null;
+    targetTool: string | null;
+    riskBucket: string | null;
+    createdAt: number;
+    decidedAt: number | null;
+  }>(sql`
+    SELECT r.id AS id, r.source_agent AS sourceAgent, r.target_agent AS targetAgent,
+           r.target_tool AS targetTool, r.risk_bucket AS riskBucket,
+           r.created_at AS createdAt, r.decided_at AS decidedAt
+    FROM requests r
+    WHERE r.decided_by = 'approval-timeout'
+      AND r.created_at > ${now - MISSED_APPROVALS_WINDOW_MS}
+      AND NOT EXISTS (
+        SELECT 1 FROM inbox_items i
+        WHERE i.dedupe_key IN ('approval:' || r.id || ':requested', 'approval:' || r.id || ':resolved')
+      )
+    ORDER BY r.created_at
+    LIMIT 200`);
+  if (rows.length === 0) return 0;
+  const what: string[] = [];
+  for (const r of rows) {
+    const tool = r.targetTool ?? r.targetAgent ?? "a tool";
+    what.push(`${tool} for ${r.sourceAgent}`);
+    inbox.add({
+      level: r.riskBucket === "critical" ? "critical" : "warning",
+      kind: "block",
+      title: `Denied ${tool} for ${r.sourceAgent} (no answer in time)`,
+      body: "approval timed out · Foreman wasn't running to ask you",
+      requestId: r.id,
+      agentId: r.sourceAgent,
+      dedupeKey: `approval:${r.id}:resolved`,
+      createdAt: r.decidedAt ?? r.createdAt,
+      read: true,
+    });
+  }
+  const n = rows.length;
+  const last = rows[rows.length - 1]!;
+  inbox.add({
+    level: "warning",
+    kind: "approval",
+    title: `${n} approval${n === 1 ? "" : "s"} timed out while Foreman wasn't running; start \`foreman start\` to approve`,
+    body: `Denied: ${what.slice(0, 5).join(", ")}${n > 5 ? `, +${n - 5} more` : ""}`,
+    dedupeKey: `approvals-missed:${last.id}`,
+    createdAt: last.decidedAt ?? last.createdAt,
+  });
+  return n;
+}
+
+/** Approvals still waiting for an answer (not yet past their deadline). */
+export function waitingApprovalCount(db: ForemanDb, now = Date.now()): number {
+  const row = db.get<{ n: number }>(sql`
+    SELECT count(*) AS n FROM pending_approvals
+    WHERE status = 'pending' AND (deadline_ms IS NULL OR deadline_ms > ${now})`);
+  return row?.n ?? 0;
+}
+
 function describeDecider(decidedBy: string): string {
   if (decidedBy.startsWith("policy:")) return "policy rule";
   if (decidedBy.startsWith("risk:")) return `risk ${decidedBy.slice("risk:".length)}`;

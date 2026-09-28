@@ -15,7 +15,7 @@ import { dim, green, orange, red } from "./colors.js";
 const SUPPORTED_CHANNELS = ["telegram", "discord", "slack"] as const;
 
 export const chatCommand = new Command("chat").description(
-  "Primary chat agent per messaging channel (#426)",
+  "Primary chat agent per messaging channel",
 );
 
 chatCommand

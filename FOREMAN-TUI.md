@@ -430,7 +430,7 @@ karar veriyor kullanıcı. Estetik üst seviye olmalı.
 | `p`   | Policy page'e git               |
 | `s`   | Sessions page'e git             |
 | `a`   | Agents page'e git               |
-| `q`   | Quit (confirm with y/n)         |
+| `q`   | Quit (y/n first while approvals wait) |
 | `Esc` | Üst sayfaya dön                 |
 | `/`   | Search bar aç (logs sayfasında) |
 
@@ -573,7 +573,7 @@ Terminal'de "tipografi" demek **renk + bold + dim** demek. Hiyerarşi:
 | `?`       | Help overlay                    |
 | `q`       | Quit                            |
 | `Esc`     | Back / close modal              |
-| `Ctrl+C`  | Force quit (with confirm)       |
+| `Ctrl+C`  | Quit, like `q`                  |
 | `1-4`     | Quick switch to page 1-4        |
 
 ### Navigation

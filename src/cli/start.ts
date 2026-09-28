@@ -18,6 +18,8 @@ import {
 } from "../core/delegation-tracker.js";
 import { MediatorService } from "../core/mediator.js";
 import { PolicyEngine } from "../core/policy-engine.js";
+import { followPolicyFile, PolicyLoadError } from "../core/policy-load.js";
+import { printPolicyLoadError } from "./policy-error.js";
 import { buildAgentActivityDigest } from "../core/agent-activity-summary.js";
 import { buildActivityPrompt } from "../core/agent-activity-prompt.js";
 import { deliverWriteDirective } from "../core/agent-write.js";
@@ -33,12 +35,21 @@ import {
   type ControlHandler,
 } from "../core/control-channel.js";
 import {
+  acquireForemanPidfile,
   deleteForemanPidfile,
-  writeForemanPidfile,
+  ForemanAlreadyRunningError,
+  getForemanPidfilePath,
+  otherForemanPid,
 } from "../core/foreman-pidfile.js";
 import { defaultLlmConfig, saveLlmConfig } from "../core/llm/config.js";
 import { ForemanCommandRouter, registerBuiltinCommands } from "../core/foreman-command.js";
-import { InboxRecorder, InboxService, oneLineSummary, recordDelegationOutcome } from "../core/inbox.js";
+import {
+  InboxRecorder,
+  InboxService,
+  oneLineSummary,
+  recordDelegationOutcome,
+  recordMissedApprovals,
+} from "../core/inbox.js";
 import { auditAgentTokens, describeTokenAudit } from "../core/agent-wiring.js";
 import { responsibilityLookup } from "../core/mediator-stack.js";
 import { OrchestratorChat } from "../core/orchestrator-chat.js";
@@ -150,13 +161,30 @@ export function startForeman(
   if (!existsSync(paths.root) || !existsSync(paths.identityPath)) {
     throw new NotInitialisedError(paths.root);
   }
-  // #431 — Write the start.ts PID to a pidfile so `foreman mcp-stdio`
-  // can signal us when a user types `/foreman stop` into an agent's
-  // Telegram chat. Cleanup happens in shutdown().
-  writeForemanPidfile(paths.configDir);
+  // One `foreman start` per home (#657): refuse before touching anything.
+  const running = otherForemanPid(paths.configDir);
+  if (running !== null) {
+    throw new ForemanAlreadyRunningError(running, getForemanPidfilePath(paths.configDir));
+  }
   const { publicKey } = loadOrCreateMasterKey();
   const db = getDb();
   const sqlite = getSqlite();
+  const policy = new PolicyEngine(db, bus);
+  // A broken policy.yaml stops here, before anything starts (#657): the
+  // caller prints file, line and reason instead of a stack trace. From
+  // then on the file is followed (#656): edits apply on the next call, and
+  // a broken edit keeps the last good policy. Those errors wait for the
+  // inbox, which is set up below.
+  const earlyPolicyErrors: string[] = [];
+  let reportPolicyError = (message: string): void => {
+    earlyPolicyErrors.push(message);
+  };
+  followPolicyFile(policy, paths.policyPath, (message) => reportPolicyError(message));
+  // #431 — Write the start.ts PID to a pidfile so `foreman mcp-stdio`
+  // can signal us when a user types `/foreman stop` into an agent's
+  // Telegram chat. Cleanup happens in shutdown(). Taking it is also the
+  // single-instance lock (a start that raced the check above loses here).
+  acquireForemanPidfile(paths.configDir);
   const registry = new RegistryService(db, bus);
   const audit = new AuditLogger(db, bus);
   const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
@@ -164,15 +192,6 @@ export function startForeman(
   const approval: ApprovalService = withTui
     ? new BusApprovalService({ bus })
     : new ReadlineApprovalService({ bus });
-  const policy = new PolicyEngine(db, bus);
-  // Followed for the life of the process (#656): edits apply on the next
-  // call, and a broken edit keeps the last good policy. Errors wait for
-  // the inbox, which is set up below.
-  const earlyPolicyErrors: string[] = [];
-  let reportPolicyError = (message: string): void => {
-    earlyPolicyErrors.push(message);
-  };
-  policy.watchFile(paths.policyPath, (message) => reportPolicyError(message));
   const daemonManager = new AgentDaemonManager({
     paths,
     registry,
@@ -270,6 +289,12 @@ export function startForeman(
   // with read state so the TUI shows what happened while you were away —
   // with or without external channels configured.
   const inbox = new InboxService(db, bus);
+  // Approvals that timed out while Foreman wasn't running (#657).
+  try {
+    recordMissedApprovals(db, inbox);
+  } catch {
+    /* best-effort, like the rest of the inbox */
+  }
   const inboxRecorder = new InboxRecorder(db, inbox, { bus });
   reportPolicyError = (message) => {
     inbox.add({
@@ -1559,6 +1584,14 @@ async function runOnboardingWizard(): Promise<boolean> {
   return quit;
 }
 
+/** `--skip-setup` is the prompt's [s] as a flag, and like [s] it is
+ *  remembered, so later runs don't ask again (#657). A setup already
+ *  started or finished is left as it is. */
+export function rememberSetupSkipped(): void {
+  const state = loadSetupState();
+  if (!hasUserOptedOut(state)) saveSetupState(markSetupSkipped(state));
+}
+
 export type StartChoice = "setup" | "skip" | "quit";
 
 // Maps an answer line (trimmed, lowercased) to a fresh-install choice.
@@ -1747,6 +1780,7 @@ export const startCommand = new Command("start")
     } else if (flagSkip) {
       // --no-onboarding / --skip-setup needs the home to exist.
       seedHomeIfMissing();
+      if (options.skipSetup) rememberSetupSkipped();
     }
     let started: StartedForeman;
     try {
@@ -1757,6 +1791,16 @@ export const startCommand = new Command("start")
           red("error: ") +
             `${err.message} Tip: run 'foreman setup' to configure interactively, or 'foreman init' to seed the home and use defaults.`,
         );
+        process.exit(1);
+      }
+      if (err instanceof PolicyLoadError) {
+        printPolicyLoadError(err);
+        closeDb();
+        process.exit(1);
+      }
+      if (err instanceof ForemanAlreadyRunningError) {
+        console.error(red("error: ") + err.message);
+        closeDb();
         process.exit(1);
       }
       throw err;

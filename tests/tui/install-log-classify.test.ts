@@ -154,6 +154,7 @@ describe("classifyInstallLog currentAgentName (#audit-finding-12)", () => {
     const result = classifyInstallLog([
       "▸ Will install: hermes",
       "▸ Will remove: codex",
+      "▸ Will unregister: codex",
       "▸ Selected agents",
     ]);
     expect(result.currentAgentName).toBeNull();

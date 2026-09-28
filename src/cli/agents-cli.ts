@@ -1,5 +1,5 @@
 import { existsSync, writeFileSync } from "node:fs";
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { bus } from "../core/event-bus.js";
 import {
   findAgent,
@@ -18,7 +18,7 @@ import {
   installPreToolUseHook,
   uninstallPreToolUseHook,
 } from "../core/agent-hook.js";
-import { buildMcpSnippet } from "../core/agent-mcp-snippet.js";
+import { buildMcpSnippet, snippetForDisplay } from "../core/agent-mcp-snippet.js";
 import {
   agentTokenSecretName,
   hasAgentToken,
@@ -62,7 +62,11 @@ import {
   runAgentAddScripted,
   type AddScriptedOptions,
 } from "./agent-add.js";
-import { MissingRequiredSecretsError } from "../core/agent-add-flow.js";
+import {
+  foremanInstallRecord,
+  MissingRequiredSecretsError,
+  pickMcpConfigPath,
+} from "../core/agent-add-flow.js";
 import { bold, dim, green, orange, red } from "./colors.js";
 import { renderAgentJson, renderAgentLine } from "./render.js";
 import { requireConfirm } from "./require-confirm.js";
@@ -109,7 +113,7 @@ agentsCommand
   .description("Register a new agent (interactive when name is omitted)")
   .option(
     "--type <registryId>",
-    "registry entry id (required in scripted form)",
+    "registry entry id (defaults to <name> when that is a registry id)",
   )
   .option("--config-path <path>", "override the registry's default config path")
   .option(
@@ -118,7 +122,7 @@ agentsCommand
   )
   .option(
     "--skip-projection",
-    "do not write Foreman-stored secrets into the agent's env/config files (#222 / #223)",
+    "do not write Foreman-stored secrets into the agent's env/config files",
   )
   .option(
     "--auto-install",
@@ -146,11 +150,18 @@ agentsCommand
       const db = getDb();
       try {
         let exit = 0;
+        // `foreman agent add claude-code`: a registry id is its own type
+        // (#657), as the README's quick start assumes.
+        const type =
+          options.type ??
+          (name && loadActiveRegistry().doc.agents.some((a) => a.id === name)
+            ? name
+            : undefined);
         if (!name && !options.type) {
           exit = await runAgentAddInteractive({ registry, db });
-        } else if (name && options.type) {
+        } else if (name && type) {
           const scripted: AddScriptedOptions = {
-            type: options.type,
+            type,
             configPath: options.configPath,
             skipConfig: options.skipConfig,
             skipProjection: options.skipProjection,
@@ -162,7 +173,9 @@ agentsCommand
         } else {
           console.error(
             red("error: ") +
-              "scripted form requires both <name> and --type, e.g. foreman agent add hermes --type hermes",
+              (name
+                ? `"${name}" is not a registry id, so say which agent it is: foreman agent add ${name} --type <registry-id> (see 'foreman registry list')`
+                : "--type needs an agent name, e.g. foreman agent add my-hermes --type hermes"),
           );
           exit = 1;
         }
@@ -178,29 +191,28 @@ agentsCommand
 agentsCommand
   .command("remove <name>")
   .description(
-    "Remove an agent (hard delete + uninstall its binary; re-add issues a fresh keypair)",
+    "Unregister an agent and revoke its key and token (its binary stays installed; re-add issues a fresh keypair)",
   )
   .option("--yes", "skip confirmation prompt")
   .option(
-    "--keep-binary",
-    "remove only the Foreman registration; leave the agent binary installed",
+    "--uninstall",
+    "also uninstall the agent's binary, if Foreman installed it (npm / brew)",
   )
+  // Keeping the binary is the default now; the flag stays so scripts that
+  // pass it keep working.
+  .addOption(new Option("--keep-binary").hideHelp())
   .action(
     async (
       name: string,
-      options: { yes?: boolean; keepBinary?: boolean },
+      options: { yes?: boolean; uninstall?: boolean; keepBinary?: boolean },
     ) => {
       const registry = getRegistry();
       try {
         const agent = registry.get(name);
         if (!agent) throw new AgentNotFoundError(name);
-        const ok = await requireConfirm({
-          yes: options.yes,
-          question: `Remove agent "${name}"?`,
-          noun: `remove "${name}"`,
-        });
-        if (!ok) {
-          console.log("(cancelled)");
+        if (options.uninstall && options.keepBinary) {
+          console.error(red("error: ") + "--uninstall and --keep-binary contradict each other.");
+          process.exitCode = 1;
           return;
         }
         const { doc } = loadActiveRegistry();
@@ -209,41 +221,83 @@ agentsCommand
             ? agent.metadata.registryId
             : null;
         const entry = registryId ? safeFindAgent(doc, registryId) : null;
+        const label = entry?.name ?? name;
+        const installRecord = foremanInstallRecord(agent.metadata);
+        // Only an actual uninstall looks at the machine (detection can
+        // shell out to `npm prefix -g`); the messages use the registry's
+        // command.
+        const detection =
+          options.uninstall && entry ? detectInstall(entry.install) : undefined;
+        const uninstallCmd = entry
+          ? preferredUninstallCommand(entry.install, detection)
+          : null;
+        // #657 — Foreman only uninstalls what it installed, and only when
+        // asked. Refuse before changing anything, so the user isn't left
+        // with half of what they asked for.
+        if (options.uninstall && (!installRecord || !entry)) {
+          console.error(
+            red("error: ") +
+              `Foreman didn't install ${label}, so it won't uninstall it (it may be your own install).`,
+          );
+          console.error(
+            `  → Run 'foreman agent remove ${name}' to unregister it` +
+              (uninstallCmd ? `, then uninstall it yourself: ${uninstallCmd}` : "."),
+          );
+          process.exitCode = 1;
+          return;
+        }
+        const what = options.uninstall
+          ? `Foreman unregisters it, revokes its key and identity token, then uninstalls ${label}` +
+            (uninstallCmd ? ` (${uninstallCmd})` : "") +
+            "."
+          : `Foreman unregisters it and revokes its key and identity token. ${label} stays installed.`;
+        const ok = await requireConfirm({
+          yes: options.yes,
+          question: `Remove agent "${name}"? ${what}`,
+          noun: `remove "${name}"`,
+        });
+        if (!ok) {
+          console.log("(cancelled)");
+          return;
+        }
         registry.remove(name);
         // A removed agent's token must not keep proving it (#618).
         revokeAgentToken(getTokenStore(), name);
         console.log(`${green("✓")} agent ${name} removed`);
-        if (!options.keepBinary && entry) {
-          // #357 — detect HOW the binary got installed, then pick the
-          // uninstall command that matches. Without this, OpenClaw (brew
-          // on the user's box, `brew: null` in registry) silently no-ops.
-          const detection = detectInstall(entry.install);
-          const uninstallCmd = preferredUninstallCommand(
-            entry.install,
-            detection,
+        if (!options.uninstall || !entry) {
+          console.log(
+            dim(
+              `${label} is still installed.` +
+                (installRecord && uninstallCmd
+                  ? ` Foreman installed it; to uninstall it too: ${uninstallCmd}`
+                  : ""),
+            ),
           );
-          if (uninstallCmd) {
-            console.log(orange(`uninstalling ${entry.name} (${uninstallCmd})…`));
-            const result = await runUninstall({
-              install: entry.install,
-              detection,
-              onLine: (line) => console.log(`  ${dim(line)}`),
-            });
-            if (result.ok) {
-              console.log(`${green("✓")} ${entry.name} uninstalled`);
-            } else {
-              console.error(
-                red("warn: ") +
-                  `uninstall failed (exit ${result.exitCode}). Run manually: ${result.manualCommand}`,
-              );
-            }
-          } else if (entry.install.script) {
-            console.log(
-              orange("note: ") +
-                `${entry.name} was installed via a script — Foreman can't auto-uninstall. ` +
-                `Remove the ${entry.install.binary ?? entry.id} binary manually (try the installer's --uninstall flag).`,
+          return;
+        }
+        // #357 — the uninstall command follows how the binary was actually
+        // installed (brew vs npm), not just the registry's hint.
+        if (uninstallCmd) {
+          console.log(orange(`uninstalling ${label} (${uninstallCmd})…`));
+          const result = await runUninstall({
+            install: entry.install,
+            detection,
+            onLine: (line) => console.log(`  ${dim(line)}`),
+          });
+          if (result.ok) {
+            console.log(`${green("✓")} ${label} uninstalled`);
+          } else {
+            console.error(
+              red("warn: ") +
+                `uninstall failed (exit ${result.exitCode}). Run manually: ${result.manualCommand}`,
             );
           }
+        } else if (entry.install.script) {
+          console.log(
+            orange("note: ") +
+              `${label} was installed via a script — Foreman can't auto-uninstall. ` +
+              `Remove the ${entry.install.binary ?? entry.id} binary manually (try the installer's --uninstall flag).`,
+          );
         }
       } catch (err) {
         handleAgentError(err);
@@ -353,9 +407,11 @@ agentsCommand
             : orange(`none — MCP calls run as untrusted:${agent.id}. Run 'foreman agent rewire ${agent.id}'.`)),
       );
       if (registryEntry) {
+        const target = pickMcpConfigPath(registryEntry);
+        const shown = snippetForDisplay(buildMcpSnippet(agent.id, registryEntry), target);
         console.log("");
-        console.log(bold("MCP snippet:"));
-        console.log(buildMcpSnippet(agent.id, registryEntry).yaml);
+        console.log(bold(`MCP snippet (${shown.format}${target ? `, for ${target}` : ""}):`));
+        console.log(shown.text);
       }
     } catch (err) {
       handleAgentError(err);
@@ -636,7 +692,7 @@ agentsCommand
   .command("permissions <agentId>")
   .description(
     "Apply Foreman's default shell-tool permission allowlist for the agent " +
-      "(Faz 1: claude-code only — see #517 for the roadmap).",
+      "(Claude Code only for now).",
   )
   .option(
     "--dry-run",
@@ -821,7 +877,7 @@ const hookSub = agentsCommand
   .command("hook")
   .description(
     "Install / uninstall Foreman's PreToolUse hook in the agent's settings " +
-      "(#517 Faz 4 — claude-code only).",
+      "(Claude Code only).",
   );
 
 hookSub

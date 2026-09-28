@@ -232,6 +232,15 @@ function parseSpeed(value: string): number {
   return n;
 }
 
+/** The demo's last line (#657). It used to suggest `foreman setup`, which
+ *  fails with "not initialised" on a fresh box; `foreman start` creates
+ *  the home and offers the setup wizard. */
+export function demoFarewell(kept: { root: string; home: string } | null): string {
+  return kept
+    ? `${green("✓")} demo kept at ${kept.root} (FOREMAN_HOME=${kept.home})`
+    : `${green("✓")} demo cleaned up. Ready for the real thing? ${bold("foreman start")} (it walks you through setup)`;
+}
+
 export const demoCommand = new Command("demo")
   .description("Watch a company of agents at work in a sandbox: no keys, no setup, nothing touched")
   .option("--keep", "keep the demo directory afterwards")
@@ -296,10 +305,6 @@ export const demoCommand = new Command("demo")
     for (const child of children) child.kill("SIGTERM");
     cleanup();
     console.log("");
-    console.log(
-      opts.keep
-        ? `${green("✓")} demo kept at ${layout.root} (FOREMAN_HOME=${layout.home})`
-        : `${green("✓")} demo cleaned up. Ready for the real thing? ${bold("foreman setup")}`,
-    );
+    console.log(demoFarewell(opts.keep ? { root: layout.root, home: layout.home } : null));
     process.exit(code);
   });

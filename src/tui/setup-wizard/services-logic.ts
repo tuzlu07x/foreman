@@ -81,10 +81,14 @@ export interface ServiceValueSubmitInput {
   value: string;
   currentIdx: number;
   totalSelected: number;
+  /** The secret is already in the vault (an earlier run, a resume). */
+  alreadyStored?: boolean;
 }
 
 export interface ServiceValueSubmitResult {
   shouldSave: boolean;
+  /** Empty input on a stored secret: keep it, count it as configured. */
+  keepStored?: boolean;
   warning: string | null;
   nextPhase: ServicesPhase;
   nextIdx: number;
@@ -94,6 +98,15 @@ export function applyServiceValueSubmit(
   input: ServiceValueSubmitInput,
 ): ServiceValueSubmitResult {
   const isLast = input.currentIdx + 1 >= input.totalSelected;
+  if (input.value.length === 0 && input.alreadyStored) {
+    return {
+      shouldSave: false,
+      keepStored: true,
+      warning: null,
+      nextPhase: isLast ? "summary" : "values",
+      nextIdx: input.currentIdx + 1,
+    };
+  }
   if (input.value.length === 0) {
     return {
       shouldSave: false,
@@ -118,6 +131,40 @@ export function consumingAgentsFor(
   agentsSelected: string[],
 ): string[] {
   return service.used_by_agents.filter((id) => agentsSelected.includes(id));
+}
+
+/** Services pre-checked in the picker (#657): the session's pick (a resumed
+ *  run) and every service whose secret is already stored, so a resumed or
+ *  repeated setup shows what is configured instead of "(none)". */
+export function servicesPreChecked(
+  servicesSelected: readonly string[],
+  catalog: readonly ServiceEntry[],
+  store: { exists(name: string): boolean },
+): string[] {
+  return catalog
+    .filter((s) => servicesSelected.includes(s.id) || store.exists(s.secret_name))
+    .map((s) => s.id);
+}
+
+/** The secrets notify.yaml is wired from: the ones saved in this run, plus
+ *  the selected services' secrets already in the vault (#657). Without the
+ *  vault, a chat id entered now for a bot token stored in an earlier run
+ *  (or a resumed run, which starts with nothing saved) never reached
+ *  notify.yaml. */
+export function notifyWiringNames(
+  servicesSelected: readonly string[],
+  servicesSaved: readonly string[],
+  catalog: readonly ServiceEntry[],
+  store: { exists(name: string): boolean },
+): string[] {
+  const names = new Set(servicesSaved);
+  for (const svc of catalog) {
+    if (!servicesSelected.includes(svc.id)) continue;
+    for (const name of [svc.secret_name, ...(svc.extra_secrets ?? []).map((e) => e.name)]) {
+      if (store.exists(name)) names.add(name);
+    }
+  }
+  return [...names];
 }
 
 // Sibling of persistLlmConfigFromWizardState (#289) — writes notify.yaml

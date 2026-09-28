@@ -7,7 +7,11 @@ import {
   type ProviderEntry,
   type ServiceEntry,
 } from "../../core/registry-catalog.js";
-import type { StoredSecretMeta } from "../../core/secret-store.js";
+import {
+  isReservedSecretName,
+  type SecretStore,
+  type StoredSecretMeta,
+} from "../../core/secret-store.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { formatTime } from "../format.js";
 import { roundBorder, theme } from "../theme.js";
@@ -58,6 +62,13 @@ export function ownershipForSecret(
   return { kind: "raw" };
 }
 
+/** The secrets the Keys page shows and acts on. Agent identity tokens
+ *  (`foreman-agent-token:*`, #618) are managed with `foreman agent token`
+ *  and never listed, revealed or deletable here (#657). */
+export function keysPageSecrets(store: Pick<SecretStore, "list">): StoredSecretMeta[] {
+  return store.list().filter((s) => !isReservedSecretName(s.name));
+}
+
 const REVEAL_AUTO_HIDE_MS = 10_000;
 
 export function SecretsPage({
@@ -76,14 +87,14 @@ export function SecretsPage({
   const providers = useMemo(() => loadActiveProviders().doc.providers, []);
   const services = useMemo(() => loadActiveServices().doc.services, []);
   const [rows, setRows] = useState<StoredSecretMeta[]>(() =>
-    secretStore ? secretStore.list() : [],
+    secretStore ? keysPageSecrets(secretStore) : [],
   );
 
   // Poll-only — SecretStore doesn't emit bus events today, so we rebuild
   // every 1s. Cheap because secret rows are tiny.
   useEffect(() => {
     if (!secretStore) return;
-    const refresh = (): void => setRows(secretStore.list());
+    const refresh = (): void => setRows(keysPageSecrets(secretStore));
     const interval = setInterval(refresh, 1000);
     return () => clearInterval(interval);
   }, [secretStore]);

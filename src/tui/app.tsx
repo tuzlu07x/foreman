@@ -8,6 +8,7 @@ import { rememberScope } from "../core/remember-scope.js";
 import type { BootInfo } from "./boot-info.js";
 import { AppHeader, NavTabs, nextTab, Toast } from "./components/app-header.js";
 import { CommandBar, type ConsoleEntry } from "./components/command-bar.js";
+import { ConfirmBar, type PendingConfirm } from "./components/confirm-bar.js";
 import { InboxPage } from "./pages/inbox-page.js";
 import { secondsLeft } from "./approval-queue.js";
 import { ApprovalQueueStrip } from "./components/approval-queue-strip.js";
@@ -47,7 +48,7 @@ import {
   type ChatScrollbackEntry,
 } from "./pages/chat-page.js";
 import { PolicyPage } from "./pages/policy-page.js";
-import { REVEAL_AUTO_HIDE_MS, SecretsPage } from "./pages/secrets-page.js";
+import { keysPageSecrets, REVEAL_AUTO_HIDE_MS, SecretsPage } from "./pages/secrets-page.js";
 import { AgentsPage } from "./pages/agents-page.js";
 import { ProvidersPage } from "./pages/providers-page.js";
 import { ServicesPage } from "./pages/services-page.js";
@@ -232,6 +233,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     "none",
   );
   const [agentsLlmDraft, setAgentsLlmDraft] = useState<string | null>(null);
+  // A delete / remove / regenerate waiting for y/N (#657).
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
 
   // Every pending approval, oldest deadline first (#614).
   const queue = useApprovalQueue(bus, pendingApprovals, approvalRecommendations);
@@ -534,7 +537,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   }, []);
   const onSecretReveal = useCallback((): void => {
     if (!secretStore) return;
-    const all = secretStore.list();
+    const all = keysPageSecrets(secretStore);
     const target = all[secretsSelectedIdx];
     if (!target) return;
     try {
@@ -562,7 +565,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
 
   const onSecretRotate = useCallback((): void => {
     if (!secretStore) return;
-    const all = secretStore.list();
+    const all = keysPageSecrets(secretStore);
     const target = all[secretsSelectedIdx];
     if (!target) return;
     setRotateMode({ name: target.name });
@@ -590,21 +593,29 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     [secretStore, rotateMode],
   );
 
+  // `d` only asks; the secret named in the question is the one deleted.
   const onSecretRemove = useCallback((): void => {
     if (!secretStore) return;
-    const all = secretStore.list();
-    const target = all[secretsSelectedIdx];
+    // Agent identity tokens are not on this page, so `d` can't reach one.
+    const target = keysPageSecrets(secretStore)[secretsSelectedIdx];
     if (!target) return;
-    try {
-      secretStore.remove(target.name);
-      setSecretsNotice(`✓ ${target.name} removed`);
-      setRevealedSecret(null);
-      setSecretsSelectedIdx((idx) => Math.max(0, idx - 1));
-    } catch (err) {
-      setSecretsNotice(
-        `error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    const name = target.name;
+    setPendingConfirm({
+      question: `Delete secret "${name}"? This can't be undone.`,
+      yesLabel: "delete",
+      run: () => {
+        try {
+          secretStore.remove(name);
+          setSecretsNotice(`✓ ${name} removed`);
+          setRevealedSecret(null);
+          setSecretsSelectedIdx((idx) => Math.max(0, idx - 1));
+        } catch (err) {
+          setSecretsNotice(
+            `error: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+    });
   }, [secretStore, secretsSelectedIdx]);
 
   const onSecretAddStart = useCallback((): void => {
@@ -669,37 +680,52 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   }, [registry, agentsSelectedIdx]);
 
   const onAgentRegenKey = useCallback((): void => {
-    const all = registry.listAll();
-    const target = all[agentsSelectedIdx];
+    const target = registry.listAll()[agentsSelectedIdx];
     if (!target) return;
-    try {
-      const result = registry.regenerateKey(target.id);
-      const hex = result.privateKey.toString("hex");
-      setAgentsNotice(
-        `✓ ${target.id} new private key (shown once): ${hex.slice(0, 16)}…${hex.slice(-8)}`,
-      );
-    } catch (err) {
-      setAgentsNotice(
-        `error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    const id = target.id;
+    setPendingConfirm({
+      question: `Regenerate ${id}'s keypair? Its old key stops working at once.`,
+      yesLabel: "regenerate",
+      run: () => {
+        try {
+          const result = registry.regenerateKey(id);
+          const hex = result.privateKey.toString("hex");
+          setAgentsNotice(
+            `✓ ${id} new private key (shown once): ${hex.slice(0, 16)}…${hex.slice(-8)}`,
+          );
+        } catch (err) {
+          setAgentsNotice(
+            `error: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+    });
   }, [registry, agentsSelectedIdx]);
 
+  // Removing here only unregisters: the agent's binary and its own config
+  // stay where they are (`foreman agent remove --uninstall` is the only
+  // way Foreman uninstalls anything).
   const onAgentRemove = useCallback((): void => {
-    const all = registry.listAll();
-    const target = all[agentsSelectedIdx];
+    const target = registry.listAll()[agentsSelectedIdx];
     if (!target) return;
-    try {
-      registry.remove(target.id);
-      // A removed agent's identity token must not keep proving it (#618).
-      if (secretStore) revokeAgentToken(secretStore, target.id);
-      setAgentsNotice(`✓ ${target.id} removed`);
-      setAgentsSelectedIdx((idx) => Math.max(0, idx - 1));
-    } catch (err) {
-      setAgentsNotice(
-        `error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    const id = target.id;
+    setPendingConfirm({
+      question: `Remove agent "${id}"? Foreman unregisters it and revokes its key and identity token. Its binary and config files stay installed.`,
+      yesLabel: "remove",
+      run: () => {
+        try {
+          registry.remove(id);
+          // A removed agent's identity token must not keep proving it (#618).
+          if (secretStore) revokeAgentToken(secretStore, id);
+          setAgentsNotice(`✓ ${id} removed (binary left installed)`);
+          setAgentsSelectedIdx((idx) => Math.max(0, idx - 1));
+        } catch (err) {
+          setAgentsNotice(
+            `error: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+    });
   }, [registry, secretStore, agentsSelectedIdx]);
 
   const onAgentDisable = useCallback((): void => {
@@ -1026,6 +1052,12 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
             setBooting(false);
             setCommandOpen(true);
           }}
+          pendingConfirm={pendingConfirm !== null}
+          onConfirmAnswer={(yes) => {
+            const current = pendingConfirm;
+            setPendingConfirm(null);
+            if (yes) current?.run();
+          }}
           onMoveApproval={queue.move}
           onAnyKey={() => setBooting(false)}
           swallowUnsettledKey={swallowUnsettledKey}
@@ -1071,7 +1103,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
         </Box>
       ) : null}
       {helpOpen ? (
-        <HelpOverlay />
+        <HelpOverlay width={terminal.cols} height={pageHeight + 1} />
       ) : commandOpen ? (
         <Box flexDirection="column">
           {pendingApproval ? (
@@ -1202,7 +1234,9 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
       ) : (
         <Box height={pageHeight}>{renderPanels(layout)}</Box>
       )}
-      {commandOpen ? null : (
+      {commandOpen ? null : pendingConfirm && !pendingApproval && !helpOpen ? (
+        <ConfirmBar confirm={pendingConfirm} />
+      ) : (
         <StatusBar quitConfirm={quitConfirm} page={page} approval={pendingApproval !== null && !helpOpen} />
       )}
         </>
@@ -1300,6 +1334,9 @@ interface KeyboardHandlerProps {
   onAgentCancelEdit: () => void;
   commandOpen: boolean;
   openCommand: () => void;
+  /** A y/N question (delete, remove, regenerate) is open. */
+  pendingConfirm: boolean;
+  onConfirmAnswer: (yes: boolean) => void;
   onMoveApproval: (delta: number) => void;
   onAnyKey: () => void;
   /** True when a letter key should be ignored because the approval on
@@ -1396,6 +1433,8 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     onAgentCancelEdit,
     commandOpen,
     openCommand,
+    pendingConfirm,
+    onConfirmAnswer,
     onMoveApproval,
     onAnyKey,
     swallowUnsettledKey,
@@ -1403,6 +1442,30 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
 
   useInput((input, key) => {
     onAnyKey();
+    // `q` and Ctrl-C quit the same way everywhere (#657): at once, or after
+    // a y/n question while approvals are waiting (#637). Quitting never
+    // decides anything: waiting calls fail closed when they time out.
+    const requestQuit = (): void => {
+      if (!pendingApproval) {
+        exit();
+        return;
+      }
+      // One y/n question at a time: an allow or "deny always" waiting for
+      // its `y` (#656) is dropped, so the next `y` can only mean "quit";
+      // `n` goes back to the call, nothing decided.
+      setApprovalConfirm(null);
+      setQuitConfirm(true);
+    };
+    const ctrlC = key.ctrl && input === "c";
+    if (quitConfirm) {
+      if (input === "y" || input === "Y") exit();
+      else if (input === "n" || input === "N" || key.escape) setQuitConfirm(false);
+      return;
+    }
+    if (ctrlC) {
+      requestQuit();
+      return;
+    }
     // The command bar owns the keyboard while it is open.
     if (commandOpen) return;
     // Help overlay takes priority — when open, Esc / `?` / `h` close it.
@@ -1419,15 +1482,14 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       ((page === "providers" || page === "services") && pageEditing);
     const letter = /^[a-zA-Z]$/.test(input) && !key.ctrl && !key.meta;
     if (letter && (pendingApproval || !textEntry) && swallowUnsettledKey()) return;
-    // `q` works here too, behind the usual confirmation (#637). Quitting
-    // never decides anything: waiting calls fail closed when they time out.
-    if (pendingApproval && quitConfirm) {
-      if (input === "y" || input === "Y") exit();
-      else if (input === "n" || input === "N" || key.escape) setQuitConfirm(false);
-      return;
-    }
-    if (pendingApproval && input === "q") {
-      setQuitConfirm(true);
+    // A delete / remove question on screen takes `q` as "no" (below).
+    if (
+      input === "q" &&
+      !key.meta &&
+      (pendingApproval || !textEntry) &&
+      !(pendingConfirm && !pendingApproval)
+    ) {
+      requestQuit();
       return;
     }
     // A decision waiting for its confirmation: `y` decides, `n` / Esc go
@@ -1500,6 +1562,11 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "k") onHaltSessionFromApproval();
       return;
     }
+    // [y/N]: only `y` goes ahead; any other key keeps things as they are.
+    if (pendingConfirm) {
+      onConfirmAnswer(input === "y" || input === "Y");
+      return;
+    }
     if (!textEntry && !quitConfirm) {
       if (input === ":") {
         openCommand();
@@ -1518,7 +1585,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     if (page === "inbox") {
       // The page handles its own keys; only leaving is handled here.
       if (key.escape) setPage("dashboard");
-      else if (input === "q") exit();
       return;
     }
     if (page === "logs") {
@@ -1567,7 +1633,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       } else if (key.return) setLogExpanded(!logExpanded);
       else if (input === "r") void onLogReplay();
       else if (input === "e") onLogExport();
-      else if (input === "q") exit();
       return;
     }
     if (page === "policy") {
@@ -1585,7 +1650,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       } else if (key.return) setPolicyExpanded(!policyExpanded);
       else if (input === "d") onPolicyToggle();
       else if (input === "e") void onPolicyEdit();
-      else if (input === "q") exit();
       return;
     }
     if (page === "sessions") {
@@ -1602,7 +1666,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         setSessionExpanded(false);
       } else if (key.return) setSessionExpanded(!sessionExpanded);
       else if (input === "k") onSessionHalt();
-      else if (input === "q") exit();
       return;
     }
     if (page === "delegations") {
@@ -1620,8 +1683,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         setDelegationsExpanded(false);
       } else if (key.return) {
         setDelegationsExpanded(!delegationsExpanded);
-      } else if (input === "q") {
-        exit();
       }
       return;
     }
@@ -1648,7 +1709,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         );
         return;
       }
-      if (input === "q") exit();
       return;
     }
     if (page === "settings") {
@@ -1675,7 +1735,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         else if (settingsSelectedIdx === 1) void onEditPolicyFromSettings();
         else if (settingsSelectedIdx === 2) setPage("policy");
         else if (settingsSelectedIdx === 3) onWizardInstruction();
-      } else if (input === "q") exit();
+      }
       return;
     }
     if (page === "secrets") {
@@ -1705,7 +1765,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "r") onSecretRotate();
       else if (input === "d") onSecretRemove();
       else if (input === "n") onSecretAddStart();
-      else if (input === "q") exit();
       return;
     }
     if (page === "agents") {
@@ -1736,31 +1795,19 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "b") onAgentToggleBlock();
       else if (input === "d") onAgentDisable();
       else if (input === "e") onAgentEnable();
-      else if (input === "r") onAgentRemove();
-      else if (input === "R") onAgentRegenKey();
+      else if (input === "x") onAgentRemove();
+      else if (input === "r") onAgentRegenKey();
       else if (input === "N") onAgentStartNoteEdit();
       else if (input === "L") onAgentStartLlmEdit();
       else if (input === "o") onAgentLogin();
-      else if (input === "q") exit();
       return;
     }
     // ProvidersPage / ServicesPage run their own useInput; short-circuit
     // here so a key (e.g. `s` for show-value) isn't double-handled by the
     // global dispatch (which would simultaneously try to setPage('sessions')).
-    if (page === "providers" || page === "services") {
-      if (input === "q") exit();
-      return;
-    }
-    if (quitConfirm) {
-      if (input === "y" || input === "Y") exit();
-      else if (input === "n" || input === "N" || key.escape)
-        setQuitConfirm(false);
-      return;
-    }
+    if (page === "providers" || page === "services") return;
     if (input === "/") openCommand();
     else if (input === "?" || input === "h") setHelpOpen(true);
-    else if (input === "q") exit();
-    else if (key.ctrl && input === "c") setQuitConfirm(true);
     else if (input === "c") setPage("chat");
     else if (input === "g") setPage("settings");
     else if (input === "k") setPage("secrets");

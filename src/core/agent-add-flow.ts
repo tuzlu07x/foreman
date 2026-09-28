@@ -131,6 +131,27 @@ export function pickMcpConfigPath(entry: AgentEntry): string | null {
   return expanded.find((p) => existsSync(p)) ?? expanded[0] ?? null;
 }
 
+/** Kept in the agent's metadata when Foreman ran its installer (#657).
+ *  `foreman agent remove --uninstall` only uninstalls such an agent; an
+ *  agent the user installed themselves is never touched. */
+export interface ForemanInstallRecord {
+  /** The install command Foreman ran. */
+  command: string;
+  at: number;
+}
+
+const INSTALL_RECORD_KEY = "installedByForeman";
+
+export function foremanInstallRecord(
+  metadata: Record<string, unknown> | null | undefined,
+): ForemanInstallRecord | null {
+  const raw = metadata?.[INSTALL_RECORD_KEY];
+  if (raw === null || typeof raw !== "object") return null;
+  const { command, at } = raw as Record<string, unknown>;
+  if (typeof command !== "string" || typeof at !== "number") return null;
+  return { command, at };
+}
+
 export interface RegisterAgentInput {
   agentId: string;
   entry: AgentEntry;
@@ -143,6 +164,8 @@ export interface RegisterAgentInput {
    *  omitted, the variant default is used. */
   modelVersion?: string;
   responsibilityNote?: string;
+  /** The install command, when Foreman just installed the agent itself. */
+  installedByForeman?: string;
 }
 
 export interface RegisterAgentResult {
@@ -163,6 +186,14 @@ export function registerAgent(input: RegisterAgentInput): RegisterAgentResult {
     metadata: {
       registryId: input.entry.id,
       registryHomepage: input.entry.homepage,
+      ...(input.installedByForeman
+        ? {
+            [INSTALL_RECORD_KEY]: {
+              command: input.installedByForeman,
+              at: Date.now(),
+            } satisfies ForemanInstallRecord,
+          }
+        : {}),
     },
     llmProvider: input.llmProvider,
     providerVariant: input.providerVariant,

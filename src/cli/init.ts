@@ -1,7 +1,12 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { Command } from "commander";
+import { sql } from "drizzle-orm";
 import { closeDb, getDb } from "../db/client.js";
 import { loadOrCreateMasterKey } from "../identity/keypair.js";
+import {
+  loadOrCreateSecretsMasterKey,
+  loadSecretsMasterKey,
+} from "../identity/master-key.js";
 import { getForemanPaths, type ForemanPaths } from "../utils/config.js";
 import { legacyHasInterestingFiles } from "../utils/migrate-config.js";
 import { ensurePrivateDir, restrictToOwner } from "../utils/secure-fs.js";
@@ -22,6 +27,9 @@ export interface InitResult {
   policyWasReset: boolean;
   soulWasNew: boolean;
   soulWasReset: boolean;
+  /** Stored secrets left undecryptable because secrets.key is missing:
+   *  init doesn't mint a new key over them (#657). */
+  secretsWithoutKey: number;
 }
 
 /** Write `content` only when `path` does not exist yet; true when written. */
@@ -54,7 +62,13 @@ export function runInit(options: InitOptions = {}): InitResult {
   if (soulWasReset) {
     writeFileSync(paths.soulPath, DEFAULT_FOREMAN_SOUL);
   }
-  getDb();
+  const db = getDb();
+  // The secret store's key comes with the home (#657), but never over
+  // stored secrets: a new key can't decrypt them and would hide that the
+  // old one is lost (`foreman doctor` explains the recovery).
+  const stored = db.get<{ n: number }>(sql`SELECT count(*) AS n FROM secrets`)?.n ?? 0;
+  const secretsWithoutKey = loadSecretsMasterKey() === null && stored > 0 ? stored : 0;
+  if (secretsWithoutKey === 0) loadOrCreateSecretsMasterKey();
   closeDb();
   // Tighten installs created before directories were made private.
   restrictToOwner(paths.policyPath);
@@ -66,11 +80,29 @@ export function runInit(options: InitOptions = {}): InitResult {
     policyWasReset,
     soulWasNew,
     soulWasReset,
+    secretsWithoutKey,
   };
 }
 
+/** Where `init` writes on this machine, for `init --help` (#657): the
+ *  platform's default dirs (XDG on Linux, Library on macOS), or
+ *  FOREMAN_HOME when set. */
+export function initPathsHelp(): string {
+  const paths = getForemanPaths();
+  const where = process.env.FOREMAN_HOME
+    ? "FOREMAN_HOME is set, so everything goes in one directory:"
+    : "Where, on this machine (set FOREMAN_HOME to use one directory instead):";
+  return [
+    "",
+    where,
+    `  config  ${paths.configDir}  (identity.key, policy.yaml, SOUL.md, secrets.key)`,
+    `  state   ${paths.stateDir}  (foreman.db)`,
+  ].join("\n");
+}
+
 export const initCommand = new Command("init")
-  .description("Initialise ~/.foreman/ (identity, policy, database)")
+  .description("Create Foreman's home: identity, policy, database and secrets key")
+  .addHelpText("after", () => initPathsHelp())
   .option(
     "--reset-policy",
     "overwrite policy.yaml with the smart-default template",
@@ -94,6 +126,7 @@ export const initCommand = new Command("init")
       policyWasReset,
       soulWasNew,
       soulWasReset,
+      secretsWithoutKey,
     } = runInit(options);
     const fp = publicKey.subarray(0, 4).toString("hex");
     const policyTag = policyWasNew
@@ -116,6 +149,13 @@ export const initCommand = new Command("init")
     );
     console.log(`  ${green("✓")} soul       ${paths.soulPath} ${dim(soulTag)}`);
     console.log(`  ${green("✓")} database   ${paths.dbPath}`);
+    if (secretsWithoutKey > 0) {
+      console.log(
+        `  ${red("✗")} secrets    ${paths.secretsKeyPath} is missing — ${secretsWithoutKey} stored secret${secretsWithoutKey === 1 ? "" : "s"} can't be decrypted. Run 'foreman doctor' for the fix.`,
+      );
+    } else {
+      console.log(`  ${green("✓")} secrets    ${paths.secretsKeyPath}`);
+    }
     console.log();
     if (!policyWasNew && !policyWasReset) {
       console.log(
