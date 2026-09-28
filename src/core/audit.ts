@@ -11,6 +11,11 @@ import {
 
 const FLUSH_INTERVAL_MS = 100
 const FLUSH_MAX_BATCH = 50
+/** Backoff cap between retries of a batch another process kept locked. */
+const RETRY_MAX_DELAY_MS = 5_000
+/** Timer retries after a lock error; after that, the next audit entry,
+ *  `flush()` or `dispose()` tries again (nothing retries on its own forever). */
+const RETRY_MAX_ATTEMPTS = 8
 
 type RequestRow = typeof requests.$inferInsert
 type AuditEventRow = typeof auditEvents.$inferInsert
@@ -25,6 +30,27 @@ export interface AuditLoggerOptions {
   flushIntervalMs?: number
   /** Override the 50-entry batch cap (mostly for tests). */
   flushMaxBatch?: number
+  /** Told when a batch could not be written because another process held
+   *  the database past its busy timeout (#594). Defaults to a line on
+   *  stderr; never stdout, which is mcp-stdio's JSON-RPC channel. */
+  onError?: (message: string) => void
+}
+
+/** SQLITE_BUSY / SQLITE_LOCKED (and their extended codes): another
+ *  connection held the lock. The transaction rolled back, so the batch can
+ *  be written again unchanged. */
+function isLockError(err: unknown): boolean {
+  const code =
+    err instanceof Error && 'code' in err && typeof err.code === 'string' ? err.code : ''
+  return code.startsWith('SQLITE_BUSY') || code.startsWith('SQLITE_LOCKED')
+}
+
+function entries(n: number): string {
+  return `${n} audit ${n === 1 ? 'entry' : 'entries'}`
+}
+
+function defaultOnError(message: string): void {
+  process.stderr.write(`foreman: ${message}\n`)
 }
 
 /**
@@ -45,6 +71,10 @@ export class AuditLogger {
   private flushTimer: NodeJS.Timeout | null = null
   private subscriptions: Unsubscribe[] = []
   private readonly onBeforeExit: () => void
+  private readonly onError: (message: string) => void
+  /** Consecutive flushes that failed on a lock held by another process. */
+  private lockFailures = 0
+  private disposed = false
 
   constructor(
     db: ForemanDb,
@@ -55,7 +85,8 @@ export class AuditLogger {
     this.bus = bus
     this.flushIntervalMs = options.flushIntervalMs ?? FLUSH_INTERVAL_MS
     this.flushMaxBatch = options.flushMaxBatch ?? FLUSH_MAX_BATCH
-    this.onBeforeExit = () => this.flush()
+    this.onError = options.onError ?? defaultOnError
+    this.onBeforeExit = () => this.flushInBackground()
     this.subscribe()
     process.once('beforeExit', this.onBeforeExit)
   }
@@ -86,7 +117,12 @@ export class AuditLogger {
     this.flush()
   }
 
-  /** Drain the queue immediately. Idempotent on an empty queue. */
+  /** Drain the queue immediately. Idempotent on an empty queue.
+   *
+   *  Throws when the write fails. If another process held the database
+   *  past its busy timeout, the batch stays queued, in order, and is
+   *  retried (#594): an audit row is only dropped from memory once it
+   *  is on disk. */
   flush(): void {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer)
@@ -95,17 +131,40 @@ export class AuditLogger {
     if (this.queue.length === 0) return
     const batch = this.queue
     this.queue = []
-    this.db.transaction((tx) => {
-      for (const entry of batch) {
-        if (entry.kind === 'request') tx.insert(requests).values(entry.row).run()
-        else if (entry.kind === 'amend') {
-          tx.update(requests)
-            .set({ decision: entry.decision, decidedBy: entry.decidedBy })
-            .where(eq(requests.id, entry.id))
-            .run()
-        } else tx.insert(auditEvents).values(entry.row).run()
-      }
-    })
+    try {
+      this.db.transaction((tx) => {
+        for (const entry of batch) {
+          if (entry.kind === 'request') tx.insert(requests).values(entry.row).run()
+          else if (entry.kind === 'amend') {
+            tx.update(requests)
+              .set({ decision: entry.decision, decidedBy: entry.decidedBy })
+              .where(eq(requests.id, entry.id))
+              .run()
+          } else tx.insert(auditEvents).values(entry.row).run()
+        }
+      })
+    } catch (err) {
+      if (!isLockError(err)) throw err
+      // The transaction rolled back: nothing of the batch was written.
+      this.queue = batch.concat(this.queue)
+      this.lockFailures++
+      const retry = !this.disposed && this.lockFailures <= RETRY_MAX_ATTEMPTS
+      if (retry) this.armTimer()
+      this.onError(
+        `audit log write failed (${err instanceof Error ? err.message : String(err)}); ` +
+          (this.disposed
+            ? `${entries(this.queue.length)} not written`
+            : `${entries(this.queue.length)} kept, ` +
+              (retry
+                ? `retrying in ${this.retryDelayMs()} ms`
+                : 'retrying with the next audit entry or on exit')),
+      )
+      throw err
+    }
+    if (this.lockFailures > 0) {
+      this.lockFailures = 0
+      this.onError(`audit log writes recovered (${entries(batch.length)} written)`)
+    }
   }
 
   /** Pending entries waiting on the next flush. Mainly for tests. */
@@ -113,26 +172,53 @@ export class AuditLogger {
     return this.queue.length
   }
 
-  /** Unsubscribe from the bus, flush remaining entries, and detach from process exit. */
+  /** Unsubscribe from the bus, flush remaining entries, and detach from
+   *  process exit. Throws if the final write fails; `pendingCount()` then
+   *  says how many entries were not written. */
   dispose(): void {
     process.off('beforeExit', this.onBeforeExit)
     for (const off of this.subscriptions) off()
     this.subscriptions = []
+    // Final: no retry outlives the logger.
+    this.disposed = true
     this.flush()
   }
 
   private scheduleFlush(): void {
-    if (this.queue.length >= this.flushMaxBatch) {
-      this.flush()
+    // While another process holds the lock, a full batch waits for the
+    // retry timer instead of blocking this process on every new entry.
+    if (this.queue.length >= this.flushMaxBatch && this.lockFailures === 0) {
+      this.flushInBackground()
       return
     }
+    this.armTimer()
+  }
+
+  private armTimer(): void {
     if (this.flushTimer) return
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null
-      this.flush()
-    }, this.flushIntervalMs)
+      this.flushInBackground()
+    }, this.retryDelayMs())
     // Don't keep the event loop alive just for a pending flush.
     this.flushTimer.unref?.()
+  }
+
+  private retryDelayMs(): number {
+    if (this.lockFailures === 0) return this.flushIntervalMs
+    return Math.min(this.flushIntervalMs * 2 ** this.lockFailures, RETRY_MAX_DELAY_MS)
+  }
+
+  /** A flush nobody waits on (timer, batch cap, process exit). A lock
+   *  error was already reported and the batch kept by flush(); throwing it
+   *  from a timer would crash the process (#594: the agent's MCP server
+   *  died and the batch was lost). Any other error still throws. */
+  private flushInBackground(): void {
+    try {
+      this.flush()
+    } catch (err) {
+      if (!isLockError(err)) throw err
+    }
   }
 
   private subscribe(): void {

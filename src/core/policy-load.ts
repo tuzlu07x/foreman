@@ -51,6 +51,12 @@ export function toPolicyLoadError(path: string, err: unknown, text?: string): Po
   return new PolicyLoadError(path, line, reason || "invalid YAML");
 }
 
+function isSqliteError(err: unknown): boolean {
+  return (
+    err instanceof Error && "code" in err && typeof err.code === "string" && err.code.startsWith("SQLITE_")
+  );
+}
+
 /**
  * Load policy.yaml now, then follow it for the life of the process.
  *
@@ -71,6 +77,9 @@ export function followPolicyFile(
     try {
       policy.loadYamlText(text);
     } catch (err) {
+      // A database error while storing the rules (another process held the
+      // lock) is not a problem with the file: don't report it as one.
+      if (isSqliteError(err)) throw err;
       throw toPolicyLoadError(path, err, text);
     }
   }

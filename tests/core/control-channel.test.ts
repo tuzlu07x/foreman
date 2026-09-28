@@ -184,6 +184,25 @@ describe("ControlChannel (#440)", () => {
       await channel.drainPending(new Map([["stop", handler]]));
       expect(handler).toHaveBeenCalledOnce();
     });
+
+    it("a status write lost to a locked database is retried, never re-running the command (#594)", async () => {
+      const { id } = channel.enqueue({ command: "write", args: ["codex", "task"], sourceAgent: "h" });
+      const handler: ControlHandler = vi.fn(() => ({ status: "applied" }));
+      const handlers = new Map([["write", handler]]);
+      const busy = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+      vi.spyOn(channel, "markApplied").mockImplementationOnce(() => {
+        throw busy;
+      });
+      // The failure surfaces to the caller (the poller reports it)…
+      await expect(channel.drainPending(handlers)).rejects.toThrow("database is locked");
+      // …without a false "failed": the row is untouched.
+      expect(channel.get(id)?.status).toBe("pending");
+      // The next drain records the outcome it kept; the delegated agent
+      // is not spawned a second time.
+      await channel.drainPending(handlers);
+      expect(handler).toHaveBeenCalledOnce();
+      expect(channel.get(id)?.status).toBe("applied");
+    });
   });
 });
 
@@ -271,6 +290,25 @@ describe("ControlDrainPoller (#440)", () => {
     await vi.advanceTimersByTimeAsync(150);
     expect(handler).toHaveBeenCalledOnce();
     poller.stop();
+  });
+
+  it("a failed drain is reported and retried, not left as an unhandled rejection (#594)", async () => {
+    // Unhandled, this rejection used to take `foreman start` down.
+    const drain = vi
+      .spyOn(channel, "drainPending")
+      .mockRejectedValueOnce(Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" }));
+    const errors: string[] = [];
+    const poller = new ControlDrainPoller(channel, new Map(), {
+      intervalMs: 100,
+      onError: (m) => errors.push(m),
+    });
+    poller.start();
+    await vi.advanceTimersByTimeAsync(250);
+    await poller.stop();
+    expect(errors).toEqual([
+      "control channel drain failed, retrying on the next tick: database is locked",
+    ]);
+    expect(drain).toHaveBeenCalledTimes(2);
   });
 });
 

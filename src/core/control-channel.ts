@@ -55,6 +55,12 @@ export type ControlHandler = (
 ) => Promise<ControlHandlerOutcome> | ControlHandlerOutcome;
 
 export class ControlChannel {
+  /** Commands that ran but whose status write failed, by row id. */
+  private readonly unrecorded = new Map<
+    number,
+    { row: ControlCommand; outcome: ControlHandlerOutcome; durationMs: number }
+  >();
+
   // #498 — Optional bus injection so the writer side (mcp-stdio /
   // foreman write CLI) can announce enqueue events for the TUI. Reader
   // side (foreman start) also keeps a reference so drain outcomes
@@ -164,35 +170,63 @@ export class ControlChannel {
     handlers: Map<string, ControlHandler>,
     limit = 16,
   ): Promise<number> {
+    // Outcomes a previous drain could not write (#594): record them first.
+    // Their rows still read "pending", but the command already ran and must
+    // not run again (a delegated agent would be spawned twice).
+    for (const [id, done] of this.unrecorded) {
+      this.record(done.row, done.outcome, done.durationMs);
+      this.unrecorded.delete(id);
+    }
     const rows = this.pending(limit);
     for (const row of rows) {
       const handler = handlers.get(row.command);
       const startedAt = Date.now();
+      let outcome: ControlHandlerOutcome;
       if (!handler) {
-        const err = `Unknown control command "${row.command}". Update foreman start to register a handler.`;
-        this.markRejected(row.id, err);
-        this.emitFailed(row, "rejected", err);
-        continue;
-      }
-      try {
-        const outcome = await handler(row);
-        if (outcome.status === "applied") {
-          this.markApplied(row.id);
-          this.emitApplied(row, Date.now() - startedAt);
-        } else if (outcome.status === "failed") {
-          this.markFailed(row.id, outcome.error);
-          this.emitFailed(row, "failed", outcome.error);
-        } else {
-          this.markRejected(row.id, outcome.error);
-          this.emitFailed(row, "rejected", outcome.error);
+        outcome = {
+          status: "rejected",
+          error: `Unknown control command "${row.command}". Update foreman start to register a handler.`,
+        };
+      } else {
+        try {
+          outcome = await handler(row);
+        } catch (err) {
+          outcome = {
+            status: "failed",
+            error: err instanceof Error ? err.message : String(err),
+          };
         }
+      }
+      const durationMs = Date.now() - startedAt;
+      try {
+        this.record(row, outcome, durationMs);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.markFailed(row.id, msg);
-        this.emitFailed(row, "failed", msg);
+        // The command ran; only its status write failed (e.g. another
+        // process held the database past its busy timeout). Keep the
+        // outcome for the next drain instead of recording a false
+        // "failed" or running the command again.
+        this.unrecorded.set(row.id, { row, outcome, durationMs });
+        throw err;
       }
     }
     return rows.length;
+  }
+
+  private record(
+    row: ControlCommand,
+    outcome: ControlHandlerOutcome,
+    durationMs: number,
+  ): void {
+    if (outcome.status === "applied") {
+      this.markApplied(row.id);
+      this.emitApplied(row, durationMs);
+    } else if (outcome.status === "failed") {
+      this.markFailed(row.id, outcome.error);
+      this.emitFailed(row, "failed", outcome.error);
+    } else {
+      this.markRejected(row.id, outcome.error);
+      this.emitFailed(row, "rejected", outcome.error);
+    }
   }
 
   private emitApplied(row: ControlCommand, durationMs: number): void {
@@ -232,6 +266,9 @@ export class ControlChannel {
 
 export interface ControlDrainPollerOptions {
   intervalMs?: number;
+  /** Told when a drain fails (e.g. another process held the database past
+   *  its busy timeout); the next tick tries again. Defaults to stderr. */
+  onError?: (message: string) => void;
 }
 
 export class ControlDrainPoller {
@@ -239,6 +276,7 @@ export class ControlDrainPoller {
   private running = false;
   private inFlight: Promise<void> | null = null;
   private readonly intervalMs: number;
+  private readonly onError: (message: string) => void;
 
   constructor(
     private readonly channel: ControlChannel,
@@ -246,6 +284,9 @@ export class ControlDrainPoller {
     opts: ControlDrainPollerOptions = {},
   ) {
     this.intervalMs = opts.intervalMs ?? 1500;
+    this.onError =
+      opts.onError ??
+      ((message) => process.stderr.write(`foreman: ${message}\n`));
   }
 
   start(): void {
@@ -255,6 +296,13 @@ export class ControlDrainPoller {
       this.running = true;
       try {
         await this.channel.drainPending(this.handlers);
+      } catch (err) {
+        // Unhandled, this rejection took `foreman start` down (#594).
+        this.onError(
+          `control channel drain failed, retrying on the next tick: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
       } finally {
         this.running = false;
       }

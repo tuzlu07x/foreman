@@ -55,6 +55,15 @@ All notable changes to Foreman are documented here. The format follows
   whatever `policy.yaml` says, and is never projected into agent files.
 
 ### Fixed
+- **A busy database no longer kills `foreman mcp-stdio` or `foreman start`**
+  (#594). When another process held the SQLite lock past the 5 s busy
+  timeout, the audit log's background write threw and the process exited
+  mid-session: the agent's MCP server went unreachable and the batch it was
+  writing, including the row of a call already allowed, was lost. The batch
+  is now kept, in order, and retried with a bounded backoff, each failure
+  reported on stderr. A failed control-channel drain in `foreman start` is
+  reported and retried on the next tick, and a command whose status could
+  not be written is not run a second time.
 - **`foreman agent remove` takes Foreman out of the agent's config.** It
   revoked the agent's token but left the `foreman` MCP server entry (e.g.
   `mcpServers.foreman` in `~/.claude.json`, `mcp_servers.foreman` for Codex
