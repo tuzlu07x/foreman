@@ -377,3 +377,41 @@ describe('responsibilityViolationRule — composite', () => {
     expect(factors).toHaveLength(1)
   })
 })
+
+describe('responsibilityViolationRule — can_call_agents_with_responsibility', () => {
+  const policies: ResponsibilityPolicy[] = [
+    {
+      responsibility: 'code writing',
+      can_call_agents_with_responsibility: ['code review', 'testing'],
+      cannot_call_agents_with_responsibility: ['payment processing'],
+    },
+  ]
+  const responsibilities = {
+    hermes: 'code writing',
+    reviewer: 'Code Review',
+    marketer: 'marketing',
+    billing: 'payment processing',
+  }
+  const evaluate = (target: string, extra: Record<string, string> = {}) =>
+    responsibilityViolationRule.evaluate(
+      req({ sourceAgent: 'hermes', targetAgent: target }),
+      makeContext({ responsibilities: { ...responsibilities, ...extra }, policies }),
+    )
+
+  it('adds 40 for a hand-off to a known role outside the list', () => {
+    const factors = evaluate('marketer')
+    expect(factors).toHaveLength(1)
+    expect(factors[0]).toMatchObject({ rule: 'responsibility_outside_delegation_list', points: 40 })
+    expect(factors[0]!.reason).toContain('marketing')
+  })
+
+  it('adds nothing for a listed role (case-insensitive) or a target without a note', () => {
+    expect(evaluate('reviewer')).toEqual([])
+    expect(evaluate('stranger')).toEqual([])
+  })
+
+  it('does not double-count a role the cannot list already bans', () => {
+    const factors = evaluate('billing')
+    expect(factors.map((f) => f.rule)).toEqual(['responsibility_violation_delegation'])
+  })
+})
