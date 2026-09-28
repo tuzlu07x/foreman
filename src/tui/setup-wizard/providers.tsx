@@ -326,7 +326,7 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
             ))}
           </Box>
         )}
-        <Text>Continue to agents? (y/n)</Text>
+        <Text>Continue to Foreman's brain? (y/n)</Text>
         <ConfirmInput
           onConfirm={() => {
             persistLlmConfigFromWizardState(

@@ -18,6 +18,7 @@ import {
   configuredServiceIds,
   safeFind,
 } from "./shared.js";
+import { wizardServiceChoices } from "./services-logic.js";
 import type { WizardOauthRunStep } from "./types.js";
 
 export function handleDoneInput(
@@ -160,7 +161,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
     ...configuredProviderIds(providerCatalog, storedNames),
     ...configuredPresetIds(llmPresetDoc.presets, storedNames),
   ];
-  const serviceIds = configuredServiceIds(serviceCatalog, storedNames);
+  const serviceIds = doneServiceIds(serviceCatalog, storedNames);
   const agentRows = services.registry.list();
   const policyRuleCount = countPolicyRules(services.policyPath);
   // Agents without an identity file (generic-mcp) aren't push targets.
@@ -508,9 +509,16 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
   );
 }
 
-// Read the policy.yaml rule count without instantiating a PolicyEngine.
-// Returns 0 on missing / malformed file rather than throwing — the Done
-// screen is best-effort reporting, not the canonical policy validator.
+/** The chat services the summary lists. GitHub, Jira and Notion are
+ *  integrations now (their own block on this screen), not services, even
+ *  when their secret is stored (terminal QA: "1 service github"). */
+export function doneServiceIds(
+  catalog: { id: string; secret_name: string }[],
+  storedNames: Set<string>,
+): string[] {
+  return configuredServiceIds(wizardServiceChoices(catalog), storedNames);
+}
+
 /** Ids of the OpenAI-compatible presets whose API key is stored. */
 export function configuredPresetIds(
   presets: readonly LlmPreset[],
@@ -521,6 +529,9 @@ export function configuredPresetIds(
     .map((p) => p.id);
 }
 
+// Read the policy.yaml rule count without instantiating a PolicyEngine.
+// Returns 0 on missing / malformed file rather than throwing — the Done
+// screen is best-effort reporting, not the canonical policy validator.
 export function countPolicyRules(policyPath: string): number {
   if (!existsSync(policyPath)) return 0;
   try {

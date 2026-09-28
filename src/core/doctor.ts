@@ -648,7 +648,7 @@ export function checkLlmCredentials(): CheckResult {
     return {
       name: "llm_credentials",
       status: "warn",
-      message: `LLM provider ${config.provider} has no client in this build yet (coming in v0.2) — verification + smart-report run heuristic-only`,
+      message: `LLM provider ${config.provider} has no client in this build yet — verification + smart-report run heuristic-only`,
       remediation: `Pick anthropic, openai or gemini as Foreman's brain (\`foreman setup\`, Step 2), or set \`enabled: false\` in ${paths.llmConfigPath}.`,
     };
   }
