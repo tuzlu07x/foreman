@@ -5,7 +5,7 @@ import { loadBundledMcpCatalog, type McpCatalogEntry } from "../core/mcp-hub/cat
 import {
   defaultHubConfig,
   loadHubConfig,
-  saveHubConfig,
+  updateHubConfig,
   type HubConfig,
   type HubMode,
 } from "../core/mcp-hub/config.js";
@@ -66,7 +66,8 @@ mcpCommand
       console.log(orange(category));
       for (const e of list) {
         const badge = e.official ? green("official") : dim("community");
-        console.log(`  ${bold(e.id.padEnd(18))} ${e.description} ${dim("·")} ${badge}`);
+        const status = e.status ? ` ${dim("·")} ${orange(e.status)}` : "";
+        console.log(`  ${bold(e.id.padEnd(18))} ${e.description} ${dim("·")} ${badge}${status}`);
       }
       console.log("");
     }
@@ -88,10 +89,16 @@ mcpCommand
     {},
   )
   .option("--header <KEY=VALUE>", "HTTP header for a remote server (repeatable)", collectPairs, {})
+  .option(
+    "--param <KEY=VALUE>",
+    "value for a catalog server's parameter, e.g. host=gitlab.example.com (repeatable)",
+    collectPairs,
+    {},
+  )
   .option("--oauth", "the remote server uses MCP OAuth — sign in with `foreman mcp login <name>`")
   .option("--force", "replace an existing server with the same name")
   .action(
-    (
+    async (
       id: string,
       args: string[],
       opts: {
@@ -100,30 +107,33 @@ mcpCommand
         url?: string;
         env: Record<string, string>;
         header: Record<string, string>;
+        param: Record<string, string>;
         oauth?: boolean;
         force?: boolean;
       },
     ) => {
       requireInitialised();
       const paths = getForemanPaths();
-      const current = readConfig(paths.mcpConfigPath);
+      const catalog = loadBundledMcpCatalog();
       let next: HubConfig;
       try {
-        next = addServer(current, loadBundledMcpCatalog(), {
-          id,
-          ...(opts.name ? { name: opts.name } : {}),
-          extraArgs: args,
-          ...(opts.command ? { command: opts.command } : {}),
-          ...(opts.url ? { url: opts.url } : {}),
-          ...(Object.keys(opts.env).length > 0 ? { env: opts.env } : {}),
-          ...(Object.keys(opts.header).length > 0 ? { headers: opts.header } : {}),
-          ...(opts.oauth ? { auth: "oauth" as const } : {}),
-          ...(opts.force ? { force: true } : {}),
-        });
+        ({ after: next } = await updateHubConfig(paths, (current) =>
+          addServer(current, catalog, {
+            id,
+            ...(opts.name ? { name: opts.name } : {}),
+            extraArgs: args,
+            ...(Object.keys(opts.param).length > 0 ? { params: opts.param } : {}),
+            ...(opts.command ? { command: opts.command } : {}),
+            ...(opts.url ? { url: opts.url } : {}),
+            ...(Object.keys(opts.env).length > 0 ? { env: opts.env } : {}),
+            ...(Object.keys(opts.header).length > 0 ? { headers: opts.header } : {}),
+            ...(opts.oauth ? { auth: "oauth" as const } : {}),
+            ...(opts.force ? { force: true } : {}),
+          }),
+        ));
       } catch (err) {
         fail(err);
       }
-      saveHubConfig(paths.mcpConfigPath, next);
       const name = opts.name ?? id;
       console.log(`${green("✓")} added ${bold(name)} to ${dim(paths.mcpConfigPath)}`);
       reportSecrets(next, name);
@@ -185,7 +195,7 @@ mcpCommand
     requireInitialised();
     const paths = getForemanPaths();
     try {
-      saveHubConfig(paths.mcpConfigPath, removeServer(readConfig(paths.mcpConfigPath), name));
+      await updateHubConfig(paths, (current) => removeServer(current, name));
       new ToolPinStore(paths.mcpPinsPath).forget(name);
       await removeMcpOAuthSession(openSecretStore(), name, mcpOAuthLockPath(paths, name));
     } catch (err) {
@@ -286,14 +296,11 @@ for (const [verb, enabled] of [
   mcpCommand
     .command(`${verb} <name>`)
     .description(`${enabled ? "Enable" : "Disable"} a configured server`)
-    .action((name: string) => {
+    .action(async (name: string) => {
       requireInitialised();
       const paths = getForemanPaths();
       try {
-        saveHubConfig(
-          paths.mcpConfigPath,
-          setServerEnabled(readConfig(paths.mcpConfigPath), name, enabled),
-        );
+        await updateHubConfig(paths, (current) => setServerEnabled(current, name, enabled));
       } catch (err) {
         fail(err);
       }
@@ -306,13 +313,17 @@ mcpCommand
   .description(
     "How agents discover hub tools: eager (list all), lazy (search + call, fewest tokens), auto (lazy above the threshold)",
   )
-  .action((mode: string) => {
+  .action(async (mode: string) => {
     requireInitialised();
     if (mode !== "auto" && mode !== "eager" && mode !== "lazy") {
       fail(new Error("mode must be auto, eager or lazy"));
     }
     const paths = getForemanPaths();
-    saveHubConfig(paths.mcpConfigPath, setMode(readConfig(paths.mcpConfigPath), mode as HubMode));
+    try {
+      await updateHubConfig(paths, (current) => setMode(current, mode as HubMode));
+    } catch (err) {
+      fail(err);
+    }
     console.log(`${green("✓")} MCP hub mode = ${mode}`);
   });
 

@@ -1,0 +1,831 @@
+{
+  "version": 1,
+  "integrations": [
+    {
+      "id": "github",
+      "name": "GitHub",
+      "aliases": [
+        "gh"
+      ],
+      "category": "code",
+      "description": "Issues, pull requests, code search and repositories on GitHub.",
+      "homepage": "https://github.com/github/github-mcp-server",
+      "used_by_agents": [
+        "claude-code",
+        "codex"
+      ],
+      "health_check": {
+        "tool": "get_me"
+      },
+      "variants": [
+        {
+          "id": "official",
+          "label": "GitHub hosted server · token",
+          "server": "github",
+          "recommended": true,
+          "description": "GitHub's hosted MCP server with a fine-grained personal access token. Lockdown mode is on.",
+          "auth": {
+            "kind": "secrets",
+            "fields": [
+              {
+                "secret": "github-pat",
+                "label": "GitHub personal access token",
+                "where_to_get": "https://github.com/settings/personal-access-tokens/new",
+                "format_hint": "github_pat_… (fine-grained, recommended) or a classic token",
+                "pattern": "^(github_pat_[A-Za-z0-9_]{20,255}|gh[p]_[A-Za-z0-9]{30,255})$",
+                "setup_steps": [
+                  "Open github.com/settings/personal-access-tokens/new (fine-grained token)",
+                  "Resource owner: you or your organization; Repository access: only the repositories agents need",
+                  "Read-only use: Contents, Issues, Pull requests, Metadata → Read-only",
+                  "Read + write use: also Issues and Pull requests → Read and write (Contents → Read and write only if agents push)",
+                  "Generate the token and paste it here — Foreman stores it encrypted and never shows it to agents"
+                ]
+              }
+            ]
+          },
+          "default_access_level": "read-only",
+          "access_levels": {
+            "read-only": {
+              "description": "Reads only: every tool that could change something is refused.",
+              "tools": {
+                "deny": [
+                  "create_*",
+                  "update_*",
+                  "delete_*",
+                  "merge_*",
+                  "push_*",
+                  "fork_*",
+                  "add_*",
+                  "remove_*",
+                  "*_write",
+                  "actions_run_trigger",
+                  "dismiss_*",
+                  "mark_*",
+                  "manage_*",
+                  "request_*",
+                  "assign_*",
+                  "submit_*",
+                  "rerun_*",
+                  "cancel_*",
+                  "star_*",
+                  "unstar_*"
+                ]
+              },
+              "headers": {
+                "X-MCP-Readonly": "true"
+              }
+            },
+            "read-write": {
+              "description": "Reads run freely; writes ask; merges, pushes and repository changes need a human every time; deletes are refused.",
+              "tools": {
+                "confirm": [
+                  "merge_*",
+                  "push_files",
+                  "*_repository"
+                ],
+                "deny": [
+                  "delete_*"
+                ]
+              }
+            }
+          },
+          "revoke_url": "https://github.com/settings/personal-access-tokens",
+          "notes": "GitHub's hosted server does not offer OAuth dynamic client registration, so it takes a token."
+        },
+        {
+          "id": "docker",
+          "label": "Local Docker · token",
+          "server": "github-docker",
+          "description": "The same server run locally in Docker from a pinned image (GitHub Enterprise Server too).",
+          "auth": {
+            "kind": "secrets",
+            "fields": [
+              {
+                "secret": "github-pat",
+                "label": "GitHub personal access token",
+                "where_to_get": "https://github.com/settings/personal-access-tokens/new",
+                "format_hint": "github_pat_… (fine-grained, recommended) or a classic token",
+                "pattern": "^(github_pat_[A-Za-z0-9_]{20,255}|gh[p]_[A-Za-z0-9]{30,255})$",
+                "setup_steps": [
+                  "Open github.com/settings/personal-access-tokens/new (fine-grained token)",
+                  "Resource owner: you or your organization; Repository access: only the repositories agents need",
+                  "Read-only use: Contents, Issues, Pull requests, Metadata → Read-only",
+                  "Read + write use: also Issues and Pull requests → Read and write (Contents → Read and write only if agents push)",
+                  "Generate the token and paste it here — Foreman stores it encrypted and never shows it to agents"
+                ]
+              }
+            ]
+          },
+          "default_access_level": "read-only",
+          "access_levels": {
+            "read-only": {
+              "description": "Reads only: every tool that could change something is refused.",
+              "tools": {
+                "deny": [
+                  "create_*",
+                  "update_*",
+                  "delete_*",
+                  "merge_*",
+                  "push_*",
+                  "fork_*",
+                  "add_*",
+                  "remove_*",
+                  "*_write",
+                  "actions_run_trigger",
+                  "dismiss_*",
+                  "mark_*",
+                  "manage_*",
+                  "request_*",
+                  "assign_*",
+                  "submit_*",
+                  "rerun_*",
+                  "cancel_*",
+                  "star_*",
+                  "unstar_*"
+                ]
+              },
+              "env": {
+                "GITHUB_READ_ONLY": "1"
+              }
+            },
+            "read-write": {
+              "description": "Reads run freely; writes ask; merges, pushes and repository changes need a human every time; deletes are refused.",
+              "tools": {
+                "confirm": [
+                  "merge_*",
+                  "push_files",
+                  "*_repository"
+                ],
+                "deny": [
+                  "delete_*"
+                ]
+              }
+            }
+          },
+          "revoke_url": "https://github.com/settings/personal-access-tokens"
+        }
+      ]
+    },
+    {
+      "id": "gitlab",
+      "name": "GitLab",
+      "aliases": [
+        "gl"
+      ],
+      "category": "code",
+      "description": "Issues, merge requests, pipelines and search on GitLab.com or a self-managed instance.",
+      "homepage": "https://docs.gitlab.com/user/model_context_protocol/mcp_server/",
+      "used_by_agents": [
+        "claude-code",
+        "codex"
+      ],
+      "variants": [
+        {
+          "id": "official",
+          "label": "GitLab built-in server · sign in",
+          "server": "gitlab",
+          "recommended": true,
+          "description": "GitLab's own MCP server (Beta, Premium and Ultimate); you sign in in the browser.",
+          "auth": {
+            "kind": "oauth"
+          },
+          "default_access_level": "read-only",
+          "access_levels": {
+            "read-only": {
+              "description": "Reads only: every tool that could change something is refused.",
+              "tools": {
+                "deny": [
+                  "create_*",
+                  "update_*",
+                  "delete_*",
+                  "manage_*",
+                  "merge_*",
+                  "post_*",
+                  "retry_*",
+                  "cancel_*",
+                  "play_*",
+                  "push_*",
+                  "fork_*",
+                  "publish_*",
+                  "upload_*",
+                  "approve_*",
+                  "unapprove_*",
+                  "add_*",
+                  "remove_*"
+                ]
+              }
+            },
+            "read-write": {
+              "description": "Reads run freely; writes ask; merges need a human every time; deletes are refused.",
+              "tools": {
+                "confirm": [
+                  "merge_*"
+                ],
+                "deny": [
+                  "delete_*"
+                ]
+              }
+            }
+          },
+          "health_check": {
+            "tool": "get_mcp_server_version"
+          },
+          "revoke_url": "https://gitlab.com/-/user_settings/applications",
+          "notes": "Self-managed instances can switch off dynamic client registration; use the community variant there."
+        },
+        {
+          "id": "community",
+          "label": "Community server · token",
+          "server": "gitlab-community",
+          "description": "zereight/gitlab-mcp with a personal access token; any tier, self-managed too.",
+          "auth": {
+            "kind": "secrets",
+            "fields": [
+              {
+                "secret": "gitlab-pat",
+                "label": "GitLab personal access token",
+                "where_to_get": "https://gitlab.com/-/user_settings/personal_access_tokens",
+                "format_hint": "usually starts with glpat-",
+                "setup_steps": [
+                  "Open your GitLab → Edit profile → Access tokens → Add new token",
+                  "Read-only use: scope read_api. Read + write use: scope api",
+                  "Set an expiry date, create the token and paste it here"
+                ]
+              }
+            ]
+          },
+          "default_access_level": "read-only",
+          "access_levels": {
+            "read-only": {
+              "description": "Reads only: every tool that could change something is refused.",
+              "tools": {
+                "deny": [
+                  "create_*",
+                  "update_*",
+                  "delete_*",
+                  "manage_*",
+                  "merge_*",
+                  "post_*",
+                  "retry_*",
+                  "cancel_*",
+                  "play_*",
+                  "push_*",
+                  "fork_*",
+                  "publish_*",
+                  "upload_*",
+                  "approve_*",
+                  "unapprove_*",
+                  "add_*",
+                  "remove_*"
+                ]
+              },
+              "env": {
+                "GITLAB_PERMISSION_MODE": "readonly",
+                "GITLAB_READ_ONLY_MODE": "true"
+              }
+            },
+            "read-write": {
+              "description": "Reads run freely; writes ask; merges and pushes need a human every time; deletes are refused.",
+              "tools": {
+                "confirm": [
+                  "merge_*",
+                  "push_files"
+                ],
+                "deny": [
+                  "delete_*"
+                ]
+              }
+            }
+          },
+          "revoke_url": "https://gitlab.com/-/user_settings/personal_access_tokens"
+        }
+      ]
+    },
+    {
+      "id": "atlassian",
+      "name": "Jira & Confluence",
+      "aliases": [
+        "jira",
+        "confluence",
+        "rovo"
+      ],
+      "category": "project",
+      "description": "Jira issues and Confluence pages (Atlassian Cloud, or Server / Data Center through the community server).",
+      "homepage": "https://github.com/atlassian/atlassian-mcp-server",
+      "used_by_agents": [
+        "claude-code",
+        "codex"
+      ],
+      "products": [
+        {
+          "id": "jira",
+          "label": "Jira",
+          "tools": [
+            "*Jira*",
+            "getIssueLinkTypes",
+            "jira_*"
+          ]
+        },
+        {
+          "id": "confluence",
+          "label": "Confluence",
+          "tools": [
+            "*Confluence*",
+            "confluence_*"
+          ]
+        }
+      ],
+      "cross_product_tools": [
+        "search",
+        "fetch",
+        "discover",
+        "executeRead",
+        "executeWrite",
+        "executeDestructive"
+      ],
+      "variants": [
+        {
+          "id": "official",
+          "label": "Atlassian Rovo server · sign in",
+          "server": "atlassian",
+          "recommended": true,
+          "description": "Atlassian's official remote MCP server; you sign in in the browser.",
+          "auth": {
+            "kind": "oauth"
+          },
+          "default_access_level": "read-only",
+          "access_levels": {
+            "read-only": {
+              "description": "Reads only: every tool that could change something is refused.",
+              "tools": {
+                "deny": [
+                  "create*",
+                  "edit*",
+                  "update*",
+                  "add*",
+                  "transition*",
+                  "delete*",
+                  "executeWrite",
+                  "executeDestructive"
+                ]
+              }
+            },
+            "read-write": {
+              "description": "Reads run freely; writes ask; deletes are refused.",
+              "tools": {
+                "deny": [
+                  "delete*",
+                  "executeDestructive"
+                ]
+              }
+            }
+          },
+          "health_check": {
+            "tool": "atlassianUserInfo"
+          },
+          "revoke_url": "https://id.atlassian.com/manage-profile/apps",
+          "notes": "An organization admin may need to allow the connection (Atlassian Administration → Rovo → Rovo MCP server). Leaving a product out also blocks the cross-product tools (search, fetch, discover, execute*)."
+        },
+        {
+          "id": "token",
+          "label": "Atlassian Rovo server · API token",
+          "server": "atlassian-token",
+          "description": "The official server with your email and an API token instead of a browser sign-in.",
+          "auth": {
+            "kind": "basic",
+            "secret": "atlassian-mcp-basic",
+            "username_label": "Atlassian account email",
+            "password_label": "Atlassian API token",
+            "where_to_get": "https://id.atlassian.com/manage-profile/security/api-tokens",
+            "format_hint": "API tokens are long and usually start with ATATT",
+            "setup_steps": [
+              "Ask an organization admin to enable API token authentication for the Rovo MCP server",
+              "Open id.atlassian.com/manage-profile/security/api-tokens → Create API token",
+              "Give it a name and an expiry, copy it, and enter it here with your account email"
+            ]
+          },
+          "default_access_level": "read-only",
+          "access_levels": {
+            "read-only": {
+              "description": "Reads only: every tool that could change something is refused.",
+              "tools": {
+                "deny": [
+                  "create*",
+                  "edit*",
+                  "update*",
+                  "add*",
+                  "transition*",
+                  "delete*",
+                  "executeWrite",
+                  "executeDestructive"
+                ]
+              }
+            },
+            "read-write": {
+              "description": "Reads run freely; writes ask; deletes are refused.",
+              "tools": {
+                "deny": [
+                  "delete*",
+                  "executeDestructive"
+                ]
+              }
+            }
+          },
+          "health_check": {
+            "tool": "atlassianUserInfo"
+          },
+          "revoke_url": "https://id.atlassian.com/manage-profile/security/api-tokens"
+        },
+        {
+          "id": "community",
+          "label": "Community server · API token (Server / DC too)",
+          "server": "mcp-atlassian",
+          "description": "sooperset/mcp-atlassian, run locally with uvx; works with Cloud, Server and Data Center.",
+          "auth": {
+            "kind": "secrets",
+            "fields": [
+              {
+                "secret": "atlassian-api-token",
+                "label": "Atlassian API token",
+                "where_to_get": "https://id.atlassian.com/manage-profile/security/api-tokens",
+                "format_hint": "long opaque string",
+                "setup_steps": [
+                  "Open id.atlassian.com/manage-profile/security/api-tokens → Create API token",
+                  "Give it a name and an expiry, copy it and paste it here"
+                ]
+              }
+            ]
+          },
+          "default_access_level": "read-only",
+          "access_levels": {
+            "read-only": {
+              "description": "Reads only: every tool that could change something is refused.",
+              "tools": {
+                "deny": [
+                  "*_create_*",
+                  "*_update_*",
+                  "*_delete_*",
+                  "*_add_*",
+                  "*_transition_*",
+                  "*_link_*",
+                  "*_remove_*",
+                  "*_upload_*",
+                  "*_move_*",
+                  "*_batch_create_*"
+                ]
+              },
+              "env": {
+                "READ_ONLY_MODE": "true"
+              }
+            },
+            "read-write": {
+              "description": "Reads run freely; writes ask; deletes are refused.",
+              "tools": {
+                "deny": [
+                  "*_delete_*"
+                ]
+              }
+            }
+          },
+          "revoke_url": "https://id.atlassian.com/manage-profile/security/api-tokens"
+        }
+      ]
+    },
+    {
+      "id": "trello",
+      "name": "Trello",
+      "aliases": [],
+      "category": "project",
+      "description": "Boards, lists, cards and checklists on Trello.",
+      "homepage": "https://trello.com/mcp",
+      "used_by_agents": [
+        "claude-code",
+        "codex",
+        "hermes",
+        "openclaw"
+      ],
+      "variants": [
+        {
+          "id": "community",
+          "label": "Community server · API key",
+          "server": "trello-community",
+          "recommended": true,
+          "description": "delorenj/mcp-server-trello with a Trello API key and token.",
+          "auth": {
+            "kind": "secrets",
+            "fields": [
+              {
+                "secret": "trello-api-key",
+                "label": "Trello API key",
+                "where_to_get": "https://trello.com/power-ups/admin",
+                "format_hint": "32 hexadecimal characters",
+                "pattern": "^[0-9a-fA-F]{32}$",
+                "setup_steps": [
+                  "Open trello.com/power-ups/admin and create a Power-Up (any name, your workspace)",
+                  "Open its API key tab and generate a new API key",
+                  "Paste the API key here"
+                ]
+              },
+              {
+                "secret": "trello-token",
+                "label": "Trello token",
+                "where_to_get": "https://trello.com/power-ups/admin",
+                "format_hint": "long token, usually starting with ATTA",
+                "setup_steps": [
+                  "On the same API key page, follow the Token link and allow access",
+                  "Paste the token Trello shows"
+                ]
+              }
+            ]
+          },
+          "default_access_level": "read-only",
+          "access_levels": {
+            "read-only": {
+              "description": "Reads only: every tool that could change something is refused.",
+              "tools": {
+                "deny": [
+                  "add_*",
+                  "update_*",
+                  "archive_*",
+                  "delete_*",
+                  "move_*",
+                  "attach_*",
+                  "create_*"
+                ]
+              }
+            },
+            "read-write": {
+              "description": "Reads run freely; writes ask; deletes are refused.",
+              "tools": {
+                "deny": [
+                  "delete_*"
+                ]
+              }
+            }
+          },
+          "health_check": {
+            "tool": "list_boards"
+          },
+          "revoke_url": "https://trello.com/my/account"
+        },
+        {
+          "id": "official",
+          "label": "Trello official server · sign in (unverified)",
+          "server": "trello",
+          "description": "Atlassian's hosted Trello server. Unverified with Foreman: sign-in may fail.",
+          "auth": {
+            "kind": "oauth"
+          },
+          "default_access_level": "read-only",
+          "access_levels": {
+            "read-only": {
+              "description": "Best effort: the official server's tool names are not published, so writes are refused by name; anything unmatched still asks.",
+              "tools": {
+                "deny": [
+                  "*create*",
+                  "*update*",
+                  "*add*",
+                  "*move*",
+                  "*archive*",
+                  "*delete*",
+                  "*remove*",
+                  "*attach*",
+                  "*detach*",
+                  "*copy*",
+                  "*Create*",
+                  "*Update*",
+                  "*Add*",
+                  "*Move*",
+                  "*Archive*",
+                  "*Delete*",
+                  "*Remove*",
+                  "*Attach*",
+                  "*Detach*",
+                  "*Copy*"
+                ]
+              }
+            },
+            "read-write": {
+              "description": "Reads run freely; writes ask; deletes are refused.",
+              "tools": {
+                "deny": [
+                  "*delete*",
+                  "*Delete*"
+                ]
+              }
+            }
+          },
+          "revoke_url": "https://trello.com/my/account"
+        }
+      ]
+    },
+    {
+      "id": "linear",
+      "name": "Linear",
+      "aliases": [],
+      "category": "project",
+      "description": "Issues, projects, cycles and comments in Linear.",
+      "homepage": "https://linear.app/docs/mcp",
+      "used_by_agents": [
+        "claude-code",
+        "codex",
+        "hermes",
+        "openclaw"
+      ],
+      "health_check": {
+        "tool": "list_projects"
+      },
+      "variants": [
+        {
+          "id": "official",
+          "label": "Linear hosted server · sign in",
+          "server": "linear",
+          "recommended": true,
+          "description": "Linear's hosted MCP server; you sign in in the browser.",
+          "auth": {
+            "kind": "oauth"
+          },
+          "default_access_level": "read-only",
+          "access_levels": {
+            "read-only": {
+              "description": "Reads only: every tool that could change something is refused.",
+              "tools": {
+                "deny": [
+                  "create_*",
+                  "update_*",
+                  "delete_*",
+                  "save_*",
+                  "archive_*",
+                  "unarchive_*",
+                  "add_*",
+                  "remove_*",
+                  "set_*",
+                  "move_*"
+                ]
+              }
+            },
+            "read-write": {
+              "description": "Reads run freely; writes ask; deletes are refused.",
+              "tools": {
+                "deny": [
+                  "delete_*"
+                ]
+              }
+            }
+          },
+          "revoke_url": "https://linear.app/settings/account/security"
+        },
+        {
+          "id": "token",
+          "label": "Linear hosted server · API key",
+          "server": "linear-token",
+          "description": "The same server with a personal API key.",
+          "auth": {
+            "kind": "secrets",
+            "fields": [
+              {
+                "secret": "linear-api-key",
+                "label": "Linear API key",
+                "where_to_get": "https://linear.app/settings/account/security",
+                "format_hint": "starts with lin_api_",
+                "setup_steps": [
+                  "Open Linear → Settings → Security & access → Personal API keys → New API key",
+                  "Read-only use: give it only the Read permission",
+                  "Create the key and paste it here"
+                ]
+              }
+            ]
+          },
+          "default_access_level": "read-only",
+          "access_levels": {
+            "read-only": {
+              "description": "Reads only: every tool that could change something is refused.",
+              "tools": {
+                "deny": [
+                  "create_*",
+                  "update_*",
+                  "delete_*",
+                  "save_*",
+                  "archive_*",
+                  "unarchive_*",
+                  "add_*",
+                  "remove_*",
+                  "set_*",
+                  "move_*"
+                ]
+              }
+            },
+            "read-write": {
+              "description": "Reads run freely; writes ask; deletes are refused.",
+              "tools": {
+                "deny": [
+                  "delete_*"
+                ]
+              }
+            }
+          },
+          "revoke_url": "https://linear.app/settings/account/security"
+        }
+      ]
+    },
+    {
+      "id": "notion",
+      "name": "Notion",
+      "aliases": [],
+      "category": "docs",
+      "description": "Search, read and edit Notion pages and databases.",
+      "homepage": "https://developers.notion.com/guides/mcp/overview",
+      "used_by_agents": [
+        "claude-code",
+        "codex",
+        "hermes",
+        "openclaw"
+      ],
+      "variants": [
+        {
+          "id": "hosted",
+          "label": "Notion hosted server · sign in",
+          "server": "notion-hosted",
+          "recommended": true,
+          "description": "Notion's hosted MCP server; you sign in in the browser and it follows your own permissions.",
+          "auth": {
+            "kind": "oauth"
+          },
+          "default_access_level": "read-only",
+          "access_levels": {
+            "read-only": {
+              "description": "Reads only: every tool that could change something is refused.",
+              "tools": {
+                "deny": [
+                  "notion-create-*",
+                  "notion-update-*",
+                  "notion-move-*",
+                  "notion-duplicate-*",
+                  "notion-delete-*"
+                ]
+              }
+            },
+            "read-write": {
+              "description": "Reads run freely; writes ask; deletes are refused.",
+              "tools": {
+                "deny": [
+                  "notion-delete-*"
+                ]
+              }
+            }
+          },
+          "revoke_url": "https://www.notion.so/profile/integrations"
+        },
+        {
+          "id": "token",
+          "label": "Local server · integration token",
+          "server": "notion",
+          "description": "Notion's older self-hosted server with an internal integration token (no longer maintained by Notion).",
+          "auth": {
+            "kind": "secrets",
+            "fields": [
+              {
+                "secret": "notion-integration-token",
+                "label": "Notion integration secret",
+                "where_to_get": "https://www.notion.so/profile/integrations",
+                "format_hint": "starts with ntn_ or secret_",
+                "setup_steps": [
+                  "Open notion.so/profile/integrations → New integration (internal)",
+                  "Read-only use: give it only the Read content capability",
+                  "Copy the internal integration secret and paste it here",
+                  "Share the pages agents may use with the integration (••• → Connections)"
+                ]
+              }
+            ]
+          },
+          "default_access_level": "read-only",
+          "access_levels": {
+            "read-only": {
+              "description": "Reads only: every tool that could change something is refused.",
+              "tools": {
+                "deny": [
+                  "*patch*",
+                  "*post-page*",
+                  "*create*",
+                  "*update*",
+                  "*delete*",
+                  "*move*",
+                  "*append*"
+                ]
+              }
+            },
+            "read-write": {
+              "description": "Reads run freely; writes ask; deletes are refused.",
+              "tools": {
+                "deny": [
+                  "*delete*"
+                ]
+              }
+            }
+          },
+          "revoke_url": "https://www.notion.so/profile/integrations"
+        }
+      ]
+    }
+  ]
+}

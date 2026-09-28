@@ -22,6 +22,10 @@ import {
 } from "../core/registry-fetch.js";
 import { bold, dim, green, orange, red } from "./colors.js";
 import { loadBundledMcpCatalog, McpCatalogError } from "../core/mcp-hub/catalog.js";
+import {
+  IntegrationCatalogError,
+  loadBundledIntegrationCatalog,
+} from "../core/integrations/catalog.js";
 
 interface ListOptions {
   json?: boolean;
@@ -251,9 +255,19 @@ registryCommand
         console.log(
           green("✓") + ` MCP catalog valid — ${catalog.servers.length} servers`,
         );
+        // Integrations sit on top of both: every variant names an MCP
+        // server, and used_by_agents names agents from agents.json.
+        const integrations = loadBundledIntegrationCatalog({
+          mcp: catalog,
+          agentIds: new Set(doc.agents.map((a) => a.id)),
+        });
+        console.log(
+          green("✓") +
+            ` integration catalog valid — ${integrations.integrations.length} integrations`,
+        );
       }
     } catch (err) {
-      if (err instanceof McpCatalogError) {
+      if (err instanceof McpCatalogError || err instanceof IntegrationCatalogError) {
         console.error(red("error: ") + err.message);
         for (const issue of err.issues) {
           console.error(`  ${issue.path || "(root)"}: ${issue.message}`);

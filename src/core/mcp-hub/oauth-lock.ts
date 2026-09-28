@@ -36,6 +36,8 @@ export interface LockOptions {
   waitMs?: number;
   /** A lock older than this is broken even if its holder still runs. */
   staleMs?: number;
+  /** What the lock guards, for error messages (default: the OAuth session). */
+  label?: string;
 }
 
 /** Longest a holder keeps the lock: one token request (see oauth-http). */
@@ -45,13 +47,14 @@ export const LOCK_WAIT_MS = 30_000;
 export async function withLockFile<T>(path: string, fn: () => Promise<T>, opts: LockOptions = {}): Promise<T> {
   const waitMs = opts.waitMs ?? LOCK_WAIT_MS;
   const staleMs = opts.staleMs ?? LOCK_STALE_MS;
+  const label = opts.label ?? "the OAuth session lock";
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const token = `${process.pid}:${randomBytes(12).toString("hex")}`;
   const deadline = Date.now() + waitMs;
-  while (!tryCreate(path, token)) {
+  while (!tryCreate(path, token, label)) {
     breakIfStale(path, staleMs);
     if (Date.now() >= deadline) {
-      throw new McpOAuthError(`timed out waiting for the OAuth session lock (${path})`);
+      throw new McpOAuthError(`timed out waiting for ${label} (${path})`);
     }
     await delay(20 + Math.floor(Math.random() * 40));
   }
@@ -62,23 +65,23 @@ export async function withLockFile<T>(path: string, fn: () => Promise<T>, opts: 
   }
 }
 
-function tryCreate(path: string, token: string): boolean {
+function tryCreate(path: string, token: string, label: string): boolean {
   try {
     // O_CREAT | O_EXCL: fails on any existing entry, symlinks included.
     writeFileSync(path, token, { flag: "wx", mode: 0o600 });
     return true;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-      assertRegularFile(path);
+      assertRegularFile(path, label);
       return false;
     }
-    throw new McpOAuthError(`cannot create the OAuth session lock ${path}: ${(err as Error).message}`);
+    throw new McpOAuthError(`cannot create ${label} ${path}: ${(err as Error).message}`);
   }
 }
 
 /** A directory, symlink or device at the lock path is never ours to remove;
  *  fail at once instead of waiting on something that will never go away. */
-function assertRegularFile(path: string): void {
+function assertRegularFile(path: string, label: string): void {
   let isFile: boolean;
   try {
     isFile = lstatSync(path).isFile();
@@ -86,7 +89,7 @@ function assertRegularFile(path: string): void {
     return; // vanished meanwhile — the next attempt may succeed
   }
   if (!isFile) {
-    throw new McpOAuthError(`the OAuth session lock path ${path} is not a regular file — remove it`);
+    throw new McpOAuthError(`${label} path ${path} is not a regular file — remove it`);
   }
 }
 
