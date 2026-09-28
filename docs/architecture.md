@@ -39,6 +39,7 @@ Every subcommand lives in its own file under `src/cli/`. The root `src/cli/index
 | `foreman setup` | Interactive Ink wizard — LLM providers → Foreman's brain → agents → services (optional) → install + verify; policy review is offered on the Done screen. Re-runnable with `--resume` / `--reset`. |
 | `foreman start` | Detects fresh installs and runs the wizard inline, then mounts the gateway + TUI dashboard. `--no-onboarding` skips the wizard. |
 | `foreman daemon` | Runs the local daemon (below) without the TUI. `foreman start` runs it too. |
+| `foreman service install / uninstall / status` | Runs `foreman daemon --service` in the background at login: a LaunchAgent on macOS, a systemd user unit on Linux / WSL2 (`src/core/service.ts`). |
 | `foreman mcp-stdio --source <agent>` | Acts as an MCP server over stdio for the partner runtime. JSON-RPC `tools/list` + `tools/call` go through the mediator. The agent proves its id with `FOREMAN_AGENT_TOKEN`; without it the connection is `untrusted:<agent>`. |
 | `foreman wrap --name <id> -- <cmd>` | Spawns a child process under Foreman; intercepts its MCP-framed stdout, signs responses, audits every call. |
 | `foreman log tail / search / show` | Reads the audit log. FTS5-indexed; `search` queries the index, `tail` paginates, `show <id>` expands one row. |

@@ -148,6 +148,7 @@ import { launchEditor } from "../tui/launch-editor.js";
 import { getForemanPaths } from "../utils/config.js";
 import { runInit } from "./init.js";
 import {
+  DaemonAlreadyRunningError,
   DaemonUnavailableError,
   startHubDaemon,
   type HubDaemon,
@@ -369,6 +370,21 @@ export function startForeman(
         })
         .catch((err: unknown) => {
           const reason = err instanceof Error ? err.message : String(err);
+          if (err instanceof DaemonAlreadyRunningError) {
+            // The background service (`foreman service`) or a `foreman
+            // daemon` got there first: agents use it. Its approvals are
+            // DB-backed, so they still reach this TUI (ApprovalBridge).
+            inbox.add({
+              level: "info",
+              kind: "system",
+              title: "Agents use the Foreman daemon that is already running",
+              body:
+                `${reason} (the background service, or a \`foreman daemon\`). Agents and the hook keep using it; ` +
+                "their approvals still appear here. `foreman service status` shows the service.",
+              dedupeKey: "daemon-already-running",
+            });
+            return;
+          }
           inbox.add({
             level: err instanceof DaemonUnavailableError ? "info" : "warning",
             kind: "system",

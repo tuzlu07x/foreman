@@ -6,6 +6,34 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`foreman service install | uninstall | status`: the daemon at login**
+  ([docs/mcp-hub.md](docs/mcp-hub.md#run-the-daemon-at-login-foreman-service)).
+  Agents and the hook no longer need `foreman start` or `foreman daemon`
+  open in a terminal to use the daemon.
+  - macOS: a LaunchAgent (`~/Library/LaunchAgents/dev.foreman.daemon.plist`)
+    in your `gui/<uid>` domain, restarted on a crash, logging to
+    `<state dir>/daemon.log`. Linux and WSL2: a systemd user unit
+    (`~/.config/systemd/user/foreman-daemon.service`). Without systemd
+    (common on WSL) `install` says so and changes nothing. Native Windows
+    isn't supported.
+  - It runs the absolute paths of the Node binary and Foreman CLI you
+    installed it with, with your `FOREMAN_HOME` and PATH. Run `install`
+    again after upgrading Node or Foreman; `status` warns when a path is
+    gone.
+  - `foreman start` works alongside it: agents stay on the running daemon,
+    and their approvals still appear in the TUI (they go through the
+    database). When `foreman start` got there first, the service waits and
+    takes over when it quits.
+  - `foreman daemon --service` (what the service runs) exits 0 instead of
+    being restarted in a loop when it can't start for a reason a restart
+    won't fix.
+  - `foreman doctor`'s `daemon` row warns when the service is installed but
+    the daemon isn't running.
+  - The service file is 0644 in your own directory, never written through a
+    symlink or outside your home directory. The daemon's socket and token
+    are unchanged.
 ### Fixed
 
 - **The audit log names who decided an approval in Slack or Discord.**

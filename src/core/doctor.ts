@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { delimiter } from "node:path";
 import { FOREMAN_VERSION } from "../version.js";
 import { parse as parseYaml } from "yaml";
@@ -47,6 +48,7 @@ import {
 } from "./agent-wiring.js";
 import { getUpdateCachePath, isNewer } from "./update-check.js";
 import { trustedDaemonFiles } from "./daemon/client.js";
+import { installedServiceFile, serviceManagerFor } from "./service.js";
 import { daemonDisabled, daemonFiles, daemonSupported, MAX_SOCKET_PATH, NO_DAEMON_ENV } from "./daemon/protocol.js";
 
 export type CheckStatus = "ok" | "warn" | "fail";
@@ -1608,6 +1610,7 @@ export function checkMcpHub(): CheckResult {
 export function checkDaemon(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
+  home: string = homedir(),
 ): CheckResult {
   if (!daemonSupported(platform)) {
     return { name: "daemon", status: "ok", message: "not used on this platform — each agent runs Foreman in its own process" };
@@ -1628,7 +1631,24 @@ export function checkDaemon(
     };
   }
   if (!files.notable) {
-    return { name: "daemon", status: "ok", message: "not running — `foreman start` starts it; until then each agent decides in its own process" };
+    // Installed at login but not listening: it crashed, gave up, or points
+    // at a Node or Foreman that has moved (`foreman service status` says).
+    const manager = serviceManagerFor(platform);
+    const service = manager ? installedServiceFile(manager, home) : null;
+    if (service) {
+      return {
+        name: "daemon",
+        status: "warn",
+        message: `not running, though the background service is installed (${service}) — each agent decides in its own process`,
+        remediation: "Run `foreman service status` and check its log; `foreman service install` starts it again.",
+      };
+    }
+    return {
+      name: "daemon",
+      status: "ok",
+      message:
+        "not running — `foreman start` or `foreman service install` starts it; until then each agent decides in its own process",
+    };
   }
   return {
     name: "daemon",
