@@ -4,6 +4,7 @@ import {
   type LlmClient,
   type LlmResponse,
 } from "../client.js";
+import { costUsd, lookupPrice, type TokenPrice } from "../pricing.js";
 
 export interface OpenAIFetch {
   (
@@ -53,21 +54,48 @@ interface ModelQuirks {
   sendsTemperature: boolean;
 }
 
-const PRICING_USD_PER_MTOK: Record<string, { input: number; output: number }> =
-  {
-    "gpt-4o-mini": { input: 0.15, output: 0.6 },
-    "gpt-4o": { input: 2.5, output: 10 },
-    "gpt-4.1": { input: 2, output: 8 },
-    "gpt-4.1-mini": { input: 0.4, output: 1.6 },
-    "gpt-4.1-nano": { input: 0.1, output: 0.4 },
-    "gpt-5": { input: 1.25, output: 10 },
-    "gpt-5-mini": { input: 0.25, output: 2 },
-    "gpt-5-nano": { input: 0.05, output: 0.4 },
-    o1: { input: 15, output: 60 },
-    "o1-mini": { input: 3, output: 12 },
-    o3: { input: 2, output: 8 },
-    "o3-mini": { input: 1.1, output: 4.4 },
-  };
+// OpenAI standard-tier list prices, USD per million tokens
+// (https://developers.openai.com/api/docs/pricing, 2026-09-28).
+const PRICING_USD_PER_MTOK: Record<string, TokenPrice> = {
+  "gpt-6-astra": { input: 10, output: 50 },
+  "gpt-6-sol": { input: 2, output: 10 },
+  "gpt-6-luna": { input: 0.1, output: 0.5 },
+  "gpt-5.6-sol": { input: 4, output: 20 },
+  "gpt-5.6-terra": { input: 2, output: 12 },
+  "gpt-5.6-luna": { input: 0.2, output: 1.2 },
+  "gpt-5.5-pro": { input: 30, output: 180 },
+  "gpt-5.5": { input: 5, output: 30 },
+  "gpt-5.4-pro": { input: 30, output: 180 },
+  "gpt-5.4": { input: 2.5, output: 15 },
+  "gpt-5.4-mini": { input: 0.75, output: 4.5 },
+  "gpt-5.4-nano": { input: 0.2, output: 1.25 },
+  "gpt-5.2-pro": { input: 21, output: 168 },
+  "gpt-5.2": { input: 1.75, output: 14 },
+  "gpt-5.1": { input: 1.25, output: 10 },
+  "gpt-5-pro": { input: 15, output: 120 },
+  "gpt-5": { input: 1.25, output: 10 },
+  "gpt-5-mini": { input: 0.25, output: 2 },
+  "gpt-5-nano": { input: 0.05, output: 0.4 },
+  "gpt-4.1": { input: 2, output: 8 },
+  "gpt-4.1-mini": { input: 0.4, output: 1.6 },
+  "gpt-4.1-nano": { input: 0.1, output: 0.4 },
+  "gpt-4o-2024-05-13": { input: 5, output: 15 },
+  "gpt-4o": { input: 2.5, output: 10 },
+  "gpt-4o-mini": { input: 0.15, output: 0.6 },
+  "o1-pro": { input: 150, output: 600 },
+  o1: { input: 15, output: 60 },
+  "o1-mini": { input: 3, output: 12 },
+  "o3-pro": { input: 20, output: 80 },
+  o3: { input: 2, output: 8 },
+  "o3-mini": { input: 1.1, output: 4.4 },
+  "o4-mini": { input: 1.1, output: 4.4 },
+};
+
+// A model missing from the table is billed like the most expensive current
+// model of its kind, so the budget can't be outrun by a model we haven't
+// priced: a `-pro` model like gpt-5.5-pro, anything else like gpt-6-astra.
+const UNKNOWN_MODEL_PRICE: TokenPrice = { input: 10, output: 50 };
+const UNKNOWN_PRO_MODEL_PRICE: TokenPrice = { input: 30, output: 180 };
 
 const DEFAULT_API_BASE = "https://api.openai.com";
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -237,17 +265,10 @@ export function calculateCostUsd(
   inputTokens: number,
   outputTokens: number,
 ): number {
-  const pricing = PRICING_USD_PER_MTOK[model];
-  if (!pricing) {
-    const fallback = PRICING_USD_PER_MTOK["gpt-4o-mini"]!;
-    return (
-      (inputTokens * fallback.input + outputTokens * fallback.output) /
-      1_000_000
-    );
-  }
-  return (
-    (inputTokens * pricing.input + outputTokens * pricing.output) / 1_000_000
-  );
+  const price =
+    lookupPrice(PRICING_USD_PER_MTOK, model) ??
+    (/-pro\b/i.test(model) ? UNKNOWN_PRO_MODEL_PRICE : UNKNOWN_MODEL_PRICE);
+  return costUsd(price, inputTokens, outputTokens);
 }
 
 export const _PRICING_USD_PER_MTOK = PRICING_USD_PER_MTOK;

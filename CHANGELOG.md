@@ -6,6 +6,15 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **LLM budget pricing.** A model missing from Foreman's price table was
+  billed at the provider's cheapest rate: Claude Opus 5 or Fable at Haiku
+  prices, gpt-5.x at gpt-4o-mini, Gemini 2.5 and 3.x at 2.0 Flash, so the
+  hard budget cap tripped 5 to 60 times too late. The tables now carry the
+  current models' list prices, and an unknown model is billed at the
+  provider's most expensive current rate, so a budget never runs over.
+  Claude Opus 4.5 to 4.8 are billed at $5 / $25, not $15 / $75.
+
 ## [2.0.0] - 2026-09-28
 
 The first release since 0.1.6. The version jumps to 2.0.0 because several

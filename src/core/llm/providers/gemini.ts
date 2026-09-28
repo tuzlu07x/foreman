@@ -4,6 +4,7 @@ import {
   type LlmClient,
   type LlmResponse,
 } from "../client.js";
+import { costUsd, lookupPrice, type TokenPrice } from "../pricing.js";
 
 // =============================================================================
 // Google Gemini client (#295 / v0.1.0)
@@ -54,15 +55,33 @@ interface GeminiResponse {
   error?: { code?: number; message?: string; status?: string };
 }
 
-const PRICING_USD_PER_MTOK: Record<string, { input: number; output: number }> =
-  {
-    "gemini-2.0-flash": { input: 0.1, output: 0.4 },
-    "gemini-2.0-flash-lite": { input: 0.075, output: 0.3 },
-    "gemini-2.0-pro": { input: 1.25, output: 5 },
-    "gemini-1.5-flash": { input: 0.075, output: 0.3 },
-    "gemini-1.5-flash-8b": { input: 0.0375, output: 0.15 },
-    "gemini-1.5-pro": { input: 1.25, output: 5 },
-  };
+// Gemini API paid-tier list prices for prompts up to 200k tokens, USD per
+// million tokens (https://ai.google.dev/gemini-api/docs/pricing, 2026-09-28).
+// Gemini 3.6-3.8 Flash cost $0.75 / $3.75 until 2026-12-31 and twice that
+// from 2027; the table uses the regular price so a budget never runs over.
+const PRICING_USD_PER_MTOK: Record<string, TokenPrice> = {
+  "gemini-3.8-flash": { input: 1.5, output: 7.5 },
+  "gemini-3.7-flash": { input: 1.5, output: 7.5 },
+  "gemini-3.6-flash": { input: 1.5, output: 7.5 },
+  "gemini-3.5-flash": { input: 1.5, output: 9 },
+  "gemini-3.5-flash-lite": { input: 0.3, output: 2.5 },
+  "gemini-3.1-flash-lite": { input: 0.25, output: 1.5 },
+  "gemini-3.1-pro": { input: 2, output: 12 },
+  "gemini-2.5-pro": { input: 1.25, output: 10 },
+  "gemini-2.5-flash": { input: 0.3, output: 2.5 },
+  "gemini-2.5-flash-lite": { input: 0.1, output: 0.4 },
+  "gemini-2.0-flash": { input: 0.1, output: 0.4 },
+  "gemini-2.0-flash-lite": { input: 0.075, output: 0.3 },
+  "gemini-2.0-pro": { input: 1.25, output: 5 },
+  "gemini-1.5-flash": { input: 0.075, output: 0.3 },
+  "gemini-1.5-flash-8b": { input: 0.0375, output: 0.15 },
+  "gemini-1.5-pro": { input: 1.25, output: 5 },
+};
+
+// A model missing from the table is billed like the most expensive current
+// one (Gemini 3.1 Pro), so the budget can't be outrun by a model we haven't
+// priced.
+const UNKNOWN_MODEL_PRICE: TokenPrice = { input: 2, output: 12 };
 
 const DEFAULT_API_BASE = "https://generativelanguage.googleapis.com";
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -167,17 +186,8 @@ export function calculateCostUsd(
   inputTokens: number,
   outputTokens: number,
 ): number {
-  const pricing = PRICING_USD_PER_MTOK[model];
-  if (!pricing) {
-    const fallback = PRICING_USD_PER_MTOK["gemini-2.0-flash"]!;
-    return (
-      (inputTokens * fallback.input + outputTokens * fallback.output) /
-      1_000_000
-    );
-  }
-  return (
-    (inputTokens * pricing.input + outputTokens * pricing.output) / 1_000_000
-  );
+  const price = lookupPrice(PRICING_USD_PER_MTOK, model) ?? UNKNOWN_MODEL_PRICE;
+  return costUsd(price, inputTokens, outputTokens);
 }
 
 export const _PRICING_USD_PER_MTOK = PRICING_USD_PER_MTOK;

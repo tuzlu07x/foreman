@@ -8,7 +8,7 @@ This doc covers the **C7-1 foundation slice**: config, Anthropic client, budget 
 
 ## 1. The pitch
 
-Heuristic detection (C1–C6) is fast, free, and false-positive-prone — a paraphrased prompt-injection or a base64-encoded shell payload slips past regex. An LLM call can read context and decide *"is this actually phishing?"* without coding every variation into a pattern.
+Heuristic detection (C1–C6) is fast, free, and false-positive-prone — a paraphrased prompt-injection or a base64-encoded shell payload slips past regex. An LLM call can read context and decide _"is this actually phishing?"_ without coding every variation into a pattern.
 
 Foreman keeps this **opt-in** because (a) it costs money, (b) it adds latency, (c) some users don't want their tool args sent to a third-party model. When you turn it on, every call is logged with cost so you can see what it's spending.
 
@@ -19,30 +19,30 @@ Foreman keeps this **opt-in** because (a) it costs money, (b) it adds latency, (
 `llm.yaml` lives in Foreman's config directory, next to `policy.yaml`: `~/.config/foreman/` on Linux (`$XDG_CONFIG_HOME/foreman/` if set), `~/Library/Application Support/foreman/` on macOS, or `$FOREMAN_HOME` if you set it. See [install.md](install.md#platform-notes).
 
 ```yaml
-enabled: false                  # global kill-switch
-provider: anthropic             # which provider Foreman calls
+enabled: false # global kill-switch
+provider: anthropic # which provider Foreman calls
 model: claude-haiku-4-5-20251001 # cheapest current Claude
 
 features:
-  verification: false           # C8 — second-opinion on heuristic-flagged calls
-  smart_report: false           # C9 — human-readable approval narratives
-  policy_suggestions: false     # future — propose rule changes from audit log
+  verification: false # C8 — second-opinion on heuristic-flagged calls
+  smart_report: false # C9 — human-readable approval narratives
+  policy_suggestions: false # future — propose rule changes from audit log
 
 budget:
-  monthly_cap_usd: 5.00         # hard ceiling — Foreman refuses calls when exceeded
-  alert_threshold_pct: 80       # alert when 80% of cap is spent
-  reset_day_of_month: 1         # billing window rolls over on the 1st
+  monthly_cap_usd: 5.00 # hard ceiling — Foreman refuses calls when exceeded
+  alert_threshold_pct: 80 # alert when 80% of cap is spent
+  reset_day_of_month: 1 # billing window rolls over on the 1st
 
 credentials:
   anthropic:
-    secret_name: anthropic-key  # foreman secrets add anthropic-key
+    secret_name: anthropic-key # foreman secrets add anthropic-key
   openai:
     secret_name: openai-key
   gemini:
     secret_name: gemini-key
   ollama:
     endpoint: http://localhost:11434
-    secret_name: null           # local — no key
+    secret_name: null # local — no key
   openai_compatible:
     endpoint_secret: openai-compatible-endpoint
     key_secret: openai-compatible-api-key
@@ -70,11 +70,13 @@ credentials:
    foreman llm enable smart_report
    ```
 5. Smoke-test:
+
    ```bash
    foreman llm test
    ```
 
    Expected output:
+
    ```
    ✓ anthropic responded in 487ms
      reply      pong
@@ -131,12 +133,12 @@ Foreman can authenticate to its own orchestrator LLM either with an **API key** 
 
 ### Why pick which
 
-| | API key | OAuth (subscription) |
-|---|---|---|
-| Who pays | Your Anthropic / OpenAI API budget | Your Claude / ChatGPT subscription |
-| Rate limits | Standard per-API-key tier | Your subscription's plan limits |
-| Setup | Paste a key | Sign in once with a browser |
-| `costUsd` in usage | Real $/token | `0` (subscription billing) |
+|                    | API key                            | OAuth (subscription)               |
+| ------------------ | ---------------------------------- | ---------------------------------- |
+| Who pays           | Your Anthropic / OpenAI API budget | Your Claude / ChatGPT subscription |
+| Rate limits        | Standard per-API-key tier          | Your subscription's plan limits    |
+| Setup              | Paste a key                        | Sign in once with a browser        |
+| `costUsd` in usage | Real $/token                       | `0` (subscription billing)         |
 
 If you already have a Claude Max or ChatGPT Pro/Plus plan, OAuth lets Foreman draw from that plan instead of asking you to top up a separate API credit balance.
 
@@ -197,17 +199,17 @@ The OAuth client IDs, endpoints, headers, and the mandatory Claude Code identity
 
 Every `LlmClient.call()` writes a row to `llm_usage`:
 
-| Column | Meaning |
-|---|---|
-| `id` | ULID |
-| `ts` | Wall-clock ms |
-| `provider` / `model` | What was called |
-| `feature` | Which feature triggered it (`verification` / `smart_report` / `test`) |
-| `input_tokens` / `output_tokens` | From the provider's response |
-| `cost_usd` | Computed from a per-model pricing table |
-| `request_id` | Link to `requests.id` when the call is about a specific tool call |
-| `duration_ms` | Wall-clock latency |
-| `cache_hit` | 1 when served from local cache (cost_usd = 0) |
+| Column                           | Meaning                                                               |
+| -------------------------------- | --------------------------------------------------------------------- |
+| `id`                             | ULID                                                                  |
+| `ts`                             | Wall-clock ms                                                         |
+| `provider` / `model`             | What was called                                                       |
+| `feature`                        | Which feature triggered it (`verification` / `smart_report` / `test`) |
+| `input_tokens` / `output_tokens` | From the provider's response                                          |
+| `cost_usd`                       | Computed from a per-model pricing table                               |
+| `request_id`                     | Link to `requests.id` when the call is about a specific tool call     |
+| `duration_ms`                    | Wall-clock latency                                                    |
+| `cache_hit`                      | 1 when served from local cache (cost_usd = 0)                         |
 
 **`assertBudget(db, config)`** is called by C8/C9 right before invoking the LLM — throws `LlmBudgetExceededError` when the cumulative cost in the current window crosses the cap. The cap is a HARD STOP; alerts trip at the percentage threshold but don't block calls.
 
@@ -217,40 +219,43 @@ Every `LlmClient.call()` writes a row to `llm_usage`:
 
 ## 6. Cost transparency
 
-Pricing is hardcoded per model (refresh quarterly as Anthropic updates [pricing](https://www.anthropic.com/pricing)). Current table:
+Pricing is kept per model in each provider client (`src/core/llm/providers/*.ts`), checked against the providers' price pages. The Anthropic rows:
 
-| Model | Input ($/MTok) | Output ($/MTok) |
-|---|---|---|
-| claude-haiku-4-5 (default) | $1 | $5 |
-| claude-sonnet-4-6 | $3 | $15 |
-| claude-opus-4-7 | $15 | $75 |
+| Model                             | Input ($/MTok) | Output ($/MTok) |
+| --------------------------------- | -------------- | --------------- |
+| claude-haiku-4-5 (default)        | $1             | $5              |
+| claude-sonnet-5                   | $2             | $10             |
+| claude-sonnet-4-6 / 4-5           | $3             | $15             |
+| claude-opus-5-5                   | $4             | $20             |
+| claude-opus-5, 4-8, 4-7, 4-6, 4-5 | $5             | $25             |
+| claude-fable-5-1 / fable-5        | $10            | $50             |
 
 A typical verification call: ~500 input + ~100 output tokens = $0.001 with Haiku. At a $5/month cap, that's ~5,000 verifications per month.
 
-Unknown models (a future Claude release before we update the table) fall back to **Haiku pricing as a conservative floor** so we never silently under-bill.
+A dated snapshot (`claude-haiku-4-5-20251001`) is priced like its model. A model missing from the table (a release newer than your Foreman) is billed at the provider's most expensive current price (Fable for Anthropic), so the budget may run out early but never runs over. Update Foreman to get the new model's real price. Calls through a Claude or ChatGPT subscription (OAuth) cost $0 against the budget.
 
 ---
 
 ## 7. Security model
 
-| Threat | Mitigation |
-|---|---|
-| **Leaked API key** in config | Keys live in Foreman's encrypted secret store (AES-256-GCM at rest). `llm.yaml` only carries a **reference** to the secret name. |
-| **Cost runaway** | Hard `monthly_cap_usd` ceiling. `assertBudget()` throws before every call. Alert at `alert_threshold_pct`. |
+| Threat                                | Mitigation                                                                                                                                                                                                                |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Leaked API key** in config          | Keys live in Foreman's encrypted secret store (AES-256-GCM at rest). `llm.yaml` only carries a **reference** to the secret name.                                                                                          |
+| **Cost runaway**                      | Hard `monthly_cap_usd` ceiling. `assertBudget()` throws before every call. Alert at `alert_threshold_pct`.                                                                                                                |
 | **Sensitive args leaked to provider** | Verification + smart-report consumers (C8/C9) decide what to send. v0.1 sends only the factor list + tool name; raw args go to the LLM only when the user opts in via `smart_report.include_args: true` (deferred to C9). |
-| **Provider downtime** | `LlmProviderError` bubbles up; consumers can fall back to heuristic-only behavior (current default — no LLM calls at all). |
+| **Provider downtime**                 | `LlmProviderError` bubbles up; consumers can fall back to heuristic-only behavior (current default — no LLM calls at all).                                                                                                |
 
 ---
 
 ## 8. Sub-issue plan (C7 → C10)
 
-| Issue | Scope | Status |
-|---|---|---|
-| **C7-1** (this PR) | Foundation: config + Anthropic client + budget + CLI + migration + doctor | shipped |
-| C7-2 | OpenAI / Gemini / Ollama / OpenAI-compatible clients + wizard Step 5 | follow-up |
-| C8 #231 | Verification consumer — second-opinion on heuristic-flagged calls | next |
-| C9 #232 | Smart report consumer — three-layer human-readable approval modal | follow-up |
-| C10 #233 | Budget alerts pushed via OOB notifications (uses `routing.budget_alert` from #235) | follow-up |
+| Issue              | Scope                                                                              | Status    |
+| ------------------ | ---------------------------------------------------------------------------------- | --------- |
+| **C7-1** (this PR) | Foundation: config + Anthropic client + budget + CLI + migration + doctor          | shipped   |
+| C7-2               | OpenAI / Gemini / Ollama / OpenAI-compatible clients + wizard Step 5               | follow-up |
+| C8 #231            | Verification consumer — second-opinion on heuristic-flagged calls                  | next      |
+| C9 #232            | Smart report consumer — three-layer human-readable approval modal                  | follow-up |
+| C10 #233           | Budget alerts pushed via OOB notifications (uses `routing.budget_alert` from #235) | follow-up |
 
 ---
 
@@ -281,6 +286,7 @@ Default threshold = **30** (medium-bucket floor). Anything below is low-confiden
 ### Prompt template
 
 The verifier sends a structured prompt with:
+
 - Source agent + responsibility note
 - Target agent + tool + JSON args
 - Heuristic factors with signs + points + reasons
@@ -311,11 +317,21 @@ The verifier sends a structured prompt with:
 
 ```ts
 function combineAssessment(heuristic, llm) {
-  if (!llm || llm.skipped) return heuristic
-  const adjustedScore = clamp(heuristic.totalScore + llm.additional_risk_score, 0, 100)
+  if (!llm || llm.skipped) return heuristic;
+  const adjustedScore = clamp(
+    heuristic.totalScore + llm.additional_risk_score,
+    0,
+    100,
+  );
   const recommendation =
-    llm.confidence >= 0.7 ? llm.recommended_action : heuristic.recommendation
-  return { ...heuristic, totalScore: adjustedScore, bucket: bucketFor(adjustedScore), recommendation, llmVerification: llm }
+    llm.confidence >= 0.7 ? llm.recommended_action : heuristic.recommendation;
+  return {
+    ...heuristic,
+    totalScore: adjustedScore,
+    bucket: bucketFor(adjustedScore),
+    recommendation,
+    llmVerification: llm,
+  };
 }
 ```
 
@@ -333,12 +349,12 @@ Identical patterns within 5 minutes reuse the prior verdict — no extra LLM cal
 
 Every failure mode returns a `skipped` shell rather than throwing — the mediator continues with the heuristic-only assessment:
 
-| Reason | When |
-|---|---|
-| `feature_disabled` | global off OR `features.verification: false` |
-| `below_threshold` | heuristic score < verification threshold (default 30) |
-| `budget_exhausted` | monthly cap reached — `assertBudget()` would throw |
-| `llm_error` | provider HTTP error OR malformed JSON response |
+| Reason             | When                                                  |
+| ------------------ | ----------------------------------------------------- |
+| `feature_disabled` | global off OR `features.verification: false`          |
+| `below_threshold`  | heuristic score < verification threshold (default 30) |
+| `budget_exhausted` | monthly cap reached — `assertBudget()` would throw    |
+| `llm_error`        | provider HTTP error OR malformed JSON response        |
 
 Heuristic-only behavior is **identical** to running without verification — the modal still opens, factors render, user decides.
 

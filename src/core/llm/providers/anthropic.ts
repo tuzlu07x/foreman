@@ -4,6 +4,7 @@ import {
   type LlmClient,
   type LlmResponse,
 } from "../client.js";
+import { costUsd, lookupPrice, type TokenPrice } from "../pricing.js";
 import type { AccessTokenProvider } from "../oauth/token-refresh.js";
 
 // =============================================================================
@@ -60,14 +61,32 @@ interface AnthropicMessageResponse {
   error?: { type: string; message: string };
 }
 
-const PRICING_USD_PER_MTOK: Record<string, { input: number; output: number }> =
-  {
-    "claude-opus-4-8": { input: 15, output: 75 },
-    "claude-opus-4-7": { input: 15, output: 75 },
-    "claude-sonnet-4-6": { input: 3, output: 15 },
-    "claude-haiku-4-5": { input: 1, output: 5 },
-    "claude-haiku-4-5-20251001": { input: 1, output: 5 },
-  };
+// Anthropic API list prices, USD per million tokens
+// (https://platform.claude.com/docs/en/about-claude/pricing, 2026-09-28).
+const PRICING_USD_PER_MTOK: Record<string, TokenPrice> = {
+  "claude-fable-5-1": { input: 10, output: 50 },
+  "claude-fable-5": { input: 10, output: 50 },
+  "claude-mythos-5-1": { input: 10, output: 50 },
+  "claude-mythos-5": { input: 10, output: 50 },
+  "claude-opus-5-5": { input: 4, output: 20 },
+  "claude-opus-5": { input: 5, output: 25 },
+  "claude-opus-4-8": { input: 5, output: 25 },
+  "claude-opus-4-7": { input: 5, output: 25 },
+  "claude-opus-4-6": { input: 5, output: 25 },
+  "claude-opus-4-5": { input: 5, output: 25 },
+  "claude-opus-4-1": { input: 15, output: 75 },
+  "claude-opus-4": { input: 15, output: 75 },
+  "claude-sonnet-5": { input: 2, output: 10 },
+  "claude-sonnet-4-6": { input: 3, output: 15 },
+  "claude-sonnet-4-5": { input: 3, output: 15 },
+  "claude-sonnet-4": { input: 3, output: 15 },
+  "claude-haiku-4-5": { input: 1, output: 5 },
+  "claude-3-5-haiku": { input: 0.8, output: 4 },
+};
+
+// A model missing from the table is billed like the most expensive current
+// one (Fable), so the budget can't be outrun by a model we haven't priced.
+const UNKNOWN_MODEL_PRICE: TokenPrice = { input: 10, output: 50 };
 
 const DEFAULT_API_BASE = "https://api.anthropic.com";
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -219,17 +238,8 @@ export function calculateCostUsd(
   inputTokens: number,
   outputTokens: number,
 ): number {
-  const pricing = PRICING_USD_PER_MTOK[model];
-  if (!pricing) {
-    const fallback = PRICING_USD_PER_MTOK["claude-haiku-4-5"]!;
-    return (
-      (inputTokens * fallback.input + outputTokens * fallback.output) /
-      1_000_000
-    );
-  }
-  return (
-    (inputTokens * pricing.input + outputTokens * pricing.output) / 1_000_000
-  );
+  const price = lookupPrice(PRICING_USD_PER_MTOK, model) ?? UNKNOWN_MODEL_PRICE;
+  return costUsd(price, inputTokens, outputTokens);
 }
 
 export const _PRICING_USD_PER_MTOK = PRICING_USD_PER_MTOK;
