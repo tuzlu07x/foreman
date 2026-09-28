@@ -14,6 +14,7 @@ import type {
 } from "../core/foreman-command.js";
 import type { InboxService } from "../core/inbox.js";
 import type { WizardOauthRunStep } from "./setup-wizard.js";
+import type { IntegrationWiring } from "../core/integrations/wiring.js";
 
 export interface DashboardServices {
   db: ForemanDb;
@@ -43,6 +44,8 @@ export interface DashboardServices {
   commandContext?: Omit<ForemanCommandContext, "sourceAgent" | "sourceUser" | "trustedOwner">;
   audit?: { logEvent(eventType: string, payload: unknown): void };
   orgConfigPath?: string;
+  /** Integrations page (`foreman integrations` in the TUI). */
+  integrations?: IntegrationWiring;
 }
 
 const DashboardContext = createContext<DashboardServices | null>(null);

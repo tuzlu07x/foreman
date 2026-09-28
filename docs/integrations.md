@@ -31,6 +31,10 @@ foreman integrations list
 If a step fails, the integration stays disabled and Foreman tells you the
 command that finishes it (`login`, `review`, `enable`).
 
+The same flow is on the TUI's Integrations page (`i` in `foreman start`):
+`n` adds, `space` enables or disables, `e` edits, `t` sets per-tool rules,
+`r` reviews and `d` removes.
+
 In a script, give the audience and pipe the token:
 
 ```bash

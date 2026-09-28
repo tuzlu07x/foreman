@@ -34,7 +34,7 @@ These work on every page, unless you are typing into a field:
 | --- | --- |
 | `:` | open the [command console](#command-console) |
 | `Tab` / `Shift+Tab` | next / previous page |
-| `n` | the [inbox](#inbox), except on Keys, Providers and Services, where `n` means "new" |
+| `n` | the [inbox](#inbox), except on Keys, Providers, Services and Integrations, where `n` means "new" |
 | `Esc` | back to Home |
 | `q` / `Ctrl-C` | quit: at once, or after a `y` / `n` question while approvals are waiting |
 
@@ -47,7 +47,8 @@ On the Home page:
 | `s` | Sessions | `V` | Services (Telegram, GitHub, … tokens) |
 | `d` | Delegations | `g` | Settings |
 | `l` | Logs | `c` | Test (send a test call as an agent) |
-| `p` | Policy | `?` / `h` | help |
+| `p` | Policy | `i` | [Integrations](integrations.md) (GitHub, GitLab, Jira, Trello, Linear, Notion) |
+|  |  | `?` / `h` | help |
 
 `/` also opens the console on Home.
 
@@ -62,6 +63,7 @@ Keys on each page:
 | Delegations | `↑↓` select, `Enter` details |
 | Keys | `↑↓` select, `Enter` details, `n` new secret, `v` reveal, `r` rotate, `d` delete |
 | Providers, Services | `↑↓` select, `Enter` details, `n` configure the selected one, `r` rotate, `d` remove (asks first), `s` show the value for 10 s; `o` sign in with a Claude / ChatGPT subscription (Providers), `w` setup walkthrough (Services) |
+| Integrations | `↑↓` select, `Enter` details (credentials, sign-in, which agents may use it), `n` add (variant, access level, who, token or browser sign-in, then review and enable), `space` enable / disable, `e` edit (access level, who, replace a credential, sign in again), `t` tools (`←→` sets a per-tool rule), `r` review, `o` sign in, `d` remove (asks first; `Enter` cancels) |
 | Settings | `↑↓` select, `Enter` open, `e` edit `SOUL.md`, `p` edit `policy.yaml`, `P` Policy page, `w` how to re-run the wizard |
 | Test | `←→` pick the source agent, `i` type a request, `Enter` send |
 
@@ -173,7 +175,7 @@ restarts:
 
 ![Inbox](images/tui-inbox.png)
 
-`n` opens it from any page except Keys, Providers and Services (there `n`
+`n` opens it from any page except Keys, Providers, Services and Integrations (there `n`
 means "new"; press `Esc`, then `n`). New warnings pop up as a one-line
 toast on whatever page you're on. On the inbox page: `↑↓` select, `Enter` details,
 `r` mark read, `R` mark all read, `f` filter (all, unread, warnings).

@@ -41,6 +41,7 @@ const NAV_SECTIONS: HelpSection[] = [
       { key: "d", label: "Delegations" },
       { key: "v", label: "Providers" },
       { key: "V", label: "Services" },
+      { key: "i", label: "Integrations" },
       { key: "k", label: "Secrets / keys" },
       { key: "l", label: "Logs" },
       { key: "p", label: "Policy" },
@@ -95,6 +96,18 @@ const PAGE_SECTIONS: HelpSection[] = [
       { key: "d", label: "remove" },
       { key: "s", label: "show value (10s)" },
       { key: "w", label: "open walkthrough" },
+    ],
+  },
+  {
+    title: "Integrations page",
+    rows: [
+      { key: "n", label: "add, review, enable" },
+      { key: "space", label: "enable / disable" },
+      { key: "e", label: "edit access, who, keys" },
+      { key: "t", label: "tools: ←→ set a rule" },
+      { key: "r", label: "review (pin) tools" },
+      { key: "o", label: "sign in again" },
+      { key: "d", label: "remove" },
     ],
   },
 ];

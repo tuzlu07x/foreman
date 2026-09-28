@@ -79,6 +79,8 @@ import { SetupWizard, type WizardOauthRunStep } from "../tui/setup-wizard.js";
 import { runOauthFlows } from "./run-oauth-flow.js";
 import { runLoginWithSuspendedTui } from "../tui/run-login-in-tui.js";
 import { SecretStore } from "../core/secret-store.js";
+import type { IntegrationAuditSink } from "../core/integrations/service.js";
+import { createIntegrationWiring, type IntegrationWiring } from "../core/integrations/wiring.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import {
   approvalButtonSigner,
@@ -662,6 +664,7 @@ export function startForeman(
           commandContext,
           audit,
           orgConfigPath: paths.orgConfigPath,
+          ...integrationsForTui(secretStore, audit),
         },
       }),
       { exitOnCtrlC: false },
@@ -1665,6 +1668,19 @@ async function runOnboardingWizard(): Promise<boolean> {
 export function rememberSetupSkipped(): void {
   const state = loadSetupState();
   if (!hasUserOptedOut(state)) saveSetupState(markSetupSkipped(state));
+}
+
+/** The Integrations page's service; the TUI still starts when the bundled
+ *  catalog can't be read (the page then says integrations are unavailable). */
+function integrationsForTui(
+  store: SecretStore,
+  audit: IntegrationAuditSink,
+): { integrations?: IntegrationWiring } {
+  try {
+    return { integrations: createIntegrationWiring({ paths: getForemanPaths(), store, audit }) };
+  } catch {
+    return {};
+  }
 }
 
 export type StartChoice = "setup" | "skip" | "quit";

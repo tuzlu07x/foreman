@@ -3,14 +3,7 @@ import { createInterface } from "node:readline";
 import { Command } from "commander";
 import { AuditLogger } from "../core/audit.js";
 import { EventBus, type ForemanEventMap } from "../core/event-bus.js";
-import {
-  findIntegration,
-  findVariant,
-  loadBundledIntegrationCatalog,
-  type IntegrationCatalog,
-  type IntegrationEntry,
-  type IntegrationVariant,
-} from "../core/integrations/catalog.js";
+import { findIntegration, findVariant, type IntegrationCatalog, type IntegrationEntry, type IntegrationVariant } from "../core/integrations/catalog.js";
 import { integrationServers } from "../core/integrations/resolve.js";
 import {
   IntegrationNotReadyError,
@@ -20,14 +13,11 @@ import {
 } from "../core/integrations/service.js";
 import { describeAccess, type IntegrationStatus } from "../core/integrations/status.js";
 import { reviewIntegration, testIntegration, type HubFactory } from "../core/integrations/verify.js";
-import { hubOAuthSessions, mcpOAuthLockPath, scopeForAgent } from "../core/mcp-hub/boot.js";
-import { findCatalogEntry, loadBundledMcpCatalog, type McpCatalog } from "../core/mcp-hub/catalog.js";
+import { createIntegrationWiring, loadIntegrationCatalogs } from "../core/integrations/wiring.js";
+import { scopeForAgent } from "../core/mcp-hub/boot.js";
+import { findCatalogEntry, type McpCatalog } from "../core/mcp-hub/catalog.js";
 import { toolRuleLevel, type AccessLevelId, type HubConfig } from "../core/mcp-hub/config.js";
-import { McpHub } from "../core/mcp-hub/hub.js";
 import { describeMcpOAuthStatus } from "../core/mcp-hub/oauth-store.js";
-import { removeMcpOAuthSession, revokeMcpOAuthTokens } from "../core/mcp-hub/oauth-session.js";
-import { ToolPinStore } from "../core/mcp-hub/pins.js";
-import { loadBundledRegistry } from "../core/registry-catalog.js";
 import { RegistryService } from "../core/registry.js";
 import { SecretStore } from "../core/secret-store.js";
 import { closeDb, getDb } from "../db/client.js";
@@ -653,12 +643,7 @@ function levelFrom(opts: LevelFlags): AccessLevelId | undefined {
 }
 
 function catalogs(): { mcp: McpCatalog; integrations: IntegrationCatalog } {
-  const mcp = loadBundledMcpCatalog();
-  const integrations = loadBundledIntegrationCatalog({
-    mcp,
-    agentIds: new Set(loadBundledRegistry().agents.map((a) => a.id)),
-  });
-  return { mcp, integrations };
+  return loadIntegrationCatalogs();
 }
 
 function openContext(): { svc: IntegrationService; ctx: Ctx; audit: AuditLogger } {
@@ -667,34 +652,12 @@ function openContext(): { svc: IntegrationService; ctx: Ctx; audit: AuditLogger 
   const bus = new EventBus<ForemanEventMap>();
   const store = new SecretStore(db, loadOrCreateSecretsMasterKey());
   const audit = new AuditLogger(db, bus);
-  const cats = catalogs();
-  const svc = new IntegrationService({
-    paths,
-    mcpCatalog: cats.mcp,
-    integrationCatalog: cats.integrations,
-    secrets: store,
-    // Read the pin file on every check: `review` writes it through the
-    // review hub's own ToolPinStore, and a snapshot taken here would still
-    // say "not reviewed" when `add` goes on to enable.
-    pins: {
-      get: (server, fingerprint) => new ToolPinStore(paths.mcpPinsPath).get(server, fingerprint),
-      forget: (server) => new ToolPinStore(paths.mcpPinsPath).forget(server),
-    },
+  const wiring = createIntegrationWiring({ paths, store, audit });
+  return {
+    svc: wiring.service,
     audit,
-    removeOAuthSession: async (server) => {
-      const removed = await removeMcpOAuthSession(store, server, mcpOAuthLockPath(paths, server));
-      if (removed.record) await revokeMcpOAuthTokens(removed.record).catch(() => undefined);
-      return removed.removed;
-    },
-  });
-  const makeHub: HubFactory = ({ config }) =>
-    new McpHub({
-      config,
-      resolveSecret: (n) => (store.exists(n) ? store.get(n) : null),
-      pins: new ToolPinStore(config.security.pin_tool_definitions ? paths.mcpPinsPath : null),
-      oauth: hubOAuthSessions(paths, store),
-    });
-  return { svc, audit, ctx: { paths, store, registry: new RegistryService(db, bus), catalogs: cats, makeHub } };
+    ctx: { paths, store, registry: new RegistryService(db, bus), catalogs: wiring.catalogs, makeHub: wiring.makeHub },
+  };
 }
 
 function withService(fn: (svc: IntegrationService, ctx: Ctx) => void): void {

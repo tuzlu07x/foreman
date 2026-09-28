@@ -73,6 +73,7 @@ const PAGE_HINTS: Record<TuiPage, KeyHint[]> = {
   ],
   providers: [{ key: "Esc", label: "home" }],
   services: [{ key: "Esc", label: "home" }],
+  integrations: [{ key: "Esc", label: "home" }],
   settings: [
     { key: "↑↓", label: "select" },
     { key: "Enter", label: "open" },
