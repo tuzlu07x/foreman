@@ -59,7 +59,7 @@ Current matrix:
 
 ## Adding a custom provider in v0.1.x
 
-Not user-facing yet — for v0.1.x the tier-1 list is bundled. Maintainers can append entries to `registry/providers.json` per [`docs/registry-maintenance.md`](registry-maintenance.md). A user-editable upstream registry URL (`FOREMAN_REGISTRY_URL`) and `foreman registry validate` CLI are tracked for v0.2.
+Not user-facing yet: the tier-1 list is bundled. Maintainers can append entries to `registry/providers.json` per [`docs/registry-maintenance.md`](registry-maintenance.md). A user-editable upstream registry URL (`FOREMAN_REGISTRY_URL`) is planned; `foreman registry validate` checks the bundled files.
 
 ## Storage
 

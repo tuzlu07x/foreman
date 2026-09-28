@@ -80,7 +80,7 @@ A service shows up under an agent's "Used by" line if it's in that agent's `opti
 
 ## Adding a custom service in v0.1.x
 
-Not user-facing for v0.1.x. Maintainers can append entries to `registry/services.json` per [`docs/registry-maintenance.md`](registry-maintenance.md). User-editable upstream catalogs are v0.2.
+Not user-facing yet. Maintainers can append entries to `registry/services.json` per [`docs/registry-maintenance.md`](registry-maintenance.md). User-editable upstream catalogs are planned.
 
 ## Storage
 

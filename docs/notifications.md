@@ -337,7 +337,7 @@ foreman notify test system
 # → look for a banner in your top-right corner (macOS) or notification area (Linux)
 ```
 
-Windows support is deferred to v0.2 (PowerShell BurntToast).
+Native Windows notifications (PowerShell BurntToast) are not supported yet.
 
 ---
 

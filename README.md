@@ -83,7 +83,7 @@ npm install -g foreman-agent                              # Node >= 22.12
 
 | Variable / flag          | Effect                                                     |
 | ------------------------ | ---------------------------------------------------------- |
-| `FOREMAN_VERSION=0.1.6`  | Pin a specific release                                     |
+| `FOREMAN_VERSION=2.0.0`  | Pin a specific release                                     |
 | `FOREMAN_INSTALL_PREFIX` | Use a non-default npm prefix                               |
 | `FOREMAN_SKIP_NVM=1`     | Refuse the nvm bootstrap path                              |
 | `--uninstall`            | Remove the global package (Foreman's data is left in place) |
@@ -241,14 +241,16 @@ effects afterwards. See [`docs/architecture.md`](docs/architecture.md).
 ## Roadmap
 
 - ✅ **Shipped:** the mediator across MCP, hooks, ACP and codex · risk engine with tamper
-  protection · MCP Hub with a curated catalog · tool-poisoning and rug-pull defence · Foreman
-  Org · TUI control surface (approval queue, command console, inbox) · approvals and
-  `/foreman` from Telegram, Slack and Discord · email / ntfy alerts · lazy tool discovery.
-- 🔜 **Next:** per-department cost reports and budgets · department channels on Slack /
-  Discord with Foreman in the loop · a shared hub daemon (one upstream per server, ~50 ms
-  hooks) · OAuth for hosted MCP servers · approval escalation along the org chart.
-- 🧭 **Later:** a desktop / menu-bar app · per-agent identity tokens · cross-machine mesh ·
-  a local classifier model (Prompt Guard) for borderline calls.
+  protection · MCP Hub with a curated catalog, OAuth for hosted servers, tool-poisoning and
+  rug-pull defence · per-agent identity tokens · Foreman Org with department channels, cost
+  reports, budgets and approval escalation along the org chart · TUI control surface (approval
+  queue, command console, inbox) · approvals and `/foreman` from Telegram, Slack and Discord ·
+  email / ntfy alerts · lazy tool discovery.
+- 🔜 **Next:** integrations for GitHub, GitLab, Jira / Confluence, Trello, Linear and Notion,
+  managed from the TUI, the CLI and chat · an always-current model list with a picker in the
+  TUI · a shared hub daemon (one upstream per server, ~50 ms hooks).
+- 🧭 **Later:** a desktop / menu-bar app · cross-machine mesh · a local classifier model
+  (Prompt Guard) for borderline calls.
 
 ## Contributing
 
