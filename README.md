@@ -243,14 +243,18 @@ effects afterwards. See [`docs/architecture.md`](docs/architecture.md).
 ## Roadmap
 
 - ✅ **Shipped:** the mediator across MCP, hooks, ACP and codex · risk engine with tamper
-  protection · MCP Hub with a curated catalog, OAuth for hosted servers, tool-poisoning and
-  rug-pull defence · per-agent identity tokens · Foreman Org with department channels, cost
-  reports, budgets and approval escalation along the org chart · TUI control surface (approval
-  queue, command console, inbox) · approvals and `/foreman` from Telegram, Slack and Discord ·
-  email / ntfy alerts · lazy tool discovery.
-- 🔜 **Next:** integrations for GitHub, GitLab, Jira / Confluence, Trello, Linear and Notion,
-  managed from the TUI, the CLI and chat · an always-current model list with a picker in the
-  TUI · a shared hub daemon (one upstream per server, ~50 ms hooks).
+  protection, and shell rules that score what a command does rather than how it is spelled
+  (2.1.1) · MCP Hub with a curated catalog, OAuth for hosted servers, access lists, confirm
+  rules, tool-poisoning and rug-pull defence · integrations for GitHub, GitLab, Jira /
+  Confluence, Trello, Linear and Notion, managed from the TUI, the CLI and chat · a local
+  daemon while `foreman start` runs (one upstream per server, ~30 ms hooks) · per-agent
+  identity tokens · Foreman Org with department channels, cost reports, budgets and approval
+  escalation along the org chart · TUI control surface (approval queue, command console,
+  inbox, model picker) · approvals and `/foreman` from Telegram, Slack and Discord · email /
+  ntfy alerts · lazy tool discovery.
+- 🔜 **Next:** the daemon as a login service (`foreman service`) · Ollama and
+  OpenAI-compatible endpoints as Foreman's own model · the setup wizard adding Claude Code's
+  PreToolUse hook by default.
 - 🧭 **Later:** a desktop / menu-bar app · cross-machine mesh · a local classifier model
   (Prompt Guard) for borderline calls.
 
