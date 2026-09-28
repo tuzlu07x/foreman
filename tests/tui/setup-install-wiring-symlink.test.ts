@@ -1,6 +1,10 @@
 import {
+  closeSync,
+  constants as fsConstants,
   existsSync,
+  fstatSync,
   lstatSync,
+  openSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -127,9 +131,17 @@ describe("wizard config writes and symlinks (#618)", () => {
     const configPath = join(home, ".openclaw", "openclaw.json");
     expect(logs).toContain("seeded OpenClaw config");
     expect(logs).toContain(`wrote MCP snippet to ${configPath}`);
-    expect(lstatSync(configPath).isFile()).toBe(true);
-    expect(statSync(configPath).mode & 0o777).toBe(0o600);
-    expect(readFileSync(configPath, "utf-8")).toMatch(/"FOREMAN_AGENT_TOKEN": "fat_/);
+    // One descriptor, never following a link: type, mode and bytes all
+    // describe the same file.
+    const fd = openSync(configPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    try {
+      const stat = fstatSync(fd);
+      expect(stat.isFile()).toBe(true);
+      expect(stat.mode & 0o777).toBe(0o600);
+      expect(readFileSync(fd, "utf-8")).toMatch(/"FOREMAN_AGENT_TOKEN": "fat_/);
+    } finally {
+      closeSync(fd);
+    }
     // Wired for it: no by-hand token hint.
     expect(logs).not.toContain("--token-out");
   });
