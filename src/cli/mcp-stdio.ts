@@ -289,7 +289,10 @@ function runMcpLoop(services: Services, initial: ResolvedIdentity, token: string
   let shuttingDown = false;
   process.stdin.setEncoding("utf-8");
   process.stdin.on("data", (chunk) => {
-    const { messages } = decoder.push(chunk);
+    const { messages, parseErrors } = decoder.push(chunk);
+    // Not JSON at all: JSON-RPC's parse error, id null, without echoing the
+    // input (it may hold a secret). The connection stays up.
+    for (let i = 0; i < parseErrors; i++) writeFrame(PARSE_ERROR_FRAME);
     // Each message is handled independently: a `tools/call` waiting on a
     // human approval must not hold up a `ping` or a second call behind it.
     for (const message of messages) {
@@ -332,8 +335,14 @@ async function respond(
     );
   }
   if (!response) return;
+  writeFrame(encodeMessage(response));
+}
+
+const PARSE_ERROR_FRAME = `${JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } })}\n`;
+
+function writeFrame(frame: string): void {
   try {
-    process.stdout.write(encodeMessage(response));
+    process.stdout.write(frame);
   } catch {
     // The client is gone; the stdout "error" handler drives the shutdown.
   }
@@ -393,6 +402,8 @@ export async function handleMessage(
     }
   }
 
+  // MCP's required liveness utility: an empty result.
+  if (method === "ping") return reply(id, {});
   if (method === "initialize") {
     return reply(id, {
       protocolVersion: PROTOCOL_VERSION,
