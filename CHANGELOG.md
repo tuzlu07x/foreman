@@ -7,6 +7,25 @@ All notable changes to Foreman are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Integrations** (`foreman integrations`,
+  [docs/integrations.md](docs/integrations.md)): GitHub, GitLab, Jira and
+  Confluence, Trello, Linear and Notion as managed MCP hub servers.
+  - `add` reads the token from a hidden prompt (or `--token-stdin`) or runs
+    the browser sign-in, saves the integration disabled, reviews and pins
+    its tools, then enables it for the agents you chose (`--agents`,
+    `--departments` or `--all-agents`).
+  - Read-only by default: write tools are denied until `--read-write`;
+    merges and pushes need a person on every call.
+  - `list`, `show` (access per agent), `update` (access level, audience,
+    products, params, variant, `--tool TOOL=RULE`, `--rotate`), `enable` /
+    `disable` (reaches running agents at once), `login` / `logout`,
+    `review`, `test`, `remove` (credentials nothing else uses go too) and
+    `adopt` for servers added with `foreman mcp add`.
+  - A second account is its own server with its own secret
+    (`--name github-work` → `github-pat-work`).
+  - `foreman doctor` reports enabled integrations that can't work;
+    `foreman secrets remove` / `rotate` say when an integration uses the
+    secret.
 
 - **MCP hub access lists, confirm rules and live reload**
   ([docs/mcp-hub.md](docs/mcp-hub.md#mcpyaml)).

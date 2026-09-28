@@ -19,25 +19,21 @@ import {
   setServerEnabled,
 } from "../core/mcp-hub/manage.js";
 import { hubOAuthSessions, mcpOAuthLockPath } from "../core/mcp-hub/boot.js";
-import {
-  DEFAULT_LOGIN_TIMEOUT_MS,
-  MAX_LOGIN_TIMEOUT_MS,
-  runMcpOAuthLogin,
-} from "../core/mcp-hub/oauth-login.js";
-import {
-  removeMcpOAuthSession,
-  revokeMcpOAuthTokens,
-  storeMcpOAuthLogin,
-} from "../core/mcp-hub/oauth-session.js";
+import { removeMcpOAuthSession } from "../core/mcp-hub/oauth-session.js";
 import { describeMcpOAuthStatus, mcpOAuthStatus } from "../core/mcp-hub/oauth-store.js";
 import { ToolPinStore } from "../core/mcp-hub/pins.js";
 import { SecretStore } from "../core/secret-store.js";
 import { closeDb, getDb } from "../db/client.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
-import { openInBrowser } from "../utils/browser-open.js";
 import { getForemanPaths } from "../utils/config.js";
 import { bold, dim, green, orange, red } from "./colors.js";
-import { isHeadlessEnvironment } from "./run-oauth-flow.js";
+import {
+  cliOAuthLogin,
+  cliOAuthLogout,
+  DEFAULT_LOGIN_TIMEOUT_MS,
+  loginTimeoutSeconds,
+  MAX_LOGIN_TIMEOUT_MS,
+} from "./oauth-cli-shared.js";
 
 // =============================================================================
 // `foreman mcp` — the MCP hub: one place to connect every agent to GitHub,
@@ -228,35 +224,12 @@ mcpCommand
         ),
       );
     }
-    const requested = Number(opts.timeout);
-    if (!Number.isFinite(requested) || requested <= 0) {
-      fail(new Error("--timeout must be a positive number of seconds"));
-    }
-    const timeoutSeconds = Math.min(requested, MAX_LOGIN_TIMEOUT_MS / 1000);
-    const autoOpen = opts.browser && !isHeadlessEnvironment();
     try {
-      const record = await runMcpOAuthLogin({
-        server: name,
-        serverUrl: server.url,
+      await cliOAuthLogin(paths, openSecretStore(), name, server.url, {
         ...(opts.scope ? { scope: opts.scope } : {}),
-        timeoutMs: Math.round(timeoutSeconds * 1000),
-        presentAuthUrl: async (url) => {
-          console.log(`Open this URL in your browser to sign in to ${bold(name)}:`);
-          console.log("");
-          console.log(`  ${url}`);
-          console.log("");
-          if (autoOpen) {
-            const opened = await openInBrowser(url);
-            if (!opened.ok) console.log(dim(`(could not open a browser: ${opened.reason ?? "unknown"})`));
-          }
-          console.log(dim(`Waiting for the sign-in to redirect back to this machine (up to ${timeoutSeconds}s)…`));
-        },
+        browser: opts.browser,
+        timeoutSeconds: loginTimeoutSeconds(opts.timeout),
       });
-      const store = openSecretStore();
-      await storeMcpOAuthLogin(store, record, mcpOAuthLockPath(paths, name));
-      const status = mcpOAuthStatus(store, name, server.url);
-      console.log(`${green("✓")} ${name}: ${describeMcpOAuthStatus(name, status)}`);
-      console.log(dim("Tokens are stored encrypted; only the hub attaches them upstream — agents never see them."));
     } catch (err) {
       fail(err);
     } finally {
@@ -269,23 +242,12 @@ mcpCommand
   .description("Delete the stored OAuth session for a server (and revoke it at the provider if it can)")
   .action(async (name: string) => {
     requireInitialised();
-    const paths = getForemanPaths();
-    let removed: Awaited<ReturnType<typeof removeMcpOAuthSession>>;
     try {
-      removed = await removeMcpOAuthSession(openSecretStore(), name, mcpOAuthLockPath(paths, name));
+      await cliOAuthLogout(getForemanPaths(), openSecretStore(), name);
     } catch (err) {
       fail(err);
     } finally {
       closeDb();
-    }
-    if (!removed.removed) {
-      console.log(dim(`${name}: not logged in`));
-      return;
-    }
-    console.log(`${green("✓")} logged out of ${bold(name)} (local tokens deleted)`);
-    if (removed.record) {
-      const revocation = await revokeMcpOAuthTokens(removed.record);
-      console.log(dim(revocation.revoked ? `  ${revocation.detail}` : `  not revoked at the provider: ${revocation.detail}`));
     }
   });
 

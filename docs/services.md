@@ -2,6 +2,8 @@
 
 Services are 3rd-party integrations (Telegram, Discord, GitHub, …) that one or more agents can use. Each service in `registry/services.json` ships with a multi-step setup walkthrough so the user doesn't have to leave Foreman to wire it up.
 
+> For GitHub, GitLab, Jira and Confluence, Trello, Linear and Notion as tools your agents call, use [integrations](./integrations.md) instead: the token stays with Foreman's MCP hub, each call is mediated, and you choose which agents may use it.
+
 ## Tier-1 services (bundled)
 
 | Service | id | Secret name | Used by | Where to get |

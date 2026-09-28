@@ -165,6 +165,11 @@ describe('IntegrationService', () => {
     })
   })
 
+  it('status resolves an alias to the server it names', async () => {
+    await svc.add({ id: 'github', access: 'all', credentials: { 'github-pat': PAT } }, CLI)
+    expect(svc.status('gh').server).toBe('github')
+  })
+
   describe('enable / disable', () => {
     it('refuses to enable before the tools are reviewed or while a secret is missing', async () => {
       await svc.add({ id: 'github', access: 'all' }, CLI)
@@ -259,6 +264,39 @@ describe('IntegrationService', () => {
       expect(events.at(-1)).toMatchObject({ type: 'integration:updated', payload: { changes: ['credential'], secrets: ['github-pat'] } })
       expect(JSON.stringify(events)).not.toContain(PAT2)
       await expect(svc.rotateSecret('github', 'nope', PAT2, CLI)).rejects.toThrow(/no credential 'nope'/)
+    })
+  })
+
+  describe('adopt', () => {
+    it('turns a `foreman mcp add` server into an integration, keeping its secret name', async () => {
+      writeFileSync(
+        mcpPath(),
+        [
+          'servers:',
+          '  gh-old:',
+          '    catalog_id: github',
+          '    url: https://api.githubcopilot.com/mcp/',
+          '    headers: { Authorization: "Bearer ${secret:my-gh}" }',
+          '',
+        ].join('\n'),
+      )
+      const before = loadHubConfig(mcpPath()).servers['gh-old']!
+      review('gh-old')
+      const res = await svc.adopt('gh-old', { id: 'github', access: { agents: ['codex'] } }, CLI)
+      const server = loadHubConfig(mcpPath()).servers['gh-old']!
+      expect(server.integration).toMatchObject({ id: 'github', variant: 'official', secrets: { 'github-pat': 'my-gh' } })
+      expect(server.headers.Authorization).toBe('Bearer ${secret:my-gh}')
+      expect(server.access).toEqual({ agents: ['codex'] })
+      // Same launch config: stays enabled, pins kept.
+      expect(res.needsReview).toBe(false)
+      expect(server.enabled).toBe(before.enabled)
+      expect(events.at(-1)).toMatchObject({ type: 'integration:added', payload: { adopted: true } })
+      await expect(svc.adopt('gh-old', { id: 'github', access: 'all' }, CLI)).rejects.toThrow(/already an integration/)
+    })
+
+    it('needs a variant when the server was not added from the catalog', async () => {
+      writeFileSync(mcpPath(), 'servers:\n  mine:\n    command: node\n')
+      await expect(svc.adopt('mine', { id: 'github', access: 'all' }, CLI)).rejects.toThrow(/pass --variant/)
     })
   })
 

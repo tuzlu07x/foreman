@@ -208,6 +208,7 @@ effects afterwards. See [`docs/architecture.md`](docs/architecture.md).
 | Category | Integrations |
 | --- | --- |
 | **Agents** ([guide](docs/agent-lifecycle.md)) | Claude Code · Codex · Hermes · OpenClaw · ZeroClaw · any MCP agent |
+| **Work tools** ([integrations](docs/integrations.md)) | GitHub · GitLab · Jira & Confluence · Trello · Linear · Notion: add once, pick which agents may use each, read-only by default |
 | **MCP servers** ([hub](docs/mcp-hub.md)) | GitHub · Filesystem · Memory · Playwright · Chrome DevTools · Notion · Sentry · Stripe · Brave · Exa · Firecrawl · Context7 · Figma · Resend · Discord · X · YouTube · App Store Connect · App Store + Google Play · your own (stdio or HTTPS) |
 | **Channels** ([guide](docs/notifications.md)) | Telegram, Slack and Discord (tap-to-approve, `/foreman` commands) · Email (SMTP) · ntfy · Webhook (signed) · OS notifications |
 | **LLM providers** ([guide](docs/llm-providers.md)), for Foreman's optional smart features | Anthropic · OpenAI · Google Gemini · Ollama (local) · any OpenAI-compatible endpoint |
@@ -227,6 +228,7 @@ effects afterwards. See [`docs/architecture.md`](docs/architecture.md).
 | Doc | What's inside |
 | --- | --- |
 | [`docs/tui.md`](docs/tui.md) | The TUI: approvals queue, command console, inbox, keys |
+| [`docs/integrations.md`](docs/integrations.md) | Integrations: GitHub, GitLab, Jira, Trello, Linear, Notion — add, scope, review |
 | [`docs/mcp-hub.md`](docs/mcp-hub.md) | MCP Hub: catalog, `mcp.yaml`, security, token budget |
 | [`docs/org.md`](docs/org.md) | Foreman Org: departments, roles, delegation, upgrades |
 | [`docs/notifications.md`](docs/notifications.md) | Telegram, Slack, Discord, email, ntfy, webhook |

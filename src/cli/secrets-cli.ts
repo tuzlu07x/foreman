@@ -11,6 +11,7 @@ import {
   findDuplicateSlots,
   legacySlotsToRemove,
 } from "../core/secret-slot-migration.js";
+import { loadHubConfig, referencedSecrets } from "../core/mcp-hub/config.js";
 import { loadActiveRegistry } from "../core/registry-catalog.js";
 import { RegistryService } from "../core/registry.js";
 import {
@@ -141,6 +142,20 @@ function auditReveal(db: ForemanDb, name: string, ok: boolean): void {
   }
 }
 
+/** Integration servers in mcp.yaml that reference `name` (best-effort). */
+function integrationsUsing(name: string): string[] {
+  try {
+    const path = getForemanPaths().mcpConfigPath;
+    if (!existsSync(path)) return [];
+    const config = loadHubConfig(path);
+    return Object.entries(config.servers)
+      .filter(([, s]) => s.integration && referencedSecrets(s).includes(name))
+      .map(([n]) => n);
+  } catch {
+    return [];
+  }
+}
+
 export const secretsCommand = new Command("secrets").description(
   "Encrypted secret store (add / list / show / remove / rotate)",
 );
@@ -260,6 +275,14 @@ secretsCommand
       //    real "no secret named" error and exit 0, masking the failure.
       if (!store.exists(name)) {
         throw new SecretNotFoundError(name);
+      }
+      const users = integrationsUsing(name);
+      if (users.length > 0) {
+        console.error(
+          orange("warning: ") +
+            `${users.join(", ")} use${users.length === 1 ? "s" : ""} "${name}"; ${users.length === 1 ? "it" : "they"} stop working without it. ` +
+            `\`foreman integrations remove ${users[0]}\` removes the integration and its credentials together.`,
+        );
       }
       const ok = await requireConfirm({
         yes: options.yes,
@@ -450,6 +473,12 @@ secretsCommand
       }
       store.rotate(name, value);
       console.log(green("✓") + ` rotated secret "${name}"`);
+      const users = integrationsUsing(name);
+      if (users.length > 0) {
+        console.log(
+          dim(`  used by ${users.join(", ")} — the hub picks it up on its next connection (next time: \`foreman integrations update ${users[0]} --rotate <slot>\` also records it)`),
+        );
+      }
       // Fanout: re-project this secret into every registered agent's config
       // file that references it (#222 / #223). Best-effort — a missing config
       // path or a write error is logged but doesn't fail the rotate.
