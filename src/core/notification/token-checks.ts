@@ -1,3 +1,5 @@
+import { slackEndpoints } from "./channels/slack-endpoints.js";
+
 // =============================================================================
 // Live token checks for the two-way chat setups (#657)
 // =============================================================================
@@ -55,7 +57,7 @@ export async function checkTelegramBot(
 
 export async function checkSlackAppToken(token: string, fetchFn: FetchFn = fetch): Promise<TokenCheck> {
   const res = await ask(
-    "https://slack.com/api/apps.connections.open",
+    `${slackEndpoints().api}/apps.connections.open`,
     { method: "POST", headers: { authorization: `Bearer ${token}` } },
     fetchFn,
   );

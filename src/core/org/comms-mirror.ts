@@ -9,6 +9,7 @@ import {
   postWithTimeout,
   type HttpFetch,
 } from "../notification/channels/http-post.js";
+import { slackEndpoints, type SlackEndpoints } from "../notification/channels/slack-endpoints.js";
 import { BOSS, channelLabel } from "./comms.js";
 import { loadOrg, type OrgDoc } from "./org.js";
 
@@ -43,6 +44,7 @@ export class SlackMirror implements OrgMirror {
   constructor(
     private readonly token: string,
     private readonly fetchImpl: HttpFetch = defaultFetch,
+    private readonly endpoints: SlackEndpoints = slackEndpoints(),
   ) {}
 
   async post(channel: string, m: MirrorMessage): Promise<void> {
@@ -52,7 +54,7 @@ export class SlackMirror implements OrgMirror {
     const res = await postWithTimeout({
       channel: "slack",
       fetchImpl: this.fetchImpl,
-      url: "https://slack.com/api/chat.postMessage",
+      url: `${this.endpoints.api}/chat.postMessage`,
       headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
       body: JSON.stringify({ channel, text, unfurl_links: false, unfurl_media: false }),
       timeoutMs: 10_000,

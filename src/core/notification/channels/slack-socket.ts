@@ -8,6 +8,7 @@ import {
   type ApprovalSigner,
 } from "./approval-buttons.js";
 import { ChannelDeliveryError, clipText, defaultFetch, postWithTimeout, type HttpFetch } from "./http-post.js";
+import { slackEndpoints, type SlackEndpoints } from "./slack-endpoints.js";
 import { defaultSocketFactory, messageText, trackSocket, type SocketFactory, type TrackedSocket } from "./socket.js";
 
 // =============================================================================
@@ -26,11 +27,10 @@ import { defaultSocketFactory, messageText, trackSocket, type SocketFactory, typ
 //   - `/foreman <command>`: allowed users only, run through the same
 //     command router as the TUI; the answer is visible only to the caller.
 // Replies go through the payload's `response_url`, which Slack signs into
-// the payload; anything that is not a hooks.slack.com URL is ignored.
+// the payload; anything that is not a hooks.slack.com URL is ignored
+// (slack-endpoints.ts has the one test-only exception).
 
-const SLACK_API = "https://slack.com/api";
 const STALE_TEXT = "This approval is no longer open here (decided, or re-sent after a restart).";
-const RESPONSE_URL_PREFIX = "https://hooks.slack.com/";
 /** Slack answers these when the token itself is wrong: stop retrying. */
 const AUTH_ERRORS = new Set([
   "invalid_auth",
@@ -58,6 +58,8 @@ export interface SlackSocketOptions {
   timeoutMs?: number;
   /** How long a close we started may wait for the peer (tests shorten it). */
   closeGraceMs?: number;
+  /** Where Slack is (default: slack.com, see slack-endpoints.ts). */
+  endpoints?: SlackEndpoints;
 }
 
 type Json = Record<string, unknown>;
@@ -68,6 +70,7 @@ export class SlackSocketListener {
   private readonly socketFactory: SocketFactory;
   private readonly abort = new AbortController();
   private readonly timeoutMs: number;
+  private readonly endpoints: SlackEndpoints;
   private current: TrackedSocket | null = null;
   private running = false;
   private refreshRequested = false;
@@ -78,6 +81,7 @@ export class SlackSocketListener {
     this.fetchImpl = opts.fetchImpl ?? defaultFetch;
     this.socketFactory = opts.socketFactory ?? defaultSocketFactory;
     this.timeoutMs = opts.timeoutMs ?? 10_000;
+    this.endpoints = opts.endpoints ?? slackEndpoints();
   }
 
   start(onDecision: (d: UserDecision) => Promise<void>): void {
@@ -146,7 +150,7 @@ export class SlackSocketListener {
       text = await postWithTimeout({
         channel: "slack",
         fetchImpl: this.fetchImpl,
-        url: `${SLACK_API}/apps.connections.open`,
+        url: `${this.endpoints.api}/apps.connections.open`,
         headers: {
           authorization: `Bearer ${this.opts.appToken}`,
           "content-type": "application/x-www-form-urlencoded",
@@ -169,7 +173,7 @@ export class SlackSocketListener {
       if (AUTH_ERRORS.has(code)) throw new SlackAuthError(code);
       throw new Error(code);
     }
-    if (typeof body.url !== "string" || !body.url.startsWith("wss://")) {
+    if (typeof body.url !== "string" || !body.url.startsWith(this.endpoints.socketUrlPrefix)) {
       throw new Error("apps.connections.open returned no socket URL");
     }
     return body.url;
@@ -278,7 +282,7 @@ export class SlackSocketListener {
   }
 
   private async respond(url: string, body: Json): Promise<void> {
-    if (!url.startsWith(RESPONSE_URL_PREFIX)) return;
+    if (!url.startsWith(this.endpoints.replyUrlPrefix)) return;
     await postWithTimeout({
       channel: "slack",
       fetchImpl: this.fetchImpl,

@@ -19,6 +19,7 @@ import {
   ChannelDeliveryError,
   type HttpFetch,
 } from "./http-post.js";
+import { slackEndpoints, type SlackEndpoints } from "./slack-endpoints.js";
 import { SlackSocketListener, type SlackSocketOptions } from "./slack-socket.js";
 
 // =============================================================================
@@ -42,10 +43,10 @@ export interface SlackChannelOptions {
   fetchImpl?: HttpFetch;
   timeoutMs?: number;
   /** Two-way mode over Socket Mode (#615). */
-  interactive?: Omit<SlackSocketOptions, "fetchImpl" | "sign"> & { sign: ApprovalSigner };
+  interactive?: Omit<SlackSocketOptions, "fetchImpl" | "sign" | "endpoints"> & { sign: ApprovalSigner };
+  /** Where Slack is (default: slack.com, see slack-endpoints.ts). */
+  endpoints?: SlackEndpoints;
 }
-
-const SLACK_API = "https://slack.com/api";
 
 export class SlackChannel implements NotificationChannel {
   readonly id = "slack" as const;
@@ -53,12 +54,14 @@ export class SlackChannel implements NotificationChannel {
   private readonly timeoutMs: number;
   private counter = 0;
   private readonly listener: SlackSocketListener | null;
+  private readonly endpoints: SlackEndpoints;
 
   constructor(private readonly opts: SlackChannelOptions) {
     this.fetchImpl = opts.fetchImpl ?? defaultFetch;
     this.timeoutMs = opts.timeoutMs ?? 10_000;
+    this.endpoints = opts.endpoints ?? slackEndpoints();
     this.listener = opts.interactive
-      ? new SlackSocketListener({ ...opts.interactive, fetchImpl: this.fetchImpl })
+      ? new SlackSocketListener({ ...opts.interactive, fetchImpl: this.fetchImpl, endpoints: this.endpoints })
       : null;
   }
 
@@ -122,7 +125,7 @@ export class SlackChannel implements NotificationChannel {
   }
 
   private async api(token: string, method: string, payload: unknown): Promise<Record<string, unknown>> {
-    const text = await this.post(`${SLACK_API}/${method}`, { authorization: `Bearer ${token}` }, payload);
+    const text = await this.post(`${this.endpoints.api}/${method}`, { authorization: `Bearer ${token}` }, payload);
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(text) as Record<string, unknown>;
