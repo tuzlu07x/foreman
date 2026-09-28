@@ -117,16 +117,26 @@ export interface StatusBarProps {
 export function StatusBar({ page = "dashboard", quitConfirm, approval }: StatusBarProps): JSX.Element {
   const layout = useLayout();
   if (quitConfirm) {
+    // One paragraph that wraps as a whole, and the keys on their own line:
+    // side-by-side <Text>s ran into each other at 80 columns (#657).
     return (
-      <Box paddingX={1}>
-        <Text color={theme.accent.warning} bold>
-          Quit Foreman? Agents stop being guarded.{" "}
+      <Box paddingX={1} flexDirection="column">
+        <Text wrap="wrap">
+          <Text color={theme.accent.warning} bold>
+            Quit Foreman? Agents stop being guarded.
+          </Text>
+          {approval ? <Text color={theme.fg.muted}> Waiting calls will be denied.</Text> : null}
         </Text>
-        {approval ? <Text color={theme.fg.muted}>Waiting calls will be denied. </Text> : null}
-        <Text color={theme.fg.default}>y</Text>
-        <Text color={theme.fg.muted}> yes · </Text>
-        <Text color={theme.fg.default}>n</Text>
-        <Text color={theme.fg.muted}> no</Text>
+        <Text>
+          <Text color={theme.fg.emphasis} bold>
+            y
+          </Text>
+          <Text color={theme.fg.muted}> quit  ·  </Text>
+          <Text color={theme.fg.emphasis} bold>
+            n
+          </Text>
+          <Text color={theme.fg.muted}> stay</Text>
+        </Text>
       </Box>
     );
   }

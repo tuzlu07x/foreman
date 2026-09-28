@@ -1,4 +1,5 @@
 import React from 'react'
+import { Box } from 'ink'
 import { render } from 'ink-testing-library'
 import { describe, expect, it } from 'vitest'
 import { StatusBar } from '../../src/tui/components/status-bar.js'
@@ -36,7 +37,20 @@ describe('StatusBar', () => {
   it('asks before quitting, and says what quitting means', () => {
     const out = frame(React.createElement(StatusBar, { page: 'dashboard', quitConfirm: true }))
     expect(out).toContain('Quit Foreman?')
-    expect(out).toContain('y yes')
-    expect(out).toContain('n no')
+    expect(out).toContain('y quit')
+    expect(out).toContain('n stay')
+  })
+
+  // QA #657 L5 — at 80 columns the question and the keys ran into each
+  // other ("…deniedy yes · n no").
+  it('keeps the quit question and its keys apart at 80 columns', () => {
+    const { lastFrame } = render(
+      React.createElement(Box, { width: 80 }, React.createElement(StatusBar, { page: 'dashboard', quitConfirm: true, approval: true })),
+    )
+    const lines = stripAnsi(lastFrame() ?? '').split('\n').map((l) => l.trimEnd())
+    const keys = lines.find((l) => l.includes('y quit'))
+    expect(keys?.trim()).toBe('y quit  ·  n stay')
+    expect(lines.join(' ').replace(/\s+/g, ' ')).toContain('Quit Foreman? Agents stop being guarded. Waiting calls will be denied.')
+    for (const l of lines) expect(l.length).toBeLessThanOrEqual(80)
   })
 })

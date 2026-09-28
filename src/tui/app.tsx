@@ -1442,6 +1442,30 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
 
   useInput((input, key) => {
     onAnyKey();
+    // `q` and Ctrl-C quit the same way everywhere (#657): at once, or after
+    // a y/n question while approvals are waiting (#637). Quitting never
+    // decides anything: waiting calls fail closed when they time out.
+    const requestQuit = (): void => {
+      if (!pendingApproval) {
+        exit();
+        return;
+      }
+      // One y/n question at a time: an allow or "deny always" waiting for
+      // its `y` (#656) is dropped, so the next `y` can only mean "quit";
+      // `n` goes back to the call, nothing decided.
+      setApprovalConfirm(null);
+      setQuitConfirm(true);
+    };
+    const ctrlC = key.ctrl && input === "c";
+    if (quitConfirm) {
+      if (input === "y" || input === "Y") exit();
+      else if (input === "n" || input === "N" || key.escape) setQuitConfirm(false);
+      return;
+    }
+    if (ctrlC) {
+      requestQuit();
+      return;
+    }
     // The command bar owns the keyboard while it is open.
     if (commandOpen) return;
     // Help overlay takes priority — when open, Esc / `?` / `h` close it.
@@ -1458,15 +1482,14 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       ((page === "providers" || page === "services") && pageEditing);
     const letter = /^[a-zA-Z]$/.test(input) && !key.ctrl && !key.meta;
     if (letter && (pendingApproval || !textEntry) && swallowUnsettledKey()) return;
-    // `q` works here too, behind the usual confirmation (#637). Quitting
-    // never decides anything: waiting calls fail closed when they time out.
-    if (pendingApproval && quitConfirm) {
-      if (input === "y" || input === "Y") exit();
-      else if (input === "n" || input === "N" || key.escape) setQuitConfirm(false);
-      return;
-    }
-    if (pendingApproval && input === "q") {
-      setQuitConfirm(true);
+    // A delete / remove question on screen takes `q` as "no" (below).
+    if (
+      input === "q" &&
+      !key.meta &&
+      (pendingApproval || !textEntry) &&
+      !(pendingConfirm && !pendingApproval)
+    ) {
+      requestQuit();
       return;
     }
     // A decision waiting for its confirmation: `y` decides, `n` / Esc go
@@ -1562,7 +1585,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     if (page === "inbox") {
       // The page handles its own keys; only leaving is handled here.
       if (key.escape) setPage("dashboard");
-      else if (input === "q") exit();
       return;
     }
     if (page === "logs") {
@@ -1611,7 +1633,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       } else if (key.return) setLogExpanded(!logExpanded);
       else if (input === "r") void onLogReplay();
       else if (input === "e") onLogExport();
-      else if (input === "q") exit();
       return;
     }
     if (page === "policy") {
@@ -1629,7 +1650,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       } else if (key.return) setPolicyExpanded(!policyExpanded);
       else if (input === "d") onPolicyToggle();
       else if (input === "e") void onPolicyEdit();
-      else if (input === "q") exit();
       return;
     }
     if (page === "sessions") {
@@ -1646,7 +1666,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         setSessionExpanded(false);
       } else if (key.return) setSessionExpanded(!sessionExpanded);
       else if (input === "k") onSessionHalt();
-      else if (input === "q") exit();
       return;
     }
     if (page === "delegations") {
@@ -1664,8 +1683,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         setDelegationsExpanded(false);
       } else if (key.return) {
         setDelegationsExpanded(!delegationsExpanded);
-      } else if (input === "q") {
-        exit();
       }
       return;
     }
@@ -1692,7 +1709,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         );
         return;
       }
-      if (input === "q") exit();
       return;
     }
     if (page === "settings") {
@@ -1719,7 +1735,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         else if (settingsSelectedIdx === 1) void onEditPolicyFromSettings();
         else if (settingsSelectedIdx === 2) setPage("policy");
         else if (settingsSelectedIdx === 3) onWizardInstruction();
-      } else if (input === "q") exit();
+      }
       return;
     }
     if (page === "secrets") {
@@ -1749,7 +1765,6 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "r") onSecretRotate();
       else if (input === "d") onSecretRemove();
       else if (input === "n") onSecretAddStart();
-      else if (input === "q") exit();
       return;
     }
     if (page === "agents") {
@@ -1785,26 +1800,14 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "N") onAgentStartNoteEdit();
       else if (input === "L") onAgentStartLlmEdit();
       else if (input === "o") onAgentLogin();
-      else if (input === "q") exit();
       return;
     }
     // ProvidersPage / ServicesPage run their own useInput; short-circuit
     // here so a key (e.g. `s` for show-value) isn't double-handled by the
     // global dispatch (which would simultaneously try to setPage('sessions')).
-    if (page === "providers" || page === "services") {
-      if (input === "q") exit();
-      return;
-    }
-    if (quitConfirm) {
-      if (input === "y" || input === "Y") exit();
-      else if (input === "n" || input === "N" || key.escape)
-        setQuitConfirm(false);
-      return;
-    }
+    if (page === "providers" || page === "services") return;
     if (input === "/") openCommand();
     else if (input === "?" || input === "h") setHelpOpen(true);
-    else if (input === "q") exit();
-    else if (key.ctrl && input === "c") setQuitConfirm(true);
     else if (input === "c") setPage("chat");
     else if (input === "g") setPage("settings");
     else if (input === "k") setPage("secrets");

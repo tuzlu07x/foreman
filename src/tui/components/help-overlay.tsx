@@ -30,7 +30,7 @@ const NAV_SECTIONS: HelpSection[] = [
       { key: "n", label: "inbox (notifications)" },
       { key: "h / ?", label: "open / close help" },
       { key: "Esc", label: "back to Home" },
-      { key: "q / Ctrl-C", label: "quit (with confirm)" },
+      { key: "q / Ctrl-C", label: "quit" },
     ],
   },
   {
@@ -59,6 +59,7 @@ const NAV_SECTIONS: HelpSection[] = [
       { key: "i", label: "inspect details" },
       { key: "t", label: "toggle technical" },
       { key: "k", label: "halt session" },
+      { key: "q / Ctrl-C", label: "quit (asks first)" },
     ],
   },
 ];
