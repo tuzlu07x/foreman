@@ -14,6 +14,7 @@ import {
 import { loadActiveRegistry } from "../core/registry-catalog.js";
 import { RegistryService } from "../core/registry.js";
 import {
+  isReservedSecretName,
   isValidSecretName,
   ReservedSecretError,
   SecretAlreadyExistsError,
@@ -182,7 +183,9 @@ secretsCommand
   .option("--json", "output JSON")
   .action((options: ListOptions) => {
     const store = getStore();
-    const rows = store.list();
+    // Agent identity tokens are managed with `foreman agent token`; like the
+    // TUI Keys page, the list never shows them.
+    const rows = store.list().filter((r) => !isReservedSecretName(r.name));
     if (options.json) {
       process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
     } else if (rows.length === 0) {
