@@ -40,7 +40,7 @@ export interface ChannelFactoryDeps {
   onChannelWarning?: (message: string) => void;
   /** Runs `/foreman <command>` typed in Slack or Discord by an allowed
    *  user. Omitted: those channels still take approval buttons. */
-  onChatCommand?: (channel: "slack" | "discord", text: string, userId: string) => Promise<string>;
+  onChatCommand?: (channel: "slack" | "discord" | "telegram", text: string, userId: string) => Promise<string>;
 }
 
 export type ChannelBuild = { channel: NotificationChannel } | { problem: string };
@@ -86,6 +86,11 @@ export function buildChannel(id: ChannelId, toggle: ChannelToggle, deps: Channel
             ...(deps.signApproval ? { signApproval: deps.signApproval } : {}),
             ...(toggle.approval_bot_token_ref
               ? { approvalBotToken: secret(toggle.approval_bot_token_ref) }
+              : {}),
+            // Commands only through the approval bot (only Foreman polls it)
+            // and only from your own private chat (TelegramChannel checks).
+            ...(toggle.approval_bot_token_ref && deps.onChatCommand
+              ? { onCommand: (text: string, user: string) => deps.onChatCommand!("telegram", text, user) }
               : {}),
             ...(deps.signButton ? { signButton: deps.signButton } : {}),
             ...(deps.onChannelWarning ? { onWarning: deps.onChannelWarning } : {}),

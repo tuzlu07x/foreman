@@ -1606,12 +1606,32 @@ export function checkIntegrations(): CheckResult {
     // secret store unavailable — the database / secrets_key checks report it
   }
   const enabled = servers.filter(([, s]) => s.enabled).length;
+  // Anyone in a two-way channel's allowed_user_ids may change integrations
+  // from chat unless owner_user_ids narrows it.
+  const openChats: string[] = [];
+  try {
+    const notify = loadNotifyConfig(paths.notifyConfigPath);
+    for (const channel of ["slack", "discord"] as const) {
+      const toggle = channelConfig(notify, channel);
+      if ((toggle?.allowed_user_ids?.length ?? 0) > 1 && !toggle?.owner_user_ids) openChats.push(channel);
+    }
+  } catch {
+    // notify_channels reports a broken notify.yaml
+  }
   if (broken.length > 0) {
     return {
       name: "integrations",
       status: "warn",
       message: `${broken.length} enabled integration(s) can't work — ${broken.join("; ")}`,
       remediation: fixes.join(" · "),
+    };
+  }
+  if (openChats.length > 0) {
+    return {
+      name: "integrations",
+      status: "warn",
+      message: `${servers.length} integration(s), ${enabled} enabled; every allowed user on ${openChats.join(" and ")} can enable, disable or remove them from chat`,
+      remediation: `Add owner_user_ids under ${openChats.join(" / ")} in notify.yaml (a subset of allowed_user_ids).`,
     };
   }
   return {

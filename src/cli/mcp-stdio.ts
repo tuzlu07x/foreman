@@ -29,6 +29,8 @@ import {
 import { createMediatorStack } from "../core/mediator-stack.js";
 import { scopeForAgent } from "../core/mcp-hub/boot.js";
 import { HubRuntime } from "../core/mcp-hub/runtime.js";
+import type { IntegrationService } from "../core/integrations/service.js";
+import { createIntegrationWiring } from "../core/integrations/wiring.js";
 import { HubToolUnavailableError } from "../core/mcp-hub/hub.js";
 import type {
   AgentScope,
@@ -184,6 +186,8 @@ interface Services {
   hubRuntime?: HubRuntime;
   /** The client sent `initialize`; notifications may follow. */
   clientInitialized?: boolean;
+  /** Built on first `/integrations` relay (null: catalogs unreadable). */
+  integrations?: IntegrationService | null;
   /** Department channels (#630). */
   comms?: OrgComms;
   /** Manager reviews of approvals (#623). */
@@ -264,6 +268,20 @@ function bootServices(): Services {
     comms,
     reviews: new ApprovalReviews(db, comms, { registry }),
   };
+}
+
+/** The integration service for relayed `/integrations` reads, built on
+ *  first use (it loads the bundled catalogs). */
+function integrationsFor(services: Services): { integrations?: { service: IntegrationService } } {
+  if (services.integrations === undefined) {
+    try {
+      const paths = getForemanPaths();
+      services.integrations = createIntegrationWiring({ paths, store: services.secretStore, audit: services.audit }).service;
+    } catch {
+      services.integrations = null;
+    }
+  }
+  return services.integrations ? { integrations: { service: services.integrations } } : {};
 }
 
 /** Diagnostics go to stderr: stdout is the agent's JSON-RPC channel. */
@@ -1248,6 +1266,8 @@ export async function handleMessage(
         controlChannel: services.controlChannel,
         ownerStore: services.secretStore,
         secretStore: services.secretStore,
+        // Relayed `/integrations` reads; changing them is owner-surface.
+        ...(command.toLowerCase().startsWith("integration") ? integrationsFor(services) : {}),
         ...(confirmedBy ? { ownerConfirmed: true } : {}),
         ...(access === "delegate"
           ? {

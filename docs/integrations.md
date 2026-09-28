@@ -111,6 +111,13 @@ foreman integrations update linear --departments product --agents hermes
 `integration` works as an alias. Names resolve as the server name, then the
 integration id, then an alias (`jira` → `atlassian`).
 
+## From chat
+
+From Slack, Discord or the Telegram approval bot you can list integrations
+and enable, disable or remove them (removing asks for a one-time code);
+see [notifications](notifications.md#integrations-from-chat). Adding one
+and entering credentials happen only on the Foreman host.
+
 ## Two accounts
 
 ```bash

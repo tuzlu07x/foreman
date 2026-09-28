@@ -41,6 +41,9 @@ import {
 import { SecretNotFoundError } from "./secret-store.js";
 import { loadActiveRegistry } from "./registry-catalog.js";
 import type { RegistryService } from "./registry.js";
+import { clipForSurface, integrationChat } from "./integrations/chat.js";
+import type { ConfirmationStore } from "./integrations/confirmations.js";
+import type { IntegrationService } from "./integrations/service.js";
 import type { SecretStore } from "./secret-store.js";
 
 // =============================================================================
@@ -104,6 +107,18 @@ export interface ForemanCommandContext {
    *  likes); org, budget and runaway checks still apply to the relaying
    *  agent. Only mcp-stdio sets it, and only after that approval. */
   ownerConfirmed?: boolean;
+  /** Integrations (`/integrations`, `/integration …`). */
+  integrations?: {
+    service: IntegrationService;
+    /** Chat remove codes; only `foreman start` keeps them. */
+    confirmations?: ConfirmationStore;
+    /** Told about changes made from chat (the inbox). */
+    notice?: (title: string) => void;
+  };
+  /** An owner surface whose sender is not one of `owner_user_ids`
+   *  (Slack / Discord) sets this to false: it may read integrations but
+   *  not change them. Unset = the surface's own owner rule applies. */
+  integrationOwner?: boolean;
   /** The relaying agent hands out work as itself (#656): `write`, `assign`
    *  and `<agent> <task>` from a verified agent are its delegation, not
    *  yours. No owner check and no owner attribution; the org chart,
@@ -275,6 +290,7 @@ export class ForemanCommandRouter {
 /** Verbs that only read state. `report` / free-form questions may spend
  *  Foreman's LLM budget, which has its own cap. */
 const READ_VERBS: ReadonlySet<string> = new Set([
+  "integrations",
   "help",
   "status",
   "agent",
@@ -309,6 +325,10 @@ export function relayedCommandAccess(
   if (OWNER_SURFACE_VERBS.has(verb)) return "owner-surface";
   if (DELEGATION_VERBS.has(verb)) return "delegate";
   if (verb === "llm") return (args[0] ?? "status").toLowerCase() === "status" ? "read" : "change";
+  // Reading integrations is fine from a relay; changing them is yours only.
+  if (verb === "integration") {
+    return ["list", "status", "show"].includes((args[0] ?? "list").toLowerCase()) ? "read" : "owner-surface";
+  }
   if (verb === "model" || verb === "models") return args.length === 0 ? "read" : "change";
   if (router.has(verb)) return "change";
   // Not a verb: `<agent> <task>` hands out work (a `write`); anything else
@@ -464,6 +484,16 @@ export function registerBuiltinCommands(router: ForemanCommandRouter): void {
     "Give a task to a role, a department (its head) or an agent from org.yaml. `/foreman assign marketing <task>`.",
   );
   router.register("org", orgHandler, "Show the org chart (departments, roles, reporting lines).");
+  router.register(
+    "integrations",
+    (_args, ctx) => integrationHandler(["list"], ctx),
+    "List integrations (GitHub, GitLab, Jira, Trello, Linear, Notion).",
+  );
+  router.register(
+    "integration",
+    integrationHandler,
+    "`integration status|enable|disable|remove <name>` — add and change them on the host.",
+  );
 }
 
 function orgHandler(_args: string[], ctx: ForemanCommandContext): ForemanCommandResult {
@@ -575,6 +605,19 @@ function ownerOnly(verb: string): ForemanCommandResult {
     text: `\`${verb}\` is for you only: use the TUI console, \`foreman org ${verb === "comms" ? "messages" : verb}\`, or /foreman in two-way Slack or Discord.`,
     errorCode: "NOT_AUTHORIZED",
   };
+}
+
+async function integrationHandler(args: string[], ctx: ForemanCommandContext): Promise<ForemanCommandResult> {
+  const surface = ctx.sourceAgent;
+  const text = await integrationChat(args, {
+    service: ctx.integrations?.service ?? null,
+    confirmations: ctx.integrations?.confirmations ?? null,
+    surface,
+    user: (ctx.sourceUser ?? "").replace(/^[a-z]+:/, ""),
+    owner: ctx.trustedOwner === true && ctx.integrationOwner !== false,
+    ...(ctx.integrations?.notice ? { notice: ctx.integrations.notice } : {}),
+  });
+  return { ok: true, text: clipForSurface(text, surface) };
 }
 
 function tellHandler(args: string[], ctx: ForemanCommandContext): ForemanCommandResult {
