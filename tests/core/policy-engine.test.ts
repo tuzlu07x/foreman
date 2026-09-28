@@ -1,3 +1,4 @@
+import { parse as parseYaml } from "yaml";
 import type Database from "better-sqlite3";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -616,8 +617,11 @@ agents:
         expect(yaml).toContain("target: tool:read_file");
         expect(yaml).toContain("effect: deny");
         expect(yaml).toContain("pathMatch:");
-        // The pattern is double-quoted so backslashes survive the YAML round trip.
-        expect(yaml).toContain('"\\\\.env(\\\\..*)?$"');
+        // Backslashes survive the YAML round trip, and the rule carries
+        // its provenance (#656: the file is the rule's only home).
+        const parsed = parseYaml(yaml) as { rules: Array<{ conditions: { pathMatch: string[]; source: { approvalId: string } } }> };
+        expect(parsed.rules.at(-1)!.conditions.pathMatch).toEqual(["\\.env(\\..*)?$"]);
+        expect(parsed.rules.at(-1)!.conditions.source.approvalId).toBe("appr-xyz");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }

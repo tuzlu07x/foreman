@@ -195,7 +195,8 @@ rememberedCommand
       return;
     }
     try {
-      engine.removeRemembered(id);
+      // A block rule is removed from policy.yaml too (#656).
+      engine.removeRemembered(id, { policyYamlPath: getForemanPaths().policyPath });
     } catch (err) {
       if (err instanceof PolicyRuleNotFoundError || err instanceof NotRememberedRuleError) {
         console.error(red("error: ") + err.message);

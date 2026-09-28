@@ -1,6 +1,6 @@
-import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { and, eq, gte, inArray, like, sql } from "drizzle-orm";
-import { parse as parseYaml } from "yaml";
+import { isSeq, parse as parseYaml, parseDocument, YAMLSeq } from "yaml";
 import { z } from "zod";
 import type { ForemanDb } from "../db/client.js";
 import { agentUsage, pendingApprovals, policies, requests } from "../db/schema.js";
@@ -402,6 +402,24 @@ export class PolicyEngine {
       const stale = [...existing.values()].flat();
       if (stale.length > 0) tx.delete(policies).where(inArray(policies.id, stale)).run();
       if (fresh.length > 0) tx.insert(policies).values(fresh).run();
+      // Block rules used to be stored twice, in the database and appended
+      // to policy.yaml (#656). The file's copy is the one that counts:
+      // drop the database copy of any block rule the file still has, so
+      // deleting it from the file removes it.
+      const inFile = approvalIdsInYaml(text, rows);
+      if (inFile.size > 0) {
+        const duplicates = tx
+          .select()
+          .from(policies)
+          .where(eq(policies.createdBy, "remember-action"))
+          .all()
+          .filter((r) => {
+            const id = approvalIdOf(r.conditions);
+            return id !== null && inFile.has(id);
+          })
+          .map((r) => r.id);
+        if (duplicates.length > 0) tx.delete(policies).where(inArray(policies.id, duplicates)).run();
+      }
     });
     return { rulesAdded: rows.length };
   }
@@ -639,6 +657,24 @@ export class PolicyEngine {
         ...(input.reason ? { reason: input.reason } : {}),
       },
     };
+    // One copy (#656): with a policy.yaml the rule lives in the file only
+    // (and so in the rules loaded from it), where you can read, edit or
+    // delete it; deleting it there removes it. Without a usable file it is
+    // kept in the database, as a remembered rule.
+    if (input.policyYamlPath) {
+      const fromYaml = this.addApprovalRuleToYaml(input.policyYamlPath, input, conditions, now);
+      if (fromYaml !== null) {
+        this.bus.emit("policy:changed", {
+          ruleId: fromYaml,
+          sourceAgent: input.sourceAgent,
+          target: input.target,
+          effect: "deny",
+          createdBy: "user",
+          changedAt: now,
+        });
+        return fromYaml;
+      }
+    }
     const result = this.db
       .insert(policies)
       .values({
@@ -660,18 +696,35 @@ export class PolicyEngine {
       createdBy: "remember-action",
       changedAt: now,
     });
-    // Best-effort YAML append — if the caller passed a path we keep the
-    // file in sync so the next `loadFromYaml` doesn't lose the rule, AND
-    // the user can grep / edit / delete by hand. Failure to write is
-    // logged-only; the DB insert already happened so the rule is live.
-    if (input.policyYamlPath) {
-      try {
-        appendApprovalRuleToYaml(input.policyYamlPath, input, now);
-      } catch {
-        // best-effort; DB persistence is the source of truth
-      }
-    }
     return ruleId;
+  }
+
+  /** Add the rule to policy.yaml's `rules:` and load the file. Nothing is
+   *  written unless the result parses. Returns the loaded rule's id, or
+   *  null when the file can't take it (unreadable, or already broken). */
+  private addApprovalRuleToYaml(
+    path: string,
+    input: AddPredicateRuleInput,
+    conditions: RuleConditions,
+    addedAt: number,
+  ): number | null {
+    let next: string;
+    try {
+      const existing = existsSync(path) ? readFileSync(path, "utf-8") : "";
+      next = withApprovalRule(existing, input, conditions, addedAt);
+      this.loadYamlText(next);
+      writeFileSync(path, next, "utf-8");
+      if (this.watched?.path === path) this.watched.stamp = fileStamp(path);
+    } catch {
+      return null;
+    }
+    const row = this.db
+      .select()
+      .from(policies)
+      .where(and(eq(policies.createdBy, "user"), eq(policies.sourceAgent, input.sourceAgent), eq(policies.target, input.target)))
+      .all()
+      .find((r) => approvalIdOf(r.conditions) === input.approvalId);
+    return row?.id ?? null;
   }
 
   list(): (typeof policies.$inferSelect)[] {
@@ -679,22 +732,38 @@ export class PolicyEngine {
   }
 
   /** Rules made from your answers ("always allow", "deny always", block
-   *  buttons), newest first: `foreman policy remembered list`. */
+   *  buttons), newest first: `foreman policy remembered list`. Block rules
+   *  that live in policy.yaml are included. */
   listRemembered(): (typeof policies.$inferSelect)[] {
     return this.db
       .select()
       .from(policies)
-      .where(eq(policies.createdBy, "remember-action"))
       .orderBy(sql`${policies.id} desc`)
-      .all();
+      .all()
+      .filter((r) => r.createdBy === "remember-action" || approvalIdOf(r.conditions) !== null);
   }
 
-  /** Forget one remembered rule. Rules from policy.yaml are edited there,
-   *  so they are refused here. Returns the removed row. */
-  removeRemembered(ruleId: number): typeof policies.$inferSelect {
+  /** Forget one remembered rule, everywhere it is kept: the database row,
+   *  and for a block rule its entry in policy.yaml. Other policy.yaml rules
+   *  are edited in the file, so they are refused. Returns the removed row. */
+  removeRemembered(ruleId: number, opts: { policyYamlPath?: string } = {}): typeof policies.$inferSelect {
     const row = this.db.select().from(policies).where(eq(policies.id, ruleId)).get();
     if (!row) throw new PolicyRuleNotFoundError(ruleId);
-    if (row.createdBy !== "remember-action") throw new NotRememberedRuleError(ruleId);
+    const approvalId = approvalIdOf(row.conditions);
+    if (row.createdBy !== "remember-action" && approvalId === null) throw new NotRememberedRuleError(ruleId);
+    if (approvalId !== null && opts.policyYamlPath && existsSync(opts.policyYamlPath)) {
+      const text = readFileSync(opts.policyYamlPath, "utf-8");
+      const next = withoutApprovalRule(text, approvalId);
+      if (next !== null) {
+        this.loadYamlText(next);
+        writeFileSync(opts.policyYamlPath, next, "utf-8");
+        if (this.watched?.path === opts.policyYamlPath) this.watched.stamp = fileStamp(opts.policyYamlPath);
+      } else if (row.createdBy !== "remember-action") {
+        throw new NotRememberedRuleError(ruleId);
+      }
+    } else if (row.createdBy !== "remember-action") {
+      throw new NotRememberedRuleError(ruleId);
+    }
     this.db.delete(policies).where(eq(policies.id, ruleId)).run();
     this.bus.emit("policy:changed", {
       ruleId,
@@ -1053,72 +1122,80 @@ export interface AddPredicateRuleInput {
   policyYamlPath?: string;
 }
 
-/** #526 — Best-effort YAML append for an approval-injected rule. The
- *  file may be empty or have an existing `rules:` block; we handle both
- *  cases by appending a self-contained YAML list item with a comment
- *  block above it. We do NOT round-trip the existing YAML through the
- *  yaml lib (would lose comments + formatting); the append is plain
- *  text that the loader parses fine because it's valid YAML on its own.
- *
- *  When the file doesn't exist, the function creates it with a `rules:`
- *  block so the appended item is anchored correctly. */
-function appendApprovalRuleToYaml(
-  path: string,
-  input: AddPredicateRuleInput,
-  addedAt: number,
-): void {
-  const block = renderApprovalRuleYamlBlock(input, addedAt);
-  if (!existsSync(path)) {
-    writeFileSync(path, `rules:\n${block}`, "utf-8");
-    return;
-  }
-  const existing = readFileSync(path, "utf-8");
-  // If the file already has a `rules:` key, append to that block.
-  // Otherwise, append a fresh `rules:` block at the end. Both paths
-  // keep existing comments / formatting intact because we never
-  // re-serialize what's already there.
-  const hasRulesBlock = /^rules:\s*$/m.test(existing) || /^rules:\s*\n/m.test(existing);
-  const sep = existing.endsWith("\n") ? "" : "\n";
-  if (hasRulesBlock) {
-    appendFileSync(path, `${sep}${block}`, "utf-8");
-  } else {
-    appendFileSync(path, `${sep}\nrules:\n${block}`, "utf-8");
+/** The approval a block rule came from, from its conditions' provenance. */
+function approvalIdOf(conditions: string | null): string | null {
+  if (!conditions) return null;
+  try {
+    const parsed = JSON.parse(conditions) as RuleConditions;
+    return parsed.source?.kind === "approval" && typeof parsed.source.approvalId === "string"
+      ? parsed.source.approvalId
+      : null;
+  } catch {
+    return null;
   }
 }
 
-function renderApprovalRuleYamlBlock(
+const APPROVAL_COMMENT_RE = /Added from approval (\S+)/g;
+
+/** Approvals whose block rule is in this policy.yaml: from the rules'
+ *  provenance, and from the comment older versions wrote above them. */
+function approvalIdsInYaml(text: string, rows: ReadonlyArray<{ conditions?: string | null }>): Set<string> {
+  const ids = new Set<string>();
+  for (const row of rows) {
+    const id = approvalIdOf(row.conditions ?? null);
+    if (id) ids.add(id);
+  }
+  for (const m of text.matchAll(APPROVAL_COMMENT_RE)) ids.add(m[1]!);
+  return ids;
+}
+
+/** policy.yaml with a block rule added to `rules:` (comments and layout
+ *  kept), with its provenance in the rule and a comment above it. */
+function withApprovalRule(
+  text: string,
   input: AddPredicateRuleInput,
+  conditions: RuleConditions,
   addedAt: number,
 ): string {
-  const iso = new Date(addedAt).toISOString();
-  const lines: string[] = [];
-  lines.push(`# === Foreman approval-injected rule ===`);
-  lines.push(`# Added from approval ${input.approvalId} at ${iso}`);
-  if (input.reason) {
-    lines.push(`# Reason: ${input.reason}`);
+  const doc = parseDocument(text);
+  if (doc.errors.length > 0) throw doc.errors[0]!;
+  let rules = doc.get("rules", true);
+  if (!isSeq(rules)) {
+    rules = new YAMLSeq();
+    doc.set("rules", rules);
   }
-  lines.push(
-    `# Edit / delete this rule by removing this entire block; Foreman won't re-add it.`,
-  );
-  lines.push(`  - source: ${input.sourceAgent}`);
-  lines.push(`    target: ${input.target}`);
-  lines.push(`    effect: deny`);
-  lines.push(`    conditions:`);
-  if (input.predicate.pathMatch && input.predicate.pathMatch.length > 0) {
-    lines.push(`      pathMatch:`);
-    for (const p of input.predicate.pathMatch) {
-      // Pattern strings may contain regex metachars + backslashes; YAML
-      // double-quote handles them with the standard escape rules.
-      lines.push(`        - ${JSON.stringify(p)}`);
-    }
-  }
-  if (input.predicate.toolPattern) {
-    lines.push(`      toolPattern: ${JSON.stringify(input.predicate.toolPattern)}`);
-  }
-  if (input.predicate.argContains) {
-    lines.push(`      argContains: ${JSON.stringify(input.predicate.argContains)}`);
-  }
-  return `${lines.join("\n")}\n`;
+  const node = doc.createNode({
+    source: input.sourceAgent,
+    target: input.target,
+    effect: "deny",
+    conditions,
+  });
+  node.commentBefore = [
+    " === Foreman approval-injected rule ===",
+    ` Added from approval ${input.approvalId} at ${new Date(addedAt).toISOString()}`,
+    ...(input.reason ? [` Reason: ${input.reason.replace(/[\r\n]+/g, " ")}`] : []),
+    " Delete this entry (or run `foreman policy remembered list` / `remove <id>`) to drop the rule.",
+  ].join("\n");
+  (rules as YAMLSeq).items.push(node);
+  return doc.toString();
+}
+
+/** policy.yaml without the block rule from `approvalId`, or null when the
+ *  file has no such entry (edited by hand). */
+function withoutApprovalRule(text: string, approvalId: string): string | null {
+  const doc = parseDocument(text);
+  if (doc.errors.length > 0) return null;
+  const rules = doc.get("rules", true);
+  if (!isSeq(rules)) return null;
+  const index = rules.items.findIndex((item) => {
+    const value = (item as { toJSON?: () => unknown }).toJSON?.() as { conditions?: RuleConditions } | undefined;
+    if (value?.conditions?.source?.approvalId === approvalId) return true;
+    const comment = (item as { commentBefore?: string | null }).commentBefore ?? "";
+    return comment.includes(`Added from approval ${approvalId} `) || comment.endsWith(`Added from approval ${approvalId}`);
+  });
+  if (index < 0) return null;
+  rules.items.splice(index, 1);
+  return doc.toString();
 }
 
 /** Path patterns match case-insensitively by default (macOS and Windows
