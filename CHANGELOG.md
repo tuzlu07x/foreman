@@ -83,6 +83,10 @@ All notable changes to Foreman are documented here. The format follows
   preset. `/foreman model`'s tap-to-copy list follows the tiers and covers
   Gemini. The wizard's live model list now includes GPT-6 models and sorts
   newest first by version (Claude Fable no longer sank below Haiku).
+- **`foreman doctor` before `init`.** The `fts5` row said `requests_fts ready`
+  before any database existed. It now reports ``FTS5 available (no database
+  yet — run `foreman init`)`` until `foreman.db` exists, and only says
+  `requests_fts ready` when the real database has the table.
 - **LLM budget pricing.** A model missing from Foreman's price table was
   billed at the provider's cheapest rate: Claude Opus 5 or Fable at Haiku
   prices, gpt-5.x at gpt-4o-mini, Gemini 2.5 and 3.x at 2.0 Flash, so the

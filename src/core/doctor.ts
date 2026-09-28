@@ -4,6 +4,7 @@ import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { delimiter } from "node:path";
 import { FOREMAN_VERSION } from "../version.js";
 import { parse as parseYaml } from "yaml";
+import { sql } from "drizzle-orm";
 import { createInMemoryDb, getDb, type ForemanDb } from "../db/client.js";
 import { getMigrationStatus } from "../db/migration-status.js";
 import { derivePublicKey } from "../identity/keypair.js";
@@ -355,29 +356,28 @@ export function checkDatabase(): CheckResult {
   }
 }
 
+const FTS5_REMEDIATION =
+  "The loaded better-sqlite3 has no FTS5. Its bundled prebuilds include FTS5, so reinstall Foreman ('npm install -g foreman-agent') on a supported platform (docs/install.md#supported-platforms).";
+
+const REQUESTS_FTS_QUERY =
+  "SELECT name FROM sqlite_master WHERE type='table' AND name='requests_fts'";
+
+// The in-memory probe only proves the loaded SQLite has FTS5. Whether
+// requests_fts is ready is a property of the real foreman.db, so it is
+// only claimed once that database exists and carries the table.
 export function checkFts5(): CheckResult {
   try {
     const { sqlite } = createInMemoryDb();
-    const row = sqlite
-      .prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='requests_fts'",
-      )
-      .get();
+    const row = sqlite.prepare(REQUESTS_FTS_QUERY).get();
     sqlite.close();
     if (!row) {
       return {
         name: "fts5",
         status: "fail",
         message: "requests_fts virtual table not present after migration",
-        remediation:
-          "The loaded better-sqlite3 has no FTS5. Its bundled prebuilds include FTS5, so reinstall Foreman ('npm install -g foreman-agent') on a supported platform (docs/install.md#supported-platforms).",
+        remediation: FTS5_REMEDIATION,
       };
     }
-    return {
-      name: "fts5",
-      status: "ok",
-      message: "FTS5 available; requests_fts ready",
-    };
   } catch (err) {
     return {
       name: "fts5",
@@ -386,6 +386,37 @@ export function checkFts5(): CheckResult {
       remediation: "Reinstall better-sqlite3 with FTS5 enabled.",
     };
   }
+  if (!existsSync(getForemanPaths().dbPath)) {
+    return {
+      name: "fts5",
+      status: "ok",
+      message: "FTS5 available (no database yet — run `foreman init`)",
+    };
+  }
+  let present: boolean;
+  try {
+    present = getDb().get<{ name: string }>(sql.raw(REQUESTS_FTS_QUERY)) !== undefined;
+  } catch (err) {
+    return {
+      name: "fts5",
+      status: "warn",
+      message: `FTS5 available; couldn't check requests_fts in foreman.db: ${err instanceof Error ? err.message : String(err)}`,
+      remediation: "See the database check above.",
+    };
+  }
+  if (!present) {
+    return {
+      name: "fts5",
+      status: "fail",
+      message: "FTS5 available, but foreman.db has no requests_fts table",
+      remediation: "Back up foreman.db, then re-run 'foreman init'.",
+    };
+  }
+  return {
+    name: "fts5",
+    status: "ok",
+    message: "FTS5 available; requests_fts ready",
+  };
 }
 
 export function checkPolicyYaml(): CheckResult {
