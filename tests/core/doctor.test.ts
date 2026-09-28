@@ -24,7 +24,8 @@ import {
   runDoctor,
   type CheckResult,
 } from "../../src/core/doctor.js";
-import { closeDb } from "../../src/db/client.js";
+import { sql } from "drizzle-orm";
+import { closeDb, getDb } from "../../src/db/client.js";
 import { runInit } from "../../src/cli/init.js";
 
 describe("computeSummary", () => {
@@ -223,10 +224,38 @@ describe("checkDatabase", () => {
 });
 
 describe("checkFts5", () => {
-  it("passes because better-sqlite3 ships with FTS5 on supported platforms", () => {
+  const home = withTmpHome();
+
+  beforeEach(() => {
+    home.setup();
+  });
+  afterEach(() => {
+    home.teardown();
+  });
+
+  it("before init reports FTS5 available but doesn't claim requests_fts is ready", () => {
     const result = checkFts5();
     expect(result.status).toBe("ok");
-    expect(result.message).toContain("FTS5");
+    expect(result.message).toContain("FTS5 available");
+    expect(result.message).toContain("no database yet");
+    expect(result.message).toContain("foreman init");
+    expect(result.message).not.toContain("requests_fts ready");
+  });
+
+  it("after init reports requests_fts ready from the real foreman.db", () => {
+    runInit();
+    const result = checkFts5();
+    expect(result.status).toBe("ok");
+    expect(result.message).toBe("FTS5 available; requests_fts ready");
+  });
+
+  it("fails when foreman.db exists without the requests_fts table", () => {
+    runInit();
+    const db = getDb();
+    db.run(sql`DROP TABLE requests_fts`);
+    const result = checkFts5();
+    expect(result.status).toBe("fail");
+    expect(result.message).toContain("no requests_fts table");
   });
 });
 

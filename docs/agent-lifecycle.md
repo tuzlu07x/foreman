@@ -36,7 +36,7 @@ An unverified connection that claims a blocked or disabled id is refused too (se
 | `foreman agent add <registry-id>` | register an agent from the bundled catalog (`foreman registry list`); see below |
 | `foreman agent add <name> --type <registry-id>` | the same under a name of your own |
 | `foreman agent add` | interactive: pick from the catalog |
-| `foreman agent show <name>` | the agent row (status, registry entry, transport, identity token) plus its MCP config snippet |
+| `foreman agent show <name>` | the agent row (status, registry entry, transport, public-key fingerprint, identity token) plus its MCP config snippet; `--json` adds the full public key in hex (`publicKey`) and its fingerprint (`publicKeyFingerprint`) |
 | `foreman agent update [name]` | upgrade an agent's npm package (omit the name or pass `all` for every agent) |
 | `foreman agent remove <name> [--uninstall]` | unregister, revoke its keypair and identity token, remove Foreman's MCP entry (and Claude Code hook) from the agent's config; `--uninstall` also uninstalls the binary if Foreman installed it |
 | `foreman agent rewire [<name>\|--all]` | give the agent its identity token and rewrite its MCP wiring (see [Agent identity tokens](#agent-identity-tokens)) |

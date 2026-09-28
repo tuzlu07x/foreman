@@ -1,6 +1,7 @@
 import type { RegisteredAgent } from "../core/registry.js";
 import { terminalSafe as t } from "../core/terminal-text.js";
 import type { policies, Request } from "../db/schema.js";
+import { fingerprint } from "../tui/boot-info.js";
 import { formatDuration, formatTime, summariseTool } from "../tui/format.js";
 import { dim, green, orange, red } from "./colors.js";
 
@@ -115,6 +116,19 @@ export function renderAgentJson(agent: RegisteredAgent): unknown {
     registeredAt: agent.registeredAt,
     lastSeenAt: agent.lastSeenAt,
     metadata: agent.metadata,
+  };
+}
+
+/** An agent's public key as `foreman agent show --json` prints it: the
+ *  whole key in hex, plus the short fingerprint `foreman init` prints for
+ *  Foreman's own key. Public material only. */
+export function renderPublicKeyJson(publicKey: Buffer): {
+  publicKey: string;
+  publicKeyFingerprint: string;
+} {
+  return {
+    publicKey: publicKey.toString("hex"),
+    publicKeyFingerprint: `ed25519:${fingerprint(publicKey)}`,
   };
 }
 

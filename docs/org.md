@@ -46,9 +46,17 @@ Foreman spawned for it), Foreman checks the chart:
 | you (terminal / owner) → anyone | ✅ always |
 
 `cross_department` can also be `allow` or `deny` (isolated departments).
-`foreman org check <from> <to>` explains any decision. A `can_call` /
-`cannot_call` rule in `policy.yaml` for that pair of agents decides first
-(see [hand-offs](policy.md#hand-offs-between-agents)).
+`foreman org check <from> <to>` explains any decision. Each side can be an
+agent id or a role id; a name that is neither is reported by side and the
+command exits 1. A blocked hand-off shows the chart's reason and the route it
+allows instead (`next: hand it to cto (claude-code), engineer's manager, …`).
+
+`policy.yaml` is checked first (see
+[hand-offs](policy.md#hand-offs-between-agents)): a `cannot_call` rule for
+the pair, or a `can_call` list for the target that leaves out `write`, blocks
+the hand-off even when the chart allows it, and an `ask` rule sends it to you.
+A `can_call` allow doesn't lift a block from the chart. `foreman org check`
+says when `policy.yaml` decides, and when no rule applies and the chart does.
 
 **Least-privilege tools.** Each department (or a single role) lists the
 [MCP hub](./mcp-hub.md) servers it may use. Finance sees Stripe, not GitHub;
@@ -108,7 +116,7 @@ about roles filled by agents you haven't registered yet.
 | `foreman org init [--template t] [--company n] [--force]` | Create org.yaml |
 | `foreman org show [--json]` | The chart, with registration status and tool access |
 | `foreman org validate` | Structure + warnings |
-| `foreman org check <from> <to>` | Explain a delegation decision |
+| `foreman org check <from> <to>` | Explain a delegation decision (agent or role ids; `policy.yaml` first, then the chart) |
 | `foreman org assign <role\|department\|agent> <task…>` | Queue a task (needs `foreman start` running) |
 | `foreman org sync` | Push titles / responsibilities / model overrides into the agent registry |
 | `foreman org upgrade` | Upgrade every agent runtime the org uses |

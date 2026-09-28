@@ -180,6 +180,7 @@ When an agent hands work to another agent (`/foreman write <agent> …`, `assign
 - `can_call: {claude-code: [write]}` becomes a `claude-code:write` allow rule, and makes the list for that agent exhaustive: once you list what hermes may do on claude-code, anything else on claude-code is denied (`policy:can_call`). Calls to agents you didn't list aren't affected.
 - You can write the same as `rules:` (`source: hermes`, `target: "codex:write"`), with any effect, including `ask`.
 - With no rule, the org chart decides (`policy:org.yaml`, see [`org.md`](org.md)), and the risk engine can still ask you.
+- An allow rule doesn't lift a block from the org chart: a hand-off `org.yaml` refuses stays refused. `foreman org check <from> <to>` shows both.
 
 These rules bind agents only. You at the terminal, in the TUI console or in your own chat aren't an agent, so they don't apply to what you hand out.
 
