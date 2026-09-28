@@ -421,7 +421,12 @@ export class PolicyEngine {
           .map((r) => r.id);
         if (duplicates.length > 0) tx.delete(policies).where(inArray(policies.id, duplicates)).run();
       }
-    });
+      // IMMEDIATE: take the write lock before reading. A deferred
+      // transaction that reads and then writes gets SQLITE_BUSY_SNAPSHOT
+      // straight away (no busy wait) when another process committed in
+      // between, e.g. an agent's `foreman mcp-stdio` writing audit rows
+      // while `foreman start` boots (#594).
+    }, { behavior: "immediate" });
     return { rulesAdded: rows.length };
   }
 
