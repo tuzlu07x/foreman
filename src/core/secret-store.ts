@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { ForemanDb } from "../db/client.js";
 import { secrets } from "../db/schema.js";
-import { decrypt, encrypt } from "../identity/encryption.js";
+import { decrypt, encrypt, EncryptionError } from "../identity/encryption.js";
 
 export interface StoredSecretMeta {
   name: string;
@@ -50,6 +50,21 @@ export class ReservedSecretError extends Error {
   constructor(public readonly secretName: string) {
     super(`"${secretName}" is an agent identity token — manage it with \`foreman agent token\``);
     this.name = "ReservedSecretError";
+  }
+}
+
+/** The stored value doesn't decrypt with this secrets.key: the key was
+ *  lost and replaced, or it is the wrong file (#657). Friendly: the CLI
+ *  prints the message instead of a stack trace. Still an EncryptionError,
+ *  so nothing that catches those changes. */
+export class SecretDecryptError extends EncryptionError {
+  readonly foremanFriendly = true;
+  constructor(public readonly secretName: string) {
+    super(
+      `can't decrypt secret "${secretName}": secrets.key isn't the key it was stored with. ` +
+        "Restore the original secrets.key, or remove the secret and add it again ('foreman doctor' checks the key).",
+    );
+    this.name = "SecretDecryptError";
   }
 }
 
@@ -133,14 +148,20 @@ export class SecretStore {
       .where(eq(secrets.name, name))
       .get();
     if (!row) throw new SecretNotFoundError(name);
-    const plaintext = decrypt(
-      {
-        ciphertext: row.valueEncrypted,
-        iv: row.iv,
-        authTag: row.authTag,
-      },
-      this.masterKey,
-    );
+    let plaintext: string;
+    try {
+      plaintext = decrypt(
+        {
+          ciphertext: row.valueEncrypted,
+          iv: row.iv,
+          authTag: row.authTag,
+        },
+        this.masterKey,
+      );
+    } catch (err) {
+      if (err instanceof EncryptionError) throw new SecretDecryptError(name);
+      throw err;
+    }
     if (touch) {
       this.db
         .update(secrets)
