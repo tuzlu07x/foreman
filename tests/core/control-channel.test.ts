@@ -187,7 +187,7 @@ describe("ControlChannel (#440)", () => {
 
     it("a status write lost to a locked database is retried, never re-running the command (#594)", async () => {
       const { id } = channel.enqueue({ command: "write", args: ["codex", "task"], sourceAgent: "h" });
-      const handler: ControlHandler = vi.fn(() => ({ status: "applied" }));
+      const handler = vi.fn<ControlHandler>(() => ({ status: "applied" }));
       const handlers = new Map([["write", handler]]);
       const busy = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
       vi.spyOn(channel, "markApplied").mockImplementationOnce(() => {
