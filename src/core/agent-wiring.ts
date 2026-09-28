@@ -1,15 +1,21 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { extname } from "node:path";
 import { pickMcpConfigPath } from "./agent-add-flow.js";
 import {
   applyInjection,
   planInjection,
+  ConfigParseError,
   ConfigShapeError,
   hasConfigComments,
   isFilesystemError,
+  planUnwire,
   planZeroclawInjection,
   readWiredAgentToken,
   UnsupportedConfigFormatError,
+  writeConfigAtomically,
 } from "./agent-config-injector.js";
+import { stripForemanHooks, type ClaudeSettings } from "./agent-hook.js";
+import { resolveAgentSettingsPath } from "./agent-permissions.js";
 import {
   buildMcpRegisterHint,
   writeMcpWrapperScript,
@@ -28,6 +34,7 @@ import type { AgentEntry } from "./registry-catalog.js";
 import {
   checkTokenPath,
   isExposedTokenFile,
+  readTokenFile,
   UnsafeTokenPathError,
   writeTokenFile,
 } from "./token-file-safety.js";
@@ -36,7 +43,8 @@ import type { RegisteredAgent } from "./registry.js";
 // Writes an agent's MCP wiring with its identity token (#618): the foreman
 // entry in the agent's config file and, for agents that register a wrapper
 // script (Hermes), the wrapper. Shared by `foreman agent add`, `rewire`,
-// `token rotate` and the setup wizard.
+// `token rotate` and the setup wizard. `unwireAgent` takes it back out
+// when the agent is removed.
 
 export type ConfigOutcome =
   | "written"
@@ -329,6 +337,134 @@ export function describeTokenAudit(audit: AgentTokenAudit): { message: string; r
   }
   if (audit.exposed.length > 0) fixes.push(`\`chmod 600\` ${audit.exposed.join(" ")} (or rewire, which does it).`);
   return { message: parts.join("; "), remediation: fixes.join(" ") };
+}
+
+export interface UnwireOptions {
+  /** The agent's MCP config (default: where `rewire` writes it). */
+  configPath?: string;
+  /** The agent's settings file holding Foreman's PreToolUse hook
+   *  (default: the registry's `config_paths`, when it is JSON). */
+  settingsPath?: string;
+}
+
+export interface UnwireResult {
+  /** What was taken out, e.g. `mcpServers.foreman from /home/me/.claude.json`. */
+  removed: string[];
+  /** What was left in place, and why. Never quotes file content. */
+  notes: string[];
+}
+
+/**
+ * The inverse of `writeAgentWiring` (and `foreman agent hook install`) for
+ * an agent being removed: take its `foreman` MCP entry out of the agent's
+ * config and, for Claude Code, Foreman's PreToolUse hook out of its
+ * settings. Only Foreman's own entries for `agentId` go; other MCP servers,
+ * other agents' entries and every other key stay. Best-effort: a missing,
+ * unreadable or unparsable file, or a symlink (never written through), is
+ * reported in `notes` and never throws. Files keep their mode and are
+ * replaced in one step, like the writers do.
+ */
+export function unwireAgent(
+  agentId: string,
+  entry: AgentEntry | null,
+  options: UnwireOptions = {},
+): UnwireResult {
+  const result: UnwireResult = { removed: [], notes: [] };
+  const configPath = options.configPath ?? (entry ? pickMcpConfigPath(entry) : null);
+  if (configPath) {
+    rewriteOwnConfig(configPath, result, (text) => {
+      const plan = planUnwire(configPath, text, agentId);
+      const notes = plan.kept.map((label) => `${configPath}: left ${label} (not ${agentId}'s Foreman wiring)`);
+      if (plan.removed.length > 0 && hasConfigComments(plan.before, plan.format)) {
+        notes.push(
+          `${configPath}: its comments were not kept (Foreman rewrote the ${plan.format.toUpperCase()} to remove its entry).`,
+        );
+      }
+      return {
+        after: plan.removed.length > 0 ? plan.after : null,
+        removed: plan.removed.map((label) => `${label} from ${configPath}`),
+        notes,
+      };
+    });
+  }
+  const settingsPath = options.settingsPath ?? (entry ? hookSettingsPath(entry) : null);
+  if (settingsPath) {
+    rewriteOwnConfig(settingsPath, result, (text) => {
+      const none = { after: null, removed: [], notes: [] };
+      if (text.trim().length === 0) return none;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new ConfigParseError(settingsPath, "json");
+      }
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return none;
+      const next = stripForemanHooks(parsed as ClaudeSettings, agentId);
+      if (next === null) return none;
+      return {
+        after: `${JSON.stringify(next, null, 2)}\n`,
+        removed: [`Foreman's PreToolUse hook from ${settingsPath}`],
+        notes: [],
+      };
+    });
+  }
+  return result;
+}
+
+interface ConfigEdit {
+  /** The file's new text; null leaves it as it is. */
+  after: string | null;
+  removed: string[];
+  notes: string[];
+}
+
+/** Where `foreman agent hook install` puts the hook: the agent's JSON
+ *  settings file from the registry's `config_paths`. */
+function hookSettingsPath(entry: AgentEntry): string | null {
+  const configPaths = entry.config_paths ?? [];
+  if (configPaths.length === 0) return null;
+  const path = resolveAgentSettingsPath(configPaths);
+  return extname(path).toLowerCase() === ".json" ? path : null;
+}
+
+/** Read `path` (never through a symlink, only your own regular file),
+ *  let `edit` say what changes, and replace it in one step with its mode
+ *  kept. Its removals count only once written; every failure becomes a
+ *  note. */
+function rewriteOwnConfig(path: string, result: UnwireResult, edit: (text: string) => ConfigEdit): void {
+  let mode: number;
+  try {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) {
+      // Deciding what's Foreman's needs the content; a symlink's target
+      // could be anywhere, so it is neither read nor rewritten.
+      result.notes.push(
+        `${path} is a symlink; Foreman left it alone (it never reads or writes through one). Remove any foreman entry in it by hand.`,
+      );
+      return;
+    }
+    mode = stat.mode & 0o777;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return; // nothing to clean
+    result.notes.push(`${describeUnwireError(path, err)}; nothing removed from it`);
+    return;
+  }
+  try {
+    const change = edit(readTokenFile(path, { private: false }));
+    if (change.after !== null) writeConfigAtomically(path, change.after, mode);
+    result.removed.push(...change.removed);
+    result.notes.push(...change.notes);
+  } catch (err) {
+    result.notes.push(`${describeUnwireError(path, err)}; nothing removed from it`);
+  }
+}
+
+/** Never a parser's own message: it may quote a token-bearing file. */
+function describeUnwireError(path: string, err: unknown): string {
+  if (err instanceof UnsupportedConfigFormatError) return `${path} isn't a JSON, YAML or TOML file`;
+  if (err instanceof ConfigParseError || err instanceof ConfigShapeError) return err.message;
+  if (err instanceof UnsafeTokenPathError || isFilesystemError(err)) return err.message;
+  return `${path} could not be updated`;
 }
 
 function writeTokenOutFile(path: string, token: string): void {

@@ -46,6 +46,16 @@ All notable changes to Foreman are documented here. The format follows
   whatever `policy.yaml` says, and is never projected into agent files.
 
 ### Fixed
+- **`foreman agent remove` takes Foreman out of the agent's config.** It
+  revoked the agent's token but left the `foreman` MCP server entry (e.g.
+  `mcpServers.foreman` in `~/.claude.json`, `mcp_servers.foreman` for Codex
+  and Hermes, ZeroClaw's `[[mcp.servers]]` entry and `foreman` bundle) and
+  Claude Code's PreToolUse hook behind. Removing an agent from the CLI, the
+  TUI (`x`) or by unticking it in the setup wizard now removes that agent's
+  own entries, keeps every other server, hook and key and the file's
+  permissions, and prints what it removed. A config it can't read, parse or
+  that is a symlink is left alone with a note and never blocks the removal
+  ([docs/agent-lifecycle.md](docs/agent-lifecycle.md#what-gets-cleaned-up-on-remove)).
 - **LLM budget pricing.** A model missing from Foreman's price table was
   billed at the provider's cheapest rate: Claude Opus 5 or Fable at Haiku
   prices, gpt-5.x at gpt-4o-mini, Gemini 2.5 and 3.x at 2.0 Flash, so the

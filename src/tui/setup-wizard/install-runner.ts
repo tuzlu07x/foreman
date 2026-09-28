@@ -26,7 +26,7 @@ import {
 } from "../../core/node-engines.js";
 import { ensureAgentToken, revokeAgentToken } from "../../core/agent-token.js";
 import { buildMcpSnippet, snippetForDisplay } from "../../core/agent-mcp-snippet.js";
-import { NO_CONFIG_PATH_NOTE, tokenHandoffHint } from "../../core/agent-wiring.js";
+import { NO_CONFIG_PATH_NOTE, tokenHandoffHint, unwireAgent } from "../../core/agent-wiring.js";
 import {
   autoRegisterMcp,
   buildMcpRegisterHint,
@@ -105,6 +105,10 @@ export async function runInstallStep(
     revokeAgentToken(services.secretStore, id);
     summary.removed.push(id);
     log(`  ✓ unregistered "${id}"`);
+    // Best-effort: take Foreman's wiring back out of the agent's config.
+    const unwired = unwireAgent(id, entry);
+    for (const line of unwired.removed) log(`  ✓ removed ${line}`);
+    for (const note of unwired.notes) log(`  ⚠ ${note}`);
     if (!removeOptions.uninstall || !installedByForeman) {
       log(
         `  ◦ ${entry?.name ?? existing.displayName} left installed` +

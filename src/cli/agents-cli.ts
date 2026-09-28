@@ -28,6 +28,7 @@ import {
 import {
   describeWiringError,
   rewireAgent,
+  unwireAgent,
   wiringDelivered,
   WiringParseError,
 } from "../core/agent-wiring.js";
@@ -191,7 +192,7 @@ agentsCommand
 agentsCommand
   .command("remove <name>")
   .description(
-    "Unregister an agent and revoke its key and token (its binary stays installed; re-add issues a fresh keypair)",
+    "Unregister an agent, revoke its key and token, and remove Foreman's MCP entry (and hook) from its config (its binary stays installed; re-add issues a fresh keypair)",
   )
   .option("--yes", "skip confirmation prompt")
   .option(
@@ -247,10 +248,10 @@ agentsCommand
           return;
         }
         const what = options.uninstall
-          ? `Foreman unregisters it, revokes its key and identity token, then uninstalls ${label}` +
+          ? `Foreman unregisters it, revokes its key and identity token, removes its foreman MCP entry, then uninstalls ${label}` +
             (uninstallCmd ? ` (${uninstallCmd})` : "") +
             "."
-          : `Foreman unregisters it and revokes its key and identity token. ${label} stays installed.`;
+          : `Foreman unregisters it, revokes its key and identity token and removes its foreman MCP entry. ${label} stays installed.`;
         const ok = await requireConfirm({
           yes: options.yes,
           question: `Remove agent "${name}"? ${what}`,
@@ -264,6 +265,10 @@ agentsCommand
         // A removed agent's token must not keep proving it (#618).
         revokeAgentToken(getTokenStore(), name);
         console.log(`${green("✓")} agent ${name} removed`);
+        // Best-effort: take Foreman's wiring back out of the agent's config.
+        const unwired = unwireAgent(name, entry);
+        for (const line of unwired.removed) console.log(`${green("✓")} removed ${line}`);
+        for (const note of unwired.notes) console.log(orange("note: ") + note);
         if (!options.uninstall || !entry) {
           console.log(
             dim(
