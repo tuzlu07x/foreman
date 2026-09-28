@@ -432,9 +432,31 @@ describe("calculateCostUsd — OpenAI", () => {
     expect(calculateCostUsd(model, inT, outT)).toBeCloseTo(expected, 4);
   });
 
-  it("falls back to gpt-4o-mini pricing on unknown models (conservative)", () => {
-    const cost = calculateCostUsd("gpt-future-99", 1_000_000, 0);
-    expect(cost).toBeCloseTo(0.15, 4);
+  it.each([
+    ["gpt-5.4", 1_000_000, 1_000_000, 17.5],
+    ["gpt-5.4-mini", 1_000_000, 1_000_000, 5.25],
+    ["gpt-5.5", 1_000_000, 1_000_000, 35],
+    ["gpt-5-mini-2025-08-07", 1_000_000, 0, 0.25],
+    ["gpt-4o-2024-05-13", 1_000_000, 0, 5],
+  ])("prices current model %s", (model, inT, outT, expected) => {
+    expect(calculateCostUsd(model, inT, outT)).toBeCloseTo(expected, 4);
+  });
+
+  // Unknown models must never be cheaper than the model they might be:
+  // before, gpt-5.x fell back to gpt-4o-mini and a budget ran 30x over.
+  it("bills unknown models at the most expensive current price", () => {
+    expect(calculateCostUsd("gpt-future-99", 1_000_000, 1_000_000)).toBeCloseTo(
+      60,
+      4,
+    );
+    expect(calculateCostUsd("gpt-5.9", 1_000_000, 1_000_000)).toBeCloseTo(
+      60,
+      4,
+    );
+    expect(calculateCostUsd("gpt-7-pro", 1_000_000, 1_000_000)).toBeCloseTo(
+      210,
+      4,
+    );
   });
 
   it("returns 0 when both token counts are 0", () => {
