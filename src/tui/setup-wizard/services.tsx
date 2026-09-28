@@ -275,7 +275,7 @@ if (servicesPhase === "summary") {
           </Text>
         </Box>
       ) : null}
-      <Text>Continue to install? (y/n)</Text>
+      <Text>Continue to integrations? (y/n)</Text>
       <ConfirmInput
         onConfirm={() => {
           persistNotifyConfigFromWizardState(services, serviceCatalog, wiringNames);

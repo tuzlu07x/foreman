@@ -67,6 +67,17 @@ All notable changes to Foreman are documented here. The format follows
   whatever `policy.yaml` says, and is never projected into agent files.
 
 ### Fixed
+- **Setup wizard wording, from terminal QA.**
+  - The Providers summary asked "Continue to agents?" and the Services
+    summary "Continue to install?". They now name the actual next step
+    (Foreman's brain, Integrations).
+  - The brain picker said Ollama and OpenAI-compatible brains were "coming
+    in v0.2". They now say "not supported yet"; `foreman doctor` no longer
+    names a version either.
+  - Without a network, the brain's model list said only "fetch failed". It
+    now says it couldn't reach the provider, as the agent step does.
+  - The Done summary counted a stored GitHub token as "1 service github".
+    Integrations are listed in their own block, not as services.
 - **A busy database no longer kills `foreman mcp-stdio` or `foreman start`**
   (#594). When another process held the SQLite lock past the 5 s busy
   timeout, the audit log's background write threw and the process exited

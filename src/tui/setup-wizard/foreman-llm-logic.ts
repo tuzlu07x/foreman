@@ -42,7 +42,7 @@ const BRAIN_ROW_PROVIDER = {
 
 /** False for brains the LLM factory can't run yet (Ollama and
  *  OpenAI-compatible land in v0.2): the picker shows them disabled with
- *  "(coming in v0.2)" instead of letting the user configure a brain that
+ *  "(not supported yet)" instead of letting the user configure a brain that
  *  fails on its first call. */
 export function brainRowAvailable(row: keyof typeof BRAIN_ROW_PROVIDER): boolean {
   return hasRuntimeClient(BRAIN_ROW_PROVIDER[row]);

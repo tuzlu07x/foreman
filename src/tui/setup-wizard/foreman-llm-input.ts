@@ -12,6 +12,7 @@ import {
   persistForemanLlmChoice,
   resolveBrainModelSource,
 } from "./foreman-llm-logic.js";
+import { classifyModelDiscoveryError } from "./agents-logic.js";
 import { configuredBrainProviderIds } from "./shared.js";
 
 // Foreman's-brain step (Step 2) key handling. Returns true when the key
@@ -163,7 +164,7 @@ export function handleForemanLlmInput(
               setCloudModelError(
                 source.kind === "oauth"
                   ? `Couldn't list models with your Claude sign-in (${msg}). Press [Enter] to use the default model (${BRAIN_DEFAULT_MODELS[chosen]}).`
-                  : msg,
+                  : classifyModelDiscoveryError(msg, chosen),
               );
               setCloudModelOptions([]);
             }

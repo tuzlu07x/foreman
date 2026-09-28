@@ -563,13 +563,13 @@ describe("foreman-llm step (Foreman's brain)", () => {
     await w.until('openai-fake-large')
   })
 
-  it('shows Ollama and OpenAI-compatible as coming in v0.2, not selectable', async () => {
+  it('shows Ollama and OpenAI-compatible as not supported yet, not selectable', async () => {
     // The LLM factory has no client for these yet; the picker used to let
     // the user save a brain that failed on its first call.
     const w = await mount('foreman-llm')
     await w.until('pick an LLM')
-    await w.until(/✗ Local — Ollama on this machine\s+\(coming in v0\.2\)/)
-    await w.until(/✗ Custom — OpenAI-compatible\s+\(coming in v0\.2\)/)
+    await w.until(/✗ Local — Ollama on this machine\s+\(not supported yet\)/)
+    await w.until(/✗ Custom — OpenAI-compatible\s+\(not supported yet\)/)
     // With no cloud provider configured, Skip is the only selectable row.
     await w.until('❯ ✓ Skip — heuristics only')
     await w.press(DOWN)

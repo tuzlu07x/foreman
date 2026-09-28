@@ -26,7 +26,7 @@ import {
 // Key handling for every phase lives in foreman-llm-input.ts.
 // Shown in place of the description for brains the LLM factory can't run
 // yet; kept short so the row never truncates it.
-const COMING_IN_V02 = "(coming in v0.2)";
+const NOT_SUPPORTED_YET = "(not supported yet)";
 
 export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
   const {
@@ -110,7 +110,7 @@ export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
         value: "ollama",
         label: "Local — Ollama on this machine",
         sub: !brainRowAvailable("ollama")
-          ? COMING_IN_V02
+          ? NOT_SUPPORTED_YET
           : ollamaDetection.installed
             ? `free · ${ollamaDetection.installedModels.length} model${
                 ollamaDetection.installedModels.length === 1 ? "" : "s"
@@ -122,7 +122,7 @@ export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
         value: "preset",
         label: "Custom — OpenAI-compatible",
         sub: !brainRowAvailable("preset")
-          ? COMING_IN_V02
+          ? NOT_SUPPORTED_YET
           : "open-source hosts + closed clouds (xAI, Cohere, Mistral, Perplexity)",
         disabled: !brainRowAvailable("preset"),
       },
