@@ -330,3 +330,32 @@ describe('discoverModels — dispatcher + cache', () => {
     ).rejects.toThrow(/Unknown discovery provider/)
   })
 })
+
+// The Gemini model list put the API key in the URL (?key=), and a failed
+// request's error message quoted that URL, so the key could show up in the
+// setup wizard's error text. It now goes in the x-goog-api-key header, and
+// error messages never include a query string.
+describe('Gemini key never in the URL or an error message', () => {
+  const KEY = 'AIzaFAKE-gemini-key-000000000000000000'
+
+  it('sends the key in the x-goog-api-key header', async () => {
+    const seen: { url: string; headers: Record<string, string> }[] = []
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      seen.push({ url: String(url), headers: (init?.headers ?? {}) as Record<string, string> })
+      return { ok: true, status: 200, json: async () => ({ models: [] }), text: async () => '' } as unknown as Response
+    }) as unknown as typeof fetch
+    await listGeminiModels({ apiKey: KEY, fetchImpl })
+    expect(seen[0]!.url).not.toContain(KEY)
+    expect(seen[0]!.url).not.toContain('key=')
+    expect(seen[0]!.headers['x-goog-api-key']).toBe(KEY)
+  })
+
+  it('keeps the key out of an HTTP error message', async () => {
+    const fetchImpl = (async () =>
+      ({ ok: false, status: 400, json: async () => ({}), text: async () => 'API key not valid' }) as unknown as Response) as unknown as typeof fetch
+    const err = await listGeminiModels({ apiKey: KEY, fetchImpl }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ModelDiscoveryError)
+    expect(String((err as Error).message)).not.toContain(KEY)
+    expect(String((err as Error).message)).toContain('HTTP 400 from https://generativelanguage.googleapis.com/v1beta/models')
+  })
+})
