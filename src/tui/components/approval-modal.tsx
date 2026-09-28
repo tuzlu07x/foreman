@@ -36,6 +36,10 @@ export interface ApprovalModalProps {
   rememberScope?: string;
   /** A decision waiting for `y` (#656): replaces the key hints. */
   confirm?: string | null;
+  /** Rows the modal may use. A long request is clipped inside the frame
+   *  (the keys and the timer always show; [i] shows everything) instead
+   *  of pushing the header off a small terminal (#656). */
+  maxRows?: number;
 }
 
 const CATEGORY_ORDER: RiskCategory[] = [
@@ -114,8 +118,10 @@ export function ApprovalModal({
   recommendations = [],
   rememberScope,
   confirm = null,
+  maxRows,
 }: ApprovalModalProps): JSX.Element {
   const keys = { ...(rememberScope ? { rememberScope } : {}), confirm };
+  const fit = maxRows !== undefined ? { maxHeight: Math.max(10, maxRows) } : {};
   // Prefer the 3-layer security report when available; fall back to the
   // legacy factor-grouped view for cross-process / pre-#232 requests.
   if (request.securityReport) {
@@ -127,6 +133,7 @@ export function ApprovalModal({
         technicalExpanded={technicalExpanded}
         recommendations={recommendations}
         keys={keys}
+        fit={fit}
       />
     );
   }
@@ -136,6 +143,7 @@ export function ApprovalModal({
       remainingSeconds={remainingSeconds}
       recommendations={recommendations}
       keys={keys}
+      fit={fit}
     />
   );
 }
@@ -189,6 +197,8 @@ interface KeyHints {
   confirm: string | null;
 }
 
+type Fit = { maxHeight?: number };
+
 function ReportModal({
   request,
   report,
@@ -196,6 +206,7 @@ function ReportModal({
   technicalExpanded,
   recommendations,
   keys,
+  fit,
 }: {
   request: ApprovalRequest;
   report: SecurityReport;
@@ -203,6 +214,7 @@ function ReportModal({
   technicalExpanded: boolean;
   recommendations: ApprovalRecommendation[];
   keys: KeyHints;
+  fit: Fit;
 }): JSX.Element {
   const color = severityColor(report);
   // Border style now tracks severity (#234 UX-6): bold frame for critical
@@ -216,7 +228,9 @@ function ReportModal({
       borderColor={color}
       paddingX={2}
       paddingY={0}
+      {...fit}
     >
+      <Box flexDirection="column" flexShrink={1} overflowY="hidden">
       {/* Layer 1 — Verdict */}
       <VerdictHeader report={report} color={color} />
 
@@ -245,7 +259,9 @@ function ReportModal({
       </Box>
 
       <RecommendationBlock recommendations={recommendations} />
+      </Box>
 
+      <Box flexDirection="column" flexShrink={0}>
       <Box marginTop={1}>
         <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>
       </Box>
@@ -262,6 +278,7 @@ function ReportModal({
 
       <Box marginTop={1} justifyContent="flex-end">
         <TimerLabel remainingSeconds={remainingSeconds} />
+      </Box>
       </Box>
     </Box>
   );
@@ -397,11 +414,13 @@ function LegacyModal({
   remainingSeconds,
   recommendations,
   keys,
+  fit,
 }: {
   request: ApprovalRequest;
   remainingSeconds: number;
   recommendations: ApprovalRecommendation[];
   keys: KeyHints;
+  fit: Fit;
 }): JSX.Element {
   const bucket: RiskBucket = request.riskBucket ?? "medium";
   const borderColor = bucketColor(bucket);
@@ -416,7 +435,9 @@ function LegacyModal({
       borderColor={borderColor}
       paddingX={2}
       paddingY={0}
+      {...fit}
     >
+      <Box flexDirection="column" flexShrink={1} overflowY="hidden">
       <LegacyHeader
         bucket={bucket}
         bucketColor={borderColor}
@@ -480,7 +501,9 @@ function LegacyModal({
       ) : null}
 
       <RecommendationBlock recommendations={recommendations} />
+      </Box>
 
+      <Box flexDirection="column" flexShrink={0}>
       <Box marginTop={1}>
         <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>
       </Box>
@@ -495,6 +518,7 @@ function LegacyModal({
 
       <Box marginTop={1} justifyContent="flex-end">
         <TimerLabel remainingSeconds={remainingSeconds} />
+      </Box>
       </Box>
     </Box>
   );

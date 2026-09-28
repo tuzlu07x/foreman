@@ -66,12 +66,17 @@ it('Approve and deny from the TUI across processes', async (context) => {
   }
 
   let allowedId = ''
-  await j.step('a risky call (read_file config/.env) waits for approval; `a` allows it', async (ev) => {
+  await j.step('a risky call (read_file config/.env) waits for approval; `a`, then `y`, allows it', async (ev) => {
     const { reply, requestId } = await riskyCall('config/.env', ev)
     allowedId = requestId
     // Letter keys are ignored for a moment after the approval on screen changes.
     await sleep(KEY_SETTLE_MS)
+    // A high-risk call takes a second key (#656): `a` asks, `y` allows.
+    const asked = tui.mark()
     tui.press('a')
+    await tui.waitForText('Allow this HIGH-risk call', { from: asked })
+    ev('`a` asks "Allow this HIGH-risk call …?"; `y` confirms')
+    tui.press('y')
     const res = await reply
     expect(res.error).toBeUndefined()
     expect(replyText(res)).toBe('(foreman) read_file allowed by user:tui')

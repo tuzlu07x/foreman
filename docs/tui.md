@@ -35,8 +35,8 @@ deadline first:
 
 | Key | |
 | --- | --- |
-| `a` / `d` | allow once / deny |
-| `A` / `D` | always allow / always deny (writes a policy rule) |
+| `a` / `d` | allow once / deny. Allowing a high- or critical-risk call asks once more: press `y` |
+| `A` / `D` | always allow / always deny: a rule for this agent, this tool and, when the call names one, this file or command (shown as "remembers:" before you press it). `D` asks for `y`; so does `A` on a high- or critical-risk call. `foreman policy remembered list` / `remove <id>` |
 | `←` `→` or `[` `]` | next / previous approval in the queue |
 | `i` | inspect the full request |
 | `t` | technical details |

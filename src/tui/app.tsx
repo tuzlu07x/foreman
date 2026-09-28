@@ -1112,7 +1112,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
               technicalExpanded={technicalExpanded}
               recommendations={queue.current?.recommendations ?? []}
               {...(rememberText ? { rememberScope: rememberText } : {})}
-              confirm={approvalConfirm ? confirmText(approvalConfirm, rememberText) : null}
+              confirm={approvalConfirm ? confirmText(approvalConfirm, rememberText, pendingApproval) : null}
+              maxRows={pageHeight + 1 - (queueCount > 1 ? 1 : 0)}
             />
           )}
         </Box>
@@ -1461,8 +1462,13 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         setInspectOffset(inspectOffset + 10);
         return;
       }
-      if (input === "a") onResolveApproval({ decision: "allowed" }, "user");
-      else if (input === "d") onResolveApproval({ decision: "denied" }, "user");
+      if (input === "a") {
+        if (needsSecondKey(pendingApproval)) {
+          // The question is on the modal, not the inspector.
+          setInspectOpen(false);
+          setApprovalConfirm({ decision: "allowed" });
+        } else onResolveApproval({ decision: "allowed" }, "user");
+      } else if (input === "d") onResolveApproval({ decision: "denied" }, "user");
       return;
     }
     if (pendingApproval) {
@@ -1478,10 +1484,16 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         openCommand();
         return;
       }
-      if (input === "a") onResolveApproval({ decision: "allowed" }, "user");
-      else if (input === "A")
-        onResolveApproval({ decision: "allowed", remember: "allow" }, "user");
-      else if (input === "d") onResolveApproval({ decision: "denied" }, "user");
+      // Allowing a high- or critical-risk call takes a second, deliberate
+      // key (#656): one stray `a` (the Agents hotkey elsewhere) must not
+      // let `rm -rf /` through.
+      if (input === "a") {
+        if (needsSecondKey(pendingApproval)) setApprovalConfirm({ decision: "allowed" });
+        else onResolveApproval({ decision: "allowed" }, "user");
+      } else if (input === "A") {
+        if (needsSecondKey(pendingApproval)) setApprovalConfirm({ decision: "allowed", remember: "allow" });
+        else onResolveApproval({ decision: "allowed", remember: "allow" }, "user");
+      } else if (input === "d") onResolveApproval({ decision: "denied" }, "user");
       else if (input === "D") setApprovalConfirm({ decision: "denied", remember: "deny" });
       else if (input === "i") setInspectOpen(true);
       else if (input === "t") setTechnicalExpanded(!technicalExpanded);
@@ -1784,9 +1796,21 @@ function renderPanels(layout: "wide" | "medium" | "narrow"): JSX.Element {
   return <ActivityFeed minimal />;
 }
 
+/** Allowing a call at or above this risk takes `a` then `y` (#656). */
+function needsSecondKey(request: ApprovalRequest): boolean {
+  return request.riskBucket === "high" || request.riskBucket === "critical";
+}
+
 /** The question a decision waiting for `y` asks (#656). */
-function confirmText(resolution: ApprovalResolution, scope: string | undefined): string {
+function confirmText(
+  resolution: ApprovalResolution,
+  scope: string | undefined,
+  request: ApprovalRequest,
+): string {
+  const risk = request.riskBucket ? `${request.riskBucket.toUpperCase()}-risk ` : "";
   if (resolution.remember === "deny") return `Deny always: ${scope ?? "this call"}?`;
-  if (resolution.remember === "allow") return `Always allow: ${scope ?? "this call"}?`;
-  return resolution.decision === "allowed" ? "Allow this call?" : "Deny this call?";
+  if (resolution.remember === "allow") return `Always allow this ${risk}call: ${scope ?? "this call"}?`;
+  return resolution.decision === "allowed"
+    ? `Allow this ${risk}call (score ${request.riskScore}/100): ${request.sourceAgent} → ${request.targetTool ?? request.targetAgent ?? "?"}?`
+    : "Deny this call?";
 }

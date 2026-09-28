@@ -591,10 +591,10 @@ Terminal'de "tipografi" demek **renk + bold + dim** demek. Hiyerarşi:
 
 | Key | Action               |
 | --- | -------------------- |
-| `a` | Allow once           |
-| `A` | Always allow         |
+| `a` | Allow once (high / critical risk: then `y`) |
+| `A` | Always allow (high / critical risk: then `y`) |
 | `d` | Deny                 |
-| `D` | Always deny          |
+| `D` | Always deny, after `y` (the modal shows what it remembers) |
 | `r` | Remember (open rule editor) |
 | `i` | Inspect details      |
 
