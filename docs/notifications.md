@@ -277,14 +277,31 @@ channels:
 
 When an approval is decided or times out, Foreman sends **one** more POST with the outcome. It has `"kind": "outcome"`, the same `id` and `requestId` as the approval, and `"inReplyTo"` set to the approval's `messageId`, so you can match the two. Countdown refreshes are not sent.
 
-**HMAC verification** — receivers should validate:
+**HMAC verification** — with `signing_secret_ref` set, every POST carries
+`X-Foreman-Timestamp` (Unix seconds) and `X-Foreman-Signature`, an
+HMAC-SHA256 over the timestamp, a dot and the raw body. Receivers should
+check both, and refuse a timestamp more than 5 minutes from their own clock,
+so a captured delivery can't be replayed later:
 
 ```js
-const expected = "sha256=" + hmacSha256(SIGNING_SECRET, rawBody);
+const ts = req.headers["x-foreman-timestamp"];
+if (!/^\d+$/.test(ts) || Math.abs(Date.now() / 1000 - Number(ts)) > 300) {
+  return reject("stale or missing timestamp");
+}
+const expected = "sha256=" + hmacSha256(SIGNING_SECRET, `${ts}.${rawBody}`);
 if (!constantTimeEqual(expected, req.headers["x-foreman-signature"])) {
   return reject("invalid signature");
 }
 ```
+
+Inside that window a receiver that must never act twice should also drop a
+`messageId` it has already seen. (Before #656 the signature covered the body
+only; update receivers that verify it.)
+
+Webhook, Slack, Discord and ntfy URLs must be `https://`; plain `http://`
+is accepted only to this machine (`localhost`, `127.0.0.0/8`, `::1`). A URL
+with a user name or password in it is refused, and errors never repeat the
+URL.
 
 **No callback support yet** — Foreman doesn't run an inbound HTTP server in v0.1, so webhooks are delivery-only. A bidirectional flow (your automation POSTs back a decision) needs significant new infrastructure; tracked as a follow-up.
 
@@ -456,7 +473,7 @@ C11a-2 ships the **`NotificationBridge`** — the missing wire from `onAnyDecisi
 | Discord | channel webhook URL → `foreman secrets add discord-webhook-url` | Or `bot_token_ref` + `channel` id. Mentions are always disabled. Two-way (bot only): [§3a](#3a-two-way-slack-and-discord-615). |
 | Email | `foreman secrets add smtp-app-password` | Gmail / iCloud / Fastmail need an app password. Credentials are never sent over an unencrypted connection to a remote host. |
 | ntfy | `foreman notify ntfy-setup` | Install the ntfy app and subscribe to the printed topic. Self-host ntfy or set `access_token_ref` for stricter privacy. |
-| Webhook | `webhook_url_ref` (+ `signing_secret_ref`) | JSON POST with `X-Foreman-Signature: sha256=…`. |
+| Webhook | `webhook_url_ref` (+ `signing_secret_ref`) | JSON POST with `X-Foreman-Timestamp` and `X-Foreman-Signature: sha256=…` over `<timestamp>.<body>`. |
 
 Then route levels to channels:
 

@@ -14,6 +14,7 @@ import {
 } from '../core/notification/notify-config.js'
 import { approvalButtonSigner, approvalSigner } from '../core/approval-token.js'
 import { buildChannel } from '../core/notification/channel-factory.js'
+import { outboundUrlProblem } from '../core/notification/channels/http-post.js'
 import {
   defaultNotifyState,
   isAgentMuted,
@@ -498,6 +499,9 @@ notifyCommand
   .option('--server <url>', 'ntfy server (self-hosted recommended for sensitive setups)', 'https://ntfy.sh')
   .action((opts: { server: string }) => {
     requireInitialised()
+    // Alerts describe tool calls: https only (http just to this machine).
+    const serverProblem = outboundUrlProblem(opts.server, 'the ntfy server URL')
+    if (serverProblem) fail(serverProblem)
     const paths = getForemanPaths()
     const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
     // The topic name is the only secret on a public ntfy server: make it

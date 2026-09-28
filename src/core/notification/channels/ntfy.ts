@@ -5,7 +5,7 @@ import type {
   NotificationLevel,
   UserDecision,
 } from "../types.js";
-import { clipText, decisionHint, defaultFetch, postWithTimeout, type HttpFetch } from "./http-post.js";
+import { clipText, decisionHint, defaultFetch, outboundUrlProblem, postWithTimeout, type HttpFetch } from "./http-post.js";
 
 // =============================================================================
 // ntfy — phone push notifications with no account or bot setup
@@ -57,7 +57,7 @@ export class NtfyChannel implements NotificationChannel {
   }
 
   async isReady(): Promise<boolean> {
-    return /^https?:\/\//.test(this.opts.server) && this.opts.topic.length > 0;
+    return outboundUrlProblem(this.opts.server, "the ntfy server URL") === null && this.opts.topic.length > 0;
   }
 
   async send(n: Notification): Promise<ChannelMessageRef> {

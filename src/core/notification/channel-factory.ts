@@ -1,6 +1,6 @@
 import { DiscordChannel, type DiscordChannelOptions } from "./channels/discord.js";
 import { EmailChannel } from "./channels/email.js";
-import type { HttpFetch } from "./channels/http-post.js";
+import { outboundUrlProblem, type HttpFetch } from "./channels/http-post.js";
 import { NtfyChannel } from "./channels/ntfy.js";
 import { SlackChannel, type SlackChannelOptions } from "./channels/slack.js";
 import { SystemNotifyChannel } from "./channels/system.js";
@@ -127,7 +127,10 @@ export function buildChannel(id: ChannelId, toggle: ChannelToggle, deps: Channel
         }
         const extra = { ...fetchImpl, ...(interactive ? { interactive } : {}) };
         if (toggle.webhook_url_ref) {
-          return { channel: new SlackChannel({ target: { kind: "webhook", url: secret(toggle.webhook_url_ref) }, ...extra }) };
+          const url = secret(toggle.webhook_url_ref);
+          const urlProblem = outboundUrlProblem(url, "the Slack webhook URL");
+          if (urlProblem) return { problem: urlProblem };
+          return { channel: new SlackChannel({ target: { kind: "webhook", url }, ...extra }) };
         }
         if (toggle.bot_token_ref && toggle.channel) {
           return {
@@ -147,7 +150,10 @@ export function buildChannel(id: ChannelId, toggle: ChannelToggle, deps: Channel
           return { problem: "two-way discord needs a bot (bot_token_ref + channel), not a webhook" };
         }
         if (toggle.webhook_url_ref && !toggle.interactive) {
-          return { channel: new DiscordChannel({ target: { kind: "webhook", url: secret(toggle.webhook_url_ref) }, ...fetchImpl }) };
+          const url = secret(toggle.webhook_url_ref);
+          const urlProblem = outboundUrlProblem(url, "the Discord webhook URL");
+          if (urlProblem) return { problem: urlProblem };
+          return { channel: new DiscordChannel({ target: { kind: "webhook", url }, ...fetchImpl }) };
         }
         if (toggle.bot_token_ref && toggle.channel) {
           let interactive: DiscordChannelOptions["interactive"];
@@ -203,9 +209,12 @@ export function buildChannel(id: ChannelId, toggle: ChannelToggle, deps: Channel
       }
       case "ntfy": {
         if (!toggle.topic_ref) return { problem: "ntfy needs topic_ref — run `foreman notify ntfy-setup`" };
+        const server = toggle.server ?? "https://ntfy.sh";
+        const serverProblem = outboundUrlProblem(server, "the ntfy server URL");
+        if (serverProblem) return { problem: serverProblem };
         return {
           channel: new NtfyChannel({
-            server: toggle.server ?? "https://ntfy.sh",
+            server,
             topic: secret(toggle.topic_ref),
             ...(toggle.access_token_ref ? { accessToken: secret(toggle.access_token_ref) } : {}),
             ...fetchImpl,

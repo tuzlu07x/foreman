@@ -16,6 +16,7 @@ import {
   clipText,
   decisionHint,
   defaultFetch,
+  outboundUrlProblem,
   postWithTimeout,
   type HttpFetch,
 } from "./http-post.js";
@@ -74,7 +75,7 @@ export class DiscordChannel implements NotificationChannel {
 
   async isReady(): Promise<boolean> {
     const t = this.opts.target;
-    return t.kind === "webhook" ? t.url.startsWith("https://") : t.token.length > 0 && t.channelId.length > 0;
+    return t.kind === "webhook" ? outboundUrlProblem(t.url, "the webhook URL") === null : t.token.length > 0 && t.channelId.length > 0;
   }
 
   async send(n: Notification): Promise<ChannelMessageRef> {

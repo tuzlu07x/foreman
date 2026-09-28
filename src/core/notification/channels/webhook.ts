@@ -6,6 +6,7 @@ import type {
   UserDecision,
 } from "../types.js";
 import { FOREMAN_VERSION } from "../../../version.js";
+import { outboundUrlProblem, sanitizeDetail } from "./http-post.js";
 
 // =============================================================================
 // WebhookChannel — generic outbound HTTP POST (#235 / C11b-1)
@@ -35,9 +36,13 @@ export interface WebhookFetch {
 export interface WebhookChannelOptions {
   /** Destination URL. */
   url: string;
-  /** Optional HMAC-SHA256 signing secret. When set, every POST carries a
-   *  `X-Foreman-Signature: sha256=<hex>` header computed over the raw body. */
+  /** Optional HMAC-SHA256 signing secret. When set, every POST carries
+   *  `X-Foreman-Timestamp: <unix seconds>` and
+   *  `X-Foreman-Signature: sha256=<hex>` computed over
+   *  `<timestamp>.<raw body>` (see webhookSignature). */
   signingSecret?: string;
+  /** Clock override (tests). */
+  now?: () => number;
   /** Override the global fetch (used by tests). */
   fetchImpl?: WebhookFetch;
   /** Request timeout in ms. Default 10s. */
@@ -46,21 +51,19 @@ export interface WebhookChannelOptions {
 
 /** Why a webhook URL is refused, or null when it's fine (#636). Payloads
  *  describe tool calls, so they only travel over https, except to this
- *  machine. */
+ *  machine; the URL never carries credentials and is never echoed. */
 export function webhookUrlProblem(raw: string): string | null {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return "the webhook URL is not a valid URL";
-  }
-  if (url.protocol === "https:") return null;
-  const host = url.hostname.replace(/^\[|\]$/g, "");
-  const loopback = host === "localhost" || host === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
-  if (url.protocol === "http:" && loopback) return null;
-  return url.protocol === "http:"
-    ? "the webhook URL uses plain http:// — use https:// (http is only allowed to localhost)"
-    : `the webhook URL must be https:// (got ${url.protocol})`;
+  return outboundUrlProblem(raw, "the webhook URL");
+}
+
+/** Header carrying the Unix time (seconds) the payload was signed at. */
+export const WEBHOOK_TIMESTAMP_HEADER = "x-foreman-timestamp";
+
+/** `X-Foreman-Signature` value: HMAC-SHA256 over `<timestamp>.<raw body>`,
+ *  so a receiver that checks the timestamp is recent can reject a replay
+ *  of an old delivery (docs/notifications.md#webhook). */
+export function webhookSignature(secret: string, timestamp: string, body: string): string {
+  return `sha256=${createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex")}`;
 }
 
 export class WebhookChannel implements NotificationChannel {
@@ -70,6 +73,7 @@ export class WebhookChannel implements NotificationChannel {
   private readonly signingSecret: string | null;
   private readonly fetchImpl: WebhookFetch;
   private readonly timeoutMs: number;
+  private readonly now: () => number;
   private messageCounter = 0;
 
   constructor(opts: WebhookChannelOptions) {
@@ -79,6 +83,7 @@ export class WebhookChannel implements NotificationChannel {
     this.signingSecret = opts.signingSecret ?? null;
     this.fetchImpl = opts.fetchImpl ?? ((u, init) => fetch(u, init) as never);
     this.timeoutMs = opts.timeoutMs ?? 10_000;
+    this.now = opts.now ?? Date.now;
   }
 
   async isReady(): Promise<boolean> {
@@ -126,7 +131,9 @@ export class WebhookChannel implements NotificationChannel {
       "user-agent": `foreman/${FOREMAN_VERSION}`,
     };
     if (this.signingSecret) {
-      headers["x-foreman-signature"] = `sha256=${this.sign(body)}`;
+      const timestamp = String(Math.floor(this.now() / 1000));
+      headers[WEBHOOK_TIMESTAMP_HEADER] = timestamp;
+      headers["x-foreman-signature"] = webhookSignature(this.signingSecret, timestamp, body);
     }
 
     const controller = new AbortController();
@@ -139,12 +146,17 @@ export class WebhookChannel implements NotificationChannel {
         body,
         signal: controller.signal,
       });
+    } catch (err) {
+      // fetch errors can quote the URL, which is a stored secret.
+      const reason = err instanceof Error && err.name === "AbortError" ? "timed out" : "network error";
+      throw new WebhookDeliveryError(reason);
     } finally {
       clearTimeout(timer);
     }
     if (!res.ok) {
-      const text = await res.text().catch(() => "<no body>");
-      throw new WebhookDeliveryError(`HTTP ${res.status}: ${text}`);
+      const text = await res.text().catch(() => "");
+      const detail = sanitizeDetail(text);
+      throw new WebhookDeliveryError(`HTTP ${res.status}${detail ? `: ${detail}` : ""}`);
     }
   }
 
@@ -160,16 +172,6 @@ export class WebhookChannel implements NotificationChannel {
   // ============================================================================
   // Internals
   // ============================================================================
-
-  // Receivers verify with:
-  //
-  //   const expected = "sha256=" + hmacSha256(secret, rawBody);
-  //   if (!constantTimeEqual(expected, signatureHeader)) reject();
-  //
-  private sign(body: string): string {
-    if (!this.signingSecret) return "";
-    return createHmac("sha256", this.signingSecret).update(body).digest("hex");
-  }
 
   private buildPayload(n: Notification): Record<string, unknown> {
     return {

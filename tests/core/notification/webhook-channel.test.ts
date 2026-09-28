@@ -79,23 +79,55 @@ describe('WebhookChannel — send', () => {
     expect(typeof body.sentAt).toBe('number')
   })
 
-  it('adds X-Foreman-Signature when signingSecret is set + receiver can verify', async () => {
+  it('signs <timestamp>.<body> with X-Foreman-Timestamp so receivers can refuse replays (#656)', async () => {
     const secret = 'super-secret-key-do-not-leak'
     const f = makeFetch([{ status: 200 }])
     const channel = new WebhookChannel({
       url: 'https://hooks.example.com/foreman',
       signingSecret: secret,
       fetchImpl: f.fetchImpl,
+      now: () => 1_779_800_000_123,
     })
     await channel.send(makeNotification())
     const headers = f.calls[0]!.init.headers as Record<string, string>
     const signature = headers['x-foreman-signature']
-    expect(signature).toMatch(/^sha256=[0-9a-f]+$/)
+    expect(headers['x-foreman-timestamp']).toBe('1779800000')
+    expect(signature).toMatch(/^sha256=[0-9a-f]{64}$/)
     // Receiver-side verification — independent recompute
     const rawBody = String(f.calls[0]!.init.body)
     const expected =
-      'sha256=' + createHmac('sha256', secret).update(rawBody).digest('hex')
+      'sha256=' + createHmac('sha256', secret).update(`1779800000.${rawBody}`).digest('hex')
     expect(signature).toBe(expected)
+    // The body alone (the old scheme) no longer verifies: a captured
+    // delivery can't be replayed under a fresh timestamp.
+    expect(signature).not.toBe('sha256=' + createHmac('sha256', secret).update(rawBody).digest('hex'))
+  })
+
+  it('never echoes the URL (a stored secret) when fetch refuses it (#656)', async () => {
+    const channel = new WebhookChannel({
+      url: 'https://hooks.example.com/t0ps3cret-path',
+      fetchImpl: async (url) => {
+        throw new TypeError(`Request cannot be constructed from a URL that includes credentials: ${url}`)
+      },
+    })
+    const err = await channel.send(makeNotification()).then(
+      () => new Error('sent'),
+      (e: unknown) => e as Error,
+    )
+    expect(err).toBeInstanceOf(WebhookDeliveryError)
+    expect(err.message).not.toContain('t0ps3cret')
+    expect(err.message).toMatch(/network error/)
+  })
+
+  it('does not echo a receiver error body verbatim (#656)', async () => {
+    const f = makeFetch([{ status: 404, body: 'no hook at https://hooks.example.com/t0ps3cret-path' }])
+    const channel = new WebhookChannel({ url: 'https://hooks.example.com/t0ps3cret-path', fetchImpl: f.fetchImpl })
+    const err = await channel.send(makeNotification()).then(
+      () => new Error('sent'),
+      (e: unknown) => e as Error,
+    )
+    expect(err.message).toContain('HTTP 404')
+    expect(err.message).not.toContain('t0ps3cret')
   })
 
   it('omits X-Foreman-Signature when no signingSecret', async () => {
@@ -159,6 +191,16 @@ describe('WebhookChannel — isReady + lifecycle', () => {
     expect(webhookUrlProblem('https://hooks.example.com/x')).toBeNull()
   })
 
+  it('refuses a URL with credentials without repeating them (#656)', () => {
+    for (const url of ['http://user:pw@127.0.0.1:9/hook', 'https://user@hooks.example.com/x']) {
+      const problem = webhookUrlProblem(url)
+      expect(problem).toMatch(/must not include a user name or password/)
+      expect(problem).not.toMatch(/user:pw|user@|127\.0|hooks\.example/)
+    }
+    expect(() => new WebhookChannel({ url: 'http://user:pw@127.0.0.1:9/hook' })).toThrow(/user name or password/)
+    expect(webhookUrlProblem('javascript:alert(1)')).toMatch(/must be https/)
+  })
+
   it('listen is a no-op (outbound-only — see file header)', async () => {
     const channel = new WebhookChannel({ url: 'https://x.example' })
     const handler = vi.fn()
@@ -191,8 +233,11 @@ describe('WebhookChannel — isReady + lifecycle', () => {
       body: 'Resolved at 14:18',
       level: 'info',
     })
-    const sig = (f.calls[1]!.init.headers as Record<string, string>)['x-foreman-signature']
-    expect(sig).toBe(`sha256=${createHmac('sha256', 's3cret').update(String(f.calls[1]!.init.body)).digest('hex')}`)
+    const outcomeHeaders = f.calls[1]!.init.headers as Record<string, string>
+    const ts = outcomeHeaders['x-foreman-timestamp']
+    expect(outcomeHeaders['x-foreman-signature']).toBe(
+      `sha256=${createHmac('sha256', 's3cret').update(`${ts}.${String(f.calls[1]!.init.body)}`).digest('hex')}`,
+    )
   })
 
   it('still matches an outcome after a restart (ids travel in the message id)', async () => {

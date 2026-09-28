@@ -14,6 +14,7 @@ import {
   clipText,
   decisionHint,
   defaultFetch,
+  outboundUrlProblem,
   postWithTimeout,
   ChannelDeliveryError,
   type HttpFetch,
@@ -63,7 +64,7 @@ export class SlackChannel implements NotificationChannel {
 
   async isReady(): Promise<boolean> {
     const t = this.opts.target;
-    return t.kind === "webhook" ? t.url.startsWith("https://") : t.token.length > 0 && t.channel.length > 0;
+    return t.kind === "webhook" ? outboundUrlProblem(t.url, "the webhook URL") === null : t.token.length > 0 && t.channel.length > 0;
   }
 
   async send(n: Notification): Promise<ChannelMessageRef> {

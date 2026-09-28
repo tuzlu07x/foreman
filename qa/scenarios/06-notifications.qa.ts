@@ -62,9 +62,13 @@ it('Notifications: signed webhook for a critical approval, outcome in the inbox'
     const d = await hook.next('the test message', (x) => x.payload.title === 'Foreman test ✓')
     expect(d.signatureValid).toBe(true)
     expect(d.payload.schema).toBe('foreman.notification.v1')
-    expect(verifySignature('wrong-secret', d.raw, d.headers['x-foreman-signature'])).toBe(false)
-    ev(`POST ${d.path}: "${d.payload.title}", X-Foreman-Signature valid (and invalid under a wrong secret), user-agent ${String(d.headers['user-agent'])}`)
-    ev('a plain http:// URL is accepted: WebhookChannel does not restrict the URL scheme')
+    expect(verifySignature('wrong-secret', d.raw, d.headers)).toBe(false)
+    // #656: signed over "<timestamp>.<body>", so a replay can be refused.
+    expect(d.headers['x-foreman-timestamp']).toMatch(/^\d+$/)
+    const stale = { ...d.headers, 'x-foreman-timestamp': String(Number(d.headers['x-foreman-timestamp']) - 3_600) }
+    expect(verifySignature(secret, d.raw, stale)).toBe(false)
+    ev(`POST ${d.path}: "${d.payload.title}", X-Foreman-Timestamp ${String(d.headers['x-foreman-timestamp'])}, X-Foreman-Signature valid (invalid under a wrong secret or an hour-old timestamp), user-agent ${String(d.headers['user-agent'])}`)
+    ev('plain http:// is accepted only because the receiver is on 127.0.0.1')
   })
 
   const tui = await Tui.start(sb)
