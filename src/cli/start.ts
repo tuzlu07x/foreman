@@ -1392,10 +1392,10 @@ function setupLlmVerifier(args: {
   }
   if (!isFeatureEnabled(config, "verification")) return null;
 
-  // Factory dispatches across all implemented providers (#296). Unimplemented
-  // providers (ollama, openai_compatible — v0.2 #312) and missing credentials
-  // both surface as typed errors; either way the mediator keeps working with
-  // heuristic-only behavior, so we swallow them silently here.
+  // Factory dispatches across all providers (#296). Missing credentials (or
+  // an unset / invalid ollama / openai_compatible base URL) surface as typed
+  // errors; the mediator keeps working with heuristic-only behavior, so we
+  // swallow them silently here.
   try {
     const client = buildLlmClient(config, args.secretStore);
     return new LlmVerifier({ db: args.db, config, client });

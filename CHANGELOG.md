@@ -8,6 +8,20 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Added
 
+- **Foreman's brain can run on Ollama or any OpenAI-compatible
+  endpoint.** Verification and daily summaries used to need Anthropic,
+  OpenAI or Gemini; the `ollama` and `openai_compatible` providers in
+  `llm.yaml` now have a client (OpenAI Chat Completions over `fetch`, no
+  new dependency). In `foreman setup` Step 2 the Ollama and Custom rows are
+  no longer "(not supported yet)": Ollama asks for its base URL (default
+  `http://localhost:11434`) and lists the pulled models; Custom offers the
+  presets (DeepSeek, OpenRouter, Groq, …) and your own endpoint (base URL,
+  optional key, model from its `/models` list). Ollama calls cost $0; an
+  OpenAI-compatible endpoint is billed at the most expensive known price so
+  the budget is never under-counted. Base URLs must be http(s), redirects
+  are refused so the key only goes to the configured endpoint, and
+  `foreman doctor` checks the URL
+  ([docs/llm-providers.md](docs/llm-providers.md#foremans-brain-on-ollama-or-an-openai-compatible-endpoint)).
 - **`foreman service install | uninstall | status`: the daemon at login**
   ([docs/mcp-hub.md](docs/mcp-hub.md#run-the-daemon-at-login-foreman-service)).
   Agents and the hook no longer need `foreman start` or `foreman daemon`

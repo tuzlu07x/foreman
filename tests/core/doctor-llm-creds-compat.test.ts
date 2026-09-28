@@ -17,12 +17,12 @@ import type { WizardServices } from '../../src/tui/setup-wizard/types.js'
 // llmCredentialSlots maps each provider to the fields it really uses: the
 // wizard writes OpenAI-compatible preset credentials as key_secret /
 // endpoint_secret (the schema's own names), with secret_name still honoured
-// for older llm.yaml files.
+// for older llm.yaml files. Both run keyless when no key slot is named.
 //
-// But this build has no LLM client for either provider (buildLlmClient throws
-// LlmProviderUnavailableError; `foreman start` falls back to heuristics), so
-// checkLlmCredentials must warn for them rather than report stored
-// credentials as "ok". All secret values are fakes.
+// checkLlmCredentials checks what the factory will read — the key slot and
+// the base URL (endpoint_secret, endpoint, or Ollama's local default) — and
+// that the URL is one the runtime client accepts. All secret values are
+// fakes.
 // =============================================================================
 
 describe('llmCredentialSlots', () => {
@@ -36,7 +36,7 @@ describe('llmCredentialSlots', () => {
       keySecret: 'deepseek-api-key',
       keyField: 'key_secret',
       endpointSecret: 'deepseek-endpoint',
-      keyOptional: false,
+      keyOptional: true,
     })
   })
 
@@ -52,9 +52,15 @@ describe('llmCredentialSlots', () => {
       keyOptional: true,
     })
   })
+
+  it("reads Ollama's endpoint_secret (Step 1 stores the URL there)", () => {
+    expect(llmCredentialSlots('ollama', { endpoint_secret: 'ollama-endpoint' }).endpointSecret).toBe(
+      'ollama-endpoint',
+    )
+  })
 })
 
-describe('checkLlmCredentials for brains without a runtime client', () => {
+describe('checkLlmCredentials for self-hosted brains', () => {
   let tmp: string
   let previousHome: string | undefined
 
@@ -76,15 +82,11 @@ describe('checkLlmCredentials for brains without a runtime client', () => {
     return new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
   }
 
-  function expectNoRuntimeWarning(provider: string): void {
-    const r = checkLlmCredentials()
-    expect(r.status).toBe('warn')
-    expect(r.message).toContain(`LLM provider ${provider} has no client in this build yet`)
-    expect(r.message).toContain('heuristic-only')
-    expect(r.remediation).toContain('anthropic, openai or gemini')
+  function writeLlmYaml(body: string): void {
+    writeFileSync(join(tmp, 'llm.yaml'), `enabled: true\n${body}`, 'utf-8')
   }
 
-  it('warns for an OpenAI-compatible preset even with its credentials stored', () => {
+  it('is ok for an OpenAI-compatible preset saved by the wizard', () => {
     const preset = findPreset(loadLlmPresets(), 'deepseek')
     expect(preset).not.toBeNull()
     persistForemanLlmChoice({
@@ -97,40 +99,78 @@ describe('checkLlmCredentials for brains without a runtime client', () => {
       preset,
       presetKey: 'fake-deepseek-key-000',
     })
-    // Used to report "ok — credentials present (deepseek-api-key)".
-    expectNoRuntimeWarning('openai_compatible')
+    const r = checkLlmCredentials()
+    expect(r.status).toBe('ok')
+    expect(r.message).toContain('openai_compatible configured')
+    expect(r.message).toContain('endpoint from deepseek-endpoint')
+    expect(r.message).toContain('key deepseek-api-key')
+    // The URL itself stays out of the report.
+    expect(r.message).not.toContain('api.deepseek.com')
   })
 
-  it('warns for an older secret_name-style openai_compatible block', () => {
+  it('warns when an older secret_name-style block has no base URL', () => {
     store().add('legacy-compat-key', 'fake-legacy-key')
-    writeFileSync(
-      join(tmp, 'llm.yaml'),
-      `enabled: true
-provider: openai_compatible
+    writeLlmYaml(`provider: openai_compatible
 model: m
 credentials:
   openai_compatible:
     secret_name: legacy-compat-key
-`,
-      'utf-8',
-    )
-    expectNoRuntimeWarning('openai_compatible')
+`)
+    const r = checkLlmCredentials()
+    expect(r.status).toBe('warn')
+    expect(r.message).toContain('has no base URL')
   })
 
-  it('warns for a keyless Ollama brain', () => {
-    writeFileSync(
-      join(tmp, 'llm.yaml'),
-      `enabled: true
-provider: ollama
+  it('is ok for a keyless Ollama brain on the local default', () => {
+    writeLlmYaml(`provider: ollama
 model: llama3.2:3b
 credentials:
   ollama:
     secret_name: null
     endpoint: http://localhost:11434
-`,
-      'utf-8',
-    )
-    expectNoRuntimeWarning('ollama')
+`)
+    const r = checkLlmCredentials()
+    expect(r.status).toBe('ok')
+    expect(r.message).toContain('ollama configured (endpoint in llm.yaml, no API key)')
+  })
+
+  it('warns when the base URL is not http(s)', () => {
+    writeLlmYaml(`provider: ollama
+model: m
+credentials:
+  ollama:
+    endpoint: file:///tmp/socket
+`)
+    const r = checkLlmCredentials()
+    expect(r.status).toBe('warn')
+    expect(r.message).toContain('base URL (endpoint in llm.yaml) is invalid')
+    expect(r.remediation).toContain('http(s) URL')
+  })
+
+  it('warns when the endpoint secret is missing from the store', () => {
+    writeLlmYaml(`provider: openai_compatible
+model: m
+credentials:
+  openai_compatible:
+    endpoint_secret: gone-endpoint
+`)
+    const r = checkLlmCredentials()
+    expect(r.status).toBe('warn')
+    expect(r.message).toContain('secret "gone-endpoint" is missing')
+  })
+
+  it('warns when an API key would travel over plain http to a remote host', () => {
+    store().add('remote-key', 'fake-remote-key')
+    writeLlmYaml(`provider: openai_compatible
+model: m
+credentials:
+  openai_compatible:
+    endpoint: http://gpu-box.example.test:8000/v1
+    key_secret: remote-key
+`)
+    const r = checkLlmCredentials()
+    expect(r.status).toBe('warn')
+    expect(r.message).toContain('over plain http')
   })
 
   it('stays ok when the LLM switch is off', () => {

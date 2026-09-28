@@ -16,7 +16,11 @@ import { legacyHasInterestingFiles } from "../utils/migrate-config.js";
 import { EventBus, type ForemanEventMap } from "./event-bus.js";
 import { getBudgetStatus } from "./llm/budget.js";
 import { loadLlmConfig } from "./llm/config.js";
-import { hasRuntimeClient } from "./llm/factory.js";
+import {
+  checkLlmBaseUrl,
+  isLoopbackUrl,
+  OLLAMA_DEFAULT_BASE_URL,
+} from "./llm/endpoint.js";
 import { isOAuthProviderId } from "./llm/oauth/oauth-providers.js";
 import { loadOAuthTokens } from "./llm/oauth/token-store.js";
 import { agentAddCommand, loadActiveProviders, loadActiveRegistry } from "./registry-catalog.js";
@@ -577,7 +581,8 @@ export interface LlmCredentialSlots {
   keyField: "secret_name" | "key_secret";
   /** Secret slot holding the endpoint URL, when the provider uses one. */
   endpointSecret: string | null;
-  /** True when the provider works without an API key (local Ollama). */
+  /** True when the provider works without an API key (a local Ollama or a
+   *  keyless OpenAI-compatible server). */
   keyOptional: boolean;
 }
 
@@ -587,8 +592,9 @@ export interface LlmCredentialSlots {
  * names the schema defaults and the setup wizard's presets write — so the
  * check used to warn "openai_compatible.secret_name is unset" right after a
  * successful preset setup. `secret_name` is still read there as a fallback
- * so an existing hand-written llm.yaml keeps working. Ollama runs keyless
- * unless a `secret_name` is set (e.g. a remote, authenticated endpoint).
+ * so an existing hand-written llm.yaml keeps working. Both run keyless when
+ * no key slot is named (a local Ollama, vLLM or LM Studio); Ollama takes a
+ * `secret_name` for a remote, authenticated server.
  */
 export function llmCredentialSlots(
   provider: string,
@@ -601,14 +607,22 @@ export function llmCredentialSlots(
       keySecret: cred?.key_secret ?? cred?.secret_name ?? null,
       keyField: "key_secret",
       endpointSecret: cred?.endpoint_secret ?? null,
-      keyOptional: false,
+      keyOptional: true,
+    };
+  }
+  if (provider === "ollama") {
+    return {
+      keySecret: cred?.secret_name ?? null,
+      keyField: "secret_name",
+      endpointSecret: cred?.endpoint_secret ?? null,
+      keyOptional: true,
     };
   }
   return {
     keySecret: cred?.secret_name ?? null,
     keyField: "secret_name",
     endpointSecret: null,
-    keyOptional: provider === "ollama",
+    keyOptional: false,
   };
 }
 
@@ -644,17 +658,13 @@ export function checkLlmCredentials(): CheckResult {
     };
   }
 
-  // A provider the schema accepts but this build has no client for
-  // (ollama, openai_compatible — v0.2): buildLlmClient throws
-  // LlmProviderUnavailableError and `foreman start` silently runs
-  // heuristic-only, so credentials being present would be a false "ok".
-  if (!hasRuntimeClient(config.provider)) {
-    return {
-      name: "llm_credentials",
-      status: "warn",
-      message: `LLM provider ${config.provider} has no client in this build yet — verification + smart-report run heuristic-only`,
-      remediation: `Pick anthropic, openai or gemini as Foreman's brain (\`foreman setup\`, Step 2), or set \`enabled: false\` in ${paths.llmConfigPath}.`,
-    };
+  // Self-hosted brains: the base URL matters as much as the key.
+  if (config.provider === "ollama" || config.provider === "openai_compatible") {
+    return checkSelfHostedLlmCredentials(
+      config.provider,
+      config.credentials[config.provider],
+      paths.llmConfigPath,
+    );
   }
 
   // OAuth path (Faz 2 / #505 onwards) — check token presence in the encrypted
@@ -676,13 +686,6 @@ export function checkLlmCredentials(): CheckResult {
   );
   const secretName = slots.keySecret;
   if (!secretName) {
-    if (slots.keyOptional) {
-      return {
-        name: "llm_credentials",
-        status: "ok",
-        message: `${config.provider} runs without an API key`,
-      };
-    }
     return {
       name: "llm_credentials",
       status: "warn",
@@ -741,6 +744,86 @@ export function checkLlmCredentials(): CheckResult {
       message: `couldn't check secret store: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
+}
+
+/** llm_credentials for ollama / openai_compatible: the key (optional) and
+ *  base URL slots the factory will read, and whether that URL is one the
+ *  runtime client accepts. The URL itself is never printed — it may live in
+ *  the secret store. */
+function checkSelfHostedLlmCredentials(
+  provider: "ollama" | "openai_compatible",
+  cred: { secret_name?: string | null; key_secret?: string; endpoint?: string; endpoint_secret?: string } | undefined,
+  llmConfigPath: string,
+): CheckResult {
+  const slots = llmCredentialSlots(provider, cred);
+  const fallback = provider === "ollama" ? OLLAMA_DEFAULT_BASE_URL : null;
+  if (!slots.endpointSecret && !cred?.endpoint && !fallback) {
+    return {
+      name: "llm_credentials",
+      status: "warn",
+      message: `LLM enabled but ${provider} has no base URL (endpoint / endpoint_secret) in llm.yaml`,
+      remediation: `Run \`foreman setup\` (Step 2) or set credentials.${provider}.endpoint in ${llmConfigPath}.`,
+    };
+  }
+  let rawUrl = cred?.endpoint ?? fallback ?? "";
+  let urlSource = cred?.endpoint ? "endpoint in llm.yaml" : "default endpoint";
+  try {
+    if (slots.keySecret || slots.endpointSecret) {
+      if (!existsSync(getForemanPaths().dbPath)) {
+        return { name: "llm_credentials", status: "warn", message: "no database yet — run 'foreman init'" };
+      }
+      const store = doctorSecretStore(getDb());
+      for (const slot of [slots.keySecret, slots.endpointSecret]) {
+        if (slot && !store.exists(slot)) {
+          return {
+            name: "llm_credentials",
+            status: "warn",
+            message: `LLM enabled but secret "${slot}" is missing from the store`,
+            remediation: `Run \`foreman secrets add ${slot}\` — verification + smart-report will silently fall back to heuristic-only until this is set.`,
+          };
+        }
+      }
+      if (slots.endpointSecret) {
+        rawUrl = store.get(slots.endpointSecret);
+        urlSource = `endpoint from ${slots.endpointSecret}`;
+      }
+    }
+  } catch (err) {
+    return {
+      name: "llm_credentials",
+      status: "warn",
+      message: `couldn't check secret store: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  const checked = checkLlmBaseUrl(rawUrl);
+  if (!checked.ok) {
+    return {
+      name: "llm_credentials",
+      status: "warn",
+      message: `${provider} base URL (${urlSource}) is invalid: ${checked.reason}`,
+      remediation: slots.endpointSecret
+        ? `Run \`foreman secrets rotate ${slots.endpointSecret}\` with an http(s) URL.`
+        : `Set credentials.${provider}.endpoint to an http(s) URL in ${llmConfigPath}.`,
+    };
+  }
+  if (
+    slots.keySecret &&
+    checked.url.startsWith("http:") &&
+    !isLoopbackUrl(checked.url)
+  ) {
+    return {
+      name: "llm_credentials",
+      status: "warn",
+      message: `${provider} sends API key "${slots.keySecret}" over plain http to a non-local host (${urlSource})`,
+      remediation: "Use an https:// URL for a remote endpoint that takes an API key.",
+    };
+  }
+  const keyNote = slots.keySecret ? `key ${slots.keySecret}` : "no API key";
+  return {
+    name: "llm_credentials",
+    status: "ok",
+    message: `${provider} configured (${urlSource}, ${keyNote})`,
+  };
 }
 
 /** OAuth credential check — when the active provider has `auth_mode: oauth`,

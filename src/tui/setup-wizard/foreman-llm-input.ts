@@ -3,14 +3,22 @@ import {
   discoverModels,
   ModelDiscoveryError,
 } from "../../core/llm/models-discovery.js";
-import { canRunModel } from "../../core/ollama-models.js";
+import { isLoopbackUrl } from "../../core/llm/endpoint.js";
+import { findPreset } from "../../core/llm-provider-presets.js";
 import type { WizardContext } from "./context.js";
 import {
   BRAIN_DEFAULT_MODELS,
   brainPickerChoices,
   brainPickerCursor,
+  CUSTOM_ENDPOINT_ID,
+  finishBrainStep,
+  ollamaModelRows,
+  orderCompatModels,
   persistForemanLlmChoice,
+  resetSelfHostedDrafts,
   resolveBrainModelSource,
+  selfHostedTarget,
+  startSelfHostedDiscovery,
 } from "./foreman-llm-logic.js";
 import { classifyModelDiscoveryError } from "./agents-logic.js";
 import { configuredBrainProviderIds } from "./shared.js";
@@ -31,7 +39,6 @@ export function handleForemanLlmInput(
     machineCap,
     ollamaModelDoc,
     llmPresetDoc,
-    ollamaDetection,
   } = ctx;
   const {
     foremanLlmPhase,
@@ -41,7 +48,9 @@ export function handleForemanLlmInput(
     cloudModelDraft,
     ollamaModelDraft,
     presetDraft,
+    presetKeyDraft,
     providersSignedIn,
+    brainBaseUrl,
   } = ctx.state;
   const {
     setForemanLlmPhase,
@@ -54,7 +63,10 @@ export function handleForemanLlmInput(
     setOllamaModelDraft,
     setPresetDraft,
     setPresetKeyDraft,
+    setBrainBaseUrlError,
   } = ctx.set;
+  const resetSelfHosted = (): void => resetSelfHostedDrafts(ctx.set);
+  const finish = (): void => finishBrainStep(ctx);
   // #367 — Foreman's-LLM step key handling. Each phase has its own
   // ↑↓ cursor + Space/Enter commit + Esc back-out.
   if (currentStep === "foreman-llm") {
@@ -95,11 +107,8 @@ export function handleForemanLlmInput(
       if (key.return || input === " ") {
         const chosen = cursor;
         if (chosen === "ollama") {
-          if (!ollamaDetection.installed) {
-            setForemanLlmPhase("ollama-not-installed");
-          } else {
-            setForemanLlmPhase("ollama-model");
-          }
+          setBrainBaseUrlError(null);
+          setForemanLlmPhase("ollama-url");
           return true;
         }
         if (chosen === "preset") {
@@ -268,60 +277,77 @@ export function handleForemanLlmInput(
       }
     }
 
-    // ----- ollama-not-installed phase -----
-    if (foremanLlmPhase === "ollama-not-installed") {
+    // ----- ollama-url / custom-url / custom-key -----
+    // Text entry is handled by the phase's input's onSubmit; only Esc here.
+    if (foremanLlmPhase === "ollama-url") {
       if (key.escape) {
+        resetSelfHosted();
         setForemanLlmPhase("picker");
-        return true;
       }
-      if (key.return) {
-        // Re-check on Enter — `ollamaDetection` re-runs every phase
-        // change, so if user installed it in another terminal we pick
-        // it up on next phase transition.
-        if (ollamaDetection.installed) {
-          setForemanLlmPhase("ollama-model");
-        } else {
-          // Force a re-render by toggling phase. detectOllama() runs
-          // again because foremanLlmPhase is in its deps.
-          setForemanLlmPhase("picker");
-          setTimeout(() => setForemanLlmPhase("ollama-not-installed"), 0);
-        }
-        return true;
+      return true;
+    }
+    if (foremanLlmPhase === "custom-url") {
+      if (key.escape) {
+        resetSelfHosted();
+        setForemanLlmPhase("preset-pick");
       }
+      return true;
+    }
+    if (foremanLlmPhase === "custom-key") {
+      if (key.escape) {
+        setPresetKeyDraft("");
+        setBrainBaseUrlError(null);
+        setForemanLlmPhase("custom-url");
+      }
+      return true;
     }
 
     // ----- ollama-model phase -----
+    // Pulled models from the server first, then (for a local server) the
+    // bundled catalog. [r] re-checks after an `ollama pull`.
     if (foremanLlmPhase === "ollama-model") {
-      const enabled = ollamaModelDoc.models.filter((m) => {
-        const status = canRunModel(m, machineCap);
-        return (
-          status.state !== "disabled-ram" && status.state !== "disabled-disk"
-        );
-      });
-      if (enabled.length === 0) {
-        if (key.escape) setForemanLlmPhase("picker");
+      if (key.escape) {
+        setCloudModelOptions(null);
+        setCloudModelError(null);
+        setOllamaModelDraft(null);
+        setForemanLlmPhase("ollama-url");
         return true;
       }
-      const cursor = ollamaModelDraft ?? enabled[0]?.name ?? "";
-      const idx = Math.max(0, enabled.findIndex((m) => m.name === cursor));
+      if (cloudModelOptions === null || !brainBaseUrl) return true;
+      const target = selfHostedTarget("ollama", brainBaseUrl, null);
+      if (input === "r") {
+        startSelfHostedDiscovery(ctx.set, target, "");
+        return true;
+      }
+      const { selectable } = ollamaModelRows({
+        live: cloudModelOptions,
+        catalog: ollamaModelDoc,
+        machine: machineCap,
+        local: isLoopbackUrl(brainBaseUrl),
+      });
+      if (selectable.length === 0) {
+        if (key.return) startSelfHostedDiscovery(ctx.set, target, "");
+        return true;
+      }
+      const idx = Math.max(
+        0,
+        selectable.findIndex((m) => m.name === ollamaModelDraft),
+      );
       if (key.upArrow) {
         setOllamaModelDraft(
-          enabled[(idx - 1 + enabled.length) % enabled.length]?.name ?? null,
+          selectable[(idx - 1 + selectable.length) % selectable.length]?.name ??
+            null,
         );
         return true;
       }
       if (key.downArrow) {
         setOllamaModelDraft(
-          enabled[(idx + 1) % enabled.length]?.name ?? null,
+          selectable[(idx + 1) % selectable.length]?.name ?? null,
         );
         return true;
       }
-      if (key.escape) {
-        setForemanLlmPhase("picker");
-        return true;
-      }
       if (key.return || input === " ") {
-        const chosen = enabled[idx]?.name;
+        const chosen = selectable[idx]?.name;
         if (chosen) {
           persistForemanLlmChoice({
             services,
@@ -329,29 +355,30 @@ export function handleForemanLlmInput(
             ollamaModel: chosen,
             preset: null,
             presetKey: "",
+            baseUrl: brainBaseUrl,
           });
-          setForemanLlmPhase("picker");
-          setForemanLlmDraft(null);
-          setOllamaModelDraft(null);
-          advance("foreman-llm");
+          finish();
         }
         return true;
       }
+      return true;
     }
 
     // ----- preset-pick phase -----
+    // The presets, then "your own endpoint" (CUSTOM_ENDPOINT_ID).
     if (foremanLlmPhase === "preset-pick") {
-      const presets = llmPresetDoc.presets;
-      const cursor = presetDraft ?? presets[0]?.id ?? "";
-      const idx = Math.max(0, presets.findIndex((p) => p.id === cursor));
+      const ids = [
+        ...llmPresetDoc.presets.map((p) => p.id),
+        CUSTOM_ENDPOINT_ID,
+      ];
+      const cursor = presetDraft ?? ids[0] ?? "";
+      const idx = Math.max(0, ids.indexOf(cursor));
       if (key.upArrow) {
-        setPresetDraft(
-          presets[(idx - 1 + presets.length) % presets.length]?.id ?? null,
-        );
+        setPresetDraft(ids[(idx - 1 + ids.length) % ids.length] ?? null);
         return true;
       }
       if (key.downArrow) {
-        setPresetDraft(presets[(idx + 1) % presets.length]?.id ?? null);
+        setPresetDraft(ids[(idx + 1) % ids.length] ?? null);
         return true;
       }
       if (key.escape) {
@@ -359,9 +386,13 @@ export function handleForemanLlmInput(
         return true;
       }
       if (key.return || input === " ") {
-        const chosen = presets[idx];
-        if (chosen) {
-          setPresetDraft(chosen.id);
+        const chosen = ids[idx];
+        if (chosen === CUSTOM_ENDPOINT_ID) {
+          setPresetDraft(chosen);
+          setBrainBaseUrlError(null);
+          setForemanLlmPhase("custom-url");
+        } else if (chosen) {
+          setPresetDraft(chosen);
           setForemanLlmPhase("preset-key");
         }
         return true;
@@ -375,6 +406,70 @@ export function handleForemanLlmInput(
         setPresetKeyDraft("");
         return true;
       }
+    }
+
+    // ----- compat-model phase -----
+    // Model for a preset or a custom endpoint. With no list, a preset
+    // falls back to its default model on Enter; a custom endpoint asks for
+    // the model id in a text input (its onSubmit persists).
+    if (foremanLlmPhase === "compat-model") {
+      const custom = presetDraft === CUSTOM_ENDPOINT_ID;
+      const preset = custom ? null : findPreset(llmPresetDoc, presetDraft ?? "");
+      if (key.escape) {
+        setCloudModelOptions(null);
+        setCloudModelError(null);
+        setCloudModelDraft(null);
+        setForemanLlmPhase(custom ? "custom-key" : "preset-key");
+        if (!custom) setPresetKeyDraft("");
+        return true;
+      }
+      if (cloudModelOptions === null) return true;
+      if (cloudModelOptions.length === 0) {
+        if (custom) return false;
+        if (key.return && preset) {
+          persistForemanLlmChoice({
+            services,
+            choice: "preset",
+            ollamaModel: null,
+            preset,
+            presetKey: presetKeyDraft,
+          });
+          finish();
+        }
+        return true;
+      }
+      const models = orderCompatModels(cloudModelOptions, preset?.default_model);
+      const idx = Math.max(
+        0,
+        models.findIndex((m) => m.id === cloudModelDraft),
+      );
+      if (key.upArrow) {
+        setCloudModelDraft(
+          models[(idx - 1 + models.length) % models.length]?.id ?? null,
+        );
+        return true;
+      }
+      if (key.downArrow) {
+        setCloudModelDraft(models[(idx + 1) % models.length]?.id ?? null);
+        return true;
+      }
+      if (key.return || input === " ") {
+        const chosen = models[idx]?.id;
+        if (chosen && (preset || (custom && brainBaseUrl))) {
+          persistForemanLlmChoice({
+            services,
+            choice: custom ? "custom" : "preset",
+            ollamaModel: null,
+            preset,
+            presetKey: presetKeyDraft,
+            cloudModel: chosen,
+            baseUrl: custom ? brainBaseUrl : null,
+          });
+          finish();
+        }
+        return true;
+      }
+      return true;
     }
   }
   return false;
