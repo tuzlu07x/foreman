@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { parseDocument } from 'yaml'
 import { MockOAuthServer } from '../core/mcp-hub/fixtures/mock-oauth-server.js'
 
 // End to end with the real CLI: `foreman mcp login` against a mock hosted
@@ -95,9 +96,10 @@ describe('foreman mcp login / logout (MCP OAuth)', () => {
     expect(mock.bearerSeen.length).toBeGreaterThan(0)
 
     // A mediated call from an agent, through mcp-stdio, with an allow rule.
-    const yaml = readFileSync(join(home, 'mcp.yaml'), 'utf-8')
-    expect(yaml).toContain('tools: {}')
-    writeFileSync(join(home, 'mcp.yaml'), yaml.replace('tools: {}', 'tools:\n      allow: [echo]'))
+    const doc = parseDocument(readFileSync(join(home, 'mcp.yaml'), 'utf-8'))
+    expect(doc.getIn(['servers', 'hosted', 'auth'])).toBe('oauth')
+    doc.setIn(['servers', 'hosted', 'tools'], doc.createNode({ allow: ['echo'] }))
+    writeFileSync(join(home, 'mcp.yaml'), doc.toString())
     const rpc = [
       { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
       { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'hosted__echo', arguments: { text: 'hello' } } },

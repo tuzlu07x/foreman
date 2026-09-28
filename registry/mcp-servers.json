@@ -56,16 +56,127 @@
       "homepage": "https://github.com/github/github-mcp-server",
       "transport": "http",
       "url": "https://api.githubcopilot.com/mcp/",
-      "headers": { "Authorization": "Bearer ${secret:github-pat}" },
+      "headers": { "Authorization": "Bearer ${secret:github-pat}", "X-MCP-Lockdown": "true" },
       "secrets": [
         {
           "name": "github-pat",
           "description": "GitHub personal access token (fine-grained, only the repos you need).",
-          "where_to_get": "https://github.com/settings/personal-access-tokens/new"
+          "where_to_get": "https://github.com/settings/personal-access-tokens/new",
+          "format_hint": "github_pat_… (fine-grained, recommended) or a classic token",
+          "pattern": "^(github_pat_[A-Za-z0-9_]{20,255}|gh[p]_[A-Za-z0-9]{30,255})$"
+        }
+      ],
+      "tools": {
+        "allow": ["get_*", "list_*", "search_*", "*_read"],
+        "ask": ["mark_*"],
+        "confirm": ["merge_*"]
+      },
+      "notes": "Write tools (create/update/push/delete) ask by default and merges need a human every time. Lockdown mode (X-MCP-Lockdown) hides public-repository content from people without push access, which blunts prompt injection through issues and comments. `*_read` also matches mark_all_notifications_read, which the `mark_*` rule keeps on ask."
+    },
+    {
+      "id": "github-docker",
+      "name": "GitHub (local Docker)",
+      "description": "GitHub's official MCP server run locally in Docker from a pinned image digest.",
+      "category": "developer",
+      "publisher": "GitHub",
+      "official": true,
+      "homepage": "https://github.com/github/github-mcp-server",
+      "requires": ["docker"],
+      "transport": "stdio",
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "-e",
+        "GITHUB_TOOLSETS",
+        "-e",
+        "GITHUB_READ_ONLY",
+        "-e",
+        "GITHUB_LOCKDOWN_MODE",
+        "ghcr.io/github/github-mcp-server:v1.12.2@sha256:508a0857ec762b1ab1cece29193345b501fab1dd9d1228a7b617062954cecac6"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${secret:github-pat}",
+        "GITHUB_LOCKDOWN_MODE": "1"
+      },
+      "secrets": [
+        {
+          "name": "github-pat",
+          "description": "GitHub personal access token (fine-grained, only the repos you need).",
+          "where_to_get": "https://github.com/settings/personal-access-tokens/new",
+          "format_hint": "github_pat_… (fine-grained, recommended) or a classic token",
+          "pattern": "^(github_pat_[A-Za-z0-9_]{20,255}|gh[p]_[A-Za-z0-9]{30,255})$"
+        }
+      ],
+      "tools": {
+        "allow": ["get_*", "list_*", "search_*", "*_read"],
+        "ask": ["mark_*"],
+        "confirm": ["merge_*"]
+      },
+      "notes": "Same tools as the hosted server, run on your machine. The image is pinned to v1.12.2 by digest; update the digest to upgrade. For GitHub Enterprise Server add GITHUB_HOST to env (and `-e GITHUB_HOST` to args) in mcp.yaml."
+    },
+    {
+      "id": "gitlab",
+      "name": "GitLab",
+      "description": "Issues, merge requests, pipelines and search on GitLab.com or your own instance (GitLab's built-in server).",
+      "category": "developer",
+      "publisher": "GitLab",
+      "official": true,
+      "status": "beta",
+      "homepage": "https://docs.gitlab.com/user/model_context_protocol/mcp_server/",
+      "transport": "http",
+      "url": "https://${param:host}/api/v4/mcp",
+      "auth": "oauth",
+      "user_params": [
+        {
+          "name": "host",
+          "label": "GitLab host",
+          "default": "gitlab.com",
+          "example": "gitlab.example.com",
+          "pattern": "^[a-z0-9.-]+(:\\d{1,5})?$"
+        }
+      ],
+      "tools": { "allow": ["get_*", "list_*", "search*", "*_search"] },
+      "notes": "Beta; Premium and Ultimate. Sign in with `foreman mcp login gitlab` (OAuth with dynamic client registration, `mcp` scope). Self-managed instances can turn dynamic client registration off; use gitlab-community there."
+    },
+    {
+      "id": "gitlab-community",
+      "name": "GitLab (community, token)",
+      "description": "GitLab projects, issues, merge requests and pipelines with a personal access token; any tier, self-managed too.",
+      "category": "developer",
+      "publisher": "zereight (community)",
+      "official": false,
+      "homepage": "https://github.com/zereight/gitlab-mcp",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@zereight/mcp-gitlab"],
+      "env": {
+        "GITLAB_PERSONAL_ACCESS_TOKEN": "${secret:gitlab-pat}",
+        "GITLAB_API_URL": "https://${param:host}/api/v4"
+      },
+      "user_params": [
+        {
+          "name": "host",
+          "label": "GitLab host",
+          "default": "gitlab.com",
+          "example": "gitlab.example.com",
+          "pattern": "^[a-z0-9.-]+(:\\d{1,5})?$"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "gitlab-pat",
+          "description": "GitLab personal access token (`api` scope; `read_api` is enough for read-only use).",
+          "where_to_get": "https://gitlab.com/-/user_settings/personal_access_tokens",
+          "format_hint": "usually starts with glpat-"
         }
       ],
       "tools": { "allow": ["get_*", "list_*", "search_*"] },
-      "notes": "Write tools (create/update/merge/push/delete) ask by default."
+      "notes": "Community package — review it before trusting it with write access."
     },
     {
       "id": "playwright",
@@ -97,9 +208,23 @@
       "tools": { "allow": ["list_*", "get_*", "take_snapshot", "take_screenshot"] }
     },
     {
+      "id": "notion-hosted",
+      "name": "Notion (hosted)",
+      "description": "Search, read and edit Notion pages and databases (Notion's hosted server, sign in with OAuth).",
+      "category": "productivity",
+      "publisher": "Notion",
+      "official": true,
+      "homepage": "https://developers.notion.com/guides/mcp/overview",
+      "transport": "http",
+      "url": "https://mcp.notion.com/mcp",
+      "auth": "oauth",
+      "tools": { "allow": ["notion-search", "notion-fetch", "notion-get-*"] },
+      "notes": "Sign in with `foreman mcp login notion-hosted`; access follows your own Notion permissions."
+    },
+    {
       "id": "notion",
       "name": "Notion",
-      "description": "Search, read and edit Notion pages and databases.",
+      "description": "Search, read and edit Notion pages and databases (self-hosted server with an integration token).",
       "category": "productivity",
       "publisher": "Notion",
       "official": true,
@@ -116,7 +241,8 @@
           "where_to_get": "https://www.notion.so/profile/integrations"
         }
       ],
-      "tools": { "allow": ["*search*", "*retrieve*", "*get*", "*query*", "*list*"] }
+      "tools": { "allow": ["*search*", "*retrieve*", "*get*", "*query*", "*list*"] },
+      "notes": "Notion no longer maintains this local server; notion-hosted is the supported one."
     },
     {
       "id": "sentry",
@@ -139,6 +265,172 @@
         }
       ],
       "tools": { "allow": ["find_*", "get_*", "search_*", "whoami"] }
+    },
+    {
+      "id": "atlassian",
+      "name": "Atlassian (Jira, Confluence)",
+      "description": "Jira issues and Confluence pages through Atlassian's official Rovo MCP server (Cloud, OAuth).",
+      "category": "productivity",
+      "publisher": "Atlassian",
+      "official": true,
+      "homepage": "https://github.com/atlassian/atlassian-mcp-server",
+      "transport": "http",
+      "url": "https://mcp.atlassian.com/v2/mcp",
+      "auth": "oauth",
+      "tools": {
+        "allow": ["get*", "search*", "lookup*", "fetch", "atlassianUserInfo", "discover", "executeRead"]
+      },
+      "notes": "Sign in with `foreman mcp login atlassian`. An organization admin may have to allow the connection under Rovo MCP server settings. v2 lists a few primary tools and reaches the rest through discover / executeRead / executeWrite / executeDestructive; writes ask by default."
+    },
+    {
+      "id": "atlassian-token",
+      "name": "Atlassian (Jira, Confluence) — API token",
+      "description": "Atlassian's official Rovo MCP server with an API token instead of a browser sign-in (Cloud).",
+      "category": "productivity",
+      "publisher": "Atlassian",
+      "official": true,
+      "homepage": "https://github.com/atlassian/atlassian-mcp-server",
+      "transport": "http",
+      "url": "https://mcp.atlassian.com/v2/mcp",
+      "headers": { "Authorization": "Basic ${secret:atlassian-mcp-basic}" },
+      "secrets": [
+        {
+          "name": "atlassian-mcp-basic",
+          "description": "base64 of `<your Atlassian email>:<API token>` (Basic auth). `foreman integrations add atlassian` builds it for you.",
+          "where_to_get": "https://id.atlassian.com/manage-profile/security/api-tokens",
+          "format_hint": "base64 of email:api-token"
+        }
+      ],
+      "tools": {
+        "allow": ["get*", "search*", "lookup*", "fetch", "atlassianUserInfo", "discover", "executeRead"]
+      },
+      "notes": "An organization admin must enable API token authentication for the Rovo MCP server first."
+    },
+    {
+      "id": "mcp-atlassian",
+      "name": "Atlassian (community, Cloud / Server / DC)",
+      "description": "Jira and Confluence with an API token, including Server and Data Center (sooperset/mcp-atlassian).",
+      "category": "productivity",
+      "publisher": "sooperset (community)",
+      "official": false,
+      "homepage": "https://github.com/sooperset/mcp-atlassian",
+      "requires": ["python-uv"],
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["mcp-atlassian"],
+      "env": {
+        "JIRA_URL": "https://${param:site}",
+        "JIRA_USERNAME": "${param:email}",
+        "JIRA_API_TOKEN": "${secret:atlassian-api-token}",
+        "CONFLUENCE_URL": "https://${param:site}/wiki",
+        "CONFLUENCE_USERNAME": "${param:email}",
+        "CONFLUENCE_API_TOKEN": "${secret:atlassian-api-token}"
+      },
+      "user_params": [
+        {
+          "name": "site",
+          "label": "Atlassian site",
+          "example": "your-company.atlassian.net",
+          "pattern": "^[a-z0-9.-]+(:\\d{1,5})?$"
+        },
+        {
+          "name": "email",
+          "label": "Atlassian account email",
+          "example": "you@example.com",
+          "pattern": "^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,190}$"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "atlassian-api-token",
+          "description": "Atlassian API token for that account.",
+          "where_to_get": "https://id.atlassian.com/manage-profile/security/api-tokens"
+        }
+      ],
+      "tools": { "allow": ["*_get_*", "*_search*"] },
+      "notes": "Community package. For Server / Data Center with a personal access token, set JIRA_PERSONAL_TOKEN / CONFLUENCE_PERSONAL_TOKEN and the right URLs in mcp.yaml instead."
+    },
+    {
+      "id": "trello",
+      "name": "Trello",
+      "description": "Boards, lists and cards through Atlassian's official Trello server (OAuth).",
+      "category": "productivity",
+      "publisher": "Atlassian",
+      "official": true,
+      "status": "unverified",
+      "homepage": "https://github.com/atlassian/trello-mcp-server",
+      "transport": "http",
+      "url": "https://mcp.trello.com/v1",
+      "auth": "oauth",
+      "notes": "Unverified: Trello signs in through Atlassian's authorization server, which offered dynamic client registration (RFC 7591) and PKCE when checked on 2026-09-28, but a full `foreman mcp login` has not been tested yet. Tool names are not published, so every tool asks. If sign-in fails, use trello-community."
+    },
+    {
+      "id": "trello-community",
+      "name": "Trello (community, API key)",
+      "description": "Boards, lists, cards and checklists with a Trello API key and token (delorenj/mcp-server-trello).",
+      "category": "productivity",
+      "publisher": "delorenj (community)",
+      "official": false,
+      "homepage": "https://github.com/delorenj/mcp-server-trello",
+      "requires": ["node"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@delorenj/mcp-server-trello"],
+      "env": {
+        "TRELLO_API_KEY": "${secret:trello-api-key}",
+        "TRELLO_TOKEN": "${secret:trello-token}"
+      },
+      "secrets": [
+        {
+          "name": "trello-api-key",
+          "description": "API key of a Trello Power-Up you own.",
+          "where_to_get": "https://trello.com/power-ups/admin",
+          "format_hint": "32 hexadecimal characters"
+        },
+        {
+          "name": "trello-token",
+          "description": "A user token generated for that API key.",
+          "where_to_get": "https://trello.com/power-ups/admin",
+          "format_hint": "long token, usually starting with ATTA"
+        }
+      ],
+      "tools": { "allow": ["get_*", "list_*"] },
+      "notes": "Community package — review it before trusting it with write access."
+    },
+    {
+      "id": "linear",
+      "name": "Linear",
+      "description": "Issues, projects, cycles and comments in Linear (Linear's hosted server, OAuth).",
+      "category": "productivity",
+      "publisher": "Linear",
+      "official": true,
+      "homepage": "https://linear.app/docs/mcp",
+      "transport": "http",
+      "url": "https://mcp.linear.app/mcp",
+      "auth": "oauth",
+      "tools": { "allow": ["get_*", "list_*", "search_*"] },
+      "notes": "Sign in with `foreman mcp login linear`."
+    },
+    {
+      "id": "linear-token",
+      "name": "Linear — API key",
+      "description": "Linear's hosted server with a personal API key instead of a browser sign-in.",
+      "category": "productivity",
+      "publisher": "Linear",
+      "official": true,
+      "homepage": "https://linear.app/docs/mcp",
+      "transport": "http",
+      "url": "https://mcp.linear.app/mcp",
+      "headers": { "Authorization": "Bearer ${secret:linear-api-key}" },
+      "secrets": [
+        {
+          "name": "linear-api-key",
+          "description": "Linear personal API key (give it only the Read permission for read-only use).",
+          "where_to_get": "https://linear.app/settings/account/security",
+          "format_hint": "starts with lin_api_"
+        }
+      ],
+      "tools": { "allow": ["get_*", "list_*", "search_*"] }
     },
     {
       "id": "stripe",

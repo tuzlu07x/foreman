@@ -6,7 +6,7 @@ import {
   type HubMode,
   type ServerConfigInput,
 } from "./config.js";
-import { findCatalogEntry, serverConfigFromCatalog, type McpCatalog } from "./catalog.js";
+import { CatalogParamError, findCatalogEntry, serverConfigFromCatalog, type McpCatalog } from "./catalog.js";
 
 // Pure mcp.yaml edits behind `foreman mcp add / remove / enable / mode`.
 // Each returns a new, schema-validated config so the CLI only does I/O.
@@ -25,6 +25,8 @@ export interface AddServerInput {
   name?: string;
   /** Extra positional args appended to the catalog command. */
   extraArgs?: readonly string[];
+  /** Values for the catalog entry's `${param:…}` placeholders. */
+  params?: Readonly<Record<string, string>>;
   /** Custom stdio server. */
   command?: string;
   /** Custom streamable-HTTP server. */
@@ -47,6 +49,9 @@ export function addServer(config: HubConfig, catalog: McpCatalog, input: AddServ
     throw new HubConfigEditError(`server '${name}' already exists — pass --force to replace it`);
   }
   let server: ServerConfigInput;
+  if ((input.command || input.url) && input.params && Object.keys(input.params).length > 0) {
+    throw new HubConfigEditError("--param only applies to catalog servers");
+  }
   if (input.command || input.url) {
     server = {
       enabled: true,
@@ -65,7 +70,12 @@ export function addServer(config: HubConfig, catalog: McpCatalog, input: AddServ
         `${entry.name} needs: ${entry.user_args.description}\n  e.g. foreman mcp add ${entry.id} ${entry.user_args.example.join(" ")}`,
       );
     }
-    server = serverConfigFromCatalog(entry, input.extraArgs ?? []);
+    try {
+      server = serverConfigFromCatalog(entry, input.extraArgs ?? [], input.params ?? {});
+    } catch (err) {
+      if (err instanceof CatalogParamError) throw new HubConfigEditError(err.message);
+      throw err;
+    }
   }
   if (input.env) server.env = { ...(server.env ?? {}), ...input.env };
   if (input.headers) server.headers = { ...(server.headers ?? {}), ...input.headers };
