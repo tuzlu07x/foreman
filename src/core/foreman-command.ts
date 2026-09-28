@@ -41,7 +41,7 @@ import {
 import { SecretNotFoundError } from "./secret-store.js";
 import { loadActiveRegistry } from "./registry-catalog.js";
 import type { RegistryService } from "./registry.js";
-import { clipForSurface, integrationChat } from "./integrations/chat.js";
+import { clipForSurface, integrationChat, isIntegrationChange } from "./integrations/chat.js";
 import type { ConfirmationStore } from "./integrations/confirmations.js";
 import type { IntegrationService } from "./integrations/service.js";
 import type { SecretStore } from "./secret-store.js";
@@ -609,15 +609,24 @@ function ownerOnly(verb: string): ForemanCommandResult {
 
 async function integrationHandler(args: string[], ctx: ForemanCommandContext): Promise<ForemanCommandResult> {
   const surface = ctx.sourceAgent;
-  const text = await integrationChat(args, {
-    service: ctx.integrations?.service ?? null,
-    confirmations: ctx.integrations?.confirmations ?? null,
+  const owner = ctx.trustedOwner === true && ctx.integrationOwner !== false;
+  const text = clipForSurface(
+    await integrationChat(args, {
+      service: ctx.integrations?.service ?? null,
+      confirmations: ctx.integrations?.confirmations ?? null,
+      surface,
+      user: (ctx.sourceUser ?? "").replace(/^[a-z]+:/, ""),
+      owner,
+      ...(ctx.integrations?.notice ? { notice: ctx.integrations.notice } : {}),
+    }),
     surface,
-    user: (ctx.sourceUser ?? "").replace(/^[a-z]+:/, ""),
-    owner: ctx.trustedOwner === true && ctx.integrationOwner !== false,
-    ...(ctx.integrations?.notice ? { notice: ctx.integrations.notice } : {}),
-  });
-  return { ok: true, text: clipForSurface(text, surface) };
+  );
+  // A change refused for want of an owner is a refusal, in the audit log
+  // (`foreman:command` ok=false) and to a relaying agent (isError).
+  if (!owner && ctx.integrations && isIntegrationChange(args)) {
+    return { ok: false, text, errorCode: "NOT_AUTHORIZED" };
+  }
+  return { ok: true, text };
 }
 
 function tellHandler(args: string[], ctx: ForemanCommandContext): ForemanCommandResult {

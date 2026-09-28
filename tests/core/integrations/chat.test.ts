@@ -98,6 +98,25 @@ describe('integrationChat', () => {
     expect(notices).toEqual([])
   })
 
+  it('reports a refused change as a failure through the router (audit log, relaying agent)', async () => {
+    const router = new ForemanCommandRouter()
+    registerBuiltinCommands(router)
+    const base = { db: {} as never, registry: {} as never, llmConfigPath: '', configDir: dir, integrations: { service: ctx.service! } }
+    // A Slack sender who is allowed but not in owner_user_ids, and an agent relaying it.
+    const notOwner = await router.dispatch('integration', ['disable', 'github'], { ...base, sourceAgent: 'slack', sourceUser: 'slack:U2', trustedOwner: true, integrationOwner: false })
+    const relayed = await router.dispatch('integration', ['disable', 'github'], { ...base, sourceAgent: 'codex' })
+    for (const res of [notOwner, relayed]) {
+      expect(res).toMatchObject({ ok: false, errorCode: 'NOT_AUTHORIZED' })
+      expect(res.text).toMatch(/Only you can disable an integration/)
+    }
+    // Reads stay fine for both.
+    expect(await router.dispatch('integration', ['status', 'github'], { ...base, sourceAgent: 'codex' })).toMatchObject({ ok: true })
+    expect(await router.dispatch('integrations', [], { ...base, sourceAgent: 'codex' })).toMatchObject({ ok: true })
+    const owner = await router.dispatch('integration', ['disable', 'github'], { ...base, sourceAgent: 'slack', sourceUser: 'slack:U1', trustedOwner: true, integrationOwner: true })
+    expect(owner).toMatchObject({ ok: true })
+    expect(owner.text).toMatch(/github disabled/)
+  })
+
   it('refuses to enable before review, then enables and tells the inbox', async () => {
     expect(await integrationChat(['enable', 'github'], ctx)).toMatch(/stays disabled: .*not been reviewed/)
     review()
