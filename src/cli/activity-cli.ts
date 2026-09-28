@@ -20,14 +20,16 @@ import { SecretStore } from "../core/secret-store.js";
 import { closeDb, getDb } from "../db/client.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { getForemanPaths } from "../utils/config.js";
-import { red } from "./colors.js";
+import { relativeTime } from "../tui/format.js";
+import { bold, dim, orange, red } from "./colors.js";
 
 // =============================================================================
 // `foreman report` — surface the digest #435 generates
 // =============================================================================
 //
-// Two output modes:
-//   - default / `--json`: stringified digest for debugging + scripting
+// Three output modes:
+//   - default: a readable table (#657; it used to be raw JSON)
+//   - `--json`: the digest as JSON, for scripts
 //   - `--narrate`: pipes the digest through Foreman's own LLM and
 //     prints a 1-3 paragraph human narration. Same budget guardrails
 //     + feature gate as `/foreman report me` (#432).
@@ -49,7 +51,7 @@ export const reportCommand = new Command("report")
   )
   .option("--agent <id>", "Limit to one agent (source OR target match)")
   .option("--narrate", "Run the digest through Foreman LLM + print prose")
-  .option("--json", "Force JSON output (default when --narrate isn't set)")
+  .option("--json", "Print the digest as JSON (for scripts)")
   .action(
     async (options: {
       since: string;
@@ -97,11 +99,13 @@ export async function runReport(options: {
       ...(options.agent ? { agentId: options.agent } : {}),
     });
 
-    if (!options.narrate) {
-      // JSON is the default when --narrate isn't set. --json explicit
-      // is the same path (kept for symmetry with other Foreman CLIs).
+    if (options.json) {
       // Agent ids and tool names come from agents (#656).
       console.log(jsonForTerminal(digest, 2));
+      return 0;
+    }
+    if (!options.narrate) {
+      console.log(renderDigest(digest, sinceArg));
       return 0;
     }
 
@@ -109,6 +113,41 @@ export async function runReport(options: {
   } finally {
     closeDb();
   }
+}
+
+/** The digest as a table: one row per agent, then the notable events.
+ *  Agent-supplied text shows hidden characters as visible stand-ins
+ *  (#656). Exported for tests. */
+export function renderDigest(digest: AgentActivityDigest, since: string, now: number = Date.now()): string {
+  const clean = (text: string): string => terminalSafe(text).replace(/\s+/g, " ").trim();
+  const lines: string[] = [bold(`Agent activity · last ${since}`), ""];
+  if (digest.agents.length === 0) {
+    lines.push(dim("  No agents registered."));
+  } else {
+    const idWidth = Math.min(24, Math.max(5, ...digest.agents.map((a) => clean(a.id).length)));
+    lines.push(dim(`  ${"agent".padEnd(idWidth)}  ${"calls".padStart(5)}  ${"denied".padStart(6)}  last call`));
+    for (const a of digest.agents) {
+      const last = a.lastActivityAt === null ? dim("idle") : relativeTime(a.lastActivityAt, now);
+      const denied = a.deniedCount > 0 ? red(String(a.deniedCount).padStart(6)) : String(a.deniedCount).padStart(6);
+      lines.push(`  ${orange(clean(a.id).slice(0, idWidth).padEnd(idWidth))}  ${String(a.requestCount).padStart(5)}  ${denied}  ${last}`);
+    }
+  }
+  if (digest.sessions.length > 0) {
+    lines.push("", bold("Sessions"));
+    for (const s of digest.sessions) {
+      lines.push(`  ${s.participants.map(clean).join(" ⇄ ")} · ${s.messageCount} messages · ${s.tokenCount} tokens · ${s.status}`);
+    }
+  }
+  lines.push("", bold("Worth a look"));
+  if (digest.notableEvents.length === 0) {
+    lines.push(dim("  Nothing: no denials, crashes, budget alerts or high-risk calls."));
+  } else {
+    for (const e of digest.notableEvents) {
+      lines.push(`  ${dim(relativeTime(e.when, now).padEnd(8))} ${clean(e.summary)}`);
+    }
+  }
+  lines.push("", dim("--json for the raw digest · --narrate for an LLM summary"));
+  return lines.join("\n");
 }
 
 async function narrate(
