@@ -17,6 +17,11 @@ import type {
 } from "./agents-logic.js";
 import type { ForemanLlmPhase } from "./foreman-llm-logic.js";
 import type {
+  IntegrationDraft,
+  IntegrationResult,
+  IntegrationsPhase,
+} from "./integrations-logic.js";
+import type {
   ProviderPrompt,
   ProvidersPhase,
 } from "./providers-logic.js";
@@ -133,6 +138,19 @@ export interface WizardState {
   servicesSkipped: string[];
   servicesWarning: string | null;
 
+  // Integrations step (docs/plans/integrations.md §7). `integrationDraft`
+  // holds a typed credential only until that integration is saved.
+  /** Every id picked in this setup (a resume restores it); the Done
+   *  screen lists the ones still off. */
+  integrationsSelected: string[];
+  /** The ids being configured in the current pass through the picker. */
+  integrationQueue: string[];
+  integrationsPhase: IntegrationsPhase;
+  integrationIdx: number;
+  integrationDraft: IntegrationDraft | null;
+  integrationResults: IntegrationResult[];
+  integrationsWarning: string | null;
+
   chatPrimaryChannelIdx: number;
   chatPrimaryCursor: number;
   chatPrimaryDrafts: Record<string, string>;
@@ -218,6 +236,14 @@ export function createInitialWizardState(
     servicesSkipped: [],
     servicesWarning: null,
 
+    integrationsSelected: session?.integrationsSelected ?? [],
+    integrationQueue: [],
+    integrationsPhase: "picker",
+    integrationIdx: 0,
+    integrationDraft: null,
+    integrationResults: [],
+    integrationsWarning: null,
+
     chatPrimaryChannelIdx: 0,
     chatPrimaryCursor: 0,
     chatPrimaryDrafts: {},
@@ -254,6 +280,9 @@ export function snapshotSession(
     agentsSelected: [...state.agentsSelected],
     agentConfigs,
     servicesSelected: [...state.servicesSelected],
+    // Ids only: integrationDraft (which may hold a credential) is never
+    // part of the snapshot.
+    integrationsSelected: [...state.integrationsSelected],
     registeredAtSnapshot: [...registered],
   };
 }

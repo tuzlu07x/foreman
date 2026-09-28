@@ -23,7 +23,7 @@ Foreman treats LLM providers as first-class — the wizard's Step 1 and the TUI'
 ## Wizard flow
 
 ```
-Step 1 of 5 — LLM Providers
+Step 1 of 6 — LLM Providers
   picker  → choose providers you want to wire up
   values  → per-provider key (and endpoint when required)
   summary → "N providers configured"

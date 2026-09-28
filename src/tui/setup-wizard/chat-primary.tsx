@@ -5,6 +5,7 @@ import type { AgentEntry } from "../../core/registry-catalog.js";
 import { WizardProgress } from "../components/wizard-progress.js";
 import { theme } from "../theme.js";
 import type { WizardContext } from "./context.js";
+import { backToIntegrations } from "./integrations.js";
 import { stepProgress } from "./progress.js";
 import type { WizardState } from "./state.js";
 
@@ -66,7 +67,6 @@ export function handleChatPrimaryInput(
     services,
     currentStep,
     advance,
-    uncomplete,
     chatPrimaryChannelsNeeded,
   } = ctx;
   const {
@@ -75,7 +75,6 @@ export function handleChatPrimaryInput(
     chatPrimaryDrafts,
   } = ctx.state;
   const {
-    setServicesPhase,
     setChatPrimaryChannelIdx,
     setChatPrimaryCursor,
     setChatPrimaryDrafts,
@@ -121,8 +120,7 @@ export function handleChatPrimaryInput(
         setChatPrimaryCursor(0);
         return true;
       }
-      uncomplete("services");
-      setServicesPhase("summary");
+      backToIntegrations(ctx);
       return true;
     }
     return true;

@@ -174,6 +174,49 @@ describe('wizard state ↔ snapshot', () => {
   it('snapshots exactly what it seeds', () => {
     const s = createInitialWizardState({ ...freshState(), session }, [])
     // Plus the live registry the choices were made against (planResume).
-    expect(snapshotSession(s, ['codex'])).toEqual({ ...session, registeredAtSnapshot: ['codex'] })
+    expect(snapshotSession(s, ['codex'])).toEqual({
+      ...session,
+      integrationsSelected: [],
+      registeredAtSnapshot: ['codex'],
+    })
+  })
+})
+
+describe('integrationsSelected in the snapshot', () => {
+  it('round-trips the picked integration ids', () => {
+    const s = createInitialWizardState({ ...freshState(), session: { ...session, integrationsSelected: ['github'] } }, [])
+    expect(s.integrationsSelected).toEqual(['github'])
+    expect(snapshotSession(s, []).integrationsSelected).toEqual(['github'])
+  })
+
+  it('is optional for files written before the Integrations step, and must be strings', () => {
+    expect(sanitizeSession(session)?.integrationsSelected).toBeUndefined()
+    expect(sanitizeSession({ ...session, integrationsSelected: ['github', 'linear'] })?.integrationsSelected).toEqual([
+      'github',
+      'linear',
+    ])
+    const bad = sanitizeSession({ ...session, integrationsSelected: [1, 'github'] })
+    expect(bad).toBeDefined()
+    expect(bad?.integrationsSelected).toBeUndefined()
+  })
+
+  it('never carries a credential typed into the Integrations step', () => {
+    const s = createInitialWizardState({ ...freshState(), session }, [])
+    const typing = {
+      ...s,
+      integrationsSelected: ['github'],
+      integrationDraft: {
+        stage: 'credentials' as const,
+        paramIdx: 0,
+        params: {},
+        accessLevel: 'read-only' as const,
+        credIdx: 0,
+        credentials: { 'github-pat': 'ghp_fake_value_never_persisted' },
+        username: null,
+        keep: [],
+        attempt: 0,
+      },
+    }
+    expect(JSON.stringify(snapshotSession(typing, []))).not.toContain('ghp_fake_value_never_persisted')
   })
 })

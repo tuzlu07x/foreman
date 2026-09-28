@@ -23,6 +23,7 @@ import { SetupWizard, type WizardOauthRunStep } from "../tui/setup-wizard.js";
 import { getForemanPaths } from "../utils/config.js";
 import { red } from "./colors.js";
 import { runOauthFlows } from "./run-oauth-flow.js";
+import { wizardIntegrations } from "./wizard-integrations.js";
 
 interface SetupOptions {
   resume?: boolean;
@@ -80,6 +81,7 @@ export const setupCommand = new Command("setup")
     const registry = new RegistryService(db, bus);
     const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
     const chatPrimary = new ChatPrimaryService(db, { bus });
+    const wizardInt = wizardIntegrations(db, secretStore);
 
     // #468 — Wizard's [y] hotkey hands its OAuth queue here; we run the
     // commands AFTER Ink unmounts so spawnSync's inherited stdio gets
@@ -101,6 +103,7 @@ export const setupCommand = new Command("setup")
           requestOauthRun: (steps) => {
             oauthQueue.push(...steps);
           },
+          ...(wizardInt.integrations ? { integrations: wizardInt.integrations } : {}),
         },
         // Ctrl-C exits 130, like any interrupted command, so scripts and
         // shells can tell an aborted setup from a finished one.
@@ -119,6 +122,7 @@ export const setupCommand = new Command("setup")
     process.once("SIGTERM", shutdown);
 
     await instance.waitUntilExit();
+    wizardInt.dispose();
     if (oauthQueue.length > 0) {
       runOauthFlows(oauthQueue);
     }

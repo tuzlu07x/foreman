@@ -12,6 +12,7 @@ import {
 } from "../../core/registry-catalog.js";
 import { theme } from "../theme.js";
 import type { WizardContext } from "./context.js";
+import { renderIntegrationsNextSteps } from "./integrations.js";
 import {
   configuredProviderIds,
   configuredServiceIds,
@@ -379,6 +380,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
       {installSummary && installSummary.registered.length > 0 && (
         <LaunchCommands agentIds={installSummary.registered} />
       )}
+      {renderIntegrationsNextSteps(ctx)}
       {/* #408 / #411 Phase 3 — surface queued OAuth flows that the user
           accepted to run manually. Without this hint the wizard would
           leave Codex / Claude Code in an un-authenticated state and the

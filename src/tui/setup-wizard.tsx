@@ -45,6 +45,10 @@ import { handleDoneInput, renderDoneStep } from "./setup-wizard/done.js";
 import { handleForemanLlmInput } from "./setup-wizard/foreman-llm-input.js";
 import { renderForemanLlmStep } from "./setup-wizard/foreman-llm.js";
 import {
+  handleIntegrationsInput,
+  renderIntegrationsStep,
+} from "./setup-wizard/integrations.js";
+import {
   handleInstallFailureInput,
   renderInstallStep,
   useInstallKickoff,
@@ -256,6 +260,7 @@ export function SetupWizard({
     if (handleAgentLlmChoiceInput(ctx, input, key)) return;
     if (handleRequiredSetupInput(ctx, input, key)) return;
     if (handleChatPrimaryInput(ctx, input, key)) return;
+    if (handleIntegrationsInput(ctx, input, key)) return;
     if (handleDoneInput(ctx, input, key)) return;
     if (handleWelcomeInput(ctx, input, key)) return;
     if (handleInstallFailureInput(ctx, input, key)) return;
@@ -281,6 +286,7 @@ export function SetupWizard({
     const view = renderServicesStep(ctx);
     if (view) return view;
   }
+  if (currentStep === "integrations") return renderIntegrationsStep(ctx);
   if (currentStep === "chat-primary") return renderChatPrimaryStep(ctx);
   if (currentStep === "required-setup") return renderRequiredSetupStep(ctx);
   if (currentStep === "install") return renderInstallStep(ctx);

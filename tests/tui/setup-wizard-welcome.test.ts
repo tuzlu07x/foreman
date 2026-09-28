@@ -5,8 +5,8 @@ import {
 } from "../../src/tui/setup-wizard.js";
 
 describe("WELCOME_STEPS", () => {
-  it("lists five steps after #367 added Foreman's brain", () => {
-    expect(WELCOME_STEPS).toHaveLength(5);
+  it("lists six steps after the Integrations step was added", () => {
+    expect(WELCOME_STEPS).toHaveLength(6);
   });
 
   it("step names + numbers match the wizard's actual flow", () => {
@@ -15,18 +15,22 @@ describe("WELCOME_STEPS", () => {
       "Foreman's brain",
       "Agents",
       "Services",
+      "Integrations",
       "Install + Verify",
     ]);
-    expect(WELCOME_STEPS.map((s) => s.number)).toEqual([1, 2, 3, 4, 5]);
+    expect(WELCOME_STEPS.map((s) => s.number)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
-  it("marks the Services step as optional", () => {
-    const services = WELCOME_STEPS.find((s) => s.name === "Services");
-    expect(services?.optional).toBe(true);
+  it("marks the Services and Integrations steps as optional", () => {
+    for (const name of ["Services", "Integrations"]) {
+      expect(WELCOME_STEPS.find((s) => s.name === name)?.optional).toBe(true);
+    }
   });
 
-  it("non-Services steps are not marked optional", () => {
-    const required = WELCOME_STEPS.filter((s) => s.name !== "Services");
+  it("the other steps are not marked optional", () => {
+    const required = WELCOME_STEPS.filter(
+      (s) => s.name !== "Services" && s.name !== "Integrations",
+    );
     for (const s of required) {
       expect(s.optional).toBeFalsy();
     }
@@ -40,8 +44,8 @@ describe("WELCOME_STEPS", () => {
 });
 
 describe("totalEstimatedMinutes", () => {
-  it("sums the default WELCOME_STEPS to about 9 minutes after #367", () => {
-    expect(totalEstimatedMinutes()).toBe(9);
+  it("sums the default WELCOME_STEPS to about 10 minutes", () => {
+    expect(totalEstimatedMinutes()).toBe(10);
   });
 
   it("sums any subset that's passed in", () => {

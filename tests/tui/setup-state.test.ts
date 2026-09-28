@@ -260,17 +260,20 @@ describe("setup-state", () => {
     it("STEPS array includes 'required-setup' between 'chat-primary' and 'install'", () => {
       expect(STEPS).toContain("required-setup");
       const servicesIdx = STEPS.indexOf("services");
+      const integrationsIdx = STEPS.indexOf("integrations");
       const chatPrimaryIdx = STEPS.indexOf("chat-primary");
       const requiredIdx = STEPS.indexOf("required-setup");
       const installIdx = STEPS.indexOf("install");
       expect(servicesIdx).toBeGreaterThanOrEqual(0);
+      // The Integrations step sits between services and chat-primary.
+      expect(integrationsIdx).toBe(servicesIdx + 1);
       // #426 inserts chat-primary between services and required-setup.
-      expect(chatPrimaryIdx).toBe(servicesIdx + 1);
+      expect(chatPrimaryIdx).toBe(integrationsIdx + 1);
       expect(requiredIdx).toBe(chatPrimaryIdx + 1);
       expect(installIdx).toBe(requiredIdx + 1);
     });
 
-    it("nextStep advances welcome → providers → foreman-llm → agents → services → chat-primary → required-setup → install", () => {
+    it("nextStep advances welcome → providers → foreman-llm → agents → services → integrations → chat-primary → required-setup → install", () => {
       let s = freshState();
       const order = [
         "welcome",
@@ -278,6 +281,7 @@ describe("setup-state", () => {
         "foreman-llm",
         "agents",
         "services",
+        "integrations",
         "chat-primary",
         "required-setup",
         "install",
@@ -289,7 +293,7 @@ describe("setup-state", () => {
       expect(nextStep(s)).toBe("done");
     });
 
-    it("markUncompleted on 'services' drops everything from 'services' onward (including chat-primary + required-setup)", () => {
+    it("markUncompleted on 'services' drops everything from 'services' onward (including integrations, chat-primary + required-setup)", () => {
       let s = freshState();
       for (const step of [
         "welcome",
@@ -297,6 +301,7 @@ describe("setup-state", () => {
         "foreman-llm",
         "agents",
         "services",
+        "integrations",
         "chat-primary",
         "required-setup",
       ]) {
@@ -309,6 +314,54 @@ describe("setup-state", () => {
         "foreman-llm",
         "agents",
       ]);
+    });
+  });
+
+  // The Integrations step was added after services. A setup that is past
+  // it must not be sent back into the wizard for an optional step.
+  describe("integrations upgrade migration", () => {
+    const write = (completed: string[]): void => {
+      writeFileSync(
+        statePath,
+        JSON.stringify({ version: 1, completed, startedAt: 1, lastUpdatedAt: 2 }),
+      );
+    };
+
+    it("marks integrations completed when a later step is (services + chat-primary)", () => {
+      write(["welcome", "providers", "foreman-llm", "agents", "services", "chat-primary"]);
+      const s = loadSetupState(statePath);
+      expect(s.completed).toContain("integrations");
+      expect(s.completed).toEqual([
+        "welcome",
+        "providers",
+        "foreman-llm",
+        "agents",
+        "services",
+        "integrations",
+        "chat-primary",
+      ]);
+      expect(nextStep(s)).toBe("required-setup");
+    });
+
+    it("keeps a finished setup finished", () => {
+      write([
+        "welcome",
+        "providers",
+        "foreman-llm",
+        "agents",
+        "services",
+        "chat-primary",
+        "required-setup",
+        "install",
+      ]);
+      expect(nextStep(loadSetupState(statePath))).toBe("done");
+    });
+
+    it("leaves a run that stopped at services on the Integrations step", () => {
+      write(["welcome", "providers", "foreman-llm", "agents", "services"]);
+      const s = loadSetupState(statePath);
+      expect(s.completed).not.toContain("integrations");
+      expect(nextStep(s)).toBe("integrations");
     });
   });
 });

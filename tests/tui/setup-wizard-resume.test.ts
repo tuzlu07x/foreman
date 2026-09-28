@@ -19,7 +19,7 @@ const catalog = {
   serviceIds: ['telegram'],
 }
 
-const UP_TO_REQUIRED: Step[] = ['welcome', 'providers', 'foreman-llm', 'agents', 'services', 'chat-primary']
+const UP_TO_REQUIRED: Step[] = ['welcome', 'providers', 'foreman-llm', 'agents', 'services', 'integrations', 'chat-primary']
 
 function resumed(session: Partial<WizardSessionSnapshot>, completed: Step[] = UP_TO_REQUIRED): SetupState {
   return {

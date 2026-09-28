@@ -11,6 +11,7 @@ import { openInBrowser } from "../../utils/browser-open.js";
 import { WizardProgress } from "../components/wizard-progress.js";
 import { theme } from "../theme.js";
 import type { WizardContext } from "./context.js";
+import { backToIntegrations } from "./integrations.js";
 import { stepProgress } from "./progress.js";
 import type { WizardState } from "./state.js";
 
@@ -107,7 +108,6 @@ export function handleRequiredSetupInput(
     setRequiredSetupCursor,
     setRequiredSetupPasteValue,
     setRequiredSetupOverrides,
-    setServicesPhase,
     setChatPrimaryChannelIdx,
     setChatPrimaryCursor,
   } = ctx.set;
@@ -157,7 +157,7 @@ export function handleRequiredSetupInput(
     // ---- picker phase ----
     if (key.escape) {
       // Step back. If chat-primary had a collision to resolve, that's
-      // the single step before us; otherwise jump past it to services
+      // the single step before us; otherwise jump past it to integrations
       // (chat-primary's auto-advance effect re-fires immediately).
       if (chatPrimaryChannelsNeeded.length > 0) {
         uncomplete("chat-primary");
@@ -167,8 +167,7 @@ export function handleRequiredSetupInput(
         setChatPrimaryCursor(0);
         return true;
       }
-      uncomplete("services");
-      setServicesPhase("summary");
+      backToIntegrations(ctx);
       return true;
     }
     if (key.upArrow) {
