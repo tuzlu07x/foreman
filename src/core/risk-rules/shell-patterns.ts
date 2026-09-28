@@ -1,5 +1,18 @@
 import { parse as parseShell } from 'shell-quote'
 import { shortFingerprint } from './secret-patterns.js'
+import {
+  analyzeShell,
+  gitCleanForce,
+  gitForcePush,
+  gitHistoryRewrite,
+  gitPushDelete,
+  gitResetHard,
+  isBulkDelete,
+  isRecursiveRm,
+  scriptDeletes,
+  unwrapCommand,
+  type ShellSegment,
+} from './shell-analysis.js'
 import type { RiskFactor, RiskRule } from './types.js'
 
 // =============================================================================
@@ -72,7 +85,15 @@ interface ShellPattern {
   id: string
   points: number
   reason: string
-  match: (cmd: string, argv: string[]) => boolean
+  /** `segment` is the simple command `argv` came from (#698): the whole
+   *  line flattened, or one command of it with its wrappers. */
+  match: (cmd: string, argv: string[], segment: ShellSegment) => boolean
+}
+
+/** `rm` deleting recursively: `-rf` as one token (the original check, any
+ *  argv position) or any other spelling of the command (#698). */
+function recursiveRm(argv: string[]): boolean {
+  return hasUnquotedRmRf(argv) || isRecursiveRm(unwrapCommand(argv))
 }
 
 // --- 1. Destructive ops (auto-critical / auto-high) -------------------------
@@ -83,6 +104,11 @@ interface ShellPattern {
 // passed via the tokeniser (which still defeats quoted false positives).
 
 const RF_FLAG_RE = /^-[a-zA-Z]*[rR][a-zA-Z]*[fF][a-zA-Z]*$|^-[a-zA-Z]*[fF][a-zA-Z]*[rR][a-zA-Z]*$/
+
+// #698 — `echo cm0gLXJmIC8K | base64 -d | sh`: whatever was encoded runs,
+// and no other rule can see it.
+const DECODE_TO_SHELL_RE =
+  /(?:\bbase(?:64|32)\s+(?:-[a-zA-Z]*d[a-zA-Z]*|--decode)|\bxxd\s+(?:-[a-z]+\s+)*-r|\bopenssl\s+(?:enc\s+)?(?:-[a-z0-9]+\s+)*-d)[^|]*\|\s*(?:sudo\s+)?(?:\S*\/)?(?:ba|z|da|k|mk)?sh\b/
 
 const CATASTROPHIC_TARGET_RE =
   /(?:^|[\s|;&])(?:\/|\/\*|~\/?\*?|\$\{?HOME\}?\/?\*?|\/usr|\/etc|\/var|\/boot)(?:\s|$|;|&|\|)/
@@ -125,15 +151,63 @@ const DESTRUCTIVE_OPS: ShellPattern[] = [
     points: 85,
     reason: 'rm -rf targets a system/home directory (catastrophic)',
     match: (cmd, argv) => {
-      if (!hasUnquotedRmRf(argv)) return false
+      if (!recursiveRm(argv)) return false
       return CATASTROPHIC_TARGET_RE.test(cmd)
     },
   },
   {
     id: 'shell_rm_rf_general',
     points: 60,
-    reason: 'rm -rf <path> (recursive force delete)',
-    match: (_cmd, argv) => hasUnquotedRmRf(argv),
+    reason: 'rm -r / rm -rf <path> (recursive delete)',
+    match: (_cmd, argv) => recursiveRm(argv),
+  },
+  {
+    id: 'shell_find_delete',
+    points: 60,
+    reason: 'find -delete / -exec rm / xargs rm (deletes every match)',
+    match: (_cmd, _argv, segment) => isBulkDelete(segment),
+  },
+  {
+    id: 'shell_script_delete',
+    points: 60,
+    reason: 'a python / node / perl / ruby / php one-liner deletes files',
+    match: (_cmd, argv) => scriptDeletes(argv),
+  },
+  {
+    id: 'shell_decode_pipe_shell',
+    points: 60,
+    reason: 'decoded text piped into a shell (base64 -d / xxd -r … | sh)',
+    match: (cmd) => DECODE_TO_SHELL_RE.test(cmd),
+  },
+  {
+    id: 'shell_git_force_push',
+    points: 50,
+    reason: 'git push --force (overwrites the remote branch history)',
+    match: (_cmd, argv) => gitForcePush(argv),
+  },
+  {
+    id: 'shell_git_history_rewrite',
+    points: 50,
+    reason: 'git filter-branch / filter-repo (rewrites history)',
+    match: (_cmd, argv) => gitHistoryRewrite(argv),
+  },
+  {
+    id: 'shell_git_push_delete',
+    points: 40,
+    reason: 'git push --delete (deletes a remote branch or tag)',
+    match: (_cmd, argv) => gitPushDelete(argv),
+  },
+  {
+    id: 'shell_git_reset_hard',
+    points: 40,
+    reason: 'git reset --hard (discards uncommitted work)',
+    match: (_cmd, argv) => gitResetHard(argv),
+  },
+  {
+    id: 'shell_git_clean',
+    points: 40,
+    reason: 'git clean -f (deletes untracked files)',
+    match: (_cmd, argv) => gitCleanForce(argv),
   },
   {
     id: 'shell_dd_to_disk',
@@ -534,10 +608,21 @@ export const shellPatternRule: RiskRule = {
 
     const argv = tokenize(cmd)
     const factors: RiskFactor[] = []
+    // #698 — Each rule looks at the whole line and at every command it runs
+    // (through &&, |, ;, bash -c, eval, find -exec and interpreter strings),
+    // both as written (`sudo …`) and with its wrappers removed (`rm …`).
+    const whole: ShellSegment = { argv, written: argv, text: cmd }
+    const views: { text: string; argv: string[]; segment: ShellSegment }[] = [
+      { text: cmd, argv, segment: whole },
+    ]
+    for (const segment of analyzeShell(cmd)) {
+      views.push({ text: segment.text, argv: segment.argv, segment })
+      views.push({ text: segment.text, argv: segment.written, segment })
+    }
 
     for (const rule of ALL_SHELL_RULES) {
       try {
-        if (rule.match(cmd, argv)) {
+        if (views.some((v) => rule.match(v.text, v.argv, v.segment))) {
           factors.push({
             rule: rule.id,
             category: 'shell',
@@ -553,7 +638,10 @@ export const shellPatternRule: RiskRule = {
     }
 
     if (factors.length > 0) {
+      // A destructive git command is not "generally benign git" (#698).
+      const gitDanger = factors.some((f) => f.rule.startsWith('shell_git_'))
       for (const safe of SAFE_LIST) {
+        if (gitDanger && safe.id === 'shell_safe_git') continue
         if (safe.match(cmd, argv)) {
           factors.push({
             rule: safe.id,

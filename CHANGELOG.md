@@ -6,6 +6,28 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- **Reworded destructive shell commands no longer slip past the risk
+  rules** (#698). The rules scored how a command was spelled, not what it
+  did. In 2.1.0 these ran with risk 0 while `rm -rf` asked:
+  - `rm -r -f`, `rm --recursive --force`, `rm -r`;
+  - `find -delete` / `-exec rm` / `xargs rm`;
+  - `python -c "shutil.rmtree(…)"`, `node -e "fs.rmSync(…)"` and other
+    interpreter one-liners that delete files;
+  - `git push --force`, `reset --hard`, `clean -f`, `filter-branch`;
+  - `echo … | base64 -d | sh`.
+
+  Every rule now also looks at each command a line runs: through `&&`,
+  `;` and `|`; through wrappers (`sudo`, `env`, `nice`, `timeout`,
+  `xargs`); inside `bash -c "…"`, `eval` and `find -exec`; and at the
+  commands an interpreter one-liner could shell out to. All of these
+  reach at least the "medium" bucket, so they ask under the default
+  policy. A destructive git command no longer gets the "benign git"
+  discount. Benign lines (`rm file`, `find -name`, `git push origin main`,
+  quoted text) score as before
+  ([docs/detection.md](docs/detection.md#4-shell-danger-library-c3-226)).
+
 ## [2.1.0] - 2026-09-28
 
 Integrations, a local daemon that makes the Claude Code hook fast, a model
