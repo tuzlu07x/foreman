@@ -482,17 +482,22 @@ export class PolicyEngine {
     const rateLimitDecision = this.checkRateLimits(req);
     if (rateLimitDecision) return rateLimitDecision;
 
+    // Another transport's name for the same tool (ACP's `read` for
+    // read_file, …) still meets the restrictions written for it (#656);
+    // an allow rule only ever covers the name it was written for.
+    const aliases = targetAliases(target);
     const candidates = this.db
       .select()
       .from(policies)
       .where(
         and(
           inArray(policies.sourceAgent, [req.sourceAgent, "*"]),
-          eq(policies.target, target),
+          inArray(policies.target, aliases),
           eq(policies.enabled, 1),
         ),
       )
-      .all();
+      .all()
+      .filter((r) => r.target === target || r.effect !== "allow");
 
     const matching = candidates.filter((rule) => this.conditionsPass(rule, req));
     // An explicit deny aimed at this agent always wins.
@@ -568,7 +573,7 @@ export class PolicyEngine {
     const restrictions = this.db
       .select()
       .from(policies)
-      .where(and(eq(policies.sourceAgent, claimed), eq(policies.target, target), eq(policies.enabled, 1)))
+      .where(and(eq(policies.sourceAgent, claimed), inArray(policies.target, targetAliases(target)), eq(policies.enabled, 1)))
       .all()
       .filter((r) => r.effect !== "allow" && this.conditionsPass(r, { ...req, sourceAgent: claimed }))
       .sort((a, b) => EFFECT_ORDER[a.effect] - EFFECT_ORDER[b.effect] || a.id - b.id);
@@ -938,6 +943,31 @@ export class PolicyEngine {
       enabled: 1,
     };
   }
+}
+
+/** Names different transports use for the same kind of tool call (#656).
+ *  A deny / ask rule written for one name also applies to the others, so
+ *  the default `.env` guard on `tool:read_file` covers ACP agents'
+ *  `tool:read` and the MCP filesystem server's read tools. */
+const TOOL_ALIAS_GROUPS: ReadonlyArray<ReadonlyArray<string>> = [
+  ["read_file", "read", "read_text_file", "read_multiple_files", "read_media_file"],
+  ["file_write", "write_file", "edit_file", "write", "edit", "create_file", "move_file"],
+  ["shell_exec", "execute", "execute_code", "run_command", "run_shell", "bash", "sh", "zsh", "exec"],
+  ["network_fetch", "fetch", "fetch_url", "web_fetch"],
+];
+
+const TOOL_ALIASES: ReadonlyMap<string, ReadonlyArray<string>> = new Map(
+  TOOL_ALIAS_GROUPS.flatMap((group) => group.map((name) => [name, group] as const)),
+);
+
+/** Every spelling of a rule target (`tool:<name>` or `<agent>:<name>`)
+ *  whose tool name belongs to an alias group; itself otherwise. */
+export function targetAliases(target: string): string[] {
+  const at = target.lastIndexOf(":");
+  if (at < 0) return [target];
+  const prefix = target.slice(0, at + 1);
+  const group = TOOL_ALIASES.get(target.slice(at + 1));
+  return group ? [target, ...group.map((name) => `${prefix}${name}`).filter((t) => t !== target)] : [target];
 }
 
 /** How often a watched policy.yaml is stat'ed at most (#656). */
