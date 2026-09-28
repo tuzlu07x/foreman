@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { Command } from "commander";
+import { ZodError } from "zod";
 import { loadBundledMcpCatalog, type McpCatalogEntry } from "../core/mcp-hub/catalog.js";
 import {
   defaultHubConfig,
@@ -462,7 +463,26 @@ function requireInitialised(): void {
 }
 
 function fail(err: unknown): never {
-  const message = err instanceof HubConfigEditError || err instanceof Error ? err.message : String(err);
-  console.error(red("error: ") + message);
+  console.error(red("error: ") + describeHubError(err));
   process.exit(1);
+}
+
+/** A rejected mcp.yaml edit in words: a ZodError's message is the raw
+ *  JSON array of issues (#657). Exported for tests. */
+export function describeHubError(err: unknown): string {
+  if (err instanceof ZodError) {
+    return err.issues
+      .map((issue) => {
+        const [top, server, ...rest] = issue.path;
+        const where =
+          top === "servers" && server !== undefined
+            ? `server '${String(server)}'${rest.length > 0 ? ` (${rest.join(".")})` : ""}: `
+            : issue.path.length > 0
+              ? `${issue.path.join(".")}: `
+              : "";
+        return `${where}${issue.message}`;
+      })
+      .join("; ");
+  }
+  return err instanceof HubConfigEditError || err instanceof Error ? err.message : String(err);
 }
