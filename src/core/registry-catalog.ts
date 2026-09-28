@@ -950,6 +950,20 @@ export function loadActiveRegistry(now: number = Date.now()): {
   return { doc: loadBundledRegistry(), source: "bundled" };
 }
 
+/** The command that registers `agentId` (#657). A registry id is its own
+ *  type (`foreman agent add claude-code`); any other id needs one. */
+export function agentAddCommand(agentId: string): string {
+  let known = false;
+  try {
+    known = loadActiveRegistry().doc.agents.some((a) => a.id === agentId);
+  } catch {
+    known = false;
+  }
+  return known
+    ? `foreman agent add ${agentId}`
+    : `foreman agent add ${agentId} --type <registry-id>`;
+}
+
 export function writeRegistryCache(
   doc: RegistryDoc,
   cachedAt: number = Date.now(),

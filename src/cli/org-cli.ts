@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { jsonForTerminal, terminalSafe } from "../core/terminal-text.js";
 import { isMap, parseDocument } from "yaml";
 import { EventBus, type ForemanEventMap } from "../core/event-bus.js";
-import { loadActiveRegistry } from "../core/registry-catalog.js";
+import { agentAddCommand, loadActiveRegistry } from "../core/registry-catalog.js";
 import { RegistryService } from "../core/registry.js";
 import {
   buildTree,
@@ -166,7 +166,7 @@ orgCommand
         console.log(`${green("✓")} ${bold(role.agent)} ← ${roleId}`);
       }
       for (const agent of skipped) {
-        console.log(`${orange("skip")} ${agent} is not registered — \`foreman agent add ${agent}\``);
+        console.log(`${orange("skip")} ${agent} is not registered — \`${agentAddCommand(agent)}\``);
       }
       console.log(dim(`${updated} role(s) synced`));
     } finally {
@@ -392,7 +392,7 @@ orgCommand
         reportInvalid(err);
       }
       console.log(`${green("✓")} added ${bold(id)} (${opts.agent})${dept ? ` in ${dept}` : ""}, reporting to ${reportsTo}`);
-      if (!registeredAgents().has(opts.agent)) console.log(dim(`Register the agent: foreman agent add ${opts.agent}`));
+      if (!registeredAgents().has(opts.agent)) console.log(dim(`Register the agent: ${agentAddCommand(opts.agent)}`));
     },
   );
 
@@ -518,7 +518,8 @@ function printTree(org: OrgDoc, registered: ReadonlySet<string>): void {
   };
   walk(buildTree(org), "");
   if ([...Object.values(org.roles)].some((r) => !registered.has(r.agent))) {
-    console.log(dim("○ = agent not registered yet (`foreman agent add <id>`)"));
+    const missing = [...new Set(Object.values(org.roles).map((r) => r.agent))].filter((a) => !registered.has(a));
+    console.log(dim(`○ = agent not registered yet: ${missing.map((a) => `\`${agentAddCommand(a)}\``).join(", ")}`));
   }
 }
 

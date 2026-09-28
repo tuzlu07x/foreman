@@ -2,6 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 import { isUntrustedSource } from "../agent-identity.js";
+import { agentAddCommand } from "../registry-catalog.js";
 
 // =============================================================================
 // Foreman Org — a company of agents, as configuration (`<configDir>/org.yaml`)
@@ -219,7 +220,7 @@ export function validateOrg(doc: OrgDoc, knownAgents?: ReadonlySet<string>): Org
     if (knownAgents && !knownAgents.has(role.agent)) {
       issues.push({
         level: "warning",
-        message: `role '${id}' uses agent '${role.agent}', which is not registered yet (foreman agent add ${role.agent})`,
+        message: `role '${id}' uses agent '${role.agent}', which is not registered yet (${agentAddCommand(role.agent)})`,
       });
     }
   }

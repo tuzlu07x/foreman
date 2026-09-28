@@ -112,7 +112,7 @@ agentsCommand
   .description("Register a new agent (interactive when name is omitted)")
   .option(
     "--type <registryId>",
-    "registry entry id (required in scripted form)",
+    "registry entry id (defaults to <name> when that is a registry id)",
   )
   .option("--config-path <path>", "override the registry's default config path")
   .option(
@@ -149,11 +149,18 @@ agentsCommand
       const db = getDb();
       try {
         let exit = 0;
+        // `foreman agent add claude-code`: a registry id is its own type
+        // (#657), as the README's quick start assumes.
+        const type =
+          options.type ??
+          (name && loadActiveRegistry().doc.agents.some((a) => a.id === name)
+            ? name
+            : undefined);
         if (!name && !options.type) {
           exit = await runAgentAddInteractive({ registry, db });
-        } else if (name && options.type) {
+        } else if (name && type) {
           const scripted: AddScriptedOptions = {
-            type: options.type,
+            type,
             configPath: options.configPath,
             skipConfig: options.skipConfig,
             skipProjection: options.skipProjection,
@@ -165,7 +172,9 @@ agentsCommand
         } else {
           console.error(
             red("error: ") +
-              "scripted form requires both <name> and --type, e.g. foreman agent add hermes --type hermes",
+              (name
+                ? `"${name}" is not a registry id, so say which agent it is: foreman agent add ${name} --type <registry-id> (see 'foreman registry list')`
+                : "--type needs an agent name, e.g. foreman agent add my-hermes --type hermes"),
           );
           exit = 1;
         }

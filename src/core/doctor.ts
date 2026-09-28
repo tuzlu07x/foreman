@@ -16,7 +16,7 @@ import { loadLlmConfig } from "./llm/config.js";
 import { hasRuntimeClient } from "./llm/factory.js";
 import { isOAuthProviderId } from "./llm/oauth/oauth-providers.js";
 import { loadOAuthTokens } from "./llm/oauth/token-store.js";
-import { loadActiveProviders, loadActiveRegistry } from "./registry-catalog.js";
+import { agentAddCommand, loadActiveProviders, loadActiveRegistry } from "./registry-catalog.js";
 import { detectProviderByPrefix } from "./key-prefix-detect.js";
 import { loadVoiceConfig } from "./notification/voice-config.js";
 import { buildEnabledChannels } from "./notification/channel-factory.js";
@@ -1483,7 +1483,7 @@ export function checkOrg(): CheckResult {
       name: "org",
       status: "warn",
       message: `${org.company}: roles use unregistered agents — ${missing.join(", ")}`,
-      remediation: "Register them with `foreman agent add <id>` or change the role's agent in org.yaml.",
+      remediation: `Register them (${missing.map(agentAddCommand).join(" · ")}) or change the role's agent in org.yaml.`,
     };
   }
   // Department channels mirrored to a platform need that platform's bot.
