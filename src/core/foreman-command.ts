@@ -111,6 +111,16 @@ export interface ForemanCommandContext {
    *  `foreman write` run from a shell Foreman spawned for the agent. Only
    *  honoured for `write`. */
   agentDelegation?: boolean;
+  /** Mediates a hand-off from `sourceAgent` to another agent before it is
+   *  queued (#656): the call `sourceAgent → <target>:write` goes through
+   *  policy.yaml (`agents.<id>.can_call` / `cannot_call`, `rules:` with an
+   *  `<agent>:write` target), the risk engine and, when either asks, you.
+   *  Set by the transports an agent delegates through; the owner surfaces
+   *  leave it unset. */
+  authorizeDelegation?: (
+    targetAgent: string,
+    task: string,
+  ) => Promise<{ ok: true } | { ok: false; reason: string }>;
   /** #432 — Foreman's own LLM, gated on `features.orchestrator_chat`.
    *  When provided + enabled, `/foreman report me`, `/foreman <agent>
    *  ne yapıyor`, and unknown free-form verbs go through the LLM.
@@ -275,6 +285,10 @@ const READ_VERBS: ReadonlySet<string> = new Set([
 /** Owner-surface verbs refuse themselves unless `trustedOwner` is set
  *  (TUI, Slack, Discord), so there is nothing to confirm. */
 const OWNER_SURFACE_VERBS: ReadonlySet<string> = new Set(["tell", "comms"]);
+
+/** The tool a hand-off from one agent to another is mediated as (#656):
+ *  policy targets it as `<agent>:write`. */
+export const DELEGATION_TOOL = "write";
 
 /** Verbs that hand work to another agent. */
 const DELEGATION_VERBS: ReadonlySet<string> = new Set(["write", "assign"]);
@@ -442,7 +456,7 @@ function orgHandler(_args: string[], ctx: ForemanCommandContext): ForemanCommand
   return { ok: true, text: renderOrgLines(org.doc, registered).join("\n") };
 }
 
-function assignHandler(args: string[], ctx: ForemanCommandContext): ForemanCommandResult {
+async function assignHandler(args: string[], ctx: ForemanCommandContext): Promise<ForemanCommandResult> {
   const target = args[0]?.trim();
   const task = args.slice(1).join(" ").trim();
   if (!target || !task) {
@@ -463,7 +477,7 @@ function assignHandler(args: string[], ctx: ForemanCommandContext): ForemanComma
     };
   }
   const role = org.doc.roles[roleId]!;
-  const result = writeHandler([role.agent, task], ctx);
+  const result = await writeHandler([role.agent, task], ctx);
   return { ...result, text: `→ ${roleId} (${role.title}) · ${role.agent}\n${result.text}` };
 }
 
@@ -1022,10 +1036,10 @@ function stopHandler(
 // for the start-side drain handler to deliver via Telegram + optional
 // inbound_dir file write. Returns the queued id; user sees the
 // formatted Foreman → <agent> post in their chat ~1.5s later.
-function writeHandler(
+async function writeHandler(
   args: string[],
   ctx: ForemanCommandContext,
-): ForemanCommandResult {
+): Promise<ForemanCommandResult> {
   const targetAgent = args[0]?.toLowerCase().trim();
   const message = args.slice(1).join(" ").trim();
   if (!targetAgent || !message) {
@@ -1125,6 +1139,19 @@ function writeHandler(
           err instanceof Error ? err.message : String(err)
         }\n`,
       );
+    }
+  }
+
+  // The hand-off itself is a call from one agent to another (#656):
+  // `can_call` / `cannot_call` and `<agent>:write` rules apply to it.
+  if (ctx.authorizeDelegation && !ctx.trustedOwner && !ctx.ownerConfirmed && !isHumanSource(ctx.sourceAgent)) {
+    const verdict = await ctx.authorizeDelegation(targetAgent, message);
+    if (!verdict.ok) {
+      return {
+        ok: false,
+        text: `Not handed to ${targetAgent}: ${verdict.reason}.`,
+        errorCode: "ORG_POLICY",
+      };
     }
   }
 

@@ -6,6 +6,7 @@ import { AuditLogger } from "../core/audit.js";
 import { ControlChannel } from "../core/control-channel.js";
 import { bus } from "../core/event-bus.js";
 import {
+  DELEGATION_TOOL,
   ForemanCommandRouter,
   registerBuiltinCommands,
   relayedCommandAccess,
@@ -1095,7 +1096,9 @@ export async function handleMessage(
         ownerStore: services.secretStore,
         secretStore: services.secretStore,
         ...(confirmedBy ? { ownerConfirmed: true } : {}),
-        ...(access === "delegate" ? { agentDelegation: true } : {}),
+        ...(access === "delegate"
+          ? { agentDelegation: true, authorizeDelegation: delegationAuthorizer(services, sourceAgent) }
+          : {}),
       });
       services.audit.logEvent("foreman:command", {
         command,
@@ -1353,6 +1356,34 @@ async function confirmRelayedCommand(
   return { decision: outcome.decision, decidedBy: outcome.decidedBy, requestId: outcome.requestId };
 }
 
+/** A hand-off from this agent to another, mediated as the call
+ *  `<source> → <target>:write` (#656): `can_call` / `cannot_call`, rules
+ *  on `<agent>:write`, the risk engine (the task text is scored) and, when
+ *  either asks, you. With no rule for it, the org chart (already checked)
+ *  decides. */
+export function delegationAuthorizer(
+  services: Pick<Services, "mediator" | "pendingRequestIds">,
+  sourceAgent: string,
+): (targetAgent: string, task: string) => Promise<{ ok: true } | { ok: false; reason: string }> {
+  return async (targetAgent, task) => {
+    const outcome = await trackRequest(services, (requestId) =>
+      services.mediator.handleRequest({
+        requestId,
+        sourceAgent,
+        targetAgent,
+        targetTool: DELEGATION_TOOL,
+        message: {
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: { name: DELEGATION_TOOL, arguments: { task } },
+        } as JSONRPCMessage,
+        policyFallback: { effect: "allow", source: "org.yaml" },
+      }),
+    );
+    return outcome.decision === "allowed" ? { ok: true } : { ok: false, reason: `denied by ${outcome.decidedBy}` };
+  };
+}
+
 function relayedCommandRefusal(command: string, decidedBy: string): string {
   const why =
     decidedBy === "approval-timeout"
@@ -1499,7 +1530,7 @@ async function handleHubCall(
 /** Run a mediated call under an explicit request id and remember it while
  *  it is in flight (see Services.pendingRequestIds). */
 async function trackRequest<T>(
-  services: Services,
+  services: Pick<Services, "pendingRequestIds">,
   run: (requestId: string) => Promise<T>,
 ): Promise<T> {
   const requestId = ulid();

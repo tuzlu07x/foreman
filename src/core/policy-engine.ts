@@ -500,6 +500,8 @@ export class PolicyEngine {
       (r) => r.sourceAgent === req.sourceAgent && r.effect === "deny",
     );
     if (exactDeny) return { decision: "deny", matchedRuleId: exactDeny.id };
+    const unlisted = this.outsideCanCall(req, target);
+    if (unlisted) return unlisted;
     // A rule overrides another only when it is more specific on one axis
     // (exact source, conditions) and no less specific on the other. Among
     // the rules nothing overrides, the strictest decides. So "always allow
@@ -520,6 +522,28 @@ export class PolicyEngine {
     const winner = undominated[0];
     const result: Evaluation = winner ? { decision: winner.effect, matchedRuleId: winner.id } : { decision: "ask" };
     return this.withUntrustedMode(req, this.withClaimedRestrictions(req, target, result));
+  }
+
+  /** `agents.<id>.can_call.<target>` is an allowlist (#656): once an
+   *  agent's calls to another agent are listed, a call to anything else on
+   *  that agent is denied. Holds for an unverified connection claiming
+   *  the id too. */
+  private outsideCanCall(req: EvaluateRequest, target: string): Evaluation | null {
+    if (!req.targetAgent || !req.targetTool) return null;
+    const prefix = `${req.targetAgent}:`;
+    const sources = [...new Set([req.sourceAgent, claimedAgentOf(req.sourceAgent)])];
+    for (const source of sources) {
+      const listed = this.db
+        .select()
+        .from(policies)
+        .where(and(eq(policies.sourceAgent, source), eq(policies.effect, "allow"), eq(policies.enabled, 1)))
+        .all()
+        .filter((r) => r.target.startsWith(prefix));
+      if (listed.length === 0) continue;
+      const covered = listed.some((r) => r.target === target && this.conditionsPass(r, { ...req, sourceAgent: source }));
+      if (!covered) return { decision: "deny", label: "can_call" };
+    }
+    return null;
   }
 
   getUntrustedMode(): UntrustedMode {
