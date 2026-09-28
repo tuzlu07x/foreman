@@ -385,6 +385,8 @@ export interface DelegationVerdict {
   allowed: boolean;
   /** Human-readable reason — surfaced in the audit log and chat reply. */
   reason: string;
+  /** For a hand-off the chart blocks: the route it allows instead. */
+  next?: string;
 }
 
 /** Source ids that are the human (or Foreman acting for them): the CLI,
@@ -430,18 +432,51 @@ export function checkDelegation(
   if (fromRoles.length === 0 || toRoles.length === 0) return null;
   if (fromAgent === toAgent) return { allowed: true, reason: "same agent" };
 
+  let blocked: { from: string; to: string; verdict: DelegationVerdict } | null = null;
   for (const from of fromRoles) {
     for (const to of toRoles) {
       const verdict = checkRolePair(doc, from, to);
       if (verdict.allowed) return verdict;
+      blocked ??= { from, to, verdict };
     }
   }
+  // Keep the pair's own reason (which part of the chart blocks it) and
+  // say which route the chart allows instead.
+  const { from, to, verdict } = blocked!;
   return {
     allowed: false,
     reason:
-      `${fromRoles.join("/")} → ${toRoles.join("/")} is outside the reporting chain in org.yaml ` +
-      `(${describeCrossPolicy(doc)})`,
+      `${fromRoles.join("/")} → ${toRoles.join("/")} is outside the reporting chain in org.yaml: ` +
+      verdict.reason,
+    next: nextHop(doc, from, to),
   };
+}
+
+/** Where role `from` can send work meant for role `to` when the chart
+ *  blocks the direct hand-off: `to`'s department head when `from` may
+ *  reach it, otherwise `from`'s manager, otherwise you (the human). */
+export function nextHop(doc: OrgDoc, from: string, to: string): string {
+  const who = (roleId: string): string => `${roleId} (${doc.roles[roleId]!.agent})`;
+  const toDept = doc.roles[to]?.department;
+  const toHead = toDept ? doc.departments[toDept]?.head : undefined;
+  if (
+    toDept &&
+    toHead &&
+    toHead !== to &&
+    toHead !== from &&
+    doc.roles[toHead] &&
+    checkRolePair(doc, from, toHead).allowed
+  ) {
+    return `hand it to ${who(toHead)}, head of ${doc.departments[toDept]!.name}, who can assign it to ${to}`;
+  }
+  const manager = doc.roles[from]?.reports_to;
+  if (manager && manager !== HUMAN && doc.roles[manager]) {
+    return (
+      `hand it to ${who(manager)}, ${from}'s manager` +
+      (checkRolePair(doc, manager, to).allowed ? `, who can assign it to ${to}` : "")
+    );
+  }
+  return `ask the human to assign it: foreman org assign ${to} "<task>"`;
 }
 
 export function checkRolePair(
@@ -484,17 +519,6 @@ export function checkRolePair(
       };
     case "deny":
       return { allowed: false, reason: "departments are isolated" };
-  }
-}
-
-function describeCrossPolicy(doc: OrgDoc): string {
-  switch (doc.delegation.cross_department) {
-    case "via_heads":
-      return "cross-department work goes through department heads";
-    case "deny":
-      return "departments are isolated";
-    case "allow":
-      return "only reporting lines and departments apply";
   }
 }
 

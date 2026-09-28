@@ -5,19 +5,27 @@ import { isMap, parseDocument } from "yaml";
 import { EventBus, type ForemanEventMap } from "../core/event-bus.js";
 import { agentAddCommand, loadActiveRegistry } from "../core/registry-catalog.js";
 import { RegistryService } from "../core/registry.js";
+import { isUntrustedSource } from "../core/agent-identity.js";
+import { DELEGATION_TOOL } from "../core/foreman-command.js";
+import { PolicyEngine } from "../core/policy-engine.js";
+import { toPolicyLoadError } from "../core/policy-load.js";
 import {
   buildTree,
   checkDelegation,
   escalatesViaManager,
+  HUMAN_SOURCES,
   loadOrg,
   OrgValidationError,
   parseOrgText,
   resolveAssignee,
+  rolesForAgent,
   saveOrgText,
+  UNTRUSTED_DELEGATION,
   validateOrg,
   type OrgDoc,
   type OrgTreeNode,
 } from "../core/org/org.js";
+import { printPolicyLoadError } from "./policy-error.js";
 import { findOrgTemplate, ORG_TEMPLATES } from "../core/org/templates.js";
 import { buildOrgReport, parsePeriod, renderOrgReport, resolveReportTarget } from "../core/usage/report.js";
 import { BOSS, channelLabel, OrgComms, renderMessages } from "../core/org/comms.js";
@@ -116,16 +124,72 @@ orgCommand
 
 orgCommand
   .command("check <from> <to>")
-  .description("Explain whether agent <from> may hand work to agent <to>")
+  .description("Explain whether <from> may hand work to <to> (agent or role ids)")
   .action((from: string, to: string) => {
     const org = requireOrg();
-    const verdict = checkDelegation(org, from, to);
-    if (!verdict) {
-      console.log(dim(`${from} or ${to} is not in org.yaml — the org chart has no opinion`));
+    // The human (and an unverified connection) is decided before any
+    // lookup, exactly as a real hand-off is.
+    const fromIsHuman = HUMAN_SOURCES.has(from.trim().toLowerCase());
+    if (fromIsHuman) {
+      console.log(`${green("allowed")} — assigned by the human ${dim("(policy.yaml rules bind agents only)")}`);
       return;
     }
-    console.log(`${verdict.allowed ? green("allowed") : red("blocked")} — ${verdict.reason}`);
-    if (!verdict.allowed) process.exitCode = 1;
+    if (isUntrustedSource(from)) {
+      console.log(`${red("blocked")} — ${UNTRUSTED_DELEGATION.reason}`);
+      process.exitCode = 1;
+      return;
+    }
+    const fromSide = resolveCheckSide(org, from);
+    const toSide = resolveCheckSide(org, to);
+    if (!fromSide || !toSide) {
+      const missing = [fromSide ? null : `<from> '${from}'`, toSide ? null : `<to> '${to}'`].filter(
+        (s): s is string => s !== null,
+      );
+      console.error(
+        red("error: ") +
+          terminalSafe(missing.join(" and ")) +
+          ` ${missing.length === 1 ? "is not an agent or role" : "are not agents or roles"} in org.yaml — ` +
+          "see `foreman org show`",
+      );
+      process.exitCode = 1;
+      return;
+    }
+    for (const side of [fromSide, toSide]) {
+      if (side.viaRole) console.log(dim(`${side.viaRole} is filled by ${side.agent}`));
+    }
+
+    // policy.yaml decides first: a hand-off is the call `<from> → <to>:write`.
+    const policy = policyHandoffVerdict(fromSide.agent, toSide.agent);
+    if (policy?.effect === "deny") {
+      console.log(`${red("blocked")} — policy.yaml decides (${policy.why})`);
+      process.exitCode = 1;
+      return;
+    }
+    const verdict = checkDelegation(org, fromSide.agent, toSide.agent);
+    if (!verdict) {
+      // Both sides are in the chart, so only a lookup mismatch lands here.
+      console.log(dim("the org chart has no opinion on this pair"));
+      return;
+    }
+    if (!verdict.allowed) {
+      console.log(`${red("blocked")} — ${verdict.reason}`);
+      if (policy?.effect === "allow") {
+        console.log(dim(`  policy.yaml allows it (${policy.why}), but a policy allow doesn't lift a block from the org chart`));
+      }
+      if (verdict.next) console.log(`  ${bold("next:")} ${verdict.next}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (policy?.effect === "ask") {
+      console.log(`${orange("ask")} — org.yaml allows it (${verdict.reason}), and policy.yaml sends it to you for approval (${policy.why})`);
+      return;
+    }
+    console.log(
+      `${green("allowed")} — ${verdict.reason}` +
+        (policy?.effect === "allow"
+          ? dim(` · policy.yaml allows it too (${policy.why})`)
+          : dim(" · no policy.yaml rule for this pair, so org.yaml decides")),
+    );
   });
 
 orgCommand
@@ -531,6 +595,57 @@ function registeredAgents(): Set<string> {
     return new Set(registry.listAll().map((a) => a.id));
   } catch {
     return new Set();
+  } finally {
+    closeDb();
+  }
+}
+
+/** A side of `foreman org check`: an agent id in org.yaml, or a role id
+ *  (then the agent filling it). An agent id wins when a name is both. */
+function resolveCheckSide(org: OrgDoc, input: string): { agent: string; viaRole: string | null } | null {
+  if (rolesForAgent(org, input).length > 0) return { agent: input.trim().toLowerCase(), viaRole: null };
+  if (Object.hasOwn(org.roles, input)) {
+    return { agent: org.roles[input]!.agent.trim().toLowerCase(), viaRole: input };
+  }
+  return null;
+}
+
+/** What policy.yaml says about the hand-off `<from> → <to>:write`, the call
+ *  every agent-to-agent hand-off is mediated as, or null when no rule
+ *  decides it (then the org chart does). A policy.yaml that doesn't load
+ *  stops the command: no verdict from a policy the file doesn't say. */
+function policyHandoffVerdict(from: string, to: string): { effect: "allow" | "deny" | "ask"; why: string } | null {
+  const paths = getForemanPaths();
+  const engine = new PolicyEngine(getDb(), new EventBus<ForemanEventMap>());
+  try {
+    if (existsSync(paths.policyPath)) {
+      try {
+        engine.loadFromYaml(paths.policyPath);
+      } catch (err) {
+        printPolicyLoadError(toPolicyLoadError(paths.policyPath, err));
+        closeDb();
+        process.exit(1);
+      }
+    }
+    const evaluation = engine.evaluate({ sourceAgent: from, targetAgent: to, targetTool: DELEGATION_TOOL });
+    if (evaluation.matchedRuleId !== undefined) {
+      const rule = engine.list().find((r) => r.id === evaluation.matchedRuleId);
+      const shown = rule ? `${rule.sourceAgent} → ${rule.target}` : `${from} → ${to}:${DELEGATION_TOOL}`;
+      return {
+        effect: evaluation.decision,
+        why: `${terminalSafe(shown)} ${evaluation.decision}, rule #${evaluation.matchedRuleId}`,
+      };
+    }
+    if (evaluation.label === "can_call") {
+      return {
+        effect: evaluation.decision,
+        why: `agents.${terminalSafe(from)}.can_call.${terminalSafe(to)} doesn't list ${DELEGATION_TOOL}`,
+      };
+    }
+    if (evaluation.label !== undefined) {
+      return { effect: evaluation.decision, why: `policy:${terminalSafe(evaluation.label)}` };
+    }
+    return null;
   } finally {
     closeDb();
   }
