@@ -104,6 +104,8 @@ export async function runAgentAddScripted(
     smokeTest: true,
   });
   const manualInstallCmd = preferredInstallCommand(entry.install);
+  // Set only when Foreman itself ran the installer (#657).
+  let installedByForeman: string | undefined;
   if (!detection.found) {
     if (detection.brokenAt) {
       log(
@@ -141,6 +143,7 @@ export async function runAgentAddScripted(
         );
         return 1;
       }
+      installedByForeman = manualInstallCmd;
     } else if (manualInstallCmd) {
       log(
         orange("note: ") +
@@ -284,6 +287,7 @@ export async function runAgentAddScripted(
       agentId,
       entry,
       registry: deps.registry,
+      installedByForeman,
     });
     handlePrivateKey(result.privateKey, options.keyOut, log);
     if (entry.identity_path) {

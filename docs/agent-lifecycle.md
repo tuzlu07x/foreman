@@ -23,7 +23,7 @@ Foreman manages each agent from install through removal. The same operations are
 - **enabled** — default after install. Agent can make MCP calls; Foreman mediates per policy.
 - **disabled** — registered but inactive. MCP calls return a "disabled" error without going through the policy engine. Use this to pause an agent without losing its config or its slot in the wizard.
 - **blocked** — Foreman refuses every call from the agent and writes an audit row for each attempt. Use this when an agent's behavior has gone off the rails and you want a paper trail.
-- **uninstalled** — not registered. The agent binary may still be on disk (Foreman's `remove` defaults to keeping it; `--keep-binary` is the default for script-installed agents like Hermes).
+- **uninstalled** — not registered. The agent binary stays on disk: `remove` only uninstalls it when you pass `--uninstall`, and only a binary Foreman installed itself.
 
 ## CLI surface
 
@@ -33,7 +33,7 @@ Foreman manages each agent from install through removal. The same operations are
 | `foreman agent add [name]` | register an agent (looks up `registry/agents.json` if `name` is provided) |
 | `foreman agent show <name>` | full record — id, public key, state, config path, registered secrets |
 | `foreman agent update [name]` | re-fetch registry entry + re-inject MCP block |
-| `foreman agent remove <name> [--keep-binary]` | unregister + strip MCP block from config + (optionally) uninstall binary |
+| `foreman agent remove <name> [--uninstall]` | unregister + strip MCP block from config; `--uninstall` also uninstalls a binary Foreman installed |
 | `foreman agent rewire [<name>\|--all]` | give the agent its identity token and rewrite its MCP wiring (see [Agent identity tokens](#agent-identity-tokens)) |
 | `foreman agent token rotate <name>` | mint a new identity token and rewrite the wiring; the old token stops working at once |
 | `foreman agent regenerate-key <name>` | issue a new Ed25519 keypair (revokes the old one) |
@@ -74,9 +74,9 @@ When you remove an agent, Foreman:
 1. Strips the `mcpServers.foreman` (or `mcp_servers.foreman` for Codex's TOML, or `mcp.servers.foreman` for niche configs) entry from every `config_paths` entry. No orphaned MCP blocks.
 2. Deletes the agent's row from the DB (and any per-agent config like `llmProvider` / `responsibilityNote`).
 3. Revokes the Ed25519 keypair and the agent's identity token — even if the binary is left on disk, a new install can't impersonate the removed agent.
-4. **Does not** delete the agent's own config files outside the MCP block, the agent's binary (unless install was via `npm`/`brew` and you didn't pass `--keep-binary`), or anything in the agent's own state dir (`~/.hermes/`, `~/.openclaw/`, etc.).
+4. **Does not** delete the agent's own config files outside the MCP block, the agent's binary (unless you pass `--uninstall` and Foreman installed it via `npm`/`brew`), or anything in the agent's own state dir (`~/.hermes/`, `~/.openclaw/`, etc.).
 
-For script-installed agents like Hermes, removal prints the manual uninstall hint:
+For script-installed agents like Hermes, `remove --uninstall` prints the manual uninstall hint:
 
 ```
 Remove the hermes binary manually (try the installer's --uninstall flag).

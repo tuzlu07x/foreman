@@ -90,6 +90,7 @@ export function useInstallKickoff(ctx: WizardContext): void {
     agentsSelected,
     agentConfigs,
     servicesSelected,
+    uninstallRemoved,
   } = ctx.state;
   const {
     setInstallLog,
@@ -118,7 +119,7 @@ export function useInstallKickoff(ctx: WizardContext): void {
           ? [`▸ Will install: ${toAdd.join(", ")}`]
           : []),
         ...(toRemove.length > 0
-          ? [`▸ Will remove: ${toRemove.join(", ")}`]
+          ? [`▸ Will unregister: ${toRemove.join(", ")}`]
           : []),
         toAdd.length === 0 && toRemove.length === 0
           ? "▸ No changes — every selection is already registered."
@@ -141,6 +142,7 @@ export function useInstallKickoff(ctx: WizardContext): void {
       agentConfigs,
       onFailure,
       { providersSelected, servicesSelected },
+      { uninstall: uninstallRemoved },
     ).then(
       (summary) => {
         setInstallSettled(true);

@@ -71,6 +71,9 @@ export interface WizardState {
   agentConfigIdx: number;
   agentConfigs: AgentConfigsMap;
   llmDraft: string | null;
+  // Unticked agents are only unregistered unless the user asks, on the
+  // confirm screen, to uninstall the ones Foreman installed (#657).
+  uninstallRemoved: boolean;
 
   // #367 — Foreman's own LLM (verifier + smart summary). The wizard's new
   // Step 2 makes this an explicit choice instead of silently picking the
@@ -154,7 +157,7 @@ export function createInitialWizardState(
   initialState: SetupState,
   // Agents already registered in this Foreman home — drive the wizard's
   // diff logic: still-checked = no-op or re-verify; newly-checked = install;
-  // previously-checked-now-unchecked = uninstall + remove.
+  // previously-checked-now-unchecked = unregister.
   initialRegistered: string[],
   // Set by planResume when a resume re-opened the agents step.
   initialAgentsPhase: AgentsPhase = "picker",
@@ -184,6 +187,7 @@ export function createInitialWizardState(
     agentConfigIdx: 0,
     agentConfigs: session?.agentConfigs ?? {},
     llmDraft: null,
+    uninstallRemoved: false,
 
     foremanLlmPhase: "picker",
     foremanLlmDraft: null,

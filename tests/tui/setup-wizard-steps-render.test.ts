@@ -220,6 +220,8 @@ async function mount(
   opts: {
     secrets?: Record<string, string>
     registered?: string[]
+    /** Registered agents Foreman installed itself (#657). */
+    installedByForeman?: string[]
     /** Resume from this state instead of "every step before `step`". */
     initialState?: SetupState
     afterExit?: 'exit' | 'launch-tui'
@@ -229,7 +231,10 @@ async function mount(
   sqlite = handle.sqlite
   const registry = new RegistryService(handle.db, new EventBus<ForemanEventMap>())
   for (const id of opts.registered ?? []) {
-    registry.register({ id, displayName: id, transport: 'stdio', metadata: { registryId: id } })
+    const installed = opts.installedByForeman?.includes(id)
+      ? { installedByForeman: { command: `npm install -g ${id}`, at: 1 } }
+      : {}
+    registry.register({ id, displayName: id, transport: 'stdio', metadata: { registryId: id, ...installed } })
   }
   const secretStore = new SecretStore(handle.db, Buffer.alloc(32, 7))
   for (const [name, value] of Object.entries(opts.secrets ?? {})) {
@@ -487,6 +492,52 @@ describe('agents step', () => {
     await w.press(ENTER, 'Agents ▸ confirm')
     expect(w.frame()).toContain('▸ Will install: hermes')
     expect(w.frame()).toContain('Continue to services? (y/n)')
+  })
+})
+
+// QA #657 H5 — unticking an agent uninstalled its binary. The confirm
+// screen now says it is only unregistered; uninstalling what Foreman
+// installed is an explicit `u`.
+describe('agents confirm: removing keeps binaries unless asked', () => {
+  const untickCodexTickGeneric = async (w: Mounted): Promise<void> => {
+    await w.until('Checked: codex')
+    await w.press(DOWN)
+    await w.press(DOWN)
+    await w.press(SPACE, 'Checked: (none)')
+    await w.press(DOWN)
+    await w.press(DOWN)
+    await w.press(SPACE, 'Checked: generic-mcp')
+    await w.press(ENTER)
+    while (!w.frame().includes('Agents ▸ confirm')) await w.press(ENTER)
+  }
+
+  it('says unticked agents stay installed, and offers no uninstall Foreman may not do', async () => {
+    const w = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' }, registered: ['codex'] })
+    await untickCodexTickGeneric(w)
+    expect(w.frame()).toContain('▸ Will unregister: codex (binaries stay installed)')
+    expect(w.frame()).not.toContain('also uninstall')
+  })
+
+  it('u toggles uninstalling an agent Foreman installed, and the choice reaches the installer', async () => {
+    const w = await mount('agents', {
+      secrets: { 'openai-key': 'sk-fake-openai-000' },
+      registered: ['codex'],
+      installedByForeman: ['codex'],
+    })
+    await untickCodexTickGeneric(w)
+    expect(w.frame()).toContain('☐ also uninstall what Foreman')
+    await w.press('u', '☑')
+    expect(w.frame()).toContain('▸ Will unregister: codex · and uninstall codex')
+    await w.press('u', '☐')
+    await w.press('u', '☑')
+    const before = vi.mocked(runInstallStep).mock.calls.length
+    await w.press('y', 'Services ▸ pick which to configure')
+    await w.press(ENTER, 'Services ▸ summary')
+    await w.press('y')
+    await w.startInstall()
+    const call = vi.mocked(runInstallStep).mock.calls[before]
+    expect(call?.[1]).toEqual(['codex'])
+    expect(call?.[7]).toEqual({ uninstall: true })
   })
 })
 
@@ -797,7 +848,7 @@ describe('resume never uninstalls on its own', () => {
     })
     await resumed.until('Agents ▸ confirm')
     expect(resumed.frame()).toContain('▸ Will install: hermes')
-    expect(resumed.frame()).not.toContain('Will remove')
+    expect(resumed.frame()).not.toContain('Will unregister')
     await resumed.press('y', 'Services ▸ pick which to configure')
     await resumed.press(ENTER, 'Services ▸ summary')
     await resumed.press('y', 'Required setup')

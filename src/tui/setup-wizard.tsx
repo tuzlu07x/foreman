@@ -30,6 +30,7 @@ import {
   handleAgentVariantPickInput,
 } from "./setup-wizard/agent-config-input.js";
 import {
+  handleAgentsConfirmInput,
   handleAgentsEscape,
   renderAgentsStep,
 } from "./setup-wizard/agents.js";
@@ -104,7 +105,8 @@ export function SetupWizard({
   };
   // Agents already registered in this Foreman home — drive the wizard's
   // diff logic: still-checked = no-op or re-verify; newly-checked = install;
-  // previously-checked-now-unchecked = uninstall + remove.
+  // previously-checked-now-unchecked = unregister (#657: uninstalling the
+  // binary is a separate, explicit choice).
   const initialRegistered = useMemo(
     () => services.registry.list().map((a) => a.id),
     [services.registry],
@@ -256,6 +258,7 @@ export function SetupWizard({
     if (handleDoneInput(ctx, input, key)) return;
     if (handleWelcomeInput(ctx, input, key)) return;
     if (handleInstallFailureInput(ctx, input, key)) return;
+    if (handleAgentsConfirmInput(ctx, input)) return;
 
     if (!key.escape) return;
     if (handleProvidersEscape(ctx)) return;

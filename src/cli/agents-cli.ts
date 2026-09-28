@@ -1,5 +1,5 @@
 import { existsSync, writeFileSync } from "node:fs";
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { bus } from "../core/event-bus.js";
 import {
   findAgent,
@@ -62,7 +62,10 @@ import {
   runAgentAddScripted,
   type AddScriptedOptions,
 } from "./agent-add.js";
-import { MissingRequiredSecretsError } from "../core/agent-add-flow.js";
+import {
+  foremanInstallRecord,
+  MissingRequiredSecretsError,
+} from "../core/agent-add-flow.js";
 import { bold, dim, green, orange, red } from "./colors.js";
 import { renderAgentJson, renderAgentLine } from "./render.js";
 import { requireConfirm } from "./require-confirm.js";
@@ -178,29 +181,28 @@ agentsCommand
 agentsCommand
   .command("remove <name>")
   .description(
-    "Remove an agent (hard delete + uninstall its binary; re-add issues a fresh keypair)",
+    "Unregister an agent and revoke its key and token (its binary stays installed; re-add issues a fresh keypair)",
   )
   .option("--yes", "skip confirmation prompt")
   .option(
-    "--keep-binary",
-    "remove only the Foreman registration; leave the agent binary installed",
+    "--uninstall",
+    "also uninstall the agent's binary, if Foreman installed it (npm / brew)",
   )
+  // Keeping the binary is the default now; the flag stays so scripts that
+  // pass it keep working.
+  .addOption(new Option("--keep-binary").hideHelp())
   .action(
     async (
       name: string,
-      options: { yes?: boolean; keepBinary?: boolean },
+      options: { yes?: boolean; uninstall?: boolean; keepBinary?: boolean },
     ) => {
       const registry = getRegistry();
       try {
         const agent = registry.get(name);
         if (!agent) throw new AgentNotFoundError(name);
-        const ok = await requireConfirm({
-          yes: options.yes,
-          question: `Remove agent "${name}"?`,
-          noun: `remove "${name}"`,
-        });
-        if (!ok) {
-          console.log("(cancelled)");
+        if (options.uninstall && options.keepBinary) {
+          console.error(red("error: ") + "--uninstall and --keep-binary contradict each other.");
+          process.exitCode = 1;
           return;
         }
         const { doc } = loadActiveRegistry();
@@ -209,41 +211,83 @@ agentsCommand
             ? agent.metadata.registryId
             : null;
         const entry = registryId ? safeFindAgent(doc, registryId) : null;
+        const label = entry?.name ?? name;
+        const installRecord = foremanInstallRecord(agent.metadata);
+        // Only an actual uninstall looks at the machine (detection can
+        // shell out to `npm prefix -g`); the messages use the registry's
+        // command.
+        const detection =
+          options.uninstall && entry ? detectInstall(entry.install) : undefined;
+        const uninstallCmd = entry
+          ? preferredUninstallCommand(entry.install, detection)
+          : null;
+        // #657 — Foreman only uninstalls what it installed, and only when
+        // asked. Refuse before changing anything, so the user isn't left
+        // with half of what they asked for.
+        if (options.uninstall && (!installRecord || !entry)) {
+          console.error(
+            red("error: ") +
+              `Foreman didn't install ${label}, so it won't uninstall it (it may be your own install).`,
+          );
+          console.error(
+            `  → Run 'foreman agent remove ${name}' to unregister it` +
+              (uninstallCmd ? `, then uninstall it yourself: ${uninstallCmd}` : "."),
+          );
+          process.exitCode = 1;
+          return;
+        }
+        const what = options.uninstall
+          ? `Foreman unregisters it, revokes its key and identity token, then uninstalls ${label}` +
+            (uninstallCmd ? ` (${uninstallCmd})` : "") +
+            "."
+          : `Foreman unregisters it and revokes its key and identity token. ${label} stays installed.`;
+        const ok = await requireConfirm({
+          yes: options.yes,
+          question: `Remove agent "${name}"? ${what}`,
+          noun: `remove "${name}"`,
+        });
+        if (!ok) {
+          console.log("(cancelled)");
+          return;
+        }
         registry.remove(name);
         // A removed agent's token must not keep proving it (#618).
         revokeAgentToken(getTokenStore(), name);
         console.log(`${green("✓")} agent ${name} removed`);
-        if (!options.keepBinary && entry) {
-          // #357 — detect HOW the binary got installed, then pick the
-          // uninstall command that matches. Without this, OpenClaw (brew
-          // on the user's box, `brew: null` in registry) silently no-ops.
-          const detection = detectInstall(entry.install);
-          const uninstallCmd = preferredUninstallCommand(
-            entry.install,
-            detection,
+        if (!options.uninstall || !entry) {
+          console.log(
+            dim(
+              `${label} is still installed.` +
+                (installRecord && uninstallCmd
+                  ? ` Foreman installed it; to uninstall it too: ${uninstallCmd}`
+                  : ""),
+            ),
           );
-          if (uninstallCmd) {
-            console.log(orange(`uninstalling ${entry.name} (${uninstallCmd})…`));
-            const result = await runUninstall({
-              install: entry.install,
-              detection,
-              onLine: (line) => console.log(`  ${dim(line)}`),
-            });
-            if (result.ok) {
-              console.log(`${green("✓")} ${entry.name} uninstalled`);
-            } else {
-              console.error(
-                red("warn: ") +
-                  `uninstall failed (exit ${result.exitCode}). Run manually: ${result.manualCommand}`,
-              );
-            }
-          } else if (entry.install.script) {
-            console.log(
-              orange("note: ") +
-                `${entry.name} was installed via a script — Foreman can't auto-uninstall. ` +
-                `Remove the ${entry.install.binary ?? entry.id} binary manually (try the installer's --uninstall flag).`,
+          return;
+        }
+        // #357 — the uninstall command follows how the binary was actually
+        // installed (brew vs npm), not just the registry's hint.
+        if (uninstallCmd) {
+          console.log(orange(`uninstalling ${label} (${uninstallCmd})…`));
+          const result = await runUninstall({
+            install: entry.install,
+            detection,
+            onLine: (line) => console.log(`  ${dim(line)}`),
+          });
+          if (result.ok) {
+            console.log(`${green("✓")} ${label} uninstalled`);
+          } else {
+            console.error(
+              red("warn: ") +
+                `uninstall failed (exit ${result.exitCode}). Run manually: ${result.manualCommand}`,
             );
           }
+        } else if (entry.install.script) {
+          console.log(
+            orange("note: ") +
+              `${label} was installed via a script — Foreman can't auto-uninstall. ` +
+              `Remove the ${entry.install.binary ?? entry.id} binary manually (try the installer's --uninstall flag).`,
+          );
         }
       } catch (err) {
         handleAgentError(err);

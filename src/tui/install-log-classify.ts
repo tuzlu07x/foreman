@@ -67,7 +67,7 @@ export function classifyInstallLog(lines: string[]): ClassifiedInstallLog {
 // loop starts. We don't want it captured as an agent name. The install
 // loop's per-agent banner is always just `▸ <Name>`.
 function looksLikeAction(s: string): boolean {
-  return /^(Will install:|Will remove:|Selected|No changes)/i.test(s);
+  return /^(Will install:|Will remove:|Will unregister:|Selected|No changes)/i.test(s);
 }
 
 /**

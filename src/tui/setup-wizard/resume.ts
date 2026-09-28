@@ -25,7 +25,7 @@ function sameIds(a: readonly string[], b: readonly string[]): boolean {
  * act on it. Install derives removals from `agentsSelected` vs the live
  * registry, so a snapshot must never be the source of a removal: an agent
  * registered after the snapshot (another terminal, a half-finished install)
- * would otherwise be unregistered + uninstalled with no "Will remove" screen.
+ * would otherwise be unregistered with no "Will unregister" screen.
  *
  * - The selection becomes the snapshot's picks PLUS every live agent, so no
  *   removal can come from a snapshot. Agents the registry catalog no longer
