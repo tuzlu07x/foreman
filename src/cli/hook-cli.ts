@@ -53,6 +53,16 @@ const BLOCK = 2;
 const ALLOW = 0;
 const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
 const ADAPTER_ID = "claude-code-pretooluse-v1";
+/** Claude Code waits on the hook; with nobody at the TUI this is how long. */
+const DEFAULT_HOOK_TIMEOUT_MS = 600_000;
+
+/** `--timeout-ms` wins, then FOREMAN_APPROVAL_TIMEOUT (seconds, like every
+ *  other transport), then the 10-minute default. */
+export function hookTimeoutMs(flag: number | undefined, env: NodeJS.ProcessEnv = process.env): number {
+  if (flag !== undefined) return flag;
+  const fromEnv = Number.parseInt(env.FOREMAN_APPROVAL_TIMEOUT ?? "", 10);
+  return Number.isFinite(fromEnv) && fromEnv >= 0 ? fromEnv * 1000 : DEFAULT_HOOK_TIMEOUT_MS;
+}
 
 
 /** Read the whole stdin into a single string, bounded so a hostile payload
@@ -92,9 +102,9 @@ export const hookCommand = new Command("hook")
   )
   .option(
     "--timeout-ms <ms>",
-    "How long to wait for the user's decision before defaulting to block",
+    "How long to wait for the user's decision before defaulting to block " +
+      `(default: FOREMAN_APPROVAL_TIMEOUT seconds when set, else ${DEFAULT_HOOK_TIMEOUT_MS / 60_000} minutes)`,
     (v) => Number.parseInt(v, 10),
-    600_000,
   )
   // A usage error (missing agent id, unknown flag) must block too: commander
   // exits 1 by default, which Claude Code treats as "run the tool".
@@ -102,7 +112,7 @@ export const hookCommand = new Command("hook")
     if (err.exitCode === 0) process.exit(0); // --help
     process.exit(BLOCK);
   })
-  .action(async (agentId: string, opts: { timeoutMs: number }) => {
+  .action(async (agentId: string, opts: { timeoutMs?: number }) => {
     // Anything that escapes the try/catch below (a rejected promise inside
     // a library callback, a synchronous throw from a listener) still blocks.
     // The main CLI installs a handler that rethrows (exit 7, which Claude
@@ -117,8 +127,11 @@ export const hookCommand = new Command("hook")
         `internal error (${err instanceof Error ? err.message : String(err)}) — blocking the call`,
       ),
     );
+    if (opts.timeoutMs !== undefined && !(Number.isFinite(opts.timeoutMs) && opts.timeoutMs >= 0)) {
+      block("--timeout-ms must be a whole number of milliseconds — blocking the call.");
+    }
     try {
-      const exit = await runHook(agentId, opts.timeoutMs);
+      const exit = await runHook(agentId, hookTimeoutMs(opts.timeoutMs));
       process.exit(exit);
     } catch (err) {
       block(
