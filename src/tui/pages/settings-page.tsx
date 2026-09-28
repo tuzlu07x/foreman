@@ -121,7 +121,7 @@ export function SettingsPage({
       </Box>
       <Text color={theme.fg.muted}>
         [↑↓] move · [Enter] run selected · letters above also trigger directly ·
-        [Esc] back
+        [m] Foreman's model · [Esc] back
       </Text>
     </Box>
   );
