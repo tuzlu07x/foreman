@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildLlmClient,
   LlmCredentialMissingError,
+  LlmEndpointError,
   LlmOAuthLoginRequiredError,
   LlmProviderUnavailableError,
 } from '../../../src/core/llm/factory.js'
@@ -11,12 +12,13 @@ import { AnthropicLlmClient } from '../../../src/core/llm/providers/anthropic.js
 import { CodexLlmClient } from '../../../src/core/llm/providers/codex.js'
 import { OpenAILlmClient } from '../../../src/core/llm/providers/openai.js'
 import { GeminiLlmClient } from '../../../src/core/llm/providers/gemini.js'
+import { OpenAICompatibleLlmClient } from '../../../src/core/llm/providers/openai-compatible.js'
 
 // =============================================================================
 // Tests pin the factory's contract: every implemented provider returns the
-// right concrete class with its secret resolved; unimplemented providers
-// throw LlmProviderUnavailableError; missing/empty secrets throw
-// LlmCredentialMissingError (typed, not raw).
+// right concrete class with its secret resolved; missing/empty secrets
+// throw LlmCredentialMissingError (typed, not raw), and a missing or
+// invalid self-hosted base URL throws its LlmEndpointError subclass.
 //
 // Uses a fake store so we don't touch the real DB / master key.
 // =============================================================================
@@ -72,30 +74,133 @@ describe('buildLlmClient', () => {
     expect(client.providerId).toBe('gemini')
   })
 
-  it('throws LlmProviderUnavailableError for provider=ollama (not yet implemented)', () => {
-    const config = LlmConfigSchema.parse({ provider: 'ollama' })
-    const store = new FakeStore({})
-    expect(() => buildLlmClient(config, store as never)).toThrow(
-      LlmProviderUnavailableError,
-    )
+  it('returns a keyless Ollama client on the default local URL', () => {
+    const config = LlmConfigSchema.parse({ provider: 'ollama', model: 'llama3.2:3b' })
+    const client = buildLlmClient(config, new FakeStore({}) as never)
+    expect(client).toBeInstanceOf(OpenAICompatibleLlmClient)
+    expect(client.providerId).toBe('ollama')
+    expect(client.model).toBe('llama3.2:3b')
+    expect(Reflect.get(client, 'baseUrl')).toBe('http://localhost:11434/v1')
+    expect(Reflect.get(client, 'apiKey')).toBeNull()
   })
 
-  it('throws LlmProviderUnavailableError for provider=openai_compatible (not yet implemented)', () => {
-    const config = LlmConfigSchema.parse({ provider: 'openai_compatible' })
-    const store = new FakeStore({})
-    expect(() => buildLlmClient(config, store as never)).toThrow(
-      LlmProviderUnavailableError,
-    )
+  it('reads the Ollama URL from endpoint_secret before endpoint, and a key from secret_name', () => {
+    const config = LlmConfigSchema.parse({
+      provider: 'ollama',
+      credentials: {
+        ollama: {
+          endpoint: 'http://localhost:11434',
+          endpoint_secret: 'ollama-endpoint',
+          secret_name: 'ollama-key',
+        },
+      },
+    })
+    const store = new FakeStore({
+      'ollama-endpoint': 'https://ollama.example.test/v1/',
+      'ollama-key': 'fake-ollama-key',
+    })
+    const client = buildLlmClient(config, store as never)
+    expect(Reflect.get(client, 'baseUrl')).toBe('https://ollama.example.test/v1')
+    expect(Reflect.get(client, 'apiKey')).toBe('fake-ollama-key')
   })
 
-  it('LlmProviderUnavailableError message lists the supported providers', () => {
-    const config = LlmConfigSchema.parse({ provider: 'ollama' })
+  it('builds an openai_compatible client from a preset-style block', () => {
+    const config = LlmConfigSchema.parse({
+      provider: 'openai_compatible',
+      model: 'deepseek-chat',
+      credentials: {
+        openai_compatible: {
+          endpoint_secret: 'deepseek-endpoint',
+          key_secret: 'deepseek-api-key',
+        },
+      },
+    })
+    const store = new FakeStore({
+      'deepseek-endpoint': 'https://api.deepseek.example.test/v1',
+      'deepseek-api-key': 'fake-deepseek-key',
+    })
+    const client = buildLlmClient(config, store as never)
+    expect(client).toBeInstanceOf(OpenAICompatibleLlmClient)
+    expect(client.providerId).toBe('openai_compatible')
+    expect(Reflect.get(client, 'baseUrl')).toBe('https://api.deepseek.example.test/v1')
+    expect(Reflect.get(client, 'apiKey')).toBe('fake-deepseek-key')
+  })
+
+  it('builds a keyless openai_compatible client when no key slot is named', () => {
+    const config = LlmConfigSchema.parse({
+      provider: 'openai_compatible',
+      model: 'local-model',
+      credentials: { openai_compatible: { endpoint: 'http://127.0.0.1:8000/v1' } },
+    })
+    const client = buildLlmClient(config, new FakeStore({}) as never)
+    expect(Reflect.get(client, 'apiKey')).toBeNull()
+  })
+
+  it('throws LlmCredentialMissingError when a named openai_compatible key is missing', () => {
+    const config = LlmConfigSchema.parse({
+      provider: 'openai_compatible',
+      credentials: {
+        openai_compatible: { endpoint: 'https://x.example.test/v1', key_secret: 'gone-key' },
+      },
+    })
     try {
       buildLlmClient(config, new FakeStore({}) as never)
       throw new Error('expected throw')
     } catch (err) {
-      expect(err).toBeInstanceOf(LlmProviderUnavailableError)
-      expect((err as Error).message).toMatch(/anthropic, openai, gemini/)
+      expect(err).toBeInstanceOf(LlmCredentialMissingError)
+      expect(err).not.toBeInstanceOf(LlmEndpointError)
+      expect((err as LlmCredentialMissingError).secretName).toBe('gone-key')
+    }
+  })
+
+  it('throws LlmEndpointError (a LlmCredentialMissingError) for openai_compatible without a URL', () => {
+    const config = LlmConfigSchema.parse({
+      provider: 'openai_compatible',
+      credentials: { openai_compatible: {} },
+    })
+    const build = (): unknown => buildLlmClient(config, new FakeStore({}) as never)
+    expect(build).toThrow(LlmEndpointError)
+    expect(build).toThrow(LlmCredentialMissingError)
+    expect(build).toThrow(/no base URL configured/)
+  })
+
+  it('throws LlmEndpointError when the endpoint secret is missing from the store', () => {
+    // The schema default for openai_compatible names openai-compatible-endpoint.
+    const config = defaultLlmConfig()
+    config.provider = 'openai_compatible'
+    expect(() => buildLlmClient(config, new FakeStore({}) as never)).toThrow(
+      /secret 'openai-compatible-endpoint' is not in the store/,
+    )
+  })
+
+  it.each([
+    ['file:///etc/passwd', /not allowed/],
+    ['ftp://host/v1', /not allowed/],
+    ['http://user:pass@host/v1', /username or password/],
+    ['https://host/v1?key=x', /query string/],
+    ['not a url', /not a valid URL/],
+  ])('rejects the base URL %s', (url, reason) => {
+    const config = LlmConfigSchema.parse({
+      provider: 'openai_compatible',
+      credentials: { openai_compatible: { endpoint: url } },
+    })
+    const build = (): unknown => buildLlmClient(config, new FakeStore({}) as never)
+    expect(build).toThrow(LlmEndpointError)
+    expect(build).toThrow(reason)
+  })
+
+  it('never echoes a stored endpoint value in the error', () => {
+    const config = LlmConfigSchema.parse({
+      provider: 'ollama',
+      credentials: { ollama: { endpoint_secret: 'ollama-endpoint' } },
+    })
+    const store = new FakeStore({ 'ollama-endpoint': 'sk-pasted-in-the-wrong-slot' })
+    try {
+      buildLlmClient(config, store as never)
+      throw new Error('expected throw')
+    } catch (err) {
+      expect(err).toBeInstanceOf(LlmEndpointError)
+      expect((err as Error).message).not.toContain('sk-pasted-in-the-wrong-slot')
     }
   })
 

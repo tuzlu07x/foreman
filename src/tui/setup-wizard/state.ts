@@ -99,6 +99,12 @@ export interface WizardState {
   ollamaModelDraft: string | null;
   presetDraft: string | null;
   presetKeyDraft: string;
+  // Self-hosted brains (Ollama, a custom OpenAI-compatible server): the
+  // validated base URL the user entered, and why the last entry was
+  // rejected. Their live model list reuses cloudModelOptions / Error /
+  // Draft above.
+  brainBaseUrl: string | null;
+  brainBaseUrlError: string | null;
 
   // #434 — Per-agent model picker state. `agentModelOptions` is the
   // live-discovered model list for the active prompt's provider;
@@ -217,6 +223,8 @@ export function createInitialWizardState(
     ollamaModelDraft: null,
     presetDraft: null,
     presetKeyDraft: "",
+    brainBaseUrl: null,
+    brainBaseUrlError: null,
 
     agentModelOptions: null,
     agentModelError: null,

@@ -6,6 +6,23 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Foreman's brain can run on Ollama or any OpenAI-compatible
+  endpoint.** Verification and daily summaries used to need Anthropic,
+  OpenAI or Gemini; the `ollama` and `openai_compatible` providers in
+  `llm.yaml` now have a client (OpenAI Chat Completions over `fetch`, no
+  new dependency). In `foreman setup` Step 2 the Ollama and Custom rows are
+  no longer "(not supported yet)": Ollama asks for its base URL (default
+  `http://localhost:11434`) and lists the pulled models; Custom offers the
+  presets (DeepSeek, OpenRouter, Groq, …) and your own endpoint (base URL,
+  optional key, model from its `/models` list). Ollama calls cost $0; an
+  OpenAI-compatible endpoint is billed at the most expensive known price so
+  the budget is never under-counted. Base URLs must be http(s), redirects
+  are refused so the key only goes to the configured endpoint, and
+  `foreman doctor` checks the URL
+  ([docs/llm-providers.md](docs/llm-providers.md#foremans-brain-on-ollama-or-an-openai-compatible-endpoint)).
+
 ## [2.1.1] - 2026-09-28
 
 A security fix for the shell risk rules. Upgrade if you run 2.1.0: some

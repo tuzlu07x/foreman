@@ -45,7 +45,7 @@ credentials:
     secret_name: null # local — no key
   openai_compatible:
     endpoint_secret: openai-compatible-endpoint
-    key_secret: openai-compatible-api-key
+    key_secret: openai-compatible-key
 ```
 
 **No literal API keys ever live in this file.** Everything is a secret-store reference. Read by `loadLlmConfig()` with Zod-validated defaults; missing keys are filled in from `defaultLlmConfig()`.
@@ -84,7 +84,7 @@ credentials:
      cost       $0.000028
    ```
 
-Other providers (OpenAI / Gemini / Ollama / OpenAI-compatible) ship in **C7-2** — config schema already supports them; clients land alongside C8 when their use case lights up.
+OpenAI and Gemini work the same way with their own key. Ollama and OpenAI-compatible endpoints need a base URL instead of (or as well as) a key; `foreman setup` Step 2 configures them — see [llm-providers.md](llm-providers.md#foremans-brain-on-ollama-or-an-openai-compatible-endpoint).
 
 ---
 
@@ -232,7 +232,7 @@ Pricing is kept per model in each provider client (`src/core/llm/providers/*.ts`
 
 A typical verification call: ~500 input + ~100 output tokens = $0.001 with Haiku. At a $5/month cap, that's ~5,000 verifications per month.
 
-A dated snapshot (`claude-haiku-4-5-20251001`) is priced like its model. A model missing from the table (a release newer than your Foreman) is billed at the provider's most expensive current price (Fable for Anthropic), so the budget may run out early but never runs over. Update Foreman to get the new model's real price. Calls through a Claude or ChatGPT subscription (OAuth) cost $0 against the budget.
+A dated snapshot (`claude-haiku-4-5-20251001`) is priced like its model. A model missing from the table (a release newer than your Foreman) is billed at the provider's most expensive current price (Fable for Anthropic), so the budget may run out early but never runs over. Update Foreman to get the new model's real price. Calls through a Claude or ChatGPT subscription (OAuth) cost $0 against the budget, and so do calls to Ollama. An OpenAI-compatible endpoint has no price table: every call is billed at the most expensive current price ($10 / $50 per MTok), or at a known model's own price when that is higher ([details](llm-providers.md#foremans-brain-on-ollama-or-an-openai-compatible-endpoint)).
 
 ---
 
