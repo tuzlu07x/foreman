@@ -133,7 +133,8 @@ describe('completeCommand', () => {
     expect(completeCommand('wr', e).line).toBe('write ')
     expect(completeCommand('write co', e)).toEqual({ line: 'write codex ', candidates: ['codex'] })
     expect(completeCommand('assign mar', e).line).toBe('assign marketing ')
-    expect(completeCommand('open in', e).line).toBe('open inbox ')
+    expect(completeCommand('open inb', e).line).toBe('open inbox ')
+    expect(completeCommand('open integrations', e).line).toBe('open integrations ')
   })
 
   it('offers candidates when ambiguous and extends the common prefix', () => {

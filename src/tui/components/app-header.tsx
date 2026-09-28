@@ -99,6 +99,7 @@ export const TABS: TabSpec[] = [
   { page: "secrets", label: "Keys", key: "k" },
   { page: "providers", label: "Providers", key: "v" },
   { page: "services", label: "Services", key: "V" },
+  { page: "integrations", label: "Integrations", key: "i" },
   { page: "settings", label: "Settings", key: "g" },
   { page: "chat", label: "Test", key: "c" },
 ];

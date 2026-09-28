@@ -98,11 +98,13 @@ describe('HelpOverlay — fits the terminal', () => {
     expect(first).toContain('Everywhere')
     expect(first).toMatch(/scroll \(1–12 of \d+\)/)
     expect(first).not.toContain('Secrets page')
-    for (let i = 0; i < 4; i++) {
+    // Page down until a later section shows (the layout grows with pages).
+    let later = first
+    for (let i = 0; i < 10 && !later.includes('Secrets page'); i++) {
       app.stdin.write('\u001B[6~')
       await new Promise((r) => setTimeout(r, 30))
+      later = stripAnsi(app.lastFrame() ?? '')
     }
-    const later = stripAnsi(app.lastFrame() ?? '')
     expect(later).toContain('Secrets page')
     expect(later).not.toContain('Everywhere')
     app.unmount()

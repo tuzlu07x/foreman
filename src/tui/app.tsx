@@ -54,6 +54,7 @@ import { keysPageSecrets, REVEAL_AUTO_HIDE_MS, SecretsPage } from "./pages/secre
 import { AgentsPage } from "./pages/agents-page.js";
 import { ProvidersPage } from "./pages/providers-page.js";
 import { ServicesPage } from "./pages/services-page.js";
+import { IntegrationsPage } from "./pages/integrations-page.js";
 import { DelegationsPage } from "./pages/delegations-page.js";
 import { SessionsPage } from "./pages/sessions-page.js";
 import { buildSettingsItems, SettingsPage } from "./pages/settings-page.js";
@@ -1248,6 +1249,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
         <ProvidersPage onLeave={() => setPage("dashboard")} onEditingChange={setPageEditing} />
       ) : page === "services" ? (
         <ServicesPage onLeave={() => setPage("dashboard")} onEditingChange={setPageEditing} />
+      ) : page === "integrations" ? (
+        <IntegrationsPage onLeave={() => setPage("dashboard")} onEditingChange={setPageEditing} />
       ) : (
         <Box height={pageHeight}>{renderPanels(layout)}</Box>
       )}
@@ -1496,7 +1499,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       (page === "chat" && chatInputMode) ||
       (page === "secrets" && (addSecretMode !== null || rotateMode !== null)) ||
       (page === "agents" && agentsEditMode !== "none") ||
-      ((page === "providers" || page === "services") && pageEditing);
+      ((page === "providers" || page === "services" || page === "integrations") && pageEditing);
     const letter = /^[a-zA-Z]$/.test(input) && !key.ctrl && !key.meta;
     if (letter && (pendingApproval || !textEntry) && swallowUnsettledKey()) return;
     // A delete / remove question on screen takes `q` as "no" (below).
@@ -1594,7 +1597,13 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         return;
       }
       // Secrets, Providers and Services use `n` for "new".
-      if (input === "n" && page !== "secrets" && page !== "providers" && page !== "services") {
+      if (
+        input === "n" &&
+        page !== "secrets" &&
+        page !== "providers" &&
+        page !== "services" &&
+        page !== "integrations"
+      ) {
         setPage("inbox");
         return;
       }
@@ -1822,7 +1831,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     // ProvidersPage / ServicesPage run their own useInput; short-circuit
     // here so a key (e.g. `s` for show-value) isn't double-handled by the
     // global dispatch (which would simultaneously try to setPage('sessions')).
-    if (page === "providers" || page === "services") return;
+    if (page === "providers" || page === "services" || page === "integrations") return;
     if (input === "/") openCommand();
     else if (input === "?" || input === "h") setHelpOpen(true);
     else if (input === "c") setPage("chat");
@@ -1831,6 +1840,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     else if (input === "a") setPage("agents");
     else if (input === "v") setPage("providers");
     else if (input === "V") setPage("services");
+    else if (input === "i") setPage("integrations");
     else if (input === "l") setPage("logs");
     else if (input === "p") setPage("policy");
     else if (input === "s") setPage("sessions");

@@ -23,6 +23,9 @@ All notable changes to Foreman are documented here. The format follows
     `adopt` for servers added with `foreman mcp add`.
   - A second account is its own server with its own secret
     (`--name github-work` → `github-pat-work`).
+  - The TUI has an Integrations page (`i`): add with a token or browser
+    sign-in, review, enable / disable, edit the access level and who may
+    use it, per-tool rules (`t`, `←→`), remove (asks first).
   - `foreman doctor` reports enabled integrations that can't work;
     `foreman secrets remove` / `rotate` say when an integration uses the
     secret.

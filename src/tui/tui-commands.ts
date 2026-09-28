@@ -25,6 +25,7 @@ export type TuiPage =
   | "agents"
   | "providers"
   | "services"
+  | "integrations"
   | "secrets"
   | "settings"
   | "chat";
@@ -85,6 +86,8 @@ export const PAGE_ALIASES: Record<string, TuiPage> = {
   agents: "agents",
   providers: "providers",
   services: "services",
+  integrations: "integrations",
+  integration: "integrations",
   keys: "secrets",
   secrets: "secrets",
   settings: "settings",
