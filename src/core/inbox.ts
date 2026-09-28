@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { monotonicFactory } from "ulid";
 import type { ForemanDb } from "../db/client.js";
+import { chatDeciderId } from "./approval.js";
 import { inboxItems, pendingApprovals, requests, type InboxItem } from "../db/schema.js";
 import type { EventBus, ForemanEventMap } from "./event-bus.js";
 import { redactSecretShapes } from "./risk-rules/secret-patterns.js";
@@ -238,7 +239,7 @@ export class InboxRecorder {
                 : e.via === "agent_mcp"
                   ? `by you, relayed by ${e.routedBy ?? "your chat agent"}`
                   : e.via
-                    ? `by you via ${e.via[0]!.toUpperCase()}${e.via.slice(1)}`
+                    ? `by ${chatDeciderId(e.via, e.userId) ?? "you"} via ${e.via[0]!.toUpperCase()}${e.via.slice(1)}`
                     : "by you";
         // Upsert: when two decisions race, the bridge announces the one
         // that actually counted after the losing one, and it must win.

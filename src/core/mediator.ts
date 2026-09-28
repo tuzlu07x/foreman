@@ -1,7 +1,7 @@
 import { ulid } from "ulid";
 import type { MCPGateway } from "../mcp/gateway.js";
 import type { JSONRPCMessage, JSONRPCRequest } from "../mcp/types.js";
-import type { ApprovalService } from "./approval.js";
+import { userDecidedBy, type ApprovalService } from "./approval.js";
 import {
   bus as defaultBus,
   type EventBus,
@@ -329,13 +329,12 @@ export class MediatorService {
       decision = approval.decision;
       // #302 — surface the channel that resolved the approval so the audit
       // log distinguishes Telegram-resolved from TUI-resolved decisions.
+      // On Slack / Discord it also names the person (`user:slack:U0BOSS`).
       decidedBy = approval.cancelled
         ? "approval-cancelled"
         : approval.timedOut
           ? "approval-timeout"
-          : approval.via
-            ? `user:${approval.via}`
-            : "user";
+          : userDecidedBy(approval);
       // "Always allow" is keyed to the source id; for an unverified
       // connection that would hand the rule to anyone who claims it.
       const rememberable =

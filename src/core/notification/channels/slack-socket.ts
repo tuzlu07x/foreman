@@ -9,6 +9,12 @@ import {
 } from "./approval-buttons.js";
 import { ChannelDeliveryError, clipText, defaultFetch, postWithTimeout, type HttpFetch } from "./http-post.js";
 import { slackEndpoints, type SlackEndpoints } from "./slack-endpoints.js";
+import {
+  describeRefusedButton,
+  describeRefusedCommand,
+  type InteractionRefusal,
+  type InteractionRefusalSink,
+} from "../interaction-refusals.js";
 import { defaultSocketFactory, messageText, trackSocket, type SocketFactory, type TrackedSocket } from "./socket.js";
 
 // =============================================================================
@@ -52,6 +58,9 @@ export interface SlackSocketOptions {
   sign?: ApprovalSigner;
   onCommand?: ChatCommandRunner;
   onWarning?: (message: string) => void;
+  /** Told about each tap or command from a user who is not allowed, for
+   *  the audit log (interaction-refusals.ts rate-limits it). */
+  onRefused?: InteractionRefusalSink;
   fetchImpl?: HttpFetch;
   socketFactory?: SocketFactory;
   backoffMs?: { min: number; max: number };
@@ -226,6 +235,7 @@ export class SlackSocketListener {
     const responseUrl = str(payload.response_url);
     const action = Array.isArray(payload.actions) && isObject(payload.actions[0]) ? payload.actions[0] : null;
     if (!this.allowed.has(userId)) {
+      this.refused({ platform: "slack", userId, ...describeRefusedButton(str(action?.value), this.opts.sign) });
       await this.respond(responseUrl, ephemeral("You are not allowed to decide Foreman approvals."));
       return;
     }
@@ -264,6 +274,7 @@ export class SlackSocketListener {
     const userId = str(payload.user_id);
     const responseUrl = str(payload.response_url);
     if (!this.allowed.has(userId)) {
+      this.refused({ platform: "slack", userId, attempted: describeRefusedCommand(str(payload.text)) });
       await this.respond(responseUrl, ephemeral("You are not allowed to command Foreman."));
       return;
     }
@@ -279,6 +290,15 @@ export class SlackSocketListener {
       answer = `Failed: ${err instanceof Error ? err.message : String(err)}`;
     }
     await this.respond(responseUrl, ephemeral(`\`/foreman ${escapeSlack(clipText(text, 200))}\`\n${escapeSlack(clipText(answer, 3_500))}`));
+  }
+
+  /** Report a refusal; a failing sink never changes the refusal. */
+  private refused(refusal: InteractionRefusal): void {
+    try {
+      this.opts.onRefused?.(refusal);
+    } catch {
+      // best effort
+    }
   }
 
   private async respond(url: string, body: Json): Promise<void> {

@@ -4,6 +4,7 @@ import { approvalSigner } from '../../../src/core/approval-token.js'
 import { encodeApprovalButton } from '../../../src/core/notification/channels/approval-buttons.js'
 import { DiscordChannel, renderDiscordMessage } from '../../../src/core/notification/channels/discord.js'
 import { DiscordGatewayListener } from '../../../src/core/notification/channels/discord-gateway.js'
+import type { InteractionRefusal } from '../../../src/core/notification/interaction-refusals.js'
 import type { Notification, UserDecision } from '../../../src/core/notification/types.js'
 import { fakeSocketServer, httpRecorder, settle, waitFor, type FakeSocket } from './fake-socket.js'
 
@@ -95,7 +96,7 @@ describe('DiscordGatewayListener', () => {
     handshake(socket)
     socket.receive(button(OWNER, encodeApprovalButton('req-7', 'deny_always', sign)))
     await waitFor(() => api.calls.some((c) => c.url.includes('/interactions/')))
-    expect(decisions).toMatchObject([{ requestId: 'req-7', decision: 'deny_always', decidedBy: `discord:${OWNER}`, channel: 'discord' }])
+    expect(decisions).toMatchObject([{ requestId: 'req-7', decision: 'deny_always', decidedBy: `discord:${OWNER}`, channel: 'discord', userId: OWNER }])
     const callback = api.calls.find((c) => c.url.includes('/interactions/'))!
     expect(callback.url).toBe(`https://discord.com/api/v10/interactions/333333333333333333/${TOKEN}/callback`)
     expect(callback.body).toMatchObject({ type: 7, data: { components: [], content: `Denied ✗ (always) by <@${OWNER}>` } })
@@ -118,6 +119,38 @@ describe('DiscordGatewayListener', () => {
       { type: 4, data: { content: 'You are not allowed to use Foreman here.', flags: 64, allowed_mentions: { parse: [] } } },
       { type: 4, data: { content: 'This button is no longer valid.', flags: 64, allowed_mentions: { parse: [] } } },
     ])
+  })
+
+  it('reports refused buttons and commands for the audit log, without the text', async () => {
+    const refused: InteractionRefusal[] = []
+    const { listener, server, api } = make({ onRefused: (r) => refused.push(r), onCommand: async () => 'ok' })
+    listener.start(async () => {})
+    const socket = await server.connection(1)
+    handshake(socket)
+    const STRANGER = '999999999999999999'
+    socket.receive(button(STRANGER, encodeApprovalButton('req-7', 'deny', sign)))
+    socket.receive(button(STRANGER, 'fa:allow:req-8.notthetag0', '444444444444444444'))
+    socket.receive({
+      op: 0,
+      t: 'INTERACTION_CREATE',
+      s: 3,
+      d: {
+        id: '555555555555555555',
+        token: TOKEN,
+        type: 2,
+        application_id: APP,
+        member: { user: { id: STRANGER } },
+        data: { name: 'foreman', options: [{ name: 'command', value: 'integration disable github please' }] },
+      },
+    })
+    await waitFor(() => api.calls.filter((c) => c.url.includes('/interactions/')).length === 3)
+    expect(refused).toEqual([
+      { platform: 'discord', userId: STRANGER, attempted: 'button:deny', requestId: 'req-7' },
+      // A forged tag: what it claimed, but no approval id.
+      { platform: 'discord', userId: STRANGER, attempted: 'button:allow' },
+      { platform: 'discord', userId: STRANGER, attempted: 'command:integration' },
+    ])
+    expect(JSON.stringify(refused)).not.toContain('please')
   })
 
   it('runs /foreman with a deferred private reply', async () => {

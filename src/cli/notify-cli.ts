@@ -642,7 +642,8 @@ notifyCommand
     const slack = channelConfig(config, 'slack')
     if (opts.off) {
       if (slack) {
-        const { app_token_ref: _t, allowed_user_ids: _u, ...rest } = slack
+        // Owners go too: nobody keeps powers over a channel that is off.
+        const { app_token_ref: _t, allowed_user_ids: _u, owner_user_ids: _o, ...rest } = slack
         setChannel(config, 'slack', rest)
         saveNotifyConfig(paths.notifyConfigPath, config)
       }
@@ -697,7 +698,8 @@ notifyCommand
     const discord = channelConfig(config, 'discord')
     if (opts.off) {
       if (discord) {
-        const { interactive: _i, allowed_user_ids: _u, ...rest } = discord
+        // Owners go too: nobody keeps powers over a channel that is off.
+        const { interactive: _i, allowed_user_ids: _u, owner_user_ids: _o, ...rest } = discord
         setChannel(config, 'discord', rest)
         saveNotifyConfig(paths.notifyConfigPath, config)
       }

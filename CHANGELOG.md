@@ -6,6 +6,35 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **The audit log names who decided an approval in Slack or Discord.**
+  With several people in `allowed_user_ids`, `requests.decided_by` only
+  said `user:slack` and the inbox said "by you via Slack", whoever tapped.
+  It is now `user:slack:<member id>` / `user:discord:<user id>` (e.g.
+  `user:slack:U0BOSS`), carried across processes in a new
+  `pending_approvals.resolved_user` column (migration 0029), and the inbox
+  says "by U0BOSS via Slack". TUI and Telegram decisions are unchanged
+  (`user:tui`, `user:telegram`); readers that match the `user` prefix
+  (log filters, the previously-denied risk rule, the inbox) need no change
+  ([docs/notifications.md](docs/notifications.md#3a-two-way-slack-and-discord)).
+- **`foreman notify slack-interactive --off` and `discord-interactive
+  --off` also remove `owner_user_ids`.** They removed the token reference
+  and `allowed_user_ids` but left the owners behind, so turning two-way
+  mode back on later quietly brought back an old owner list and, with it,
+  who may change integrations from chat.
+
+### Security
+
+- **Refused Slack and Discord interactions are audited.** A button tap or
+  `/foreman` from someone not in `allowed_user_ids` was refused but left
+  no trace. Each refusal now writes a `notify:interaction-refused` audit
+  event with the platform, the user id and what was tried
+  (`button:<action>` with the approval id, `command:<verb>` or
+  `command:other`); never the message text or the button's tag. At most
+  one event per user per minute (the next carries `suppressed`) and 30 per
+  minute in all, so a flood can't grow the log without bound
+  ([docs/notifications.md](docs/notifications.md#3a-two-way-slack-and-discord)).
 ### Added
 
 - **The setup wizard adds Claude Code's PreToolUse hook.** Claude Code's

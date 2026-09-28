@@ -227,6 +227,10 @@ export const pendingApprovals = sqliteTable(
     resolvedVia: text("resolved_via", {
       enum: ["tui", "telegram", "discord", "slack", "webhook", "agent_mcp"],
     }),
+    // Who decided on Slack / Discord, by the platform's user id (e.g.
+    // U0BOSS), so decided_by can name the person (`user:slack:U0BOSS`).
+    // Null for every other surface and for legacy rows.
+    resolvedUser: text("resolved_user"),
     requestedAt: integer("requested_at").notNull(),
     resolvedAt: integer("resolved_at"),
     // #525 — Absolute Unix ms timestamp when the approval auto-resolves to
