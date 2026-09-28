@@ -6,6 +6,7 @@ import { osc8 } from "../osc8.js";
 import { persistVoiceConfig } from "../setup-wizard-voice-persist.js";
 import { theme } from "../theme.js";
 import type { WizardContext } from "./context.js";
+import { servicePasteWarning } from "./paste-checks.js";
 import { stepProgress } from "./progress.js";
 import {
   applyServicesPickerSubmit,
@@ -180,7 +181,10 @@ if (servicesPhase === "values") {
                 : [...prev, prompt.secretName],
             );
           }
-          setServicesWarning(result.warning);
+          setServicesWarning(
+            (result.shouldSave ? servicePasteWarning(prompt.secretName, value) : null) ??
+              result.warning,
+          );
           setServiceIdx(result.nextIdx);
           setServicesPhase(result.nextPhase);
         }}
@@ -242,6 +246,9 @@ if (servicesPhase === "summary") {
           ))}
         </Box>
       )}
+      {servicesWarning ? (
+        <Text color={theme.accent.warning}>⚠ {servicesWarning}</Text>
+      ) : null}
       {telegramSkippedWithoutSave ? (
         <Box flexDirection="column">
           <Text color={theme.accent.warning} bold>

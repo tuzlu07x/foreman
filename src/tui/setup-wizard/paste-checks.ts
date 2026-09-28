@@ -1,0 +1,68 @@
+// =============================================================================
+// Paste-time format checks for the wizard's endpoint and service prompts (#657)
+// =============================================================================
+//
+// The wizard took `notatoken` as a Telegram bot token and `not a url` as a
+// custom endpoint without a word; the mistake only surfaced later as a
+// failed delivery. Like the provider key check (setup-wizard-key-
+// validation.ts) these only warn: the value is saved either way, since a
+// self-hosted or unusual setup may legitimately differ.
+
+/** A warning for an endpoint that isn't an http(s) URL, else null. */
+export function endpointPasteWarning(value: string): string | null {
+  const trimmed = value.trim();
+  let ok = false;
+  try {
+    const url = new URL(trimmed);
+    ok = (url.protocol === "http:" || url.protocol === "https:") && url.hostname.length > 0;
+  } catch {
+    ok = false;
+  }
+  return ok
+    ? null
+    : `"${trimmed}" doesn't look like an http(s) URL (e.g. https://api.example.com/v1). Saved anyway — change it on the Providers page if that was a typo.`;
+}
+
+interface ServiceFormat {
+  test: RegExp;
+  what: string;
+  example: string;
+}
+
+/** Shapes of the service secrets the catalog asks for, by secret name. */
+const SERVICE_FORMATS: Record<string, ServiceFormat> = {
+  "telegram-bot-token": {
+    test: /^\d{5,}:[A-Za-z0-9_-]{30,}$/,
+    what: "a Telegram bot token",
+    example: "123456789:ABC-DEF1234…",
+  },
+  "telegram-chat-id": {
+    test: /^(-?\d+|@[A-Za-z0-9_]{5,})$/,
+    what: "a Telegram chat id",
+    example: "123456789, or -1001234567890 for a group",
+  },
+  "slack-bot-token": { test: /^xoxb-[A-Za-z0-9-]+$/, what: "a Slack bot token", example: "xoxb-…" },
+  "discord-bot-token": {
+    test: /^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{20,}$/,
+    what: "a Discord bot token",
+    example: "three dot-separated parts",
+  },
+  "github-pat": {
+    test: /^(ghp_|github_pat_|gho_|ghu_|ghs_)[A-Za-z0-9_]{20,}$/,
+    what: "a GitHub token",
+    example: "ghp_… or github_pat_…",
+  },
+  "notion-integration-token": {
+    test: /^(secret_|ntn_)[A-Za-z0-9]{20,}$/,
+    what: "a Notion integration token",
+    example: "ntn_… or secret_…",
+  },
+};
+
+/** A warning when a pasted service secret doesn't have its usual shape,
+ *  else null (also for secrets with no known shape). */
+export function servicePasteWarning(secretName: string, value: string): string | null {
+  const format = SERVICE_FORMATS[secretName];
+  if (!format || format.test.test(value.trim())) return null;
+  return `that doesn't look like ${format.what} (${format.example}). Saved anyway — fix it with \`foreman secrets rotate ${secretName}\` if it was a paste error.`;
+}

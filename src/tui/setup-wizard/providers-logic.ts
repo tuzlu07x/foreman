@@ -6,6 +6,7 @@ import {
 import type { ProviderEntry } from "../../core/registry-catalog.js";
 import { buildLlmConfigFromWizard } from "../setup-wizard-llm-persist.js";
 import { validateKeyPaste } from "../setup-wizard-key-validation.js";
+import { endpointPasteWarning } from "./paste-checks.js";
 import type { WizardServices } from "./types.js";
 
 export type ProvidersPhase = "picker" | "values" | "summary";
@@ -155,6 +156,8 @@ export function handleProviderValueSubmit(
   if (result.shouldSave && prompt.kind === "key") {
     const check = validateKeyPaste({ provider, value });
     if (!check.ok) validationWarning = check.warning;
+  } else if (result.shouldSave && prompt.kind === "endpoint") {
+    validationWarning = endpointPasteWarning(value);
   }
   setWarning(validationWarning ?? result.warning);
   setIdx(result.nextIdx);

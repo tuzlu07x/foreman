@@ -455,6 +455,23 @@ describe('providers step', () => {
     expect(w.frame()).not.toContain('fake-gemini-key-000')
   })
 
+  // QA #657 L7 — `not a url` was taken as an endpoint without a word.
+  it('warns (and still saves) when an endpoint is not a URL', async () => {
+    const w = await mount('providers')
+    await w.until('pick which to configure')
+    await w.press(DOWN)
+    await w.press(DOWN)
+    await w.press(DOWN)
+    await w.press(SPACE)
+    await w.press(ENTER)
+    await w.until('Local (Ollama)')
+    // The field starts with the default endpoint; this makes it invalid.
+    await w.type('not a url')
+    await w.press(ENTER, 'LLM Providers ▸ summary')
+    expect(w.frame().replace(/\s+/g, ' ')).toContain("not a url\" doesn't look like an http(s) URL")
+    expect(w.secretStore.get('ollama-endpoint')).toMatch(/not a url$/)
+  })
+
   it('asks OAuth-capable providers for key vs subscription first', async () => {
     const w = await mount('providers')
     await w.until('pick which to configure')
@@ -657,6 +674,22 @@ describe('services step', () => {
     expect(w.frame()).toContain('⚠ Skipped 1 (empty value)')
     expect(w.secretStore.get('telegram-bot-token')).toBe('fake-telegram-token-000')
     expect(w.frame()).not.toContain('fake-telegram-token-000')
+  })
+
+  // QA #657 L7 — `notatoken` was taken as a Telegram token without a word.
+  it('warns (and still saves) when a token or chat id has the wrong shape', async () => {
+    const w = await mount('services')
+    await w.until('Services ▸ pick which to configure')
+    await w.press(SPACE)
+    await w.press(ENTER, 'prompt 1 of 2')
+    await w.type('notatoken')
+    await w.press(ENTER, 'telegram-chat-id')
+    expect(w.frame()).toContain("doesn't look like a Telegram bot token")
+    await w.type('my chat')
+    await w.press(ENTER, 'Services ▸ summary')
+    expect(w.frame()).toContain("doesn't look like a Telegram chat id")
+    expect(w.secretStore.get('telegram-bot-token')).toBe('notatoken')
+    expect(w.secretStore.get('telegram-chat-id')).toBe('my chat')
   })
 })
 
