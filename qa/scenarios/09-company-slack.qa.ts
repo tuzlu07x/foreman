@@ -27,6 +27,14 @@ interface OrgMessageEvent {
   channel: string | null
 }
 
+interface RefusalEvent {
+  platform: string
+  userId: string
+  attempted: string
+  requestId?: string
+  suppressed?: number
+}
+
 interface Decision {
   decision: string
   decided_by: string
@@ -300,6 +308,9 @@ it('A company on Slack: department channels, approvals, budgets and integrations
     const still = sb.query<{ status: string }>('SELECT status FROM pending_approvals WHERE request_id = ?', second.requestId)
     expect(still[0]?.status).toBe('pending')
     ev(`${STRANGER} taps Allow on ${second.requestId}: "${String(refusal.body.text)}" (ephemeral); the approval stays pending`)
+    const refusedTap = await sb.event<RefusalEvent>('notify:interaction-refused', (e) => e.userId === STRANGER)
+    expect(refusedTap).toEqual({ platform: 'slack', userId: STRANGER, attempted: 'button:allow', requestId: second.requestId })
+    ev(`audit_events notify:interaction-refused: ${JSON.stringify(refusedTap)}`)
     const deny = slack.tap(TEAMMATE, second.message, 'foreman_deny')
     await slack.acked(deny.envelopeId)
     const denied = await second.reply
@@ -433,6 +444,14 @@ it('A company on Slack: department channels, approvals, budgets and integrations
     const disabled = sb.events<{ server: string; via: string; actor?: string }>('integration:disabled')
     expect(disabled.map((e) => `${e.server} ${e.via} ${e.actor ?? ''}`)).toEqual([`github slack ${BOSS}`])
     ev(`audit_events integration:disabled: exactly one, github via slack by ${BOSS}`)
+    // The stranger's tap, and their /foreman unless it came within the same
+    // minute (one refusal event per user per minute).
+    const refusals = sb.events<RefusalEvent>('notify:interaction-refused')
+    expect(refusals.every((e) => e.platform === 'slack' && e.userId === STRANGER)).toBe(true)
+    expect(refusals[0]).toMatchObject({ attempted: 'button:allow', requestId: deniedId })
+    expect(refusals.slice(1)).toEqual(refusals.length > 1 ? [expect.objectContaining({ attempted: 'command:report' })] : [])
+    expect(JSON.stringify(refusals)).not.toContain('marketing')
+    ev(`audit_events notify:interaction-refused: ${refusals.map((e) => `${e.userId} ${e.attempted}`).join('; ')} (never the command text)`)
     const orgPolicy = sb.events<CommandEvent>('foreman:command').filter((e) => e.errorCode === 'ORG_POLICY')
     expect(orgPolicy).toHaveLength(2)
     ev('audit_events foreman:command ORG_POLICY: fin-lead → mkt-writer (chart), fin-lead → mkt-lead (budget)')

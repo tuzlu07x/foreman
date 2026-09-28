@@ -9,6 +9,12 @@ import {
 } from "./approval-buttons.js";
 import { clipText, defaultFetch, postWithTimeout, type HttpFetch } from "./http-post.js";
 import type { ChatCommandRunner } from "./slack-socket.js";
+import {
+  describeRefusedButton,
+  describeRefusedCommand,
+  type InteractionRefusal,
+  type InteractionRefusalSink,
+} from "../interaction-refusals.js";
 import { defaultSocketFactory, messageText, trackSocket, type SocketFactory, type TrackedSocket } from "./socket.js";
 
 // =============================================================================
@@ -46,6 +52,9 @@ export interface DiscordGatewayOptions {
   sign?: ApprovalSigner;
   onCommand?: ChatCommandRunner;
   onWarning?: (message: string) => void;
+  /** Told about each tap or command from a user who is not allowed, for
+   *  the audit log (interaction-refusals.ts rate-limits it). */
+  onRefused?: InteractionRefusalSink;
   fetchImpl?: HttpFetch;
   socketFactory?: SocketFactory;
   gatewayUrl?: string;
@@ -289,11 +298,12 @@ export class DiscordGatewayListener {
     const ephemeral = (content: string): Promise<string> =>
       callback({ type: 4, data: { content, flags: EPHEMERAL, allowed_mentions: { parse: [] } } });
 
+    const data = isObject(d.data) ? d.data : null;
     if (!this.allowed.has(userId)) {
+      this.refused({ platform: "discord", userId, ...describeInteraction(d.type, data, this.opts.sign) });
       await ephemeral("You are not allowed to use Foreman here.");
       return;
     }
-    const data = isObject(d.data) ? d.data : null;
     if (d.type === 3) {
       const check = verifyApprovalButton(str(data?.custom_id), this.opts.sign);
       if (!check.ok) {
@@ -347,6 +357,15 @@ export class DiscordGatewayListener {
     }
   }
 
+  /** Report a refusal; a failing sink never changes the refusal. */
+  private refused(refusal: InteractionRefusal): void {
+    try {
+      this.opts.onRefused?.(refusal);
+    } catch {
+      // best effort
+    }
+  }
+
   private post(url: string, body: Json, method: "POST" | "PATCH" = "POST"): Promise<string> {
     return postWithTimeout({
       channel: "discord",
@@ -358,6 +377,20 @@ export class DiscordGatewayListener {
       timeoutMs: this.timeoutMs,
     }).catch(() => "");
   }
+}
+
+/** What a refused interaction tried (see interaction-refusals.ts). */
+function describeInteraction(
+  type: unknown,
+  data: Json | null,
+  sign: ApprovalSigner | undefined,
+): Pick<InteractionRefusal, "attempted" | "requestId"> {
+  if (type === 3) return describeRefusedButton(str(data?.custom_id), sign);
+  if (type === 2 && data?.name === "foreman") {
+    const options = Array.isArray(data.options) ? data.options.filter(isObject) : [];
+    return { attempted: describeRefusedCommand(str(options.find((o) => o.name === "command")?.value)) };
+  }
+  return { attempted: "interaction" };
 }
 
 function send(tracked: TrackedSocket, payload: Json): void {

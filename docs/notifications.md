@@ -188,6 +188,15 @@ Several people can be allowed, so the audit log names who decided:
 example `user:slack:U0123ABCD`), and the inbox says "Allowed … by U0123ABCD
 via Slack". A decision in the TUI stays `user:tui`.
 
+A tap or `/foreman` from someone who is not allowed is refused and written
+to the audit log as `notify:interaction-refused`: the platform, their user
+id and what they tried (`button:allow` with the approval id, or
+`command:<verb>` for a Foreman verb and `command:other` for anything else),
+never the message text or the button's tag. So that a flood can't grow the
+log, Foreman writes at most one such event per user per minute (the next
+one carries `suppressed`, how many were skipped) and at most 30 per minute
+in all. Refusals past those limits are still refused, just not logged.
+
 ### Slack (Socket Mode)
 
 You need the Slack channel set up first (webhook or bot, see
@@ -454,7 +463,7 @@ There is no command for timeouts: an approval's deadline is set by the process t
 | **Channel hijack** — anyone with the bot token can send / receive | Token stays in Foreman's encrypted secret store. The configured `chat_id` constraint means even if the bot lands in a group, only YOUR taps are honored. |
 | **Replay attack** — replays of an old "approved" callback | Every callback's `notificationId` is checked against the outstanding-message map. Once resolved, the id is dropped — replays are silently rejected. |
 | **Compromised bot token** — attacker has the token, sends fake approvals | Every callback verifies (a) it's from the configured chat_id, (b) it targets a real outstanding notification id. A spoofed callback for a non-existent notification is dropped. |
-| **Two-way Slack / Discord** — someone else in the channel presses a button, or a forged payload | Only `allowed_user_ids` can act; others get a private refusal. Button values carry an HMAC tag bound to the approval and the action, signed with a key of their own: an agent that can read Slack or Discord history can't replay one through `submit_approval`. Payloads arrive over a Socket Mode / Gateway connection opened with a token only Foreman holds, and Slack replies go only to `hooks.slack.com`. A stale button (approval already decided) is refused. |
+| **Two-way Slack / Discord** — someone else in the channel presses a button, or a forged payload | Only `allowed_user_ids` can act; others get a private refusal, audited as `notify:interaction-refused` (rate-limited). Button values carry an HMAC tag bound to the approval and the action, signed with a key of their own: an agent that can read Slack or Discord history can't replay one through `submit_approval`. Payloads arrive over a Socket Mode / Gateway connection opened with a token only Foreman holds, and Slack replies go only to `hooks.slack.com`. A stale button (approval already decided) is refused. |
 | **Relaying chat agent** — an agent that shares the bot reads the approval buttons after any tap | Use the approval bot (`foreman notify approval-bot`): approvals go through a bot only Foreman holds and polls, so no agent sees them. Without it, relayed allows still need the button's HMAC tag, but the relay agent itself can read the keyboard (see SECURITY.md). |
 | **Network unavailable** — Telegram is down | `NotificationService` records the failed delivery in the `notifications` table with `status='failed'` + the error message. `foreman doctor` surfaces channel health. |
 

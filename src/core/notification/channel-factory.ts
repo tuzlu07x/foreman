@@ -7,6 +7,7 @@ import { SystemNotifyChannel } from "./channels/system.js";
 import { TelegramChannel } from "./channels/telegram.js";
 import { WebhookChannel, webhookUrlProblem } from "./channels/webhook.js";
 import { channelConfig, isChannelEnabled, type ChannelToggle, type NotifyConfig } from "./notify-config.js";
+import type { InteractionRefusalSink } from "./interaction-refusals.js";
 import type { SmtpSecurity } from "./smtp.js";
 import { KNOWN_CHANNELS, type ChannelId, type NotificationChannel } from "./types.js";
 
@@ -41,6 +42,9 @@ export interface ChannelFactoryDeps {
   /** Runs `/foreman <command>` typed in Slack or Discord by an allowed
    *  user. Omitted: those channels still take approval buttons. */
   onChatCommand?: (channel: "slack" | "discord" | "telegram", text: string, userId: string) => Promise<string>;
+  /** Told when Slack or Discord refuses a tap or command from a user who
+   *  is not in allowed_user_ids, for the audit log. */
+  onInteractionRefused?: InteractionRefusalSink;
 }
 
 export type ChannelBuild = { channel: NotificationChannel } | { problem: string };
@@ -128,6 +132,7 @@ export function buildChannel(id: ChannelId, toggle: ChannelToggle, deps: Channel
             sign: deps.signButton,
             ...(onChatCommand ? { onCommand: (text: string, user: string) => onChatCommand("slack", text, user) } : {}),
             ...(deps.onChannelWarning ? { onWarning: deps.onChannelWarning } : {}),
+            ...(deps.onInteractionRefused ? { onRefused: deps.onInteractionRefused } : {}),
           };
         }
         const extra = { ...fetchImpl, ...(interactive ? { interactive } : {}) };
@@ -176,6 +181,7 @@ export function buildChannel(id: ChannelId, toggle: ChannelToggle, deps: Channel
                 ? { onCommand: (text: string, user: string) => onChatCommand("discord", text, user) }
                 : {}),
               ...(deps.onChannelWarning ? { onWarning: deps.onChannelWarning } : {}),
+              ...(deps.onInteractionRefused ? { onRefused: deps.onInteractionRefused } : {}),
             };
           }
           return {
