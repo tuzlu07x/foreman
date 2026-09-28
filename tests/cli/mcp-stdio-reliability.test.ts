@@ -230,7 +230,8 @@ describe("foreman mcp-stdio under concurrent database writers (#594)", () => {
       () => query<{ n: number }>("SELECT COUNT(*) AS n FROM requests WHERE args LIKE '%foreman-594.txt%'")[0]!.n === 1,
       10_000,
     );
-    expect(agent.stderr).toContain("audit log writes recovered");
+    // Reported right after the commit; stderr can arrive a moment after the row.
+    await waitFor("the recovery report", () => agent.stderr.includes("audit log writes recovered"), 5_000);
     expect(await agent.close()).toBe(0);
   }, 40_000);
 
