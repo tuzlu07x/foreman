@@ -168,7 +168,7 @@ describe('renderIntegration', () => {
     const confluenceTool = atlassian.products.find((p) => p.id === 'confluence')!.tools[0]!
     expect(toolRuleLevel(jiraOnly.server.tools!, confluenceTool)).toBe('deny')
     for (const tool of atlassian.cross_product_tools) {
-      expect(toolRuleLevel(jiraOnly.server.tools!, tool.replace('*', 'x'))).toBe('deny')
+      expect(toolRuleLevel(jiraOnly.server.tools!, tool.replaceAll('*', 'x'))).toBe('deny')
     }
     expect(() => render('atlassian', 'official', { products: ['bitbucket'] })).toThrow(/no product 'bitbucket'/)
   })
