@@ -329,3 +329,34 @@ export function handleAgentLlmChoiceInput(
   }
   return false;
 }
+
+// Claude Code's PreToolUse hook: y / Enter keeps the default (install it),
+// n leaves it out. Other keys fall through (Esc goes back to selection).
+export function handleAgentHookChoiceInput(
+  ctx: WizardContext,
+  input: string,
+  key: Key,
+): boolean {
+  const { currentStep } = ctx;
+  const { agentsPhase, agentConfigPrompts, agentConfigIdx } = ctx.state;
+  const { setAgentsPhase, setAgentConfigIdx, setAgentConfigs } = ctx.set;
+  if (currentStep !== "agents" || agentsPhase !== "per-agent-config") return false;
+  const prompt = agentConfigPrompts[agentConfigIdx];
+  if (!prompt || prompt.kind !== "hook-choice") return false;
+  let choice: boolean | null = null;
+  if (key.return || input === "y" || input === "Y") choice = true;
+  else if (input === "n" || input === "N") choice = false;
+  if (choice === null) return false;
+  const preToolUseHook = choice;
+  setAgentConfigs((prev) => ({
+    ...prev,
+    [prompt.agentId]: { ...(prev[prompt.agentId] ?? {}), preToolUseHook },
+  }));
+  const result = applyAgentConfigSubmit({
+    currentIdx: agentConfigIdx,
+    totalPrompts: agentConfigPrompts.length,
+  });
+  setAgentConfigIdx(result.nextIdx);
+  setAgentsPhase(result.nextPhase);
+  return true;
+}

@@ -6,6 +6,22 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **The setup wizard adds Claude Code's PreToolUse hook.** Claude Code's
+  own tools (Bash, Edit, Write, Read, WebFetch…) only went through
+  Foreman once you ran `foreman agent hook install claude-code`, a step
+  the wizard never mentioned. The agents step now asks "Also check Claude
+  Code's own tools before they run? (recommended)" — yes by default — and
+  the install step adds the hook to `~/.claude/settings.json`, keeping
+  every other setting and hook. Say no and the Done screen still shows the
+  command.
+
+### Changed
+
+- Tests run with a throwaway `HOME` as well as `FOREMAN_HOME`, so no test
+  can edit the developer's real Claude Code or Codex settings.
+
 ## [2.1.1] - 2026-09-28
 
 A security fix for the shell risk rules. Upgrade if you run 2.1.0: some
