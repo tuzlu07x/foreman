@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { closeDb, getDb } from "../db/client.js";
 import { foremanSpend, formatCost, formatTokens, formatUsd, parsePeriod, spendBy } from "../core/usage/report.js";
+import { agentUsageKey } from "../core/usage/agent-key.js";
 import { codexTelemetrySnippet, loadOrCreateUsageKey, otlpPort, telemetryEnv } from "../core/usage/telemetry-env.js";
 import { getForemanPaths } from "../utils/config.js";
 import { bold, dim, green, orange, red } from "./colors.js";
@@ -65,9 +66,11 @@ usageCommand
   .action((agent: string) => {
     requireInitialised();
     const paths = getForemanPaths();
-    const key = loadOrCreateUsageKey(paths.root);
-    const port = otlpPort();
     const id = agent.toLowerCase();
+    // A key of this agent's own: what arrives with it is booked to `id`,
+    // whatever the payload says (#657).
+    const key = agentUsageKey(loadOrCreateUsageKey(paths.root), id);
+    const port = otlpPort();
     if (id.includes("codex")) {
       console.log(`${green("✓")} Add this to ${bold("~/.codex/config.toml")}, then restart Codex:`);
       console.log("");
