@@ -215,9 +215,9 @@ interface Mounted {
   until: (target: string | RegExp) => Promise<void>
   secretStore: SecretStore
   services: WizardServices
-  chatPrimarySet: Mock<[string, string], void>
-  launchEditor: Mock<[string], Promise<unknown>>
-  onQuit: Mock<[], void>
+  chatPrimarySet: Mock<(a: string, b: string) => void>
+  launchEditor: Mock<(path: string) => Promise<unknown>>
+  onQuit: Mock<() => void>
   /** A run resumed at install re-opens required-setup (never auto-starts):
    *  wait for "Ready to install" and press [c]. */
   startInstall: () => Promise<void>
@@ -251,8 +251,8 @@ async function mount(
   const dir = mkdtempSync(join(sandbox, 'paths-'))
   const policyPath = join(dir, 'policy.yaml')
   writeFileSync(policyPath, 'rules:\n  - id: a\n  - id: b\n')
-  const chatPrimarySet = vi.fn<[string, string], void>()
-  const launchEditor = vi.fn<[string], Promise<unknown>>(async () => undefined)
+  const chatPrimarySet = vi.fn<(a: string, b: string) => void>()
+  const launchEditor = vi.fn<(path: string) => Promise<unknown>>(async () => undefined)
   const services: WizardServices = {
     db: handle.db,
     secretStore,
@@ -264,7 +264,7 @@ async function mount(
     voiceConfigPath: join(dir, 'voice.yaml'),
     launchEditor,
   }
-  const onQuit = vi.fn<[], void>()
+  const onQuit = vi.fn<() => void>()
   const wizard = React.createElement(SetupWizard, {
     initialState: opts.initialState ?? {
       version: 1,

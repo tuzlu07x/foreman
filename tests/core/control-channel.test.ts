@@ -179,7 +179,7 @@ describe("ControlChannel (#440)", () => {
 
     it("does not re-dispatch rows already applied", async () => {
       channel.enqueue({ command: "stop", args: [], sourceAgent: "h" });
-      const handler: ControlHandler = vi.fn(() => ({ status: "applied" }));
+      const handler = vi.fn<ControlHandler>(() => ({ status: "applied" as const }));
       await channel.drainPending(new Map([["stop", handler]]));
       await channel.drainPending(new Map([["stop", handler]]));
       expect(handler).toHaveBeenCalledOnce();

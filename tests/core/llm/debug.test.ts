@@ -33,7 +33,7 @@ describe("debugLogLlmError", () => {
       write,
     });
     expect(write).toHaveBeenCalledOnce();
-    expect(write.mock.calls[0][0]).toBe(
+    expect(write.mock.calls[0]![0]).toBe(
       "[foreman llm:verifier] openai 429 rate limited\n",
     );
   });
@@ -45,7 +45,7 @@ describe("debugLogLlmError", () => {
       write,
     });
     expect(write).toHaveBeenCalledOnce();
-    const line = write.mock.calls[0][0];
+    const line = write.mock.calls[0]![0];
     expect(line).toContain("[foreman llm:summary]");
   });
 
@@ -55,6 +55,6 @@ describe("debugLogLlmError", () => {
       env: { FOREMAN_LLM_DEBUG: "yes" },
       write,
     });
-    expect(write.mock.calls[0][0]).toContain("llm:budget");
+    expect(write.mock.calls[0]![0]).toContain("llm:budget");
   });
 });

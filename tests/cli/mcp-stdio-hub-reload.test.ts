@@ -33,7 +33,7 @@ describe("mcp-stdio with a live-reloaded hub", () => {
   let dir: string;
   let calls: string[];
   let mediatorHook: (() => void) | null;
-  let handleRequest: Mock<[input: { requestId: string }], Promise<MediatorOutput>>;
+  let handleRequest: Mock<(input: { requestId: string }) => Promise<MediatorOutput>>;
   let amendDecision: ReturnType<typeof vi.fn>;
   const mcp = () => join(dir, "mcp.yaml");
   const write = (text: string) => {

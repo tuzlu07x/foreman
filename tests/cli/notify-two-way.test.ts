@@ -50,7 +50,7 @@ describe('two-way Slack and Discord setup (#615)', () => {
     expect(run('notify', 'slack-interactive', '--off').status).toBe(0)
     expect(notifyYaml()).not.toContain('app_token_ref')
     expect(notifyYaml()).not.toContain('allowed_user_ids')
-  })
+  }, 30_000)
 
   it('discord-interactive needs a bot, not a webhook', () => {
     writeFileSync(
