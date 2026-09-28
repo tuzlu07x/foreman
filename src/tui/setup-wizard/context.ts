@@ -13,7 +13,7 @@ import type { Layout } from "../layout.js";
 import type { Step } from "../setup-state.js";
 import type { ChatPrimaryChannel } from "./chat-primary.js";
 import type { WizardSetters, WizardState } from "./state.js";
-import type { FailureResolution, WizardServices } from "./types.js";
+import type { FailureResolution, QuitReason, WizardServices } from "./types.js";
 
 /**
  * Everything a wizard step needs, computed once per render by the root
@@ -26,8 +26,9 @@ import type { FailureResolution, WizardServices } from "./types.js";
 export interface WizardContext {
   services: WizardServices;
   exit: () => void;
-  /** Quit (not finish): tells the host via onQuit, then exits normally. */
-  quit: () => void;
+  /** Quit (not finish): tells the host via onQuit, then exits normally.
+   *  Ctrl-C passes `"interrupt"`; everything else defaults to `"quit"`. */
+  quit: (reason?: QuitReason) => void;
   afterExit: "exit" | "launch-tui";
   state: WizardState;
   set: WizardSetters;
@@ -46,5 +47,7 @@ export interface WizardContext {
   llmPickerOptions: string[];
   requiredSetupResolution: RequiredSetupResolution;
   chatPrimaryChannelsNeeded: ChatPrimaryChannel[];
-  failureResolverRef: RefObject<((resolution: FailureResolution) => void) | null>;
+  failureResolverRef: RefObject<
+    ((resolution: FailureResolution) => void) | null
+  >;
 }

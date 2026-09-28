@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import type { Interface as ReadlineInterface } from "node:readline";
 import { Command } from "commander";
 import { render, type Instance } from "ink";
 import React from "react";
@@ -42,7 +43,10 @@ import {
   otherForemanPid,
 } from "../core/foreman-pidfile.js";
 import { defaultLlmConfig, saveLlmConfig } from "../core/llm/config.js";
-import { ForemanCommandRouter, registerBuiltinCommands } from "../core/foreman-command.js";
+import {
+  ForemanCommandRouter,
+  registerBuiltinCommands,
+} from "../core/foreman-command.js";
 import {
   InboxRecorder,
   InboxService,
@@ -76,17 +80,27 @@ import { runOauthFlows } from "./run-oauth-flow.js";
 import { runLoginWithSuspendedTui } from "../tui/run-login-in-tui.js";
 import { SecretStore } from "../core/secret-store.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
-import { approvalButtonSigner, approvalSigner } from "../core/approval-token.js";
+import {
+  approvalButtonSigner,
+  approvalSigner,
+} from "../core/approval-token.js";
 import { buildEnabledChannels } from "../core/notification/channel-factory.js";
 import { isHumanSource, orgBudgetBlock } from "../core/org/guard.js";
-import { CommsMirrorWorker, mirrorsFromNotifyConfig } from "../core/org/comms-mirror.js";
+import {
+  CommsMirrorWorker,
+  mirrorsFromNotifyConfig,
+} from "../core/org/comms-mirror.js";
 import { OrgComms } from "../core/org/comms.js";
 import { ApprovalReviews, ApprovalReviewWorker } from "../core/org/review.js";
 import { BudgetWatcher } from "../core/usage/budget-watcher.js";
 import { UsageLedger } from "../core/usage/ledger.js";
 import { OtlpReceiver } from "../core/usage/otlp-receiver.js";
 import { parseTaskUsage } from "../core/usage/task-usage.js";
-import { loadOrCreateUsageKey, otlpPort, telemetryEnv } from "../core/usage/telemetry-env.js";
+import {
+  loadOrCreateUsageKey,
+  otlpPort,
+  telemetryEnv,
+} from "../core/usage/telemetry-env.js";
 import {
   costBySession,
   recordUsageAndCheckBudget,
@@ -100,7 +114,10 @@ import {
 } from "../core/llm/factory.js";
 import { LlmVerifier } from "../core/llm/verifier.js";
 import { BudgetAlertBridge } from "../core/llm/budget-alert-bridge.js";
-import { NotificationBridge, type NotificationBridgeOptions } from "../core/notification/notification-bridge.js";
+import {
+  NotificationBridge,
+  type NotificationBridgeOptions,
+} from "../core/notification/notification-bridge.js";
 import { NotificationService } from "../core/notification/notification-service.js";
 import { ForemanVoice } from "../core/notification/foreman-voice.js";
 import {
@@ -164,7 +181,10 @@ export function startForeman(
   // One `foreman start` per home (#657): refuse before touching anything.
   const running = otherForemanPid(paths.configDir);
   if (running !== null) {
-    throw new ForemanAlreadyRunningError(running, getForemanPidfilePath(paths.configDir));
+    throw new ForemanAlreadyRunningError(
+      running,
+      getForemanPidfilePath(paths.configDir),
+    );
   }
   const { publicKey } = loadOrCreateMasterKey();
   const db = getDb();
@@ -179,7 +199,9 @@ export function startForeman(
   let reportPolicyError = (message: string): void => {
     earlyPolicyErrors.push(message);
   };
-  followPolicyFile(policy, paths.policyPath, (message) => reportPolicyError(message));
+  followPolicyFile(policy, paths.policyPath, (message) =>
+    reportPolicyError(message),
+  );
   // #431 — Write the start.ts PID to a pidfile so `foreman mcp-stdio`
   // can signal us when a user types `/foreman stop` into an agent's
   // Telegram chat. Cleanup happens in shutdown(). Taking it is also the
@@ -312,7 +334,9 @@ export function startForeman(
   // Spend ledger (#629): agents report their token usage over
   // OpenTelemetry to a receiver on 127.0.0.1; spawned tasks get the
   // exporter settings automatically (see telemetry-env.ts).
-  const usageLedger = new UsageLedger(db, { orgConfigPath: paths.orgConfigPath });
+  const usageLedger = new UsageLedger(db, {
+    orgConfigPath: paths.orgConfigPath,
+  });
   const usageKey = loadOrCreateUsageKey(paths.root);
   // Budgets are checked as soon as usage arrives (the watcher is created
   // below, once the notification channels exist).
@@ -348,7 +372,9 @@ export function startForeman(
   try {
     orchestratorChat = new OrchestratorChat({
       db,
-      config: existsSync(paths.llmConfigPath) ? loadLlmConfig(paths.llmConfigPath) : defaultLlmConfig(),
+      config: existsSync(paths.llmConfigPath)
+        ? loadLlmConfig(paths.llmConfigPath)
+        : defaultLlmConfig(),
       secretStore,
       registry,
       bus,
@@ -385,7 +411,11 @@ export function startForeman(
     text: string,
     userId: string,
   ): Promise<string> => {
-    const [verb = "help", ...args] = text.trim().replace(/^\/?foreman\b\s*/i, "").split(/\s+/).filter(Boolean);
+    const [verb = "help", ...args] = text
+      .trim()
+      .replace(/^\/?foreman\b\s*/i, "")
+      .split(/\s+/)
+      .filter(Boolean);
     const sourceUser = `${channel}:${userId}`;
     const result = await commandRouter.dispatch(verb, args, {
       ...commandContext,
@@ -408,14 +438,20 @@ export function startForeman(
     db,
     secretStore,
     onChatCommand: runChatCommand,
-    onChannelDecision: (info) => audit.logEvent("approval:channel-decision", info),
+    onChannelDecision: (info) =>
+      audit.logEvent("approval:channel-decision", info),
     notifyConfigPath: paths.notifyConfigPath,
     notifyStatePath: paths.notifyStatePath,
     llmConfigPath: paths.llmConfigPath,
     // Channel trouble (e.g. someone else polling the approval bot) lands
     // in the inbox, once per distinct message.
     onChannelWarning: (message) =>
-      inbox.add({ level: "warning", kind: "system", title: message, dedupeKey: `channel:${message}` }),
+      inbox.add({
+        level: "warning",
+        kind: "system",
+        title: message,
+        dedupeKey: `channel:${message}`,
+      }),
   });
   const notificationBridge = notificationSetup?.bridge ?? null;
   const dailyScheduler = notificationSetup?.scheduler ?? null;
@@ -423,10 +459,17 @@ export function startForeman(
   // Approval escalation along reporting lines (#623): low- and medium-risk
   // approvals also go to the requester's manager agent, whose
   // recommendation is shown next to the approval. Advice only.
-  const approvalReviews = new ApprovalReviews(db, new OrgComms(db, { orgConfigPath: paths.orgConfigPath, bus }), {
-    registry,
+  const approvalReviews = new ApprovalReviews(
+    db,
+    new OrgComms(db, { orgConfigPath: paths.orgConfigPath, bus }),
+    {
+      registry,
+    },
+  );
+  const reviewWorker = new ApprovalReviewWorker(approvalReviews, {
+    bus,
+    inbox,
   });
-  const reviewWorker = new ApprovalReviewWorker(approvalReviews, { bus, inbox });
   reviewWorker.start();
   approvalBridge.start();
 
@@ -435,7 +478,9 @@ export function startForeman(
   // notify.yaml. Agents never hold those tokens.
   const commsMirror = new CommsMirrorWorker(db, {
     orgConfigPath: paths.orgConfigPath,
-    mirrors: mirrorsFromNotifyConfig(chatBotTokens(paths.notifyConfigPath, secretStore)),
+    mirrors: mirrorsFromNotifyConfig(
+      chatBotTokens(paths.notifyConfigPath, secretStore),
+    ),
     inbox,
   });
   commsMirror.start();
@@ -611,7 +656,8 @@ export function startForeman(
           runInteractiveLogin,
           inbox,
           pendingApprovals: () => approvalBridge.pending(),
-          approvalRecommendations: (approvalId: string) => approvalReviews.recommendationsFor(approvalId),
+          approvalRecommendations: (approvalId: string) =>
+            approvalReviews.recommendationsFor(approvalId),
           commandRouter,
           commandContext,
           audit,
@@ -930,8 +976,16 @@ export function startForeman(
             // it (chat, CLI, flow routing), an agent can't hand work into
             // a department that has spent its budget.
             if (!isHumanSource(row.sourceAgent ?? "cli")) {
-              const overBudget = orgBudgetBlock(db, paths.orgConfigPath, agentId);
-              if (overBudget) return { status: "failed", error: `paused by budget: ${overBudget}` };
+              const overBudget = orgBudgetBlock(
+                db,
+                paths.orgConfigPath,
+                agentId,
+              );
+              if (overBudget)
+                return {
+                  status: "failed",
+                  error: `paused by budget: ${overBudget}`,
+                };
             }
             // Mark the step running before the spawn so `foreman flow
             // show` reflects in-progress state in real time.
@@ -961,7 +1015,9 @@ export function startForeman(
                 );
               }
             }
-            const taskUsageKey = otlpBoundPort ? otlp.issueTaskKey(agentId, String(row.id)) : null;
+            const taskUsageKey = otlpBoundPort
+              ? otlp.issueTaskKey(agentId, String(row.id))
+              : null;
             const exec = await executeWriteDirective(
               {
                 agentId,
@@ -1048,7 +1104,10 @@ export function startForeman(
             // Usage the agent printed (Codex `tokens used`, Claude JSON
             // results); telemetry for the same task takes precedence.
             if ("stdout" in exec.spawn) {
-              const printed = parseTaskUsage(exec.spawn.stdout, exec.spawn.stderr);
+              const printed = parseTaskUsage(
+                exec.spawn.stdout,
+                exec.spawn.stderr,
+              );
               if (printed) {
                 try {
                   usageLedger.record({
@@ -1256,7 +1315,10 @@ function chatBotTokens(
 ): { slack: string | null; discord: string | null } {
   const token = (channel: "slack" | "discord"): string | null => {
     try {
-      const ref = channelConfig(loadNotifyConfig(notifyConfigPath), channel)?.bot_token_ref;
+      const ref = channelConfig(
+        loadNotifyConfig(notifyConfigPath),
+        channel,
+      )?.bot_token_ref;
       return ref && secretStore.exists(ref) ? secretStore.get(ref) : null;
     } catch {
       return null;
@@ -1272,7 +1334,11 @@ function setupNotificationBridge(args: {
   notifyStatePath: string;
   llmConfigPath: string;
   onChannelWarning?: (message: string) => void;
-  onChatCommand?: (channel: "slack" | "discord", text: string, userId: string) => Promise<string>;
+  onChatCommand?: (
+    channel: "slack" | "discord",
+    text: string,
+    userId: string,
+  ) => Promise<string>;
   onChannelDecision?: NotificationBridgeOptions["onChannelDecision"];
 }): {
   bridge: NotificationBridge;
@@ -1296,7 +1362,9 @@ function setupNotificationBridge(args: {
     signApproval: approvalSigner(loadOrCreateSecretsMasterKey()),
     // Buttons Foreman receives itself get their own key (never a relay token).
     signButton: approvalButtonSigner(loadOrCreateSecretsMasterKey()),
-    ...(args.onChannelWarning ? { onChannelWarning: args.onChannelWarning } : {}),
+    ...(args.onChannelWarning
+      ? { onChannelWarning: args.onChannelWarning }
+      : {}),
     ...(args.onChatCommand ? { onChatCommand: args.onChatCommand } : {}),
   });
 
@@ -1310,7 +1378,9 @@ function setupNotificationBridge(args: {
     getState: () => loadNotifyState(args.notifyStatePath),
     // Which person on which channel decided: the approval row itself only
     // records "the user".
-    ...(args.onChannelDecision ? { onChannelDecision: args.onChannelDecision } : {}),
+    ...(args.onChannelDecision
+      ? { onChannelDecision: args.onChannelDecision }
+      : {}),
   });
   void bridge.start().catch(() => {
     /* best-effort */
@@ -1463,8 +1533,10 @@ function warnAboutAgentTokens(
     } catch {
       doc = null;
     }
-    const audit = auditAgentTokens(registry.listAll(), secretStore, (id) =>
-      doc?.agents.find((a) => a.id === id) ?? null,
+    const audit = auditAgentTokens(
+      registry.listAll(),
+      secretStore,
+      (id) => doc?.agents.find((a) => a.id === id) ?? null,
     );
     const problem = describeTokenAudit(audit);
     if (!problem) {
@@ -1479,7 +1551,9 @@ function warnAboutAgentTokens(
       dedupeKey: AGENT_TOKENS_INBOX_KEY,
     });
     if (!withTui) {
-      process.stderr.write(`${orange("warning: ")}${problem.message}\n  → ${problem.remediation}\n`);
+      process.stderr.write(
+        `${orange("warning: ")}${problem.message}\n  → ${problem.remediation}\n`,
+      );
     }
   } catch {
     /* doctor reports the same problem */
@@ -1570,8 +1644,9 @@ async function runOnboardingWizard(): Promise<boolean> {
       },
       // `foreman start` continues into the TUI once the wizard exits.
       afterExit: "launch-tui",
-      onQuit: () => {
+      onQuit: (reason) => {
         quit = true;
+        if (reason === "interrupt") process.exitCode = 130;
       },
     }),
     { exitOnCtrlC: false },
@@ -1617,10 +1692,30 @@ async function promptStartChoice(): Promise<StartChoice> {
   );
   const { createInterface } = await import("node:readline");
   const rl = createInterface({ input: process.stdin, output: process.stderr });
+  return readStartChoice(rl);
+}
+
+/**
+ * One answer from the first-run prompt. Ctrl-C quits with exit code 130,
+ * like any interrupted command; without the handler readline swallowed it,
+ * nothing was left to run and Node exited 13 with an "unsettled top-level
+ * await" warning. Ctrl-D (end of input) quits too instead of hanging.
+ */
+export function readStartChoice(rl: ReadlineInterface): Promise<StartChoice> {
   return new Promise<StartChoice>((resolveChoice) => {
+    let answered = false;
     rl.question("", (answer) => {
+      answered = true;
       rl.close();
       resolveChoice(parseStartChoice(answer));
+    });
+    rl.on("SIGINT", () => {
+      process.exitCode = 130;
+      process.stderr.write("\n");
+      rl.close();
+    });
+    rl.on("close", () => {
+      if (!answered) resolveChoice("quit");
     });
   });
 }
@@ -1764,12 +1859,14 @@ export const startCommand = new Command("start")
         if (choice === "setup") {
           // Quitting the wizard quits Foreman; only a finished setup goes
           // on to launch the TUI.
-          if (await runOnboardingWizard()) process.exit(0);
+          // process.exit() keeps the 130 a Ctrl-C quit set.
+          if (await runOnboardingWizard()) process.exit();
         } else if (choice === "skip") {
           seedHomeIfMissing();
           saveSetupState(markSetupSkipped(previousState));
         } else {
-          process.exit(0);
+          // process.exit() keeps the 130 a Ctrl-C at the prompt set.
+          process.exit();
         }
       } else {
         // Already configured / previously skipped — seed home if it's

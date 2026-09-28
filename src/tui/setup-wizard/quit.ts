@@ -43,5 +43,5 @@ export function handleCtrlC(ctx: WizardContext): void {
       return;
     }
   }
-  ctx.quit();
+  ctx.quit("interrupt");
 }

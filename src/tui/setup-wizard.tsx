@@ -68,6 +68,7 @@ import { planResume } from "./setup-wizard/resume.js";
 import { snapshotSession, useWizardState } from "./setup-wizard/state.js";
 import type {
   FailureResolution,
+  QuitReason,
   SetupWizardProps,
 } from "./setup-wizard/types.js";
 import {
@@ -99,8 +100,8 @@ export function SetupWizard({
   onQuit,
 }: SetupWizardProps): JSX.Element {
   const { exit } = useApp();
-  const quit = (): void => {
-    onQuit?.();
+  const quit = (reason: QuitReason = "quit"): void => {
+    onQuit?.(reason);
     exit();
   };
   // Agents already registered in this Foreman home — drive the wizard's

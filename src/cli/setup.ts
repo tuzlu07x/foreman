@@ -102,11 +102,17 @@ export const setupCommand = new Command("setup")
             oauthQueue.push(...steps);
           },
         },
+        // Ctrl-C exits 130, like any interrupted command, so scripts and
+        // shells can tell an aborted setup from a finished one.
+        onQuit: (reason) => {
+          if (reason === "interrupt") process.exitCode = 130;
+        },
       }),
       { exitOnCtrlC: false },
     );
 
     const shutdown = (): void => {
+      process.exitCode = 130;
       instance.unmount();
     };
     process.once("SIGINT", shutdown);
