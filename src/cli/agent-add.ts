@@ -16,7 +16,7 @@ import {
   runInstall,
   runPostConfigCommands,
 } from "../core/agent-install.js";
-import { buildMcpSnippet } from "../core/agent-mcp-snippet.js";
+import { buildMcpSnippet, snippetForDisplay } from "../core/agent-mcp-snippet.js";
 import {
   AGENT_TOKEN_ENV,
   ensureAgentToken,
@@ -478,11 +478,11 @@ export function logWiring(
       break;
     case "unsupported":
       log(orange("note: ") + `${path} has an unsupported format. Paste this manually:`);
-      log(buildMcpSnippet(agentId, entry).yaml);
+      log(snippetForDisplay(buildMcpSnippet(agentId, entry), null).text);
       break;
     case "none":
       log(orange("note: ") + NO_CONFIG_PATH_NOTE);
-      log(buildMcpSnippet(agentId, entry).yaml);
+      log(snippetForDisplay(buildMcpSnippet(agentId, entry), null).text);
       break;
   }
   if (wiring.note) log(orange("note: ") + wiring.note);

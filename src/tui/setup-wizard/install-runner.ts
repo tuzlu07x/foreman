@@ -25,7 +25,7 @@ import {
   resolveInstallerNodeVersion,
 } from "../../core/node-engines.js";
 import { ensureAgentToken, revokeAgentToken } from "../../core/agent-token.js";
-import { buildMcpSnippet } from "../../core/agent-mcp-snippet.js";
+import { buildMcpSnippet, snippetForDisplay } from "../../core/agent-mcp-snippet.js";
 import { NO_CONFIG_PATH_NOTE, tokenHandoffHint } from "../../core/agent-wiring.js";
 import {
   autoRegisterMcp,
@@ -419,7 +419,7 @@ export async function runInstallStep(
       // it, as `foreman agent add` does. The snippet has a placeholder.
       if (!pickMcpConfigPath(entry) && !registerHint?.wrapper) {
         log(`  ◦ ${NO_CONFIG_PATH_NOTE}`);
-        for (const line of buildMcpSnippet(id, entry).yaml.trimEnd().split("\n")) log(`      ${line}`);
+        for (const line of snippetForDisplay(buildMcpSnippet(id, entry), null).text.split("\n")) log(`      ${line}`);
         log(`  ◦ ${tokenHandoffHint(id)}`);
         summary.tokenToWire.push(id);
       }

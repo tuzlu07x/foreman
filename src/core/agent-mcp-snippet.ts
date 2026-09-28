@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { extname, resolve } from "node:path";
+import { stringify as stringifyToml } from "smol-toml";
 import { stringify as stringifyYaml } from "yaml";
 import { AGENT_TOKEN_ENV } from "./agent-token.js";
 import type { AgentEntry } from "./registry-catalog.js";
@@ -72,6 +73,20 @@ export function buildMcpSnippet(
         };
 
   return { yaml: stringifyYaml(json), json };
+}
+
+/** The snippet in the format of the file it goes in (#657): JSON for
+ *  `~/.claude.json` and other JSON configs, TOML for Codex / ZeroClaw,
+ *  YAML for Hermes. With no known file (a custom MCP client), JSON: the
+ *  format MCP clients use. */
+export function snippetForDisplay(
+  snippet: McpSnippet,
+  configPath: string | null,
+): { format: "json" | "toml" | "yaml"; text: string } {
+  const ext = configPath ? extname(configPath).toLowerCase() : "";
+  if (ext === ".yaml" || ext === ".yml") return { format: "yaml", text: snippet.yaml.trimEnd() };
+  if (ext === ".toml") return { format: "toml", text: stringifyToml(snippet.json).trimEnd() };
+  return { format: "json", text: JSON.stringify(snippet.json, null, 2) };
 }
 
 /** `a.b` + value → `{ a: { b: value } }`. */

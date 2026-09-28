@@ -18,7 +18,7 @@ import {
   installPreToolUseHook,
   uninstallPreToolUseHook,
 } from "../core/agent-hook.js";
-import { buildMcpSnippet } from "../core/agent-mcp-snippet.js";
+import { buildMcpSnippet, snippetForDisplay } from "../core/agent-mcp-snippet.js";
 import {
   agentTokenSecretName,
   hasAgentToken,
@@ -65,6 +65,7 @@ import {
 import {
   foremanInstallRecord,
   MissingRequiredSecretsError,
+  pickMcpConfigPath,
 } from "../core/agent-add-flow.js";
 import { bold, dim, green, orange, red } from "./colors.js";
 import { renderAgentJson, renderAgentLine } from "./render.js";
@@ -406,9 +407,11 @@ agentsCommand
             : orange(`none — MCP calls run as untrusted:${agent.id}. Run 'foreman agent rewire ${agent.id}'.`)),
       );
       if (registryEntry) {
+        const target = pickMcpConfigPath(registryEntry);
+        const shown = snippetForDisplay(buildMcpSnippet(agent.id, registryEntry), target);
         console.log("");
-        console.log(bold("MCP snippet:"));
-        console.log(buildMcpSnippet(agent.id, registryEntry).yaml);
+        console.log(bold(`MCP snippet (${shown.format}${target ? `, for ${target}` : ""}):`));
+        console.log(shown.text);
       }
     } catch (err) {
       handleAgentError(err);
