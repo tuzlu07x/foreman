@@ -78,6 +78,11 @@ All notable changes to Foreman are documented here. The format follows
     now says it couldn't reach the provider, as the agent step does.
   - The Done summary counted a stored GitHub token as "1 service github".
     Integrations are listed in their own block, not as services.
+- **`?` opens help on every page.** Every status bar says `? help`, but
+  only Home opened it; on Agents, Settings, Logs, Policy, Sessions,
+  Delegations, Inbox and the other pages the key did nothing. It now works
+  everywhere except while a page takes typed text, and on the approval
+  modal (help decides nothing; Esc goes back to the call).
 - **A busy database no longer kills `foreman mcp-stdio` or `foreman start`**
   (#594). When another process held the SQLite lock past the 5 s busy
   timeout, the audit log's background write threw and the process exited
