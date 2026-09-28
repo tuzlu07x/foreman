@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, statSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { isAbsolute } from "node:path";
 import { Command } from "commander";
@@ -26,7 +26,7 @@ import { EventBus, type ForemanEventMap } from "../core/event-bus.js";
 import { foremanSelfOf } from "../core/foreman-mcp-trust.js";
 import { HubRuntime, SharedHub } from "../core/mcp-hub/runtime.js";
 import { SecretStore } from "../core/secret-store.js";
-import { createTokenFile } from "../core/token-file-safety.js";
+import { createTokenFile, readTokenFile } from "../core/token-file-safety.js";
 import { closeDb, getDb } from "../db/client.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import { encodeMessage } from "../mcp/framing.js";
@@ -525,11 +525,11 @@ function removeStale(path: string): void {
 
 function removeOwnToken(path: string, token: string): void {
   try {
-    const st = lstatSync(path);
-    if (!st.isFile()) return;
-    if (readFileSync(path, "utf-8").trim() === token) unlinkSync(path);
+    // Read through one no-follow descriptor (an owned regular file only),
+    // so what is compared is what was checked: no check-then-read race.
+    if (readTokenFile(path, { private: true }).trim() === token) unlinkSync(path);
   } catch {
-    // already gone
+    // already gone, or not ours to remove
   }
 }
 

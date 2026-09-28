@@ -190,7 +190,7 @@ describe("HubRuntime", () => {
 
 describe("SharedHub (the daemon's hub, #616)", () => {
   let dir: string;
-  let built: Array<{ close: Mock<[], Promise<undefined>>; resetSession: Mock<[], void> }>;
+  let built: Array<{ close: Mock<() => Promise<undefined>>; resetSession: Mock<() => void> }>;
   const paths = () => ({
     mcpConfigPath: join(dir, "mcp.yaml"),
     mcpPinsPath: join(dir, "pins.json"),
