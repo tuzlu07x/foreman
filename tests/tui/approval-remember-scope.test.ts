@@ -13,6 +13,14 @@ import { App } from '../../src/tui/app.js'
 
 const strip = (s: string | undefined): string => (s ?? '').replace(/\x1b\[[0-9;]*m/g, '')
 const tick = (ms = 60): Promise<void> => new Promise((r) => setTimeout(r, ms))
+/** Wait until `check` holds, then let the render settle: Ink attaches the
+ *  new key handler in an effect after the frame is written, so a key sent
+ *  in between would reach the previous screen's handler. */
+const until = async (check: () => boolean, ms = 5_000): Promise<void> => {
+  const deadline = Date.now() + ms
+  while (!check() && Date.now() < deadline) await tick(20)
+  await tick(100)
+}
 const ESC = String.fromCharCode(27)
 
 const request = (requestId: string, bucket: ApprovalRequest['riskBucket'] = 'medium'): ApprovalRequest => ({
@@ -59,10 +67,10 @@ describe('approval modal: what "always" remembers (#656)', () => {
 
   it('shows the scope next to the keys, and D waits for y', async () => {
     bus.emit('approval:requested', request('m6'))
-    await tick()
+    await until(() => strip(app.lastFrame()).includes('remembers:'))
     expect(strip(app.lastFrame())).toContain('remembers: qa-bot → read_file, only for "/home/u/.ssh/id_rsa"')
     app.stdin.write('D')
-    await tick()
+    await until(() => strip(app.lastFrame()).includes('Deny always:'))
     const asking = strip(app.lastFrame())
     expect(asking).toContain('Deny always: qa-bot → read_file, only for "/home/u/.ssh/id_rsa"?')
     expect(asking).toContain('[y] yes')
@@ -72,18 +80,18 @@ describe('approval modal: what "always" remembers (#656)', () => {
     await tick()
     expect(resolved).toEqual([])
     app.stdin.write('n')
-    await tick()
+    await until(() => !strip(app.lastFrame()).includes('Deny always:'))
     expect(strip(app.lastFrame())).toContain('eny always')
     expect(strip(app.lastFrame())).not.toContain('Deny always:')
     app.stdin.write('D')
-    await tick()
+    await until(() => strip(app.lastFrame()).includes('Deny always:'))
     app.stdin.write(ESC)
-    await tick()
+    await until(() => !strip(app.lastFrame()).includes('Deny always:'))
     expect(resolved).toEqual([])
     app.stdin.write('D')
-    await tick()
+    await until(() => strip(app.lastFrame()).includes('Deny always:'))
     app.stdin.write('y')
-    await tick()
+    await until(() => resolved.length > 0)
     expect(resolved).toEqual([expect.objectContaining({ requestId: 'm6', decision: 'denied', remember: 'deny' })])
   })
 })

@@ -121,7 +121,10 @@ export function ApprovalModal({
   maxRows,
 }: ApprovalModalProps): JSX.Element {
   const keys = { ...(rememberScope ? { rememberScope } : {}), confirm };
-  const fit = maxRows !== undefined ? { maxHeight: Math.max(10, maxRows) } : {};
+  // On a short terminal the call line keeps its start and its end (the
+  // file name) on one row, instead of wrapping its tail out of the frame.
+  const fit: Fit =
+    maxRows !== undefined ? { maxHeight: Math.max(10, maxRows), compact: maxRows < 30 } : {};
   // Prefer the 3-layer security report when available; fall back to the
   // legacy factor-grouped view for cross-process / pre-#232 requests.
   if (request.securityReport) {
@@ -197,7 +200,7 @@ interface KeyHints {
   confirm: string | null;
 }
 
-type Fit = { maxHeight?: number };
+type Fit = { maxHeight?: number; compact?: boolean };
 
 function ReportModal({
   request,
@@ -228,14 +231,15 @@ function ReportModal({
       borderColor={color}
       paddingX={2}
       paddingY={0}
-      {...fit}
+      {...(fit.maxHeight !== undefined ? { maxHeight: fit.maxHeight } : {})}
     >
       <Box flexDirection="column" flexShrink={1} overflowY="hidden">
+      <Box flexDirection="column" flexShrink={0}>
       {/* Layer 1 — Verdict */}
       <VerdictHeader report={report} color={color} />
 
       <Box marginTop={1}>
-        <Text>{safe(report.oneLineSummary)}</Text>
+        <Text wrap={fit.compact ? "truncate-middle" : "wrap"}>{safe(report.oneLineSummary)}</Text>
       </Box>
 
       {/* Layer 2 — Narrative */}
@@ -259,6 +263,7 @@ function ReportModal({
       </Box>
 
       <RecommendationBlock recommendations={recommendations} />
+      </Box>
       </Box>
 
       <Box flexDirection="column" flexShrink={0}>
@@ -435,9 +440,10 @@ function LegacyModal({
       borderColor={borderColor}
       paddingX={2}
       paddingY={0}
-      {...fit}
+      {...(fit.maxHeight !== undefined ? { maxHeight: fit.maxHeight } : {})}
     >
       <Box flexDirection="column" flexShrink={1} overflowY="hidden">
+      <Box flexDirection="column" flexShrink={0}>
       <LegacyHeader
         bucket={bucket}
         bucketColor={borderColor}
@@ -456,7 +462,7 @@ function LegacyModal({
       </Box>
 
       <Box marginTop={1}>
-        <Text>
+        <Text wrap={fit.compact ? "truncate-middle" : "wrap"}>
           {"    "}
           <Text bold>{safe(request.targetTool ?? "(no tool)")}</Text>
           <Text>({renderArgs(request.args)})</Text>
@@ -501,6 +507,7 @@ function LegacyModal({
       ) : null}
 
       <RecommendationBlock recommendations={recommendations} />
+      </Box>
       </Box>
 
       <Box flexDirection="column" flexShrink={0}>

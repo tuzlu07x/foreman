@@ -15,6 +15,14 @@ import { App } from '../../src/tui/app.js'
 
 const strip = (s: string | undefined): string => (s ?? '').replace(/\x1b\[[0-9;]*m/g, '')
 const tick = (ms = 60): Promise<void> => new Promise((r) => setTimeout(r, ms))
+/** Wait until `check` holds, then let the render settle: Ink attaches the
+ *  new key handler in an effect after the frame is written, so a key sent
+ *  in between would reach the previous screen's handler. */
+const until = async (check: () => boolean, ms = 5_000): Promise<void> => {
+  const deadline = Date.now() + ms
+  while (!check() && Date.now() < deadline) await tick(20)
+  await tick(100)
+}
 
 const request = (requestId: string, bucket: ApprovalRequest['riskBucket'], args: unknown = { cmd: 'rm -rf /' }): ApprovalRequest => ({
   requestId,
@@ -60,9 +68,9 @@ describe('allowing a risky call takes a second key (#656)', () => {
 
   it.each([['critical'], ['high']] as const)('%s: `a` asks, `y` allows', async (bucket) => {
     bus.emit('approval:requested', request('r1', bucket))
-    await tick()
+    await until(() => strip(app.lastFrame()).includes('llow once'))
     app.stdin.write('a')
-    await tick()
+    await until(() => strip(app.lastFrame()).includes('Allow this'))
     expect(resolved).toEqual([])
     expect(strip(app.lastFrame())).toContain(`Allow this ${bucket.toUpperCase()}-risk call`)
     // A second stray `a` does nothing either.
@@ -70,55 +78,55 @@ describe('allowing a risky call takes a second key (#656)', () => {
     await tick()
     expect(resolved).toEqual([])
     app.stdin.write('y')
-    await tick()
+    await until(() => resolved.length > 0)
     expect(resolved).toEqual([expect.objectContaining({ requestId: 'r1', decision: 'allowed' })])
   })
 
   it('`A` on a critical call asks too, and `n` goes back without deciding', async () => {
     bus.emit('approval:requested', request('r2', 'critical'))
-    await tick()
+    await until(() => strip(app.lastFrame()).includes('llow once'))
     app.stdin.write('A')
-    await tick()
+    await until(() => strip(app.lastFrame()).includes('Always allow this'))
     expect(strip(app.lastFrame())).toContain('Always allow this CRITICAL-risk call')
     app.stdin.write('n')
-    await tick()
+    await until(() => strip(app.lastFrame()).includes('llow once'))
     expect(resolved).toEqual([])
     app.stdin.write('d')
-    await tick()
+    await until(() => resolved.length > 0)
     expect(resolved).toEqual([expect.objectContaining({ requestId: 'r2', decision: 'denied' })])
   })
 
   it('from the inspector too', async () => {
     bus.emit('approval:requested', request('r3', 'critical'))
-    await tick()
+    await until(() => strip(app.lastFrame()).includes('llow once'))
     app.stdin.write('i')
-    await tick()
+    await until(() => strip(app.lastFrame()).includes('Inspecting'))
     app.stdin.write('a')
-    await tick()
+    await until(() => strip(app.lastFrame()).includes('Allow this'))
     expect(resolved).toEqual([])
     app.stdin.write('y')
-    await tick()
+    await until(() => resolved.length > 0)
     expect(resolved).toEqual([expect.objectContaining({ requestId: 'r3', decision: 'allowed' })])
   })
 
   it('low and medium still take one key', async () => {
     bus.emit('approval:requested', request('r4', 'medium', { cmd: 'ls' }))
-    await tick()
+    await until(() => strip(app.lastFrame()).includes('llow once'))
     app.stdin.write('a')
-    await tick()
+    await until(() => resolved.length > 0)
     expect(resolved).toEqual([expect.objectContaining({ requestId: 'r4', decision: 'allowed' })])
   })
 
   it('page hotkeys do nothing while an approval is on screen', async () => {
     bus.emit('approval:requested', request('r5', 'medium', { cmd: 'ls' }))
-    await tick()
+    await until(() => strip(app.lastFrame()).includes('llow once'))
     for (const key of ['l', 'p', 'k', 's', 'x', 'r', 'e', '\t', 'n']) {
       app.stdin.write(key)
       await tick(20)
     }
     expect(resolved).toEqual([])
     app.stdin.write('d')
-    await tick()
+    await until(() => resolved.length > 0)
     expect(resolved).toEqual([expect.objectContaining({ requestId: 'r5', decision: 'denied' })])
     // Still on the dashboard: none of those keys switched pages.
     expect(strip(app.lastFrame())).toContain('Activity')
@@ -137,11 +145,13 @@ describe('allowing a risky call takes a second key (#656)', () => {
       })),
     })
     bus.emit('approval:requested', request('r7', 'medium', { cmd: 'ls' }))
-    await tick()
+    await until(() => strip(app.lastFrame()).includes('Approval 1 of 2'))
     const frame = strip(app.lastFrame())
     const lines = frame.split('\n')
     expect(lines.length).toBeLessThanOrEqual(24)
     expect(frame).toContain('Approval 1 of 2')
+    // The call line keeps the end of the path (the file) on screen.
+    expect(frame).toContain('secret.env")')
     expect(frame).toMatch(/llow once/)
     expect(frame).toMatch(/s left/)
     // The header (first line of the app) is still the first thing shown.
