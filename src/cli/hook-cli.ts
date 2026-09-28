@@ -200,6 +200,7 @@ export async function runHook(agentId: string, timeoutMs: number): Promise<0 | 2
       bus,
       approval,
       policyPath: paths.policyPath,
+      onPolicyError: (message) => process.stderr.write(`${dim("foreman hook:")} ${message}\n`),
     });
     const result = await mediator.handleRequest({
       sourceAgent: normalised.sourceAgent,

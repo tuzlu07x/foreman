@@ -181,6 +181,7 @@ function bootServices(): Services {
       bus,
       approval,
       policyPath: paths.policyPath,
+      onPolicyError: warn,
       secretStore,
     });
   policyEngine = policy;

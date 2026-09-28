@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { and, eq, gte, inArray, like, sql } from "drizzle-orm";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
@@ -242,6 +242,14 @@ export class PolicyEngine {
   // accessor so YAML reload applies without a restart.
   private sessionLimits: SessionLimits = { ...DEFAULT_SESSION_LIMITS };
   private untrustedMode: UntrustedMode = DEFAULT_UNTRUSTED_MODE;
+  /** The policy.yaml this engine follows (#656), see watchFile(). */
+  private watched: {
+    path: string;
+    stamp: string | null;
+    checkedAt: number;
+    reportedError: string | null;
+    onError: (message: string) => void;
+  } | null = null;
 
   constructor(
     private readonly db: ForemanDb,
@@ -249,12 +257,62 @@ export class PolicyEngine {
   ) {}
 
   loadFromYaml(path: string): { rulesAdded: number } {
-    return this.loadYamlText(readFileSync(path, "utf-8"));
+    const result = this.loadYamlText(readFileSync(path, "utf-8"));
+    if (this.watched?.path === path) {
+      this.watched.stamp = fileStamp(path);
+      this.watched.reportedError = null;
+    }
+    return result;
   }
 
-  // Replaces every previously-yaml-loaded rule with the doc's contents.
-  // The swap runs inside a single transaction so concurrent evaluators
-  // never observe the empty-policy window mid-reload.
+  /**
+   * Follow `path` for the life of this process (#656): load it now, then
+   * re-read it whenever it changes (one `stat` per evaluation, at most
+   * every WATCH_INTERVAL_MS), so `foreman start` and every running
+   * `foreman mcp-stdio` apply an edit on their next call. A file that
+   * doesn't parse is not applied: the last good policy stays in force (the
+   * rules already in the database) and `onError` hears about it once per
+   * broken version. Never throws.
+   */
+  watchFile(path: string, onError: (message: string) => void = () => {}): void {
+    this.watched = { path, stamp: null, checkedAt: 0, reportedError: null, onError };
+    this.refreshWatched(true);
+  }
+
+  private refreshWatched(force = false): void {
+    const w = this.watched;
+    if (!w) return;
+    const now = Date.now();
+    if (!force && now - w.checkedAt < WATCH_INTERVAL_MS) return;
+    w.checkedAt = now;
+    const stamp = fileStamp(w.path);
+    if (stamp === w.stamp) return;
+    w.stamp = stamp;
+    if (stamp === null) return; // deleted: keep what is loaded
+    try {
+      this.loadYamlText(readFileSync(w.path, "utf-8"));
+      w.reportedError = null;
+    } catch (err) {
+      const message =
+        `${w.path} could not be applied (${describePolicyError(err)}); ` +
+        "the last good policy stays in force until the file is fixed";
+      if (w.reportedError !== message) {
+        w.reportedError = message;
+        try {
+          w.onError(message);
+        } catch {
+          // reporting is best-effort; enforcement must not depend on it
+        }
+      }
+    }
+  }
+
+  // Replaces the yaml-loaded rules with the doc's contents. Rules that are
+  // unchanged keep their row, and so their id (#656): audit rows such as
+  // `allowed (policy:5)` keep pointing at the rule that decided them, in
+  // every process and across restarts. Only removed rules are deleted and
+  // only new ones inserted, inside one transaction so concurrent
+  // evaluators never observe a partial policy.
   loadYamlText(text: string): { rulesAdded: number } {
     const parsed = parseYaml(text);
     const doc = parsed === null ? {} : PolicyDocSchema.parse(parsed);
@@ -323,10 +381,20 @@ export class PolicyEngine {
     }
 
     this.db.transaction((tx) => {
-      tx.delete(policies).where(eq(policies.createdBy, "user")).run();
-      if (rows.length > 0) {
-        tx.insert(policies).values(rows).run();
+      const existing = new Map<string, number[]>();
+      for (const row of tx.select().from(policies).where(eq(policies.createdBy, "user")).orderBy(policies.id).all()) {
+        const key = ruleKey(row);
+        existing.set(key, [...(existing.get(key) ?? []), row.id]);
       }
+      const fresh: (typeof policies.$inferInsert)[] = [];
+      for (const row of rows) {
+        const ids = existing.get(ruleKey(row));
+        if (ids && ids.length > 0) ids.shift();
+        else fresh.push(row);
+      }
+      const stale = [...existing.values()].flat();
+      if (stale.length > 0) tx.delete(policies).where(inArray(policies.id, stale)).run();
+      if (fresh.length > 0) tx.insert(policies).values(fresh).run();
     });
     return { rulesAdded: rows.length };
   }
@@ -337,6 +405,7 @@ export class PolicyEngine {
     sourceAgent: string,
     secretName: string,
   ): Evaluation & { decidedBy: string } {
+    this.refreshWatched();
     const target = secretTarget(secretName);
     const candidates = this.db
       .select()
@@ -399,6 +468,7 @@ export class PolicyEngine {
   }
 
   evaluate(req: EvaluateRequest): Evaluation {
+    this.refreshWatched();
     const target = this.requestTarget(req);
     if (!target) return { decision: "ask" };
 
@@ -446,6 +516,7 @@ export class PolicyEngine {
   }
 
   getUntrustedMode(): UntrustedMode {
+    this.refreshWatched();
     return this.untrustedMode;
   }
 
@@ -572,6 +643,7 @@ export class PolicyEngine {
   }
 
   getBucketOverrides(): BucketOverrides {
+    this.refreshWatched();
     return { ...this.bucketOverrides };
   }
 
@@ -580,6 +652,7 @@ export class PolicyEngine {
   // takes effect without a process restart. Returns a shallow copy so the
   // caller can't mutate engine state.
   getResponsibilityPolicies(): ResponsibilityPolicy[] {
+    this.refreshWatched();
     return this.responsibilityPolicies.map((p) => ({ ...p }));
   }
 
@@ -589,6 +662,7 @@ export class PolicyEngine {
    *  YAML reload takes effect mid-session. Returns a shallow copy so
    *  callers can't mutate engine state by accident. */
   getSessionLimits(): SessionLimits {
+    this.refreshWatched();
     return { ...this.sessionLimits };
   }
 
@@ -804,6 +878,35 @@ export class PolicyEngine {
       enabled: 1,
     };
   }
+}
+
+/** How often a watched policy.yaml is stat'ed at most (#656). */
+const WATCH_INTERVAL_MS = 250;
+
+/** Changes whenever the file's content can have changed. */
+function fileStamp(path: string): string | null {
+  try {
+    const st = statSync(path);
+    return `${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Identity of a yaml rule: same source, target, effect and conditions. */
+function ruleKey(row: { sourceAgent: string; target: string; effect: string; conditions?: string | null }): string {
+  return JSON.stringify([row.sourceAgent, row.target, row.effect, row.conditions ?? null]);
+}
+
+function describePolicyError(err: unknown): string {
+  if (err instanceof z.ZodError) {
+    return err.issues
+      .slice(0, 3)
+      .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+      .join("; ");
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return message.split("\n")[0]!.slice(0, 200);
 }
 
 export function secretTarget(secretName: string): string {

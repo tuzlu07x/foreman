@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import type { ForemanDb } from "../db/client.js";
 import { claimedAgentOf } from "./agent-identity.js";
 import type { ApprovalService } from "./approval.js";
@@ -26,8 +25,11 @@ export interface MediatorStackOptions {
   db: ForemanDb;
   bus: EventBus<ForemanEventMap>;
   approval: ApprovalService;
-  /** policy.yaml to load; skipped when absent on disk. */
+  /** policy.yaml to follow: loaded now and re-read when it changes
+   *  (#656). A version that doesn't parse leaves the last good policy in
+   *  force and is reported once through `onPolicyError`. */
   policyPath?: string | null;
+  onPolicyError?: (message: string) => void;
   secretStore?: SecretStore;
   verifier?: LlmVerifier;
 }
@@ -54,9 +56,7 @@ export function createMediatorStack(opts: MediatorStackOptions): MediatorStack {
   const { db, bus } = opts;
   const registry = new RegistryService(db, bus);
   const policy = new PolicyEngine(db, bus);
-  if (opts.policyPath && existsSync(opts.policyPath)) {
-    policy.loadFromYaml(opts.policyPath);
-  }
+  if (opts.policyPath) policy.watchFile(opts.policyPath, opts.onPolicyError);
   const risk = new RiskScorer(db, undefined, {
     bucketOverrides: () => policy.getBucketOverrides(),
     getAgentResponsibility: responsibilityLookup(registry),

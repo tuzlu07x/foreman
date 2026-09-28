@@ -81,6 +81,7 @@ export const wrapCommand = new Command("wrap")
       bus,
       approval,
       policyPath: options.policy ?? paths.policyPath,
+      onPolicyError: (message) => process.stderr.write(`foreman wrap: ${message}\n`),
       secretStore: new SecretStore(db, masterKey),
     });
 
