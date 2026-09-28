@@ -219,7 +219,7 @@ If the agent's registry entry declares an `identity_path` (e.g. `~/.hermes/SOUL.
 foreman identity push
 ```
 
-The push is best-effort — some runtimes (notably Hermes' core LLM prompt) weight their built-in system prompt above any user-supplied SOUL.md. The push still gets you the strongest available identity hook for that runtime; whether the upstream LLM respects it is upstream's call. See [`docs/qa-report-v0.1.0.md`](qa-report-v0.1.0.md) for the original Hermes identity finding.
+The push is best-effort — some runtimes (notably Hermes' core LLM prompt) weight their built-in system prompt above any user-supplied SOUL.md. The push still gets you the strongest available identity hook for that runtime; whether the upstream LLM respects it is upstream's call. See the archived [v0.1.0 QA report](archive/qa-report-v0.1.0.md) for the original Hermes identity finding.
 
 ## Secret projection (#222 / #223)
 
