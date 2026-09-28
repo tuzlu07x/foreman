@@ -112,11 +112,20 @@ Eleven patterns subtract `-10` when they'd otherwise trigger a false positive �
 
 The `shell_command` rule fires when the agent invokes a shell-y tool name (`shell_exec`, `execute_code`, `run_command`, `bash`, `sh`, `zsh`, `exec`) with a recognisable command in args. The command string is tokenised via [`shell-quote`](https://www.npmjs.com/package/shell-quote) so quoted strings (`echo "rm -rf /"`) don't false-positive; some matchers (catastrophic rm targets, fork bomb, curl-pipe-bash) fall back to a raw-regex check after the tokeniser confirms the dangerous command is unquoted.
 
+Every rule looks at the whole line **and at each command the line runs** (#698), so the rules score what a command does rather than how it is spelled:
+
+- the line is split on `;`, `&&`, `||`, `|`, `&` and newlines;
+- leading `VAR=value` assignments and wrappers (`sudo`, `doas`, `env`, `nice`, `nohup`, `time`, `timeout`, `stdbuf`, `ionice`, `command`, `exec`, `xargs`) are removed; each command is checked both as written and unwrapped;
+- scripts passed to `sh`/`bash`/`zsh`/`dash`/`ksh -c "…"`, `su -c "…"` and `eval "…"` are analysed as commands (up to 3 levels deep);
+- the command `find … -exec`/`-execdir`/`-ok` runs is analysed too;
+- string literals of an interpreter one-liner (`python -c`, `node -e`, `perl -e`, `ruby -e`, `php -r`, `deno eval`) are analysed as the commands they could shell out to (`os.system("rm -rf x")`, `subprocess.run(["rm", "-rf", "x"])`).
+
 ### 6 categories
 
 | Category | Sample rules | Points |
 |---|---|---|
-| **Destructive** | `shell_rm_rf_catastrophic` (rm -rf /, ~, $HOME, /usr, /etc, /var, /boot), `shell_dd_to_disk`, `shell_mkfs_on_disk`, `shell_fork_bomb` | 60–85 |
+| **Destructive** | `shell_rm_rf_catastrophic` (recursive rm of /, ~, $HOME, /usr, /etc, /var, /boot), `shell_rm_rf_general` (`rm -r` in any spelling: `-rf`, `-r -f`, `--recursive`, flags after operands), `shell_find_delete` (`find -delete`, `-exec rm`, `… \| xargs rm`), `shell_script_delete` (file deletes in a python/node/perl/ruby/php/deno one-liner), `shell_decode_pipe_shell` (`base64 -d` / `xxd -r` / `openssl -d` piped into a shell), `shell_dd_to_disk`, `shell_mkfs_on_disk`, `shell_fork_bomb` | 60–85 |
+| **Destructive git** | `shell_git_force_push` (`--force`, `-f`, `--force-with-lease`, `+refspec`, `--mirror`), `shell_git_history_rewrite` (`filter-branch`, `filter-repo`), `shell_git_push_delete` (`--delete`, `:branch`), `shell_git_reset_hard`, `shell_git_clean` (`clean -f`) | 40–50 |
 | **Privilege escalation** | `shell_sudo`, `shell_doas`, `shell_chmod_setuid` (+s or 4XXX), `shell_chown_to_root`, `shell_visudo`, `shell_sudoers_write`, `shell_usermod_sudo_group`, `shell_su_root` | 40–50 |
 | **Persistence** | `shell_persist_crontab`, `shell_persist_bashrc` / `_zshrc` / `_profile`, `shell_persist_cron_dir`, `shell_persist_systemctl_enable`, `shell_persist_launchctl_load`, `shell_persist_launchagent_dir` (macOS) | 35 |
 | **Reverse shell / exfil** | `shell_revsh_nc_e`, `shell_revsh_bash_tcp` (`bash -i >& /dev/tcp/…`), `shell_revsh_curl_pipe_bash`, `shell_revsh_wget_pipe_bash`, `shell_revsh_ssh_reverse_port`, `shell_revsh_python_socket` / `_perl_socket` / `_ruby_socket` | 50–60 |
@@ -125,23 +134,25 @@ The `shell_command` rule fires when the agent invokes a shell-y tool name (`shel
 
 ### Catastrophic targets
 
-`shell_rm_rf_catastrophic` (+85, lands `critical` bucket on first match) fires when an rm command with -rf-style flags targets one of: `/`, `/*`, `~`, `~/`, `~/*`, `$HOME`, `${HOME}`, `/usr`, `/etc`, `/var`, `/boot`. Strips a leading `sudo` / `doas` wrapper so `sudo rm -rf /` is equivalent.
+`shell_rm_rf_catastrophic` (+85, lands `critical` bucket on first match) fires when a recursive rm (any spelling of the flags) targets one of: `/`, `/*`, `~`, `~/`, `~/*`, `$HOME`, `${HOME}`, `/usr`, `/etc`, `/var`, `/boot`. Strips a leading `sudo` / `doas` wrapper so `sudo rm -rf /` is equivalent.
 
 ### Safe-list (-10 each)
 
 - `rm` under `/tmp` or `/var/tmp` is conventional cleanup
 - `foreman *` (Foreman is the guardian)
 - `npm install` / `yarn add` / `pnpm i`
-- `git *`
+- `git *` (not when a destructive-git rule fired)
 - `brew *`
 
 Safe-list factors only emit when at least one positive shell factor would have fired — so `git status` produces no factors at all, but `rm -rf /tmp/cache` produces `shell_rm_rf_general` (+60) + `shell_safe_tmp_rm` (-10) = net +50.
 
 ### Known gaps
 
-- `bash -c "<inner cmd>"` — the inner command is a single argv token, so the matchers don't recurse into it. Detection happens at the outer level only.
+- Code that reaches the shell later: a script written to a file and then run (`cat > x.sh <<EOF … EOF; bash x.sh`), a command held in a variable (`$CMD`), heredoc input to an interpreter (`python3 - <<EOF`). The file-write and the run are separate calls; only the run is seen, as `bash x.sh`.
+- Encodings other than a decode piped straight into a shell (`… | base64 -d > x.sh; sh x.sh`, `$(echo … | base64 -d)`).
 - Windows / PowerShell analogues — tracked via [LOLBAS](https://lolbas-project.github.io/) for a later release.
-- Encoded payloads — `echo "cm0gLXJmIC8K" | base64 -d | sh` would bypass the rule. C5 (prompt injection) and C8 (LLM verification) are the planned defenses.
+
+C5 (prompt injection) and C8 (LLM verification) are the planned second line for these.
 
 ### Sources
 
