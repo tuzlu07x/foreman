@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { resolveDirs } from '../../src/utils/config.js'
 import { stubInstallers } from '../support/stub-installers.js'
 
 const FM_BIN = resolve(dirname(fileURLToPath(import.meta.url)), '../..', 'dist/cli/index.js')
@@ -60,15 +61,17 @@ describe('doctor on a fresh box with FOREMAN_HOME=~/.foreman', () => {
   })
 
   it('names the files already in the new layout, without doubling paths', () => {
-    // A real legacy home next to a live XDG layout.
+    // A real legacy home next to a live new layout (XDG on Linux,
+    // ~/Library/Application Support on macOS, which ignores XDG_*).
     delete env.FOREMAN_HOME
     mkdirSync(join(home(), '.foreman'), { recursive: true })
     writeFileSync(join(home(), '.foreman', 'policy.yaml'), 'rules: []\n')
-    mkdirSync(join(dir, 'xdgc', 'foreman'), { recursive: true })
-    writeFileSync(join(dir, 'xdgc', 'foreman', 'policy.yaml'), 'rules: []\n')
+    const { configDir } = resolveDirs({ homeDir: home(), env })
+    mkdirSync(configDir, { recursive: true })
+    writeFileSync(join(configDir, 'policy.yaml'), 'rules: []\n')
     const out = run('migrate-config')
     expect(out.status).toBe(1)
-    expect(out.stderr).toContain(`the new layout already has data: ${join(dir, 'xdgc', 'foreman', 'policy.yaml')}`)
+    expect(out.stderr).toContain(`the new layout already has data: ${join(configDir, 'policy.yaml')}`)
     expect(out.stderr).not.toMatch(/foreman\/\//)
   })
 })
