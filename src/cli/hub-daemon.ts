@@ -120,18 +120,18 @@ export async function startHubDaemon(opts: HubDaemonOptions): Promise<HubDaemon>
   removeStale(socketPath);
   removeStale(tokenPath);
 
-  const token = randomBytes(32).toString("base64url");
-  createTokenFile(tokenPath, `${token}\n`);
-
   // What every session shares. The bus is private, as a separate
   // `foreman mcp-stdio` process's would be: the TUI learns about these
   // approvals through the database (ApprovalBridge), exactly once.
   const db = getDb();
-  const bus = new EventBus<ForemanEventMap>();
-  const audit = new AuditLogger(db, bus);
   const masterKey = loadOrCreateSecretsMasterKey();
   const secretStore = new SecretStore(db, masterKey);
+  const bus = new EventBus<ForemanEventMap>();
+  const audit = new AuditLogger(db, bus);
   const base: ServiceBase = { db, bus, audit, masterKey, secretStore };
+
+  const token = randomBytes(32).toString("base64url");
+  createTokenFile(tokenPath, `${token}\n`);
   const hub = new SharedHub({
     paths: { mcpConfigPath: opts.paths.mcpConfigPath, mcpPinsPath: opts.paths.mcpPinsPath },
     secretStore,
@@ -273,7 +273,6 @@ function serveConnection(conn: Conn, ctx: ServeContext): void {
       return refuse("unknown role");
     }
   };
-
 
   // Only an MCP session may half-close (the agent closed stdin); anything
   // else that does is dropped.

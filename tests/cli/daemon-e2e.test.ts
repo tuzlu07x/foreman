@@ -55,6 +55,7 @@ class Session {
   private buf = "";
   private waiters = new Map<number, (r: Rpc) => void>();
   stderr = "";
+  readonly notifications: string[] = [];
   constructor(readonly child: ChildProcessWithoutNullStreams) {
     child.stderr.on("data", (d: Buffer) => {
       this.stderr += d.toString();
@@ -66,6 +67,7 @@ class Session {
         const msg = JSON.parse(this.buf.slice(0, nl)) as Rpc;
         this.buf = this.buf.slice(nl + 1);
         if (msg.id !== undefined) this.waiters.get(msg.id)?.(msg);
+        else if (msg.method) this.notifications.push(msg.method);
       }
     });
   }
@@ -239,6 +241,14 @@ describe("the Foreman daemon (#616)", () => {
       expect(viaDaemon.map((r) => r.stderr.replace(/\d+\/100/g, "N"))).toEqual(
         inProcess.map((r) => r.stderr.replace(/\d+\/100/g, "N")),
       );
+      // `foreman hook` (the full CLI, for standalone binaries) asks it too.
+      const viaCli = spawnSync("node", [FM_BIN, "hook", "claude-code"], {
+        env,
+        input: JSON.stringify(bash("ls -la", "d")),
+        encoding: "utf-8",
+        timeout: 20_000,
+      });
+      expect(viaCli.status).toBe(0);
     } finally {
       chmodSync(dbPath, 0o600);
     }
@@ -248,8 +258,9 @@ describe("the Foreman daemon (#616)", () => {
       .prepare("SELECT decision, decided_by AS decidedBy FROM requests WHERE source_agent = 'claude-code' ORDER BY created_at")
       .all() as Array<{ decision: string; decidedBy: string }>;
     db.close();
-    expect(rows).toHaveLength(6);
-    expect(rows.slice(3)).toEqual(rows.slice(0, 3));
+    expect(rows).toHaveLength(7);
+    expect(rows.slice(3, 6)).toEqual(rows.slice(0, 3));
+    expect(rows[6]).toEqual(rows[0]);
   }, 60_000);
 
   it("blocks the call (exit 2) when the daemon dies while the call waits for approval", async () => {
@@ -416,6 +427,41 @@ describe("the Foreman daemon (#616)", () => {
       expect(JSON.stringify(borrowed.call)).not.toContain('"text":"hi"');
     }
   }, 90_000);
+
+  it("applies confirm rules, hub-only secrets and live reload through the daemon", async () => {
+    expect(
+      spawnSync("node", [FM_BIN, "secrets", "add", "demo-token", "--value", "hunter2hunter2"], {
+        env: { ...env, FOREMAN_NO_DAEMON: "1" },
+        encoding: "utf-8",
+      }).status,
+    ).toBe(0);
+    writeMcpYaml([
+      "    env:",
+      "      DEMO_TOKEN: ${secret:demo-token}",
+      // Managed as an integration: its credential is for the hub only.
+      '    integration: { id: github, variant: official, access_level: read-only, created_at: "2026-09-28T00:00:00Z", updated_at: "2026-09-28T00:00:00Z" }',
+    ]);
+    writeFileSync(
+      join(home, "mcp.yaml"),
+      readFileSync(join(home, "mcp.yaml"), "utf-8").replace("      allow: [echo]", "      allow: [echo]\n      confirm: [echo]"),
+    );
+    const token = tokenFor("claude-code");
+    await startDaemon();
+    const s = mcp("claude-code", token);
+    await s.call(1, "initialize");
+    // The integration's credential is for the hub only, whatever policy says.
+    const secret = await s.call(2, "tools/call", { name: "secrets/get", arguments: { name: "demo-token" } });
+    expect(secret.error?.message).toBe("Denied by reserved:integration");
+    // A confirm tool waits for a person; nobody answers within 1 s.
+    const confirm = await s.call(3, "tools/call", { name: "demo__echo", arguments: { text: "merge it" } });
+    expect(confirm.error?.message).toContain("Denied by approval-timeout");
+    // Disabling the server reaches the connected agent.
+    expect(spawnSync("node", [FM_BIN, "mcp", "disable", "demo"], { env, encoding: "utf-8" }).status).toBe(0);
+    await until(() => s.notifications.includes("notifications/tools/list_changed"), 8_000);
+    expect((await s.call(4, "tools/list")).result!.tools!.map((t) => t.name)).not.toContain("demo__echo");
+    expect(s.stderr).not.toMatch(/not using the Foreman daemon|serving this session in this process/);
+    await s.close();
+  }, 60_000);
 
   it("starts each upstream server once for every agent", async () => {
     const claude = tokenFor("claude-code");

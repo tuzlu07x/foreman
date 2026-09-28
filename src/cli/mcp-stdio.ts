@@ -128,8 +128,18 @@ export const mcpStdioCommand = new Command("mcp-stdio")
       stateDir: paths.stateDir,
       stdin,
       approvalTimeoutMs: mcpApprovalTimeoutMs(),
-      onLost: (state) =>
-        serveInProcess(options.source, token, stdin, state),
+      onLost: (state) => {
+        try {
+          serveInProcess(options.source, token, stdin, state);
+        } catch (err) {
+          // e.g. a policy.yaml that no longer loads: stop, as a fresh
+          // start would, rather than serve on anything else.
+          warn(
+            `could not continue in this process: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          process.exit(1);
+        }
+      },
     });
     if (!viaDaemon) {
       serveInProcess(options.source, token, stdin, {
