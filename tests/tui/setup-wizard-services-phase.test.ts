@@ -6,6 +6,7 @@ import {
   consumingAgentsFor,
 } from "../../src/tui/setup-wizard.js";
 import type { ServiceEntry } from "../../src/core/registry-catalog.js";
+import { servicesPreChecked } from "../../src/tui/setup-wizard/services-logic.js";
 
 function service(overrides: Partial<ServiceEntry>): ServiceEntry {
   return {
@@ -219,3 +220,21 @@ describe("consumingAgentsFor", () => {
     ]);
   });
 });
+
+// QA #657 L8 — a resumed setup starts with nothing saved this run.
+describe('services step on a resumed setup', () => {
+  it('keeps a stored secret on empty input instead of calling it skipped', () => {
+    const r = applyServiceValueSubmit({ serviceId: 'telegram-bot-token', value: '', currentIdx: 0, totalSelected: 2, alreadyStored: true })
+    expect(r).toMatchObject({ shouldSave: false, keepStored: true, warning: null, nextPhase: 'values', nextIdx: 1 })
+  })
+
+  it('pre-checks the session pick and the services already stored', () => {
+    const catalog = [
+      { id: 'telegram', secret_name: 'telegram-bot-token' },
+      { id: 'github', secret_name: 'github-pat' },
+      { id: 'slack', secret_name: 'slack-bot-token' },
+    ] as never
+    const store = { exists: (n: string) => n === 'github-pat' }
+    expect(servicesPreChecked(['slack'], catalog, store)).toEqual(['github', 'slack'])
+  })
+})

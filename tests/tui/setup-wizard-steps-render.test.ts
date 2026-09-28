@@ -676,6 +676,25 @@ describe('services step', () => {
     expect(w.frame()).not.toContain('fake-telegram-token-000')
   })
 
+  // QA #657 L8 — on a resumed setup the services step showed stored
+  // services as unconfigured, "(no services configured", while Done then
+  // counted them.
+  it('shows services already stored as configured, and Enter keeps them', async () => {
+    const w = await mount('services', {
+      secrets: { 'telegram-bot-token': '123456789:AAHfake_token-abcdefghijklmnopqrstuvwxyz' },
+    })
+    await w.until('Services ▸ pick which to configure')
+    expect(w.frame()).toMatch(/Telegram — .* [✔√]/)
+    await w.press(ENTER, 'prompt 1 of 2')
+    expect(w.frame()).toContain('already stored — Enter on empty input keeps it')
+    await w.press(ENTER, 'telegram-chat-id')
+    await w.press(ENTER, 'Services ▸ summary')
+    expect(w.frame()).toContain('✓ Wired 1 service')
+    expect(w.frame()).toContain('• telegram-bot-token')
+    expect(w.frame()).not.toContain('no services configured')
+    expect(w.secretStore.get('telegram-bot-token')).toBe('123456789:AAHfake_token-abcdefghijklmnopqrstuvwxyz')
+  })
+
   // QA #657 L7 — `notatoken` was taken as a Telegram token without a word.
   it('warns (and still saves) when a token or chat id has the wrong shape', async () => {
     const w = await mount('services')
