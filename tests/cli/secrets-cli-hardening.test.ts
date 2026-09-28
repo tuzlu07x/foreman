@@ -40,6 +40,24 @@ describe('foreman secrets — names, --value and reveal audit (#656)', () => {
     },
   )
 
+  // QA leftover: `secrets list` showed agent identity token names (the TUI
+  // Keys page hides them) and `secrets remove` deleted one.
+  it('never lists or removes an agent identity token', () => {
+    const tokenFile = join(home, 'codex.token')
+    expect(run(['agent', 'add', 'codex', '--skip-config', '--token-out', tokenFile]).status).toBe(0)
+    run(['secrets', 'add', 'my-key'], 'value\n')
+    expect(run(['secrets', 'list']).stdout).not.toContain('foreman-agent-token')
+    const listed = JSON.parse(run(['secrets', 'list', '--json']).stdout) as Array<{ name: string }>
+    expect(listed.map((r) => r.name)).toEqual(['my-key'])
+    const removed = run(['secrets', 'remove', 'foreman-agent-token:codex', '--yes'])
+    expect(removed.status).toBe(1)
+    expect(removed.stderr).toMatch(/is an agent identity token/)
+    const db = new Database(join(home, 'foreman.db'), { readonly: true })
+    const row = db.prepare("SELECT name FROM secrets WHERE name = 'foreman-agent-token:codex'").get()
+    db.close()
+    expect(row).toBeDefined()
+  })
+
   it('accepts the documented charset, from stdin, without a history warning', () => {
     const r = run(['secrets', 'add', 'my.api_key-2'], 'v1\n')
     expect(r.status).toBe(0)

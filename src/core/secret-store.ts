@@ -173,6 +173,17 @@ export class SecretStore {
   }
 
   remove(name: string): void {
+    if (isReservedSecretName(name)) throw new ReservedSecretError(name);
+    this.delete(name);
+  }
+
+  /** Delete a reserved secret (only the agent-token module revokes one). */
+  removeReserved(name: string): void {
+    if (!isReservedSecretName(name)) throw new Error(`"${name}" is not a reserved secret name`);
+    this.delete(name);
+  }
+
+  private delete(name: string): void {
     const row = this.db
       .select()
       .from(secrets)

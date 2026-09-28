@@ -70,7 +70,7 @@ const TOKEN_BYTES = 32;
 
 export type AgentTokenStore = Pick<
   SecretStore,
-  "getReserved" | "putReserved" | "exists" | "remove" | "list" | "meta"
+  "getReserved" | "putReserved" | "exists" | "removeReserved" | "list" | "meta"
 >;
 
 export class InvalidTokenAgentIdError extends Error {
@@ -122,7 +122,7 @@ export function ensureAgentToken(store: AgentTokenStore, agentId: string): strin
 export function revokeAgentToken(store: AgentTokenStore, agentId: string): boolean {
   const name = agentTokenSecretName(agentId);
   if (!store.exists(name)) return false;
-  store.remove(name);
+  store.removeReserved(name);
   return true;
 }
 
