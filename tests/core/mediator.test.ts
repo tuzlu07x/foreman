@@ -121,6 +121,35 @@ describe('MediatorService — unit', () => {
     expect(blocked.decidedBy).toBe('agent:blocked')
   })
 
+  describe('remembered answers cover the call, not the whole tool (#656)', () => {
+    const call = (id: number, path: string) => ({
+      sourceAgent: 'qa-bot',
+      targetTool: 'read_file',
+      message: callMessage(id, 'read_file', { path }),
+    })
+
+    it('"deny always" on one file denies that file only', async () => {
+      const denyAlways = vi.fn(async (): Promise<ApprovalDecision> => ({ decision: 'denied', remember: 'deny', via: 'tui' }))
+      const mediator = new MediatorService({ registry, policy, risk, approval: { request: denyAlways }, bus })
+      await mediator.handleRequest(call(1, '/home/u/.ssh/id_rsa'))
+      const again = await mediator.handleRequest(call(2, '/home/u/.ssh/id_rsa'))
+      expect(again.decidedBy).toMatch(/^policy:\d+$/)
+      const readme = await mediator.handleRequest(call(3, 'README.md'))
+      expect(readme.decidedBy).not.toMatch(/^policy:/)
+      expect(denyAlways).toHaveBeenCalledTimes(2)
+    })
+
+    it('"always allow" is scoped the same way', async () => {
+      const allowAlways = vi.fn(async (): Promise<ApprovalDecision> => ({ decision: 'allowed', remember: 'allow', via: 'tui' }))
+      policy.loadYamlText('rules:\n  - source: "*"\n    target: tool:read_file\n    effect: ask\n')
+      const mediator = new MediatorService({ registry, policy, risk, approval: { request: allowAlways }, bus })
+      await mediator.handleRequest(call(1, 'docs/a.md'))
+      expect((await mediator.handleRequest(call(2, 'docs/a.md'))).decidedBy).toMatch(/^policy:\d+$/)
+      await mediator.handleRequest(call(3, 'docs/b.md'))
+      expect(allowAlways).toHaveBeenCalledTimes(2)
+    })
+  })
+
   describe('requireHuman (#656)', () => {
     const factor = { rule: 'relayed_command', category: 'structural' as const, points: 60, reason: 'relays /foreman stop' }
 

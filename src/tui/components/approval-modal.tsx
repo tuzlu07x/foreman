@@ -32,6 +32,10 @@ export interface ApprovalModalProps {
   technicalExpanded?: boolean;
   /** Manager agents' advice (#623). Shown only; the keys still decide. */
   recommendations?: ApprovalRecommendation[];
+  /** What `A` / `D` remember for this call (#656), shown next to the keys. */
+  rememberScope?: string;
+  /** A decision waiting for `y` (#656): replaces the key hints. */
+  confirm?: string | null;
 }
 
 const CATEGORY_ORDER: RiskCategory[] = [
@@ -108,7 +112,10 @@ export function ApprovalModal({
   remainingSeconds,
   technicalExpanded = false,
   recommendations = [],
+  rememberScope,
+  confirm = null,
 }: ApprovalModalProps): JSX.Element {
+  const keys = { ...(rememberScope ? { rememberScope } : {}), confirm };
   // Prefer the 3-layer security report when available; fall back to the
   // legacy factor-grouped view for cross-process / pre-#232 requests.
   if (request.securityReport) {
@@ -119,6 +126,7 @@ export function ApprovalModal({
         remainingSeconds={remainingSeconds}
         technicalExpanded={technicalExpanded}
         recommendations={recommendations}
+        keys={keys}
       />
     );
   }
@@ -127,6 +135,7 @@ export function ApprovalModal({
       request={request}
       remainingSeconds={remainingSeconds}
       recommendations={recommendations}
+      keys={keys}
     />
   );
 }
@@ -175,18 +184,25 @@ export function RecommendationBlock({
 // 3-layer (SecurityReport) modal — #232 / C9
 // =============================================================================
 
+interface KeyHints {
+  rememberScope?: string;
+  confirm: string | null;
+}
+
 function ReportModal({
   request,
   report,
   remainingSeconds,
   technicalExpanded,
   recommendations,
+  keys,
 }: {
   request: ApprovalRequest;
   report: SecurityReport;
   remainingSeconds: number;
   technicalExpanded: boolean;
   recommendations: ApprovalRecommendation[];
+  keys: KeyHints;
 }): JSX.Element {
   const color = severityColor(report);
   // Border style now tracks severity (#234 UX-6): bold frame for critical
@@ -241,6 +257,7 @@ function ReportModal({
         }
         showTechnicalToggle
         technicalExpanded={technicalExpanded}
+        keys={keys}
       />
 
       <Box marginTop={1} justifyContent="flex-end">
@@ -379,10 +396,12 @@ function LegacyModal({
   request,
   remainingSeconds,
   recommendations,
+  keys,
 }: {
   request: ApprovalRequest;
   remainingSeconds: number;
   recommendations: ApprovalRecommendation[];
+  keys: KeyHints;
 }): JSX.Element {
   const bucket: RiskBucket = request.riskBucket ?? "medium";
   const borderColor = bucketColor(bucket);
@@ -471,6 +490,7 @@ function LegacyModal({
           Boolean(request.sessionId) &&
           (request.riskFactors ?? []).some((f) => f.category === "loop")
         }
+        keys={keys}
       />
 
       <Box marginTop={1} justifyContent="flex-end">
@@ -587,11 +607,34 @@ function HotkeyRow({
   showHalt,
   showTechnicalToggle = false,
   technicalExpanded = false,
+  keys,
 }: {
   showHalt: boolean;
   showTechnicalToggle?: boolean;
   technicalExpanded?: boolean;
+  keys: KeyHints;
 }): JSX.Element {
+  if (keys.confirm) {
+    return (
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold color={theme.accent.warning} wrap="wrap">
+          {" "}
+          {safe(keys.confirm)}
+        </Text>
+        <Text>
+          {" "}[
+          <Text color={theme.accent.primary} bold>
+            y
+          </Text>
+          ] yes · [
+          <Text color={theme.accent.primary} bold>
+            n
+          </Text>
+          ] no, go back
+        </Text>
+      </Box>
+    );
+  }
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text>
@@ -640,6 +683,12 @@ function HotkeyRow({
         </Text>
         ]eny always
       </Text>
+      {keys.rememberScope ? (
+        <Text color={theme.fg.muted} wrap="truncate-middle">
+          {"   remembers: "}
+          {safe(keys.rememberScope)}
+        </Text>
+      ) : null}
     </Box>
   );
 }

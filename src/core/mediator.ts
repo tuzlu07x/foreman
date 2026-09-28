@@ -8,6 +8,7 @@ import {
   type ForemanEventMap,
 } from "./event-bus.js";
 import type { PolicyEngine } from "./policy-engine.js";
+import { rememberScope } from "./remember-scope.js";
 import { composeAssessment, type RiskScorer } from "./risk-scorer.js";
 import type {
   LlmVerification,
@@ -340,10 +341,14 @@ export class MediatorService {
         const target = input.targetAgent
           ? `${input.targetAgent}:${input.targetTool}`
           : `tool:${input.targetTool}`;
+        // The call you answered, not the whole tool (#656): the same file
+        // or command, as the prompt showed before you confirmed.
+        const scope = rememberScope(input.sourceAgent, input.targetTool, this.argsFromMessage(input.message));
         this.deps.policy.remember({
           sourceAgent: input.sourceAgent,
           target,
           effect: approval.remember,
+          ...(scope.conditions ? { conditions: scope.conditions } : {}),
         });
       }
     } else {

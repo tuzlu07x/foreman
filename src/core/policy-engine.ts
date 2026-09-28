@@ -227,6 +227,13 @@ export class PolicyRuleNotFoundError extends Error {
   }
 }
 
+export class NotRememberedRuleError extends Error {
+  constructor(public readonly ruleId: number) {
+    super(`Policy rule ${ruleId} comes from policy.yaml; edit the file to change it`);
+    this.name = "NotRememberedRuleError";
+  }
+}
+
 export class PolicyEngine {
   // Held in memory only — re-populated on every loadYamlText. The mediator
   // reads via getBucketOverrides() each call so a YAML reload takes effect
@@ -642,6 +649,35 @@ export class PolicyEngine {
     return this.db.select().from(policies).all();
   }
 
+  /** Rules made from your answers ("always allow", "deny always", block
+   *  buttons), newest first: `foreman policy remembered list`. */
+  listRemembered(): (typeof policies.$inferSelect)[] {
+    return this.db
+      .select()
+      .from(policies)
+      .where(eq(policies.createdBy, "remember-action"))
+      .orderBy(sql`${policies.id} desc`)
+      .all();
+  }
+
+  /** Forget one remembered rule. Rules from policy.yaml are edited there,
+   *  so they are refused here. Returns the removed row. */
+  removeRemembered(ruleId: number): typeof policies.$inferSelect {
+    const row = this.db.select().from(policies).where(eq(policies.id, ruleId)).get();
+    if (!row) throw new PolicyRuleNotFoundError(ruleId);
+    if (row.createdBy !== "remember-action") throw new NotRememberedRuleError(ruleId);
+    this.db.delete(policies).where(eq(policies.id, ruleId)).run();
+    this.bus.emit("policy:changed", {
+      ruleId,
+      sourceAgent: row.sourceAgent,
+      target: row.target,
+      effect: row.effect,
+      createdBy: row.createdBy,
+      changedAt: Date.now(),
+    });
+    return row;
+  }
+
   getBucketOverrides(): BucketOverrides {
     this.refreshWatched();
     return { ...this.bucketOverrides };
@@ -1028,7 +1064,7 @@ function testPattern(pattern: string, input: string, flags = "i"): boolean | "in
  *  MCP shell tools use `command` (+ `args`), some use `script`; a call that
  *  carries several is judged on all of them, so a decoy `cmd` can't hide
  *  the `command` that actually runs. */
-function extractCommands(args: unknown): string[] {
+export function extractCommands(args: unknown): string[] {
   if (typeof args !== "object" || args === null) return [];
   const obj = args as { command?: unknown; args?: unknown; cmd?: unknown; script?: unknown };
   const out: string[] = [];

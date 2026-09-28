@@ -1,10 +1,16 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { Command } from "commander";
 import { bus } from "../core/event-bus.js";
-import { PolicyEngine } from "../core/policy-engine.js";
+import {
+  NotRememberedRuleError,
+  PolicyEngine,
+  PolicyRuleNotFoundError,
+  type RuleConditions,
+} from "../core/policy-engine.js";
+import { terminalSafe } from "../core/terminal-text.js";
 import { closeDb, getDb } from "../db/client.js";
 import { getForemanPaths } from "../utils/config.js";
-import { dim, green, red } from "./colors.js";
+import { dim, green, orange, red } from "./colors.js";
 import { DEFAULT_POLICY_YAML } from "./policy-template.js";
 import { launchEditor } from "../tui/launch-editor.js";
 import { renderPolicyJson, renderPolicyLine } from "./render.js";
@@ -124,6 +130,110 @@ policyCommand
     }
     closeDb();
   });
+
+// #656 — the rules your answers created ("always allow", "deny always",
+// block buttons) live outside policy.yaml. List them and take one back.
+const rememberedCommand = policyCommand
+  .command("remembered")
+  .description("Rules made from your approval answers (always allow / deny always): list, remove");
+
+rememberedCommand
+  .command("list", { isDefault: true })
+  .description("List remembered rules, newest first")
+  .option("--json", "output JSON")
+  .action((options: { json?: boolean }) => {
+    const engine = openEngine();
+    const rows = engine.listRemembered();
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify(rows.map(renderPolicyJson), null, 2)}\n`);
+    } else if (rows.length === 0) {
+      console.log("(no remembered rules)");
+    } else {
+      for (const row of rows) {
+        const effect = row.effect === "allow" ? green("ALLOW") : row.effect === "deny" ? red("DENY") : orange("ASK");
+        console.log(
+          `${dim(`#${row.id}`)}  ${orange(terminalSafe(row.sourceAgent))} ${dim("→")} ${terminalSafe(row.target)}  ${effect}` +
+            `${row.enabled === 1 ? "" : dim(" DISABLED")}  ${dim(terminalSafe(describeScope(row.conditions)))}  ${dim(new Date(row.createdAt).toISOString())}`,
+        );
+      }
+      console.log(dim("\nRemove one: foreman policy remembered remove <id>"));
+    }
+    closeDb();
+  });
+
+rememberedCommand
+  .command("remove <id>")
+  .description("Remove a remembered rule")
+  .option("--yes", "skip the confirmation prompt")
+  .action(async (idArg: string, options: { yes?: boolean }) => {
+    const id = Number(idArg.replace(/^#/, ""));
+    if (!Number.isInteger(id) || id <= 0) {
+      console.error(red("error: ") + "the id is the number `foreman policy remembered list` shows (e.g. 12)");
+      process.exit(1);
+    }
+    const engine = openEngine();
+    const row = engine.listRemembered().find((r) => r.id === id);
+    if (!row) {
+      const exists = engine.list().some((r) => r.id === id);
+      console.error(
+        red("error: ") +
+          (exists
+            ? `rule #${id} comes from policy.yaml; edit ${getForemanPaths().policyPath} to change it`
+            : `no remembered rule #${id} (see foreman policy remembered list)`),
+      );
+      closeDb();
+      process.exit(1);
+    }
+    const ok = await requireConfirm({
+      yes: options.yes,
+      question: `Remove rule #${id} (${terminalSafe(row.sourceAgent)} → ${terminalSafe(row.target)} ${row.effect.toUpperCase()}, ${terminalSafe(describeScope(row.conditions))})?`,
+      noun: `remove rule #${id}`,
+    });
+    if (!ok) {
+      console.log("(cancelled)");
+      closeDb();
+      return;
+    }
+    try {
+      engine.removeRemembered(id);
+    } catch (err) {
+      if (err instanceof PolicyRuleNotFoundError || err instanceof NotRememberedRuleError) {
+        console.error(red("error: ") + err.message);
+        closeDb();
+        process.exit(1);
+      }
+      throw err;
+    }
+    console.log(`${green("✓")} removed rule #${id}`);
+    closeDb();
+  });
+
+function openEngine(): PolicyEngine {
+  const paths = getForemanPaths();
+  if (!existsSync(paths.root)) {
+    console.error(red("error: ") + `Foreman is not initialised. Run 'foreman init' first.`);
+    process.exit(1);
+  }
+  return new PolicyEngine(getDb(), bus);
+}
+
+/** What a rule's conditions limit it to, in one line. */
+export function describeScope(raw: string | null): string {
+  if (!raw) return "every call to the tool";
+  let cond: RuleConditions;
+  try {
+    cond = JSON.parse(raw) as RuleConditions;
+  } catch {
+    return "(unreadable conditions)";
+  }
+  const parts: string[] = [];
+  if (cond.pathMatch?.length) parts.push(`path matches ${cond.pathMatch.join(" or ")}`);
+  if (cond.commandMatch?.length) parts.push(`command contains ${cond.commandMatch.map((c) => JSON.stringify(c)).join(" or ")}`);
+  if (cond.toolPattern) parts.push(`tool matches ${cond.toolPattern}`);
+  if (cond.argContains) parts.push(`an argument contains ${JSON.stringify(cond.argContains)}`);
+  if (cond.pathNotMatch) parts.push(`path doesn't match ${cond.pathNotMatch}`);
+  return parts.length > 0 ? `only when ${parts.join(" and ")}` : "every call to the tool";
+}
 
 function printPolicyLoadError(path: string, err: unknown): void {
   // ZodError serialises message as a JSON array (\`[\n  { code: ... }\n]\`);

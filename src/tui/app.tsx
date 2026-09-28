@@ -3,6 +3,8 @@ import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import type { ApprovalRequest } from "../core/approval.js";
 import { loadOrg } from "../core/org/org.js";
 import { revokeAgentToken } from "../core/agent-token.js";
+import { isUntrustedSource } from "../core/agent-identity.js";
+import { rememberScope } from "../core/remember-scope.js";
 import type { BootInfo } from "./boot-info.js";
 import { AppHeader, NavTabs, nextTab, Toast } from "./components/app-header.js";
 import { CommandBar, type ConsoleEntry } from "./components/command-bar.js";
@@ -237,6 +239,9 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   const [inspectOpen, setInspectOpen] = useState(false);
   const [inspectOffset, setInspectOffset] = useState(0);
   const [technicalExpanded, setTechnicalExpanded] = useState(false);
+  // A decision that waits for `y` (#656): "deny always" shows what it will
+  // remember first.
+  const [approvalConfirm, setApprovalConfirm] = useState<ApprovalResolution | null>(null);
   const inbox = useInbox(inboxService, bus);
   const [commandOpen, setCommandOpen] = useState(false);
   /** Providers / Services pages are taking typed text (they own their keys). */
@@ -289,7 +294,17 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     setInspectOpen(false);
     setInspectOffset(0);
     setTechnicalExpanded(false);
+    setApprovalConfirm(null);
   }, [currentApprovalId]);
+  // What `A` / `D` would remember for the call on screen, from the same
+  // function the mediator writes the rule with.
+  const rememberText = useMemo(() => {
+    if (!pendingApproval?.targetTool) return undefined;
+    const scope = rememberScope(pendingApproval.sourceAgent, pendingApproval.targetTool, pendingApproval.args).summary;
+    return isUntrustedSource(pendingApproval.sourceAgent)
+      ? `${scope} (deny only: nothing is always-allowed for an unverified agent)`
+      : scope;
+  }, [pendingApproval]);
 
   // Decisions always name the request that was on screen when the key was
   // pressed. The TUI never times approvals out itself: the service that
@@ -934,6 +949,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           technicalExpanded={technicalExpanded}
           setTechnicalExpanded={setTechnicalExpanded}
           onResolveApproval={resolveApproval}
+          approvalConfirm={approvalConfirm}
+          setApprovalConfirm={setApprovalConfirm}
           onHaltSessionFromApproval={onHaltSessionFromApproval}
           logSearch={logSearch}
           setLogSearch={setLogSearch}
@@ -1094,6 +1111,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
               remainingSeconds={remainingSeconds}
               technicalExpanded={technicalExpanded}
               recommendations={queue.current?.recommendations ?? []}
+              {...(rememberText ? { rememberScope: rememberText } : {})}
+              confirm={approvalConfirm ? confirmText(approvalConfirm, rememberText) : null}
             />
           )}
         </Box>
@@ -1206,6 +1225,8 @@ interface KeyboardHandlerProps {
   technicalExpanded: boolean;
   setTechnicalExpanded: (v: boolean) => void;
   onResolveApproval: (r: ApprovalResolution, by: ResolvedBy) => void;
+  approvalConfirm: ApprovalResolution | null;
+  setApprovalConfirm: (next: ApprovalResolution | null) => void;
   onHaltSessionFromApproval: () => void;
   logSearch: string;
   setLogSearch: (next: string) => void;
@@ -1302,6 +1323,8 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     technicalExpanded,
     setTechnicalExpanded,
     onResolveApproval,
+    approvalConfirm,
+    setApprovalConfirm,
     onHaltSessionFromApproval,
     logSearch,
     setLogSearch,
@@ -1406,6 +1429,17 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       setQuitConfirm(true);
       return;
     }
+    // A decision waiting for its confirmation: `y` decides, `n` / Esc go
+    // back, anything else is ignored (#656).
+    if (pendingApproval && approvalConfirm) {
+      if (input === "y" || input === "Y") {
+        setApprovalConfirm(null);
+        onResolveApproval(approvalConfirm, "user");
+      } else if (input === "n" || input === "N" || key.escape) {
+        setApprovalConfirm(null);
+      }
+      return;
+    }
     if (pendingApproval && inspectOpen) {
       if (key.escape) {
         setInspectOpen(false);
@@ -1448,8 +1482,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "A")
         onResolveApproval({ decision: "allowed", remember: "allow" }, "user");
       else if (input === "d") onResolveApproval({ decision: "denied" }, "user");
-      else if (input === "D")
-        onResolveApproval({ decision: "denied", remember: "deny" }, "user");
+      else if (input === "D") setApprovalConfirm({ decision: "denied", remember: "deny" });
       else if (input === "i") setInspectOpen(true);
       else if (input === "t") setTechnicalExpanded(!technicalExpanded);
       else if (input === "k") onHaltSessionFromApproval();
@@ -1749,4 +1782,11 @@ function renderPanels(layout: "wide" | "medium" | "narrow"): JSX.Element {
     );
   }
   return <ActivityFeed minimal />;
+}
+
+/** The question a decision waiting for `y` asks (#656). */
+function confirmText(resolution: ApprovalResolution, scope: string | undefined): string {
+  if (resolution.remember === "deny") return `Deny always: ${scope ?? "this call"}?`;
+  if (resolution.remember === "allow") return `Always allow: ${scope ?? "this call"}?`;
+  return resolution.decision === "allowed" ? "Allow this call?" : "Deny this call?";
 }
