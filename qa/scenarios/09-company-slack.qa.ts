@@ -171,7 +171,7 @@ it('A company on Slack: department channels, approvals, budgets and integrations
     const res = await write('fin-lead', WRITER, 'draft the Q3 pricing post')
     expect(res.result?.isError).toBe(true)
     expect(replyText(res)).toContain('Blocked by the org chart')
-    expect(replyText(res)).toContain('cross-department work goes through department heads')
+    expect(replyText(res)).toContain('must go through department heads')
     const refused = await sb.event<CommandEvent>('foreman:command', (e) => e.errorCode === 'ORG_POLICY')
     expect(refused).toMatchObject({ command: 'write', sourceAgent: 'fin-lead', ok: false })
     const rows = sb.query<{ n: number }>("SELECT count(*) AS n FROM control_commands WHERE command = 'write'")
