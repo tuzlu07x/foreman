@@ -88,10 +88,6 @@ function scenarioNumber(filepath: string): string {
   return m?.[1] ? String(Number(m[1])) : '-'
 }
 
-function flatten(tasks: Task[]): Task[] {
-  return tasks.flatMap((t) => (t.type === 'suite' ? flatten(t.tasks) : [t]))
-}
-
 function count(rows: Row[]): Record<Outcome, number> {
   const c: Record<Outcome, number> = { PASS: 0, FAIL: 0, SKIP: 0 }
   for (const r of rows) c[r.outcome] += 1
