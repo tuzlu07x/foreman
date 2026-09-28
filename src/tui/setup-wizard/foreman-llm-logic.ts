@@ -8,6 +8,7 @@ import {
 import { makeAccessTokenProvider } from "../../core/llm/oauth/token-refresh.js";
 import { loadOAuthTokens } from "../../core/llm/oauth/token-store.js";
 import type { OllamaModel, RunStatus } from "../../core/ollama-models.js";
+import { deriveDefaultModelId } from "../../core/provider-resolver.js";
 import type { SecretStore } from "../../core/secret-store.js";
 import type { WizardServices } from "./types.js";
 
@@ -78,10 +79,16 @@ export function brainPickerCursor(
 /** Model persisted when the user doesn't (or can't) pick one from the live
  *  list — e.g. discovery failed or the sign-in has no model list. */
 export const BRAIN_DEFAULT_MODELS: Record<BrainCloudProvider, string> = {
-  anthropic: "claude-haiku-4-5-20251001",
-  openai: "gpt-4o-mini",
-  gemini: "gemini-2.0-flash",
+  anthropic: registryDefault("anthropic", "claude-haiku-4-5"),
+  openai: registryDefault("openai", "gpt-6-luna"),
+  gemini: registryDefault("gemini", "gemini-3.5-flash-lite"),
 };
+
+/** registry/providers.json's default_model, or `fallback` if it can't be read. */
+function registryDefault(provider: string, fallback: string): string {
+  const id = deriveDefaultModelId(provider);
+  return id === "default" ? fallback : id;
+}
 
 const SUBSCRIPTION_LABEL: Record<OAuthProviderId, string> = {
   anthropic: "Claude",

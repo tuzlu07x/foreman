@@ -102,6 +102,55 @@ describe('listOpenAiModels', () => {
   })
 })
 
+describe('model lists include new generations, newest first', () => {
+  it('keeps GPT-6 chat models and drops audio / realtime / image variants', async () => {
+    const fetchImpl = mockFetch({
+      'https://api.openai.com/v1/models': {
+        ok: true,
+        status: 200,
+        body: {
+          data: [
+            { id: 'gpt-4o-mini' },
+            { id: 'gpt-6-luna' },
+            { id: 'gpt-6-astra' },
+            { id: 'gpt-5.4' },
+            { id: 'gpt-realtime-mini' },
+            { id: 'gpt-4o-audio-preview' },
+            { id: 'gpt-image-1' },
+          ],
+        },
+      },
+    })
+    const ids = (await listOpenAiModels({ apiKey: 'sk-test', fetchImpl })).map((m) => m.id)
+    expect(ids).toEqual(expect.arrayContaining(['gpt-6-luna', 'gpt-6-astra', 'gpt-5.4', 'gpt-4o-mini']))
+    expect(ids).not.toContain('gpt-realtime-mini')
+    expect(ids).not.toContain('gpt-4o-audio-preview')
+    expect(ids).not.toContain('gpt-image-1')
+    expect(ids.indexOf('gpt-6-astra')).toBeLessThan(ids.indexOf('gpt-5.4'))
+    expect(ids.indexOf('gpt-5.4')).toBeLessThan(ids.indexOf('gpt-4o-mini'))
+  })
+
+  it('puts Claude 5 models above 4.x ones, ignoring snapshot dates', async () => {
+    const fetchImpl = mockFetch({
+      'https://api.anthropic.com/v1/models': {
+        ok: true,
+        status: 200,
+        body: {
+          data: [
+            { id: 'claude-haiku-4-5-20251001', display_name: 'Claude Haiku 4.5' },
+            { id: 'claude-fable-5-1', display_name: 'Claude Fable 5.1' },
+            { id: 'claude-sonnet-5', display_name: 'Claude Sonnet 5' },
+            { id: 'claude-opus-4-7-20250101', display_name: 'Claude Opus 4.7' },
+          ],
+        },
+      },
+    })
+    const ids = (await listAnthropicModels({ apiKey: 'sk-ant', fetchImpl })).map((m) => m.id)
+    expect(ids.slice(0, 2)).toEqual(['claude-fable-5-1', 'claude-sonnet-5'])
+    expect(ids.at(-1)).toBe('claude-haiku-4-5-20251001')
+  })
+})
+
 describe('listAnthropicModels', () => {
   it('returns claude ids with display_name labels', async () => {
     const fetchImpl = mockFetch({

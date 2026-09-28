@@ -159,7 +159,7 @@
             {
               "if_provider": "openai",
               "set": {
-                "model.default": "openai/gpt-4o-mini",
+                "model.default": "openai/gpt-6-luna",
                 "model.provider": "openai",
                 "model.base_url": "https://api.openai.com/v1"
               }
@@ -167,7 +167,7 @@
             {
               "if_provider": "anthropic",
               "set": {
-                "model.default": "anthropic/claude-haiku-4-5-20251001",
+                "model.default": "anthropic/claude-haiku-4-5",
                 "model.provider": "anthropic",
                 "model.base_url": "https://api.anthropic.com/v1"
               }
@@ -175,7 +175,7 @@
             {
               "if_provider": "gemini",
               "set": {
-                "model.default": "google/gemini-2.0-flash",
+                "model.default": "google/gemini-3.5-flash-lite",
                 "model.provider": "google",
                 "model.base_url": "https://generativelanguage.googleapis.com/v1beta/openai"
               }
@@ -329,19 +329,19 @@
             {
               "if_provider": "openai",
               "set": {
-                "agents.defaults.model.primary": "openai/gpt-4o-mini"
+                "agents.defaults.model.primary": "openai/gpt-6-luna"
               }
             },
             {
               "if_provider": "anthropic",
               "set": {
-                "agents.defaults.model.primary": "anthropic/claude-haiku-4-5-20251001"
+                "agents.defaults.model.primary": "anthropic/claude-haiku-4-5"
               }
             },
             {
               "if_provider": "gemini",
               "set": {
-                "agents.defaults.model.primary": "google/gemini-2.0-flash"
+                "agents.defaults.model.primary": "google/gemini-3.5-flash-lite"
               }
             },
             {
