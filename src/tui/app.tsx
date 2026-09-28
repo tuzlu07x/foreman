@@ -8,6 +8,7 @@ import { rememberScope } from "../core/remember-scope.js";
 import type { BootInfo } from "./boot-info.js";
 import { AppHeader, NavTabs, nextTab, Toast } from "./components/app-header.js";
 import { CommandBar, type ConsoleEntry } from "./components/command-bar.js";
+import { ConfirmBar, type PendingConfirm } from "./components/confirm-bar.js";
 import { InboxPage } from "./pages/inbox-page.js";
 import { secondsLeft } from "./approval-queue.js";
 import { ApprovalQueueStrip } from "./components/approval-queue-strip.js";
@@ -232,6 +233,8 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     "none",
   );
   const [agentsLlmDraft, setAgentsLlmDraft] = useState<string | null>(null);
+  // A delete / remove / regenerate waiting for y/N (#657).
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
 
   // Every pending approval, oldest deadline first (#614).
   const queue = useApprovalQueue(bus, pendingApprovals, approvalRecommendations);
@@ -590,21 +593,28 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     [secretStore, rotateMode],
   );
 
+  // `d` only asks; the secret named in the question is the one deleted.
   const onSecretRemove = useCallback((): void => {
     if (!secretStore) return;
-    const all = secretStore.list();
-    const target = all[secretsSelectedIdx];
+    const target = secretStore.list()[secretsSelectedIdx];
     if (!target) return;
-    try {
-      secretStore.remove(target.name);
-      setSecretsNotice(`✓ ${target.name} removed`);
-      setRevealedSecret(null);
-      setSecretsSelectedIdx((idx) => Math.max(0, idx - 1));
-    } catch (err) {
-      setSecretsNotice(
-        `error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    const name = target.name;
+    setPendingConfirm({
+      question: `Delete secret "${name}"? This can't be undone.`,
+      yesLabel: "delete",
+      run: () => {
+        try {
+          secretStore.remove(name);
+          setSecretsNotice(`✓ ${name} removed`);
+          setRevealedSecret(null);
+          setSecretsSelectedIdx((idx) => Math.max(0, idx - 1));
+        } catch (err) {
+          setSecretsNotice(
+            `error: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+    });
   }, [secretStore, secretsSelectedIdx]);
 
   const onSecretAddStart = useCallback((): void => {
@@ -669,37 +679,52 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
   }, [registry, agentsSelectedIdx]);
 
   const onAgentRegenKey = useCallback((): void => {
-    const all = registry.listAll();
-    const target = all[agentsSelectedIdx];
+    const target = registry.listAll()[agentsSelectedIdx];
     if (!target) return;
-    try {
-      const result = registry.regenerateKey(target.id);
-      const hex = result.privateKey.toString("hex");
-      setAgentsNotice(
-        `✓ ${target.id} new private key (shown once): ${hex.slice(0, 16)}…${hex.slice(-8)}`,
-      );
-    } catch (err) {
-      setAgentsNotice(
-        `error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    const id = target.id;
+    setPendingConfirm({
+      question: `Regenerate ${id}'s keypair? Its old key stops working at once.`,
+      yesLabel: "regenerate",
+      run: () => {
+        try {
+          const result = registry.regenerateKey(id);
+          const hex = result.privateKey.toString("hex");
+          setAgentsNotice(
+            `✓ ${id} new private key (shown once): ${hex.slice(0, 16)}…${hex.slice(-8)}`,
+          );
+        } catch (err) {
+          setAgentsNotice(
+            `error: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+    });
   }, [registry, agentsSelectedIdx]);
 
+  // Removing here only unregisters: the agent's binary and its own config
+  // stay where they are (`foreman agent remove --uninstall` is the only
+  // way Foreman uninstalls anything).
   const onAgentRemove = useCallback((): void => {
-    const all = registry.listAll();
-    const target = all[agentsSelectedIdx];
+    const target = registry.listAll()[agentsSelectedIdx];
     if (!target) return;
-    try {
-      registry.remove(target.id);
-      // A removed agent's identity token must not keep proving it (#618).
-      if (secretStore) revokeAgentToken(secretStore, target.id);
-      setAgentsNotice(`✓ ${target.id} removed`);
-      setAgentsSelectedIdx((idx) => Math.max(0, idx - 1));
-    } catch (err) {
-      setAgentsNotice(
-        `error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    const id = target.id;
+    setPendingConfirm({
+      question: `Remove agent "${id}"? Foreman unregisters it and revokes its key and identity token. Its binary and config files stay installed.`,
+      yesLabel: "remove",
+      run: () => {
+        try {
+          registry.remove(id);
+          // A removed agent's identity token must not keep proving it (#618).
+          if (secretStore) revokeAgentToken(secretStore, id);
+          setAgentsNotice(`✓ ${id} removed (binary left installed)`);
+          setAgentsSelectedIdx((idx) => Math.max(0, idx - 1));
+        } catch (err) {
+          setAgentsNotice(
+            `error: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+    });
   }, [registry, secretStore, agentsSelectedIdx]);
 
   const onAgentDisable = useCallback((): void => {
@@ -1026,6 +1051,12 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
             setBooting(false);
             setCommandOpen(true);
           }}
+          pendingConfirm={pendingConfirm !== null}
+          onConfirmAnswer={(yes) => {
+            const current = pendingConfirm;
+            setPendingConfirm(null);
+            if (yes) current?.run();
+          }}
           onMoveApproval={queue.move}
           onAnyKey={() => setBooting(false)}
           swallowUnsettledKey={swallowUnsettledKey}
@@ -1202,7 +1233,9 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
       ) : (
         <Box height={pageHeight}>{renderPanels(layout)}</Box>
       )}
-      {commandOpen ? null : (
+      {commandOpen ? null : pendingConfirm && !pendingApproval && !helpOpen ? (
+        <ConfirmBar confirm={pendingConfirm} />
+      ) : (
         <StatusBar quitConfirm={quitConfirm} page={page} approval={pendingApproval !== null && !helpOpen} />
       )}
         </>
@@ -1300,6 +1333,9 @@ interface KeyboardHandlerProps {
   onAgentCancelEdit: () => void;
   commandOpen: boolean;
   openCommand: () => void;
+  /** A y/N question (delete, remove, regenerate) is open. */
+  pendingConfirm: boolean;
+  onConfirmAnswer: (yes: boolean) => void;
   onMoveApproval: (delta: number) => void;
   onAnyKey: () => void;
   /** True when a letter key should be ignored because the approval on
@@ -1396,6 +1432,8 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     onAgentCancelEdit,
     commandOpen,
     openCommand,
+    pendingConfirm,
+    onConfirmAnswer,
     onMoveApproval,
     onAnyKey,
     swallowUnsettledKey,
@@ -1498,6 +1536,11 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "i") setInspectOpen(true);
       else if (input === "t") setTechnicalExpanded(!technicalExpanded);
       else if (input === "k") onHaltSessionFromApproval();
+      return;
+    }
+    // [y/N]: only `y` goes ahead; any other key keeps things as they are.
+    if (pendingConfirm) {
+      onConfirmAnswer(input === "y" || input === "Y");
       return;
     }
     if (!textEntry && !quitConfirm) {
@@ -1736,8 +1779,8 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       else if (input === "b") onAgentToggleBlock();
       else if (input === "d") onAgentDisable();
       else if (input === "e") onAgentEnable();
-      else if (input === "r") onAgentRemove();
-      else if (input === "R") onAgentRegenKey();
+      else if (input === "x") onAgentRemove();
+      else if (input === "r") onAgentRegenKey();
       else if (input === "N") onAgentStartNoteEdit();
       else if (input === "L") onAgentStartLlmEdit();
       else if (input === "o") onAgentLogin();

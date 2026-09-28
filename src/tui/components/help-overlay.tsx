@@ -81,8 +81,8 @@ const PAGE_SECTIONS: HelpSection[] = [
       { key: "o", label: "login (OAuth / interactive)" },
       { key: "N / L", label: "edit note / change LLM" },
       { key: "d / e", label: "disable / enable" },
-      { key: "b / r", label: "block / remove" },
-      { key: "R", label: "regen key" },
+      { key: "b", label: "block / unblock" },
+      { key: "r / x", label: "regen key / remove" },
     ],
   },
   {
@@ -104,7 +104,7 @@ const EXTRA_SECTIONS: HelpSection[] = [
     rows: [
       { key: "↑ ↓ / Enter", label: "select / expand" },
       { key: "n", label: "add custom secret" },
-      { key: "v / r / d", label: "reveal / rotate / remove" },
+      { key: "v / r / d", label: "reveal / rotate / delete" },
     ],
   },
   {

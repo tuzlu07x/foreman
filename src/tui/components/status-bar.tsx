@@ -60,6 +60,7 @@ const PAGE_HINTS: Record<TuiPage, KeyHint[]> = {
     { key: "N", label: "note" },
     { key: "L", label: "LLM" },
     { key: "o", label: "login" },
+    { key: "x", label: "remove" },
     { key: "Esc", label: "home" },
   ],
   secrets: [
