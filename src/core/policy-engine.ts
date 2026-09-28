@@ -3,7 +3,7 @@ import { and, eq, gte, inArray, like, sql } from "drizzle-orm";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { ForemanDb } from "../db/client.js";
-import { pendingApprovals, policies, requests } from "../db/schema.js";
+import { agentUsage, pendingApprovals, policies, requests } from "../db/schema.js";
 import { claimedAgentOf, isUntrustedSource } from "./agent-identity.js";
 import {
   bus as defaultBus,
@@ -881,20 +881,39 @@ export class PolicyEngine {
       if (!rule.conditions) continue;
       const cond = this.parseConditions(rule.conditions);
       const limit = cond?.rateLimits?.messagesPerMinute;
-      if (!limit) continue;
-
-      const row = this.db
-        .select({ count: sql<number>`count(*)` })
-        .from(requests)
-        .where(
-          and(
-            inArray(requests.sourceAgent, counted),
-            gte(requests.createdAt, since),
-          ),
-        )
-        .get();
-      if ((row?.count ?? 0) >= limit) {
-        return { decision: "deny", matchedRuleId: rule.id };
+      if (limit) {
+        const row = this.db
+          .select({ count: sql<number>`count(*)` })
+          .from(requests)
+          .where(
+            and(
+              inArray(requests.sourceAgent, counted),
+              gte(requests.createdAt, since),
+            ),
+          )
+          .get();
+        if ((row?.count ?? 0) >= limit) {
+          return { decision: "deny", matchedRuleId: rule.id };
+        }
+      }
+      // #656 — tokens the agent used in the last hour, as the spend ledger
+      // has them (telemetry, task output, Foreman's own calls). Ledger ids
+      // are lower-case.
+      const tokenLimit = cond?.rateLimits?.tokensPerHour;
+      if (tokenLimit) {
+        const used = this.db
+          .select({ total: sql<number>`coalesce(sum(${agentUsage.totalTokens}), 0)` })
+          .from(agentUsage)
+          .where(
+            and(
+              inArray(agentUsage.agentId, [...new Set(counted.map((id) => id.trim().toLowerCase()))]),
+              gte(agentUsage.ts, Date.now() - 3_600_000),
+            ),
+          )
+          .get();
+        if ((used?.total ?? 0) >= tokenLimit) {
+          return { decision: "deny", matchedRuleId: rule.id };
+        }
       }
     }
     return untrusted ? this.checkUntrustedFlood(since) : null;
