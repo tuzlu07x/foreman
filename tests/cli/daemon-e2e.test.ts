@@ -394,6 +394,28 @@ describe("the Foreman daemon (#616)", () => {
     }
   }, 30_000);
 
+  it("has an agent's calls in the audit trail by the time its mcp-stdio exits", async () => {
+    // An in-process mcp-stdio flushed its audit queue on exit. Through the
+    // daemon the queue lives in \`foreman start\`, so an agent that had
+    // just gone could still have its last call unwritten for a moment
+    // (QA scenario 09 on Linux read the audit trail right then).
+    const claude = tokenFor("claude-code");
+    await startDaemon();
+    const s = mcp("claude-code", claude);
+    await s.call(1, "initialize");
+    const call = await s.call(2, "tools/call", { name: "demo__echo", arguments: { text: "audit-me" } });
+    expect(call.result!.content![0]!.text).toBe("audit-me");
+    await s.close();
+    expect(s.stderr).not.toMatch(/not using the Foreman daemon/);
+    const db = new Database(join(home, "foreman.db"), { readonly: true, fileMustExist: true });
+    try {
+      const row = db.prepare("SELECT count(*) AS n FROM requests WHERE args LIKE '%audit-me%'").get() as { n: number };
+      expect(row.n).toBe(1);
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
   it("keeps each agent to its own identity and scope", async () => {
     writeFileSync(
       join(home, "mcp.yaml"),
