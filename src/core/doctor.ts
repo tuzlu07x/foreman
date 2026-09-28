@@ -46,6 +46,8 @@ import {
   verifiedAgentCount,
 } from "./agent-wiring.js";
 import { getUpdateCachePath, isNewer } from "./update-check.js";
+import { trustedDaemonFiles } from "./daemon/client.js";
+import { daemonDisabled, daemonFiles, daemonSupported, MAX_SOCKET_PATH, NO_DAEMON_ENV } from "./daemon/protocol.js";
 
 export type CheckStatus = "ok" | "warn" | "fail";
 
@@ -1600,6 +1602,42 @@ export function checkMcpHub(): CheckResult {
   };
 }
 
+// The daemon `foreman start` hosts (docs/mcp-hub.md). Read-only: it checks
+// the socket and token the way agents do before trusting them, and never
+// connects. Without a daemon everything still works, only slower.
+export function checkDaemon(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): CheckResult {
+  if (!daemonSupported(platform)) {
+    return { name: "daemon", status: "ok", message: "not used on this platform — each agent runs Foreman in its own process" };
+  }
+  if (daemonDisabled(env)) {
+    return { name: "daemon", status: "ok", message: `turned off (${NO_DAEMON_ENV}) — each agent runs Foreman in its own process` };
+  }
+  const { stateDir } = getForemanPaths();
+  const { socketPath, tokenPath } = daemonFiles(stateDir);
+  const files = trustedDaemonFiles(stateDir);
+  if (files.ok) return { name: "daemon", status: "ok", message: `listening at ${socketPath}` };
+  if (socketPath.length > MAX_SOCKET_PATH) {
+    return {
+      name: "daemon",
+      status: "warn",
+      message: `can't start: its socket path is ${socketPath.length} characters (the limit is ${MAX_SOCKET_PATH}) — agents run slower, each in its own process`,
+      remediation: "Use a shorter FOREMAN_HOME.",
+    };
+  }
+  if (!files.notable) {
+    return { name: "daemon", status: "ok", message: "not running — `foreman start` starts it; until then each agent decides in its own process" };
+  }
+  return {
+    name: "daemon",
+    status: "warn",
+    message: `not trusted: ${files.reason} — agents won't use it`,
+    remediation: `Stop \`foreman start\`, remove ${socketPath} and ${tokenPath}, and start it again.`,
+  };
+}
+
 // Integrations (`foreman integrations`): an enabled one that needs a
 // credential, a sign-in or a review can't work; a disabled one is only noted.
 export function checkIntegrations(): CheckResult {
@@ -1778,6 +1816,7 @@ const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkMcpGateway,
   checkMcpHub,
   checkIntegrations,
+  checkDaemon,
   checkOrg,
   checkLegacyHome,
   checkUpdate,
