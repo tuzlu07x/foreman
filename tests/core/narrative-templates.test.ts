@@ -48,9 +48,17 @@ describe('templateNarrative', () => {
     const n = templateNarrative(
       assessment({ factors: [], totalScore: 0, bucket: 'medium' }),
       'heuristic_only',
+      { policyAsked: true },
     )
-    expect(n.whatHappening).toContain('No specific risk factors fired')
+    expect(n.whatHappening).toContain('No specific risk factors fired — policy asked for explicit approval')
     expect(n.thingsToCheck[0]).toContain('No specific signals')
+  })
+
+  // QA leftover: an allowed call's report said "policy asked for explicit approval".
+  it('does not claim policy asked when it did not', () => {
+    const n = templateNarrative(assessment({ factors: [], totalScore: 0, bucket: 'low' }), 'heuristic_only')
+    expect(n.whatHappening).toContain('No specific risk factors fired.')
+    expect(n.whatHappening).not.toContain('policy asked')
   })
 
   it('puts strongest factor first in things-to-check', () => {

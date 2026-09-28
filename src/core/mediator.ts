@@ -258,6 +258,7 @@ export class MediatorService {
         targetTool: input.targetTool,
         args: this.argsFromMessage(input.message),
         assessment,
+        policyAsked: policyResult.decision === "ask" || input.requireHuman !== undefined,
       });
     } catch {
       securityReport = null;
