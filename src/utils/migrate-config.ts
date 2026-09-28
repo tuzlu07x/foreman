@@ -35,6 +35,9 @@ export interface MigrationMove {
 
 export type MigrationStatus =
   | "no-legacy"
+  /** ~/.foreman/ is the home Foreman runs from (FOREMAN_HOME points at
+   *  it): there is nothing to migrate, and nothing may be moved (#657). */
+  | "live-home"
   | "ready"
   | "destination-has-data"
   | "done";
@@ -52,6 +55,24 @@ export class LegacyConflictError extends Error {
   }
 }
 
+/** True when `dir` is the config or state directory Foreman uses now. */
+function isLiveHome(dir: string, paths: ForemanPaths): boolean {
+  const target = resolve(dir);
+  return resolve(paths.configDir) === target || resolve(paths.stateDir) === target;
+}
+
+/** Same file on disk (a move onto itself), even under another spelling. */
+function sameFile(a: string, b: string): boolean {
+  if (resolve(a) === resolve(b)) return true;
+  try {
+    const sa = statSync(a);
+    const sb = statSync(b);
+    return sa.dev === sb.dev && sa.ino === sb.ino;
+  } catch {
+    return false;
+  }
+}
+
 // Plans the legacy → new layout move without touching disk.
 export function planMigration(
   ctx: MigrationContext = {},
@@ -59,6 +80,17 @@ export function planMigration(
   const paths = ctx.paths ?? getForemanPaths();
   const home = ctx.homeDir ?? homedir();
   const legacyRoot = legacyHome(home);
+  if (existsSync(legacyRoot) && isLiveHome(legacyRoot, paths)) {
+    return {
+      status: "live-home",
+      legacyRoot,
+      configDir: paths.configDir,
+      stateDir: paths.stateDir,
+      cacheDir: paths.cacheDir,
+      moves: [],
+      destinationHasData: false,
+    };
+  }
   if (!existsSync(legacyRoot)) {
     return {
       status: "no-legacy",
@@ -145,7 +177,8 @@ export function executeMigration(
   let movedCount = 0;
   let skippedCount = 0;
   for (const move of plan.moves) {
-    if (!existsSync(move.from)) {
+    // Never onto itself, whatever --force says (#657).
+    if (!existsSync(move.from) || sameFile(move.from, move.to)) {
       skippedCount += 1;
       continue;
     }
@@ -159,10 +192,15 @@ export function executeMigration(
 // True when ~/.foreman/ still has files we'd consider migrating. Used for
 // the boot-time warning to avoid alarming users who've already migrated and
 // only have an empty ~/.foreman/ shell.
-export function legacyHasInterestingFiles(homeDir?: string): boolean {
+export function legacyHasInterestingFiles(
+  homeDir?: string,
+  paths: ForemanPaths = getForemanPaths(),
+): boolean {
   const home = homeDir ?? homedir();
   const root = legacyHome(home);
   if (!existsSync(root)) return false;
+  // FOREMAN_HOME=~/.foreman: that is the live home, not a legacy one.
+  if (isLiveHome(root, paths)) return false;
   try {
     if (statSync(root).isFile()) return false;
     for (const name of readdirSync(root)) {

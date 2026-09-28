@@ -15,11 +15,13 @@ import { describe, expect, it } from 'vitest'
 import { checkAcpAgents } from '../../src/core/doctor.js'
 
 describe('checkAcpAgents', () => {
-  it('emits one row per ACP agent declared in the bundled registry', () => {
+  const ACP = ['hermes', 'openclaw', 'zeroclaw']
+
+  it('emits one row per registered ACP agent', () => {
     // The bundled registry ships Hermes / OpenClaw / ZeroClaw as
     // ACP agents (see PR #567). With an empty PATH every row warns
     // — we use that to assert the expected agent ids surface.
-    const rows = checkAcpAgents({ PATH: '/nowhere' })
+    const rows = checkAcpAgents({ PATH: '/nowhere' }, ACP)
     const ids = new Set(rows.map((r) => r.name))
     expect(ids).toContain('acp:hermes')
     expect(ids).toContain('acp:openclaw')
@@ -37,7 +39,7 @@ describe('checkAcpAgents', () => {
       const fakeHermes = join(tmp, 'hermes')
       writeFileSync(fakeHermes, '#!/bin/sh\necho ok\n')
       chmodSync(fakeHermes, 0o755)
-      const rows = checkAcpAgents({ PATH: tmp })
+      const rows = checkAcpAgents({ PATH: tmp }, ACP)
       const hermesRow = rows.find((r) => r.name === 'acp:hermes')
       expect(hermesRow).toBeDefined()
       expect(hermesRow!.status).toBe('ok')
@@ -49,5 +51,15 @@ describe('checkAcpAgents', () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true })
     }
+  })
+
+  // QA #657 M13 — a fresh box warned "Install Hermes … foreman write hermes
+  // will fail" for three agents nobody registered.
+  it('says nothing about ACP agents that are not registered', () => {
+    expect(checkAcpAgents({ PATH: '/nowhere' }, [])).toEqual([
+      { name: 'acp-agents', status: 'ok', message: 'no ACP-mediated agents registered' },
+    ])
+    const rows = checkAcpAgents({ PATH: '/nowhere' }, ['hermes', 'claude-code'])
+    expect(rows.map((r) => r.name)).toEqual(['acp:hermes'])
   })
 })

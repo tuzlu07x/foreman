@@ -1284,11 +1284,13 @@ export function checkChafa(env: NodeJS.ProcessEnv = process.env): CheckResult {
  * PATH. The registry declares Hermes / OpenClaw / ZeroClaw with
  * `approval_adapter='acp-stdio-v1'` + `acp_command`, but `foreman
  * write <agent>` won't actually run if the binary isn't installed.
- * Each ACP agent gets its own check row so the operator sees
- * exactly which one is missing.
+ * Each registered ACP agent gets its own check row so the operator sees
+ * exactly which one is missing; agents you never added are not checked
+ * (a fresh box warned about all three, #657).
  */
 export function checkAcpAgents(
   env: NodeJS.ProcessEnv = process.env,
+  registeredIds: readonly string[] = registeredRegistryIds(),
 ): CheckResult[] {
   let doc: ReturnType<typeof loadActiveRegistry>["doc"] | null = null;
   try {
@@ -1299,14 +1301,17 @@ export function checkAcpAgents(
     return [];
   }
   const acpAgents = doc.agents.filter(
-    (a) => a.approval_adapter === "acp-stdio-v1" && a.acp_command,
+    (a) =>
+      a.approval_adapter === "acp-stdio-v1" &&
+      a.acp_command &&
+      registeredIds.includes(a.id),
   );
   if (acpAgents.length === 0) {
     return [
       {
         name: "acp-agents",
         status: "ok",
-        message: "no ACP-mediated agents declared",
+        message: "no ACP-mediated agents registered",
       },
     ];
   }

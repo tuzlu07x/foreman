@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { Command } from "commander";
 import {
   executeMigration,
@@ -18,6 +19,13 @@ export const migrateConfigCommand = new Command("migrate-config")
   .action((options: { dryRun?: boolean; force?: boolean }) => {
     const plan = planMigration();
     switch (plan.status) {
+      case "live-home":
+        console.log(
+          dim(
+            `nothing to migrate — ${plan.legacyRoot} is the home Foreman uses now (FOREMAN_HOME).`,
+          ),
+        );
+        return;
       case "no-legacy":
         console.log(
           dim(
@@ -34,9 +42,10 @@ export const migrateConfigCommand = new Command("migrate-config")
         return;
       case "destination-has-data":
         if (!options.force) {
+          const existing = plan.moves.filter((m) => existsSync(m.to)).map((m) => m.to);
           console.error(
             red("error: ") +
-              `the new layout already has data at ${plan.configDir}/${plan.stateDir}.`,
+              `the new layout already has data: ${existing.join(", ")}`,
           );
           console.error(
             `Re-run with --force after backing up if you want to overwrite.`,
