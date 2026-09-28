@@ -205,7 +205,7 @@ Enter creates Foreman's home (identity key, secret store key, default `policy.ya
 
 1. **Welcome.** Enter starts setup, `q` quits. You can quit later with Ctrl-C (except while agents are installing) and pick up where you left off with `foreman setup --resume`. A Ctrl-C quit exits with code 130, like any interrupted command, so a script can tell it from a finished setup (exit 0).
 2. **Step 1 of 6: LLM Providers.** Space toggles the providers you have (Anthropic, OpenAI, Google Gemini, local Ollama, a custom OpenAI-compatible endpoint), Enter confirms. For Anthropic and OpenAI you can sign in with your Claude or ChatGPT subscription instead of pasting a key. Otherwise paste each key at its prompt; a help URL is shown. You can confirm with nothing selected and add providers later.
-3. **Step 2 of 6: Foreman's brain.** Pick the LLM Foreman itself uses to check risky calls and write summaries: Anthropic, OpenAI or Google Gemini (rows you haven't configured in Step 1 are greyed out), or **Skip: heuristics only**. Local Ollama and OpenAI-compatible brains are listed as "coming soon".
+3. **Step 2 of 6: Foreman's brain.** Pick the LLM Foreman itself uses to check risky calls and write summaries: Anthropic, OpenAI or Google Gemini (rows you haven't configured in Step 1 are greyed out), a local or remote **Ollama** server (base URL, then one of its models), an **OpenAI-compatible** preset or your own endpoint (base URL, optional key, model), or **Skip: heuristics only**. See [llm-providers.md](llm-providers.md#foremans-brain-on-ollama-or-an-openai-compatible-endpoint).
 4. **Step 3 of 6: Agents.** Space toggles the agents to install; Hermes and Claude Code are pre-checked when their LLM is configured, and agents whose LLM isn't configured are hidden. For each agent you pick its LLM, route and model and an optional responsibility note, then confirm. On a re-run, unticking an agent unregisters it and leaves its binary installed; if Foreman installed it, `u` on the confirm screen uninstalls it too.
 5. **Step 4 of 6: Services** (optional). Tokens for the chat apps: Telegram, Discord, Slack. GitHub, Jira and Notion are set up in the next step.
 6. **Step 5 of 6: Integrations** (optional). Tick GitHub, GitLab, Jira & Confluence, Trello, Linear or Notion, or press Enter with nothing ticked to skip. For each one: the access level (read-only is the default) and, for token integrations, the token at a hidden prompt. The agents you picked in Step 3 may use it. Integrations are saved **disabled**: the wizard doesn't connect to anything. The Done screen names what finishes each one: `foreman integrations review <name>` for a token, `foreman integrations login <name>` for a browser sign-in, then `foreman integrations enable <name>`. See [`integrations.md`](integrations.md).
@@ -282,6 +282,17 @@ foreman completion bash > /etc/bash_completion.d/foreman
 
 See [`completion.md`](completion.md).
 
+### Keep the daemon running at login (optional)
+
+Agents and Claude Code's hook are fastest through Foreman's daemon, which otherwise runs only while `foreman start` (or `foreman daemon`) is open. To run it in the background at every login (a LaunchAgent on macOS, a systemd user unit on Linux and WSL2 with systemd):
+
+```bash
+foreman service install
+foreman service status
+```
+
+Run `foreman service install` again after upgrading Node or Foreman. `foreman start` keeps working alongside it, and approvals still show up in the TUI. See [One daemon for every agent](mcp-hub.md#run-the-daemon-at-login-foreman-service).
+
 ### Run the doctor whenever something feels off
 
 ```bash
@@ -296,8 +307,10 @@ foreman doctor --json    # the same checks, for scripts
 Do it in this order: the first steps need the `foreman` command, which step 5 removes.
 
 ```bash
-# 1. Remove the PreToolUse hook Foreman added to Claude Code (if you installed it).
+# 1. Remove the PreToolUse hook Foreman added to Claude Code (if you installed it),
+#    and the background daemon service (if you installed that).
 foreman agent hook uninstall claude-code
+foreman service uninstall
 
 # 2. Note where Foreman keeps its files (the foreman_home and paths lines).
 foreman doctor

@@ -46,7 +46,7 @@ Foreman doctor
   ✓ mcp_gateway          gateway instantiates cleanly (stdio transport ready)
   ✓ mcp_hub              no mcp.yaml — MCP hub not configured (try `foreman mcp catalog`)
   ✓ integrations         none configured (try `foreman integrations catalog`)
-  ✓ daemon               not running — `foreman start` starts it; until then each agent decides in its own process
+  ✓ daemon               not running — `foreman start` or `foreman service install` starts it; until then each agent decides in its own process
   ✓ org                  no org.yaml — agents work without an org chart (try `foreman org templates`)
   ✓ legacy_home          no legacy ~/.foreman/ files detected
   ✓ update               no cached check yet — 'foreman start' will refresh on next run
@@ -56,7 +56,7 @@ Foreman doctor
 27 ok  ·  2 warning  (exit 1 — warnings only)
 ```
 
-A few checks add a row per agent once agents are registered: `acp:<id>` for each registered Hermes, OpenClaw or ZeroClaw (it warns while that agent's CLI isn't on your PATH), `agent_tokens:<id>` for an agent whose wiring doctor can't see, and `node_engines:<id>` when an agent needs a newer Node. `daemon` warns when agents can't use the daemon `foreman start` hosts: its socket path is too long (use a shorter `FOREMAN_HOME`), or the socket or token file isn't one agents trust. Everything still works then, only slower. The footer always names the exit code so you can match what you see to what your shell scripts will read.
+A few checks add a row per agent once agents are registered: `acp:<id>` for each registered Hermes, OpenClaw or ZeroClaw (it warns while that agent's CLI isn't on your PATH), `agent_tokens:<id>` for an agent whose wiring doctor can't see, and `node_engines:<id>` when an agent needs a newer Node. `daemon` warns when agents can't use the daemon `foreman start` hosts: its socket path is too long (use a shorter `FOREMAN_HOME`), or the socket or token file isn't one agents trust. It also warns when the background service (`foreman service install`) is installed but the daemon isn't running; `foreman service status` says why. Everything still works then, only slower. The footer always names the exit code so you can match what you see to what your shell scripts will read.
 
 ### JSON (`--json`)
 

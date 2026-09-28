@@ -567,18 +567,95 @@ describe("foreman-llm step (Foreman's brain)", () => {
     await w.until('openai-fake-large')
   })
 
-  it('shows Ollama and OpenAI-compatible as not supported yet, not selectable', async () => {
-    // The LLM factory has no client for these yet; the picker used to let
-    // the user save a brain that failed on its first call.
+  it('offers Ollama: base URL (local default), then the pulled models', async () => {
     const w = await mount('foreman-llm')
     await w.until('pick an LLM')
-    await w.until(/✗ Local — Ollama on this machine\s+\(not supported yet\)/)
-    await w.until(/✗ Custom — OpenAI-compatible\s+\(not supported yet\)/)
-    // With no cloud provider configured, Skip is the only selectable row.
-    await w.until('❯ ✓ Skip — heuristics only')
-    await w.press(DOWN)
-    await w.press('\u001B[A')
-    await w.until('❯ ✓ Skip — heuristics only')
+    // With no cloud provider configured, the cursor starts on Ollama.
+    await w.until('❯ ✓ Local — Ollama')
+    await w.until('✓ Custom — OpenAI-compatible')
+    expect(w.frame()).not.toContain('not supported yet')
+    await w.press(ENTER, 'Ollama ▸ base URL')
+    await w.until('http://localhost:11434')
+    await w.press(ENTER, 'Ollama ▸ pick a model')
+    await w.until('❯ ✓ ollama-fake-large')
+    expect(vi.mocked(discoverModels)).toHaveBeenLastCalledWith(
+      'ollama',
+      expect.objectContaining({ apiKey: '', baseUrl: 'http://localhost:11434' }),
+    )
+    await w.pressInList(DOWN)
+    await w.press(ENTER, 'Agents ▸ pick which to install')
+    const llmYaml = readFileSync(w.services.llmConfigPath, 'utf-8')
+    expect(llmYaml).toContain('provider: ollama')
+    expect(llmYaml).toContain('model: ollama-fake-small')
+    expect(llmYaml).toContain('endpoint: http://localhost:11434')
+  })
+
+  it('keeps the user on the URL screen when the base URL is invalid', async () => {
+    const w = await mount('foreman-llm')
+    await w.until('❯ ✓ Local — Ollama')
+    await w.press(ENTER, 'Ollama ▸ base URL')
+    const callsBefore = vi.mocked(discoverModels).mock.calls.length
+    // The field starts with the default URL; this makes it invalid.
+    await w.type(' not a url')
+    await w.press(ENTER, 'Not a usable base URL: it is not a valid URL.')
+    expect(w.frame()).toContain('Ollama ▸ base URL')
+    expect(vi.mocked(discoverModels).mock.calls.length).toBe(callsBefore)
+  })
+
+  it('offers an own OpenAI-compatible endpoint: URL, optional key, model', async () => {
+    const w = await mount('foreman-llm')
+    await w.until('❯ ✓ Local — Ollama')
+    await w.pressInList(DOWN)
+    await w.press(ENTER, 'OpenAI-compatible ▸ pick a preset')
+    // Up from the first preset wraps to the last row: your own endpoint.
+    await w.press('\u001B[A', '❯ ✓ Other endpoint')
+    await w.press(ENTER, 'Own endpoint ▸ base URL')
+    await w.type('http://127.0.0.1:8000/v1/')
+    await w.press(ENTER, 'Own endpoint ▸ API key')
+    await w.press(ENTER, 'Own endpoint ▸ pick a model')
+    await w.until('❯ ✓ openai_compatible-fake-large')
+    expect(vi.mocked(discoverModels)).toHaveBeenLastCalledWith(
+      'openai_compatible',
+      expect.objectContaining({ apiKey: '', baseUrl: 'http://127.0.0.1:8000/v1' }),
+    )
+    await w.press(ENTER, 'Agents ▸ pick which to install')
+    const llmYaml = readFileSync(w.services.llmConfigPath, 'utf-8')
+    expect(llmYaml).toContain('provider: openai_compatible')
+    expect(llmYaml).toContain('model: openai_compatible-fake-large')
+    expect(llmYaml).toContain('endpoint_secret: openai-compatible-endpoint')
+    // Keyless: no key slot is referenced, and none was stored.
+    expect(llmYaml).not.toContain('key_secret')
+    expect(w.secretStore.get('openai-compatible-endpoint')).toBe('http://127.0.0.1:8000/v1')
+    expect(w.secretStore.exists('openai-compatible-key')).toBe(false)
+  })
+
+  it('lets a preset pick its model from the live list', async () => {
+    const w = await mount('foreman-llm')
+    await w.until('❯ ✓ Local — Ollama')
+    await w.pressInList(DOWN)
+    await w.press(ENTER, 'OpenAI-compatible ▸ pick a preset')
+    await w.until('❯ ✓ DeepSeek')
+    await w.press(ENTER, 'DeepSeek ▸ API key')
+    await w.type('fake-deepseek-key-000')
+    await w.press(ENTER, 'DeepSeek ▸ pick a model')
+    await w.until('❯ ✓ openai_compatible-fake-large')
+    expect(w.frame()).not.toContain('fake-deepseek-key-000')
+    expect(vi.mocked(discoverModels)).toHaveBeenLastCalledWith(
+      'openai_compatible',
+      expect.objectContaining({ apiKey: 'fake-deepseek-key-000', baseUrl: 'https://api.deepseek.com/v1' }),
+    )
+    await w.press(ENTER, 'Agents ▸ pick which to install')
+    const llmYaml = readFileSync(w.services.llmConfigPath, 'utf-8')
+    expect(llmYaml).toContain('model: openai_compatible-fake-large')
+    expect(llmYaml).toContain('key_secret: deepseek-api-key')
+    expect(w.secretStore.get('deepseek-api-key')).toBe('fake-deepseek-key-000')
+  })
+
+  it('still lets the user skip the brain', async () => {
+    const w = await mount('foreman-llm')
+    await w.until('❯ ✓ Local — Ollama')
+    await w.pressInList(DOWN)
+    await w.press(DOWN, '❯ ✓ Skip — heuristics only')
     await w.press(ENTER, 'Agents ▸ pick which to install')
     expect(readFileSync(w.services.llmConfigPath, 'utf-8')).toContain('enabled: false')
   })

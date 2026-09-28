@@ -84,6 +84,15 @@ export class DaemonUnavailableError extends Error {
   }
 }
 
+/** Another daemon (`foreman start`'s, `foreman daemon`, the background
+ *  service) already serves this home: agents use that one. */
+export class DaemonAlreadyRunningError extends DaemonUnavailableError {
+  constructor(readonly socketPath: string) {
+    super(`another Foreman daemon is already listening on ${socketPath}`);
+    this.name = "DaemonAlreadyRunningError";
+  }
+}
+
 export interface HubDaemonOptions {
   paths: Pick<ForemanPaths, "stateDir" | "policyPath" | "mcpConfigPath" | "mcpPinsPath" | "orgConfigPath">;
   /** Daemon-level events (a refused client, a broken mcp.yaml). */
@@ -130,9 +139,7 @@ export async function startHubDaemon(opts: HubDaemonOptions): Promise<HubDaemon>
     throw new DaemonUnavailableError(`the state directory path is too long for a Unix socket (${socketPath})`);
   }
   checkStateDir(opts.paths.stateDir);
-  if (await socketAnswers(socketPath)) {
-    throw new DaemonUnavailableError(`another Foreman daemon is already listening on ${socketPath}`);
-  }
+  if (await socketAnswers(socketPath)) throw new DaemonAlreadyRunningError(socketPath);
   removeStale(socketPath);
   removeStale(tokenPath);
 
@@ -583,33 +590,66 @@ function removeOwnToken(path: string, token: string): void {
   }
 }
 
+/** How often a waiting service daemon checks whether it can take over. */
+const SERVICE_RETRY_MS = 3_000;
+
 export const daemonCommand = new Command("daemon")
   .description(
     "Run Foreman's local daemon without the TUI: agents' `foreman mcp-stdio` and the PreToolUse hook connect to it " +
-      "(one copy of each MCP hub server, no start-up cost per hook call). `foreman start` runs it too.",
+      "(one copy of each MCP hub server, no start-up cost per hook call). `foreman start` runs it too; " +
+      "`foreman service install` runs it at login.",
   )
-  .action(async () => {
+  .option(
+    "--service",
+    "run as the background service (`foreman service install`): wait while another daemon is listening and take over " +
+      "when it stops, and exit 0 (so the service manager doesn't restart it) when Foreman can't start",
+  )
+  .action(async (opts: { service?: boolean }) => {
+    const service = opts.service === true;
+    const log = (message: string): void => void process.stderr.write(`foreman daemon: ${message}\n`);
+    // A service that can't start for a reason a restart won't fix (not
+    // initialised, an unsafe state directory) stops without asking the
+    // service manager to restart it every few seconds.
+    const fail = (message: string): never => {
+      process.stderr.write(red("error: ") + `${message}\n`);
+      if (service) log("not restarting until this is fixed; then run `foreman service install` again");
+      closeDb();
+      process.exit(service ? 0 : 1);
+    };
     const paths = getForemanPaths();
     if (!existsSync(paths.root) || !existsSync(paths.identityPath)) {
-      process.stderr.write(red("error: ") + `Foreman is not initialised at ${paths.root}. Run 'foreman init' first.\n`);
-      process.exit(1);
+      fail(`Foreman is not initialised at ${paths.root}. Run 'foreman init' first.`);
     }
-    let daemon: HubDaemon;
-    try {
-      daemon = await startHubDaemon({
-        paths,
-        log: (message) => process.stderr.write(`foreman daemon: ${message}\n`),
-      });
-    } catch (err) {
-      process.stderr.write(red("error: ") + `${err instanceof Error ? err.message : String(err)}\n`);
-      closeDb();
-      process.exit(1);
-    }
-    process.stderr.write(`foreman daemon: listening on ${daemon.socketPath}\n`);
-    await new Promise<void>((resolve) => {
+    const stopped = new Promise<void>((resolve) => {
       process.once("SIGINT", resolve);
       process.once("SIGTERM", resolve);
     });
+    let stopping = false;
+    void stopped.then(() => {
+      stopping = true;
+    });
+    let daemon: HubDaemon | null = null;
+    let waiting = false;
+    while (!daemon) {
+      try {
+        daemon = await startHubDaemon({ paths, log });
+      } catch (err) {
+        if (!(service && err instanceof DaemonAlreadyRunningError)) {
+          fail(err instanceof Error ? err.message : String(err));
+        }
+        // `foreman start` (or another `foreman daemon`) serves agents for
+        // now; this one takes over when that one stops.
+        if (!waiting) log(`${(err as Error).message}; waiting to take over when it stops`);
+        waiting = true;
+        await Promise.race([stopped, new Promise((resolve) => setTimeout(resolve, SERVICE_RETRY_MS))]);
+        if (stopping) {
+          closeDb();
+          process.exit(0);
+        }
+      }
+    }
+    log(`listening on ${daemon.socketPath}`);
+    await stopped;
     await daemon.close();
     closeDb();
     process.exit(0);

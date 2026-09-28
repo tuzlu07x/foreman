@@ -6,15 +6,16 @@
 // `gpt-4o-mini` / `claude-haiku-4-5-20251001` defaults.
 // =============================================================================
 //
-// Three providers ship today (OpenAI + Anthropic + Gemini). OpenRouter and
-// custom-base proxy support are follow-ups — `DiscoveryProvider` accepts
-// strings beyond the union so future providers slot in without a public-API
-// break.
+// Cloud providers (OpenAI + Anthropic + Gemini) are listed at their fixed
+// API hosts. Self-hosted brains are listed at the base URL the user gave:
+// Ollama via its native `/api/tags` (the models pulled on that server), any
+// OpenAI-compatible endpoint via `<base>/models`.
 //
 // Caching: in-memory map keyed on `<provider>:<api-key-hash>` with a default
 // 24h TTL. SQLite-backed persistence is a follow-up if wizard re-renders
 // turn out to hammer the APIs in practice.
 
+import { checkLlmBaseUrl, ollamaApiRoot } from './endpoint.js'
 import { OAUTH_BETA as ANTHROPIC_OAUTH_BETA } from './providers/anthropic.js'
 
 export interface DiscoveredModel {
@@ -34,11 +35,20 @@ export interface DiscoveredModel {
   family?: string
 }
 
-export type DiscoveryProvider = 'openai' | 'anthropic' | 'gemini'
+export type DiscoveryProvider =
+  | 'openai'
+  | 'anthropic'
+  | 'gemini'
+  | 'ollama'
+  | 'openai_compatible'
 
 export interface DiscoverOptions {
-  /** API key, or the OAuth access token when `auth` is `'oauth'`. */
+  /** API key, or the OAuth access token when `auth` is `'oauth'`. Empty
+   *  for a keyless Ollama / OpenAI-compatible server. */
   apiKey: string
+  /** Required for `ollama` / `openai_compatible`: the server's http(s) base
+   *  URL (an OpenAI-compatible one includes its version path, e.g. `…/v1`). */
+  baseUrl?: string
   /** How `apiKey` authenticates. `'oauth'` (a subscription sign-in token)
    *  is only listable on Anthropic, which accepts the same Bearer + beta
    *  headers as the OAuth messages client. ChatGPT sign-in tokens target
@@ -82,7 +92,7 @@ export async function discoverModels(
   }
   const ttl = options.cacheTtlMs ?? 24 * 60 * 60 * 1000
   const now = options.now ?? Date.now
-  const cacheKey = `${provider}:${auth}:${hashApiKey(options.apiKey)}`
+  const cacheKey = `${provider}:${auth}:${options.baseUrl ?? ''}:${hashApiKey(options.apiKey)}`
   if (ttl > 0) {
     const cached = memoryCache.get(cacheKey)
     if (cached && now() - cached.fetchedAt < ttl) return cached.models
@@ -94,6 +104,10 @@ export async function discoverModels(
     models = await listAnthropicModels(options)
   } else if (provider === 'gemini') {
     models = await listGeminiModels(options)
+  } else if (provider === 'ollama') {
+    models = await listOllamaModels(options)
+  } else if (provider === 'openai_compatible') {
+    models = await listOpenAiCompatibleModels(options)
   } else {
     throw new Error(`Unknown discovery provider: ${provider as string}`)
   }
@@ -203,9 +217,77 @@ export async function listGeminiModels(
     .sort((a, b) => preferRecent(a.id, b.id))
 }
 
+/** Models pulled on an Ollama server (`/api/tags`), minus embedding-only
+ *  ones. Ids are what the chat endpoint takes, e.g. `llama3.2:3b`. */
+export async function listOllamaModels(
+  options: DiscoverOptions,
+): Promise<DiscoveredModel[]> {
+  const base = requireBaseUrl(options)
+  const body = await getJson<{ models?: { name?: unknown }[] }>(
+    `${ollamaApiRoot(base)}/api/tags`,
+    { headers: bearer(options.apiKey), redirect: 'error' },
+    options,
+  )
+  const names = (Array.isArray(body.models) ? body.models : [])
+    .map((m) => (typeof m?.name === 'string' ? m.name : ''))
+    .filter((name) => name.length > 0 && !/embed/i.test(name))
+  return [...new Set(names)]
+    .map(
+      (id): DiscoveredModel => ({
+        id,
+        label: id,
+        slash_id: `ollama/${id}`,
+        family: id.split(':')[0] ?? id,
+      }),
+    )
+    .sort((a, b) => a.id.localeCompare(b.id))
+}
+
+/** Models an OpenAI-compatible endpoint lists at `<base>/models`, minus
+ *  the obviously non-chat ones (embeddings, speech, images, moderation). */
+export async function listOpenAiCompatibleModels(
+  options: DiscoverOptions,
+): Promise<DiscoveredModel[]> {
+  const base = requireBaseUrl(options)
+  const body = await getJson<{ data?: { id?: unknown }[] }>(
+    `${base}/models`,
+    { headers: bearer(options.apiKey), redirect: 'error' },
+    options,
+  )
+  const ids = (Array.isArray(body.data) ? body.data : [])
+    .map((m) => (typeof m?.id === 'string' ? m.id : ''))
+    .filter(
+      (id) =>
+        id.length > 0 &&
+        !/(embed|whisper|tts|transcribe|moderation|dall-e|image)/i.test(id),
+    )
+  return [...new Set(ids)]
+    .map(
+      (id): DiscoveredModel => ({
+        id,
+        label: id,
+        slash_id: id,
+        family: id.split('/')[0] ?? id,
+      }),
+    )
+    .sort((a, b) => a.id.localeCompare(b.id))
+}
+
 // =============================================================================
 // Helpers
 // =============================================================================
+
+function requireBaseUrl(options: DiscoverOptions): string {
+  const checked = checkLlmBaseUrl(options.baseUrl ?? '')
+  if (!checked.ok) {
+    throw new ModelDiscoveryError(`Invalid base URL: ${checked.reason}`)
+  }
+  return checked.url
+}
+
+function bearer(apiKey: string): Record<string, string> {
+  return apiKey ? { authorization: `Bearer ${apiKey}` } : {}
+}
 
 async function getJson<T>(
   url: string,
@@ -226,7 +308,14 @@ async function getJson<T>(
         `HTTP ${res.status} from ${withoutQuery(url)}${body ? `: ${body.slice(0, 200)}` : ''}`,
       )
     }
-    return (await res.json()) as T
+    try {
+      return (await res.json()) as T
+    } catch (err) {
+      if (controller.signal.aborted) throw err
+      throw new ModelDiscoveryError(
+        "Malformed response: the body is not JSON",
+      )
+    }
   } finally {
     clearTimeout(timeout)
   }
