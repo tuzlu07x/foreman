@@ -2,7 +2,7 @@
 
 Foreman targets POSIX environments. On Windows the path is **WSL2 with Ubuntu 22.04** — there's no native Windows binary in v0.1.x (#66 ships darwin/linux only). This doc walks you from "fresh Windows 11" to a running `foreman start` + the phishing demo, then catalogues every WSL2-specific quirk we hit during verification.
 
-> If something blocks you that this doc doesn't cover, open an issue tagged `area:install` — those become the v0.1.3 follow-ups.
+> If something blocks you that this doc doesn't cover, open an issue tagged `area:install` — those become the WSL2 follow-ups.
 
 ## Prerequisites
 
@@ -47,7 +47,7 @@ Every item below was hit on the Windows 11 + WSL2 (Ubuntu 22.04) verification ru
 ### Filesystem
 
 - **Keep Foreman's state inside the WSL2 filesystem, not `/mnt/c/...`.** Foreman's SQLite write path is fsync-heavy; the WSL2 ↔ NTFS bridge multiplies every commit by ~5–10×. The default install lands in `~/.config/foreman/` + `~/.local/state/foreman/` — both live on the Linux-native ext4 root, so this is automatic. Only override `FOREMAN_HOME` if you point at another Linux path, never `/mnt/c/`.
-- **Linux permissions are advisory on `/mnt/c/`.** `chmod 0600` on a Windows mount is a no-op; if you accidentally store the identity key there it isn't actually protected. `foreman doctor` warns you about world-readable identity files starting v0.1.3.
+- **Linux permissions are advisory on `/mnt/c/`.** `chmod 0600` on a Windows mount is a no-op; if you accidentally store the identity key there it isn't actually protected. `foreman doctor` warns you about world-readable identity files.
 
 ### Terminal
 
@@ -92,7 +92,7 @@ Everything else in the walkthrough is identical. Keep `FOREMAN_HOME` (and your h
 
 ## What's *not* supported
 
-- **Native Windows binary** — v0.2+ at the earliest. Until then `wsl --install` is the only blessed path.
+- **Native Windows binary** — not planned yet. Until then `wsl --install` is the only blessed path.
 - **PowerShell / cmd workflows.** Foreman shells out and assumes a POSIX environment; running it directly from PowerShell breaks in mysterious ways.
 - **Other WSL2 distros** (Debian, Kali, openSUSE…). They probably work — package names differ; treat anything beyond Ubuntu 22.04 as best-effort.
 - **WSL1**. Drop it and re-install as WSL2: `wsl --set-default-version 2`.

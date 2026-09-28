@@ -17,13 +17,13 @@ All three run only on a published release or a manual dispatch, never on pull re
 
 ## Cutting a release
 
-1. Update `package.json` `version` (e.g. `0.2.0`), then run `npm install --package-lock-only` so the lockfile matches.
-2. In `CHANGELOG.md`, move **Unreleased** under `## [0.2.0] - <date>`.
+1. Update `package.json` `version` (e.g. `2.1.0`), then run `npm install --package-lock-only` so the lockfile matches.
+2. In `CHANGELOG.md`, move **Unreleased** under `## [2.1.0] - <date>`.
 3. Merge that as a PR. `verify` and `qa` must be green.
 4. Create the release from `main`:
 
    ```bash
-   gh release create v0.2.0 --target main --title "v0.2.0" --notes-file <notes.md>
+   gh release create v2.1.0 --target main --title "v2.1.0" --notes-file <notes.md>
    ```
 
    The tag must be `v` + the `package.json` version, otherwise `release-npm` stops before publishing.

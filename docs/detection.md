@@ -137,17 +137,17 @@ The `shell_command` rule fires when the agent invokes a shell-y tool name (`shel
 
 Safe-list factors only emit when at least one positive shell factor would have fired — so `git status` produces no factors at all, but `rm -rf /tmp/cache` produces `shell_rm_rf_general` (+60) + `shell_safe_tmp_rm` (-10) = net +50.
 
-### Known gaps (documented for v0.2)
+### Known gaps
 
 - `bash -c "<inner cmd>"` — the inner command is a single argv token, so the matchers don't recurse into it. Detection happens at the outer level only.
-- Windows / PowerShell analogues — tracked via [LOLBAS](https://lolbas-project.github.io/) for v0.2.
+- Windows / PowerShell analogues — tracked via [LOLBAS](https://lolbas-project.github.io/) for a later release.
 - Encoded payloads — `echo "cm0gLXJmIC8K" | base64 -d | sh` would bypass the rule. C5 (prompt injection) and C8 (LLM verification) are the planned defenses.
 
 ### Sources
 
 - [MITRE ATT&CK — Execution / Persistence / Defense Evasion / Discovery](https://attack.mitre.org/tactics/TA0002/)
 - [GTFOBins — abusable Unix binaries](https://gtfobins.github.io/)
-- [LOLBAS — Windows analogue (v0.2)](https://lolbas-project.github.io/)
+- [LOLBAS — Windows analogue](https://lolbas-project.github.io/)
 
 ---
 
@@ -177,7 +177,7 @@ The `network_outbound` rule scans the stringified args (plus the tool name) for 
 
 Regex on `JSON.stringify(args) + ' ' + targetTool`. Hosts are deduped per request (multiple URLs to `webhook.site/a` and `webhook.site/b` produce one factor, not two). Port is stripped before matching. IPv6 hosts are recognised by the bracketed form (`[2001:db8::1]`).
 
-### Known gaps (documented for v0.2)
+### Known gaps
 
 - Non-http(s) schemes — `stratum+tcp://pool.miner.com` (mining), `ftp://exfil/upload` are NOT scanned. C5 / C6 may pick these up via context.
 - DNS exfil — `dig` queries to attacker-controlled subdomains (e.g. `<base64-stolen-data>.attacker.com`) aren't caught by URL scanning. Future work.
@@ -265,7 +265,7 @@ Without a `sessionId` (single-shot / un-sessioned calls) the hotkey doesn't rend
 
 ### Auto-halt (deferred)
 
-The spec calls for optional auto-halt at `bucket === 'critical' && hasLoopFactor`. v0.1 ships the **manual `[k]` hotkey only**; auto-halt is deferred to v0.2 because:
+The spec calls for optional auto-halt at `bucket === 'critical' && hasLoopFactor`. Foreman ships the **manual `[k]` hotkey only**; auto-halt is deferred because:
 
 1. The user should witness the loop before halting — false-positive on `loop_burst` against a legitimate batch job would silently break it.
 2. Adding the auto-halt path requires new policy.yaml schema (`loop.auto_halt_critical: true`) + audit semantics for "halt without modal approval".

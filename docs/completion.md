@@ -57,8 +57,8 @@ Fish reloads completions automatically on next launch — no `source` required.
 
 ## What does not complete (yet)
 
-- **Dynamic values** — agent ids from the registry, secret names from the store, log request ids. Today the script is static at install time. Dynamic context completion is on the v0.2+ list; see #70 for the issue.
-- **PowerShell / cmd** — Windows-native is v0.2+. Until then WSL2 + bash/zsh/fish covers Windows.
+- **Dynamic values** — agent ids from the registry, secret names from the store, log request ids. Today the script is static at install time. Dynamic context completion is planned.
+- **PowerShell / cmd** — Windows-native is not supported yet. Until then WSL2 + bash/zsh/fish covers Windows.
 
 ## Homebrew
 

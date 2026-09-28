@@ -6,6 +6,39 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-28
+
+The first release since 0.1.6. The version jumps to 2.0.0 because several
+interfaces and defaults changed in ways that can break an existing setup.
+Read **Breaking changes** before you upgrade.
+
+### Breaking changes
+- **Node 22.12+** is required (see Changed).
+- **Agent identity tokens (#618).** Agents wired before this release run as
+  `untrusted:<id>` until you run `foreman agent rewire --all` and restart
+  them. See the upgrade note under Changed.
+- **Webhook signatures (#656).** `X-Foreman-Signature` is now an HMAC-SHA256
+  over `<X-Foreman-Timestamp>.<raw body>`, not over the body alone, and
+  every POST carries `X-Foreman-Timestamp` (Unix seconds). Receivers that
+  verify the old signature reject every delivery until they are updated
+  ([docs/notifications.md](docs/notifications.md)).
+- **Push URLs (#656).** Slack and Discord webhook URLs and the ntfy server
+  must be `https://` (plain `http://` only to this machine), and a URL with
+  a user name or password is refused.
+- **`foreman agent remove` keeps the agent's program (#657).** It
+  unregisters the agent and revokes its key and identity token, but no
+  longer uninstalls the binary. `--uninstall` does, and only for agents
+  Foreman installed itself.
+- **`foreman report` prints a table (#657).** Use `--json` for the digest
+  scripts used to read.
+- **Relayed `/foreman` commands (#656).** A command an agent relays (for
+  example from Telegram) that changes Foreman, such as `stop` or
+  `model <x>`, now waits for your approval. Read-only verbs still run at
+  once.
+- **A broken `policy.yaml` stops `foreman start`** and `foreman wrap` with
+  the file, line and reason, instead of a stack trace (#657). A second
+  `foreman start` on the same home refuses to run.
+
 ### Added
 - **Per-agent identity tokens on the MCP path** (#618,
   [docs](docs/agent-lifecycle.md#agent-identity-tokens)).
@@ -179,6 +212,50 @@ All notable changes to Foreman are documented here. The format follows
   - Node 22/24 test matrix.
 
 ### Fixed
+- **Security fixes from the end-user QA pass** (#656).
+  - Agents can't run Foreman: relayed commands that change it need you
+    (see Breaking changes), and a `--source` can't create, revive or
+    re-spell an agent.
+  - Policy edits apply live, without a restart, and rule ids stay stable,
+    so audit rows keep pointing at the right rule. A block rule lives in
+    `policy.yaml` only and goes away when you remove it.
+  - Agent-to-agent rules work: `can_call` / `cannot_call`,
+    `<agent>:<tool>` rules and the delegation fields of responsibility
+    policies bind hand-offs (`write`, `assign`).
+  - The `.env` and SSH-key guards hold whatever a transport calls the tool
+    (Hermes, OpenClaw and ZeroClaw report reads as `read`). Deny and ask
+    rules cover every alias; allow rules never widen.
+  - `rate_limits.tokens_per_hour` is enforced.
+  - "Always allow / deny" remembers the call you answered (same agent,
+    tool and file or command), not the whole tool, and says so first.
+  - Allowing a high- or critical-risk call in the TUI takes a second key
+    (`a`, then `y`). Hidden terminal characters in agent text are shown as
+    visible symbols, so they can't hide a path on the approval screen.
+  - Only your own denials count as "previously denied".
+  - Stripe, npm, Notion and Discord tokens are redacted. Secret names are
+    validated, `--value` warns about shell history, and
+    `secrets show --reveal` is audited.
+  - The Claude Code hook honours `FOREMAN_APPROVAL_TIMEOUT`; `mcp-stdio`
+    answers `ping` and non-JSON input as JSON-RPC says.
+- **CLI and TUI fixes from the end-user QA pass** (#657).
+  - `foreman usage env <agent>` gives each agent a usage key of its own,
+    so an agent can no longer book its spend to another one.
+  - Log search text is never parsed as FTS5 syntax (it used to crash).
+  - The TUI asks before deleting a secret or removing an agent, and the
+    Keys page never lists or deletes agent identity tokens.
+  - `foreman agent add <registry-id>` works without `--type`.
+  - `foreman doctor` never creates `secrets.key`, fails loudly when it
+    can't decrypt the secrets, checks the policy schema and rule regexes,
+    and gives a fresh box no false warnings. `migrate-config` never moves
+    the live home.
+  - `foreman notify enable` points the channel at its credentials, and
+    offline errors say "couldn't reach", not "rejected".
+  - The setup wizard and the help overlay fit an 80x24 terminal; `q` and
+    Ctrl-C quit the same way on every screen; the wizard warns about a
+    token, chat id or endpoint with the wrong shape.
+  - Approvals that timed out while `foreman start` wasn't running leave a
+    trace in the inbox. `log tail` shows what each call was about, and
+    `org messages boss` is your inbox.
 - **OpenClaw on an older Node** (#646). OpenClaw needs Node
   `>=24.16.0 <25 || >=26.1.0` since v2026.9.3; Foreman runs on 22.12+.
   When the `node` on PATH is outside that range, the setup wizard,
@@ -333,5 +410,5 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [0.1.6] - 2026-06-01
 
-Last published release. See the
-[GitHub releases](https://github.com/tuzlu07x/foreman/releases) for earlier notes.
+See the [GitHub releases](https://github.com/tuzlu07x/foreman/releases) for
+the notes of 0.1.6 and earlier.

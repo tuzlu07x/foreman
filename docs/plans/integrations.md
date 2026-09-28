@@ -1,6 +1,6 @@
 # Plan: Integrations (GitHub, GitLab, Jira/Confluence, Trello, Linear, Notion)
 
-> Status: approved plan, implementation in progress. PR 1 (catalog + model) has a work-in-progress commit on branch `claude/busy-wright-gn17l6`; PRs 2–5 are not started. See [docs/project-status.md](../project-status.md).
+> Status: approved plan, implementation in progress. PR 1 (catalog + model) has a work-in-progress commit on branch `claude/busy-wright-gn17l6`; PRs 2–5 are not started.
 
 The decisions in §13 are binding for the implementation.
 

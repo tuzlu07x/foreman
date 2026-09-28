@@ -3,8 +3,8 @@ require "language/node"
 class ForemanAgent < Formula
   desc "Local AI agent gateway — mediates, scores, asks, and audits"
   homepage "https://github.com/tuzlu07x/foreman"
-  url "https://registry.npmjs.org/foreman-agent/-/foreman-agent-0.1.1.tgz"
-  sha256 "58d21035f6e8561312d063a6115c249927209376c699072cd49bdf7bf1794ea2"
+  url "https://registry.npmjs.org/foreman-agent/-/foreman-agent-2.0.0.tgz"
+  sha256 "64d86418c50a49d73158bcfdc8058a826fe570c872cf8e227dc26947d46cb089"
   license "MIT"
   head "https://github.com/tuzlu07x/foreman.git", branch: "main"
 
@@ -28,11 +28,11 @@ class ForemanAgent < Formula
 
   def caveats
     <<~EOS
-      Foreman stores its state in ~/.foreman/ (identity key, policy.yaml,
-      audit database). Reinstalling or upgrading does NOT touch it. Delete
-      it manually if you want a clean slate:
-
-          rm -rf ~/.foreman
+      Foreman keeps its state (identity key, policy.yaml, audit database)
+      outside the Homebrew prefix; `foreman doctor` prints where.
+      Reinstalling or upgrading does NOT touch it. See
+      https://github.com/tuzlu07x/foreman/blob/main/docs/install.md#uninstall
+      for a clean removal.
     EOS
   end
 end
