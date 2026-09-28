@@ -90,7 +90,7 @@ function block(reason: string): never {
 
 export const hookCommand = new Command("hook")
   .description(
-    "PreToolUse hook entrypoint (#517 Faz 4). Wired from the agent's " +
+    "PreToolUse hook entrypoint. Wired from the agent's " +
       "settings file by `foreman agent hook install <agent>`. Reads the " +
       "agent's tool-call payload from stdin, gates it through Foreman's " +
       "policy / risk / approval / audit pipeline, and exits 0 (allow) or " +

@@ -536,7 +536,7 @@ export class DbApprovalService implements ApprovalService {
         return {
           ok: false,
           error:
-            "policy injection not wired in this Foreman build (#526 — restart with the injector configured)",
+            "policy injection not wired in this Foreman build (restart with the injector configured)",
         };
       }
       const proposal = resolveProposalFromRow(opts.actionId, fullRow);

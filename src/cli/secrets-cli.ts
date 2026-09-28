@@ -374,7 +374,7 @@ secretsCommand
 secretsCommand
   .command("repush <agentId>")
   .description(
-    "Re-run secret projection for an installed agent — useful after the agent's own config has been initialised (#377)",
+    "Re-run secret projection for an installed agent — useful after the agent's own config has been initialised",
   )
   .action((agentId: string) => {
     const db = getDb();

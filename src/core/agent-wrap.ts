@@ -137,17 +137,17 @@ export function startAgentWrap(opts: AgentWrapOptions): AgentWrapHandle {
   const protocol = opts.entry.input_protocol
   if (!protocol) {
     throw new AgentWrapValidationError(
-      `agent "${opts.entry.id}" cannot be wrap-launched: registry entry has no \`input_protocol\` block. See #445 for the schema. Configure \`approval_adapter\` instead if this agent ships a programmable transport.`,
+      `agent "${opts.entry.id}" cannot be wrap-launched: registry entry has no \`input_protocol\` block. Configure \`approval_adapter\` instead if this agent ships a programmable transport.`,
     )
   }
   if (protocol.method !== 'stdin_jsonl') {
     throw new AgentWrapValidationError(
-      `agent "${opts.entry.id}" declares input_protocol.method="${protocol.method}"; only "stdin_jsonl" is implemented in #445 PR 2.`,
+      `agent "${opts.entry.id}" declares input_protocol.method="${protocol.method}"; only "stdin_jsonl" is supported.`,
     )
   }
   if (protocol.schema !== 'telegram-update') {
     throw new AgentWrapValidationError(
-      `agent "${opts.entry.id}" declares input_protocol.schema="${protocol.schema}"; only "telegram-update" is implemented in #445 PR 2.`,
+      `agent "${opts.entry.id}" declares input_protocol.schema="${protocol.schema}"; only "telegram-update" is supported.`,
     )
   }
 

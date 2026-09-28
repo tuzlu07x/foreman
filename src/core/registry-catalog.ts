@@ -664,7 +664,7 @@ export const AgentEntrySchema = z
       !(entry.approval_adapter !== undefined && entry.input_protocol !== undefined),
     {
       message:
-        "agent entry cannot declare both `approval_adapter` (programmable bidirectional transport, e.g. codex exec-server) and `input_protocol` (chat-only daemon wrap mode). These are two distinct transport models — pick one. See #445 for the decision matrix.",
+        "agent entry cannot declare both `approval_adapter` (programmable bidirectional transport, e.g. codex exec-server) and `input_protocol` (chat-only daemon wrap mode). These are two distinct transport models — pick one.",
       path: ["approval_adapter"],
     },
   )

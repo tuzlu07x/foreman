@@ -348,8 +348,7 @@ export function applyPermissions(
   if (!defaults) {
     throw new Error(
       `No default permission allowlist for agent '${agentId}'. ` +
-        `Supported: ${Object.keys(DEFAULT_PERMISSIONS).sort().join(", ")}. ` +
-        `See #517 for the roadmap.`,
+        `Supported: ${Object.keys(DEFAULT_PERMISSIONS).sort().join(", ")}.`,
     );
   }
   // Default to JSON for back-compat with the original Faz 1 shape
@@ -358,11 +357,9 @@ export function applyPermissions(
   if (format !== "json") {
     throw new Error(
       `Agent '${agentId}' uses a ${format.toUpperCase()} config (${settingsPath}); ` +
-        `Foreman's automatic permission writer only handles JSON in Faz 2. ` +
+        `Foreman's automatic permission writer only handles JSON config files. ` +
         `The semantic defaults are available via DEFAULT_PERMISSIONS['${agentId}'] ` +
-        `for reference, but writing the file lands in Faz 4 alongside the ` +
-        `unified PreToolUse hook (see #517 Faz 4). For now, apply the ` +
-        `allowlist by hand — the entry shape is the same as claude-code.`,
+        `for reference; apply the allowlist by hand — the entry shape is the same as claude-code.`,
     );
   }
   let existing: ClaudeSettings = {};
