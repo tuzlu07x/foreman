@@ -26,6 +26,12 @@ import type {
   ProvidersPhase,
 } from "./providers-logic.js";
 import type { ServicesPhase } from "./services-logic.js";
+import type {
+  TeamCustomRole,
+  TeamPhase,
+  TeamResult,
+  TeamRuntime,
+} from "./team-logic.js";
 import { DEFAULT_AGENTS } from "./shared.js";
 import type {
   AgentConfigsMap,
@@ -178,6 +184,17 @@ export interface WizardState {
   // The install runner has resolved or rejected (Ctrl-C may quit then).
   installSettled: boolean;
 
+  teamPhase: TeamPhase;
+  teamCursor: number;
+  /** Picked rows: `preset:<id>` or `custom:<index>`. */
+  teamPicked: string[];
+  /** Per row, Claude Code or Codex when you switched it ([r]). */
+  teamRunsOn: Record<string, TeamRuntime>;
+  teamCustom: TeamCustomRole[];
+  teamDraft: TeamCustomRole | null;
+  teamCanCursor: number;
+  teamResult: TeamResult | null;
+
   donePhase: "main" | "doctor" | "log";
   doctorReport: DoctorReport | null;
 }
@@ -273,6 +290,15 @@ export function createInitialWizardState(
     installQuitNotice: false,
     installSettled: false,
 
+    teamPhase: "pick",
+    teamCursor: 0,
+    teamPicked: [],
+    teamRunsOn: {},
+    teamCustom: [],
+    teamDraft: null,
+    teamCanCursor: 0,
+    teamResult: null,
+
     donePhase: "main",
     doctorReport: null,
   };
@@ -299,6 +325,7 @@ export function snapshotSession(
     // part of the snapshot.
     integrationsSelected: [...state.integrationsSelected],
     registeredAtSnapshot: [...registered],
+    teamStep: true,
   };
 }
 

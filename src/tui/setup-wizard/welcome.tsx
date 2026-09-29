@@ -22,6 +22,7 @@ export const WELCOME_STEPS: WelcomeStep[] = [
   { number: 4, name: "Services", estimateMinutes: 1, optional: true },
   { number: 5, name: "Integrations", estimateMinutes: 1, optional: true },
   { number: 6, name: "Install + Verify", estimateMinutes: 3 },
+  { number: 7, name: "Your team", estimateMinutes: 1, optional: true },
 ];
 
 export function totalEstimatedMinutes(
@@ -49,7 +50,8 @@ export function renderWelcomeStep(ctx: WizardContext): JSX.Element {
         Foreman guards the AI agents on this machine (Claude Code, Codex,
         Hermes and others): every tool call is checked against your
         policy, risky ones wait for your OK, and everything lands in one
-        audit trail. Chat apps like Telegram are optional.
+        audit trail. It can also run them as a team, each with its own role.
+        Chat apps like Telegram are optional.
       </Text>
       <Text color={theme.fg.muted}>
         You'll paste LLM provider keys, pick agents to install, and

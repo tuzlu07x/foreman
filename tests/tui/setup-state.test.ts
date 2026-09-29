@@ -285,6 +285,7 @@ describe("setup-state", () => {
         "chat-primary",
         "required-setup",
         "install",
+        "team",
       ];
       for (const step of order) {
         expect(nextStep(s)).toBe(step);
@@ -355,6 +356,22 @@ describe("setup-state", () => {
         "install",
       ]);
       expect(nextStep(loadSetupState(statePath))).toBe("done");
+    });
+
+    it("counts the optional team step as done for a setup past install", () => {
+      write(["welcome", "providers", "foreman-llm", "agents", "services", "integrations", "chat-primary", "required-setup"]);
+      expect(nextStep(loadSetupState(statePath))).toBe("install");
+      write(["welcome", "providers", "foreman-llm", "agents", "services", "integrations", "chat-primary", "required-setup", "install"]);
+      expect(loadSetupState(statePath).completed).toContain("team");
+    });
+
+    it("offers the team step on resume when the wizard that saved it had one", () => {
+      const completed = ["welcome", "providers", "foreman-llm", "agents", "services", "integrations", "chat-primary", "required-setup", "install"];
+      const session = { providersSelected: [], providersSignedIn: [], agentsSelected: [], agentConfigs: {}, servicesSelected: [], teamStep: true };
+      writeFileSync(statePath, JSON.stringify({ version: 1, completed, startedAt: 1, lastUpdatedAt: 2, session }));
+      const state = loadSetupState(statePath);
+      expect(nextStep(state)).toBe("team");
+      expect(state.session?.teamStep).toBe(true);
     });
 
     it("leaves a run that stopped at services on the Integrations step", () => {

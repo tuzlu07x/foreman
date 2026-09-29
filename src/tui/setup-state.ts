@@ -24,6 +24,9 @@ export const STEPS = [
   // pasted in before the projector writes them).
   "required-setup",
   "install",
+  // Optional: roles on Claude Code / Codex instances (org.yaml). Skipped
+  // on its own when neither is registered.
+  "team",
   "done",
 ] as const;
 export type Step = (typeof STEPS)[number];
@@ -59,6 +62,9 @@ export interface WizardSessionSnapshot {
    *  with the registry now; any difference re-opens the agents confirm
    *  step (planResume). Absent in snapshots written before it existed. */
   registeredAtSnapshot?: string[];
+  /** Written by a wizard that has the "Your team" step: its install isn't
+   *  the last step, so resume offers the team step (migrateCompleted). */
+  teamStep?: true;
 }
 
 export interface SetupState {
@@ -118,6 +124,13 @@ function migrateCompleted(state: SetupState): SetupState {
         (a, b) => STEPS.indexOf(a) - STEPS.indexOf(b),
       );
     }
+  }
+  // The optional team step comes after install: a setup that got past
+  // install before the step existed is finished (roles can be added with
+  // `foreman org add-role`).
+  const knowsTeam = (state.session as { teamStep?: unknown } | undefined)?.teamStep === true;
+  if (!knowsTeam && completed.includes("install") && !completed.includes("team")) {
+    completed = [...completed, "team"];
   }
   return completed === state.completed ? state : { ...state, completed };
 }
@@ -266,6 +279,7 @@ export function sanitizeSession(
   if (isStringArray(r.registeredAtSnapshot)) {
     out.registeredAtSnapshot = [...r.registeredAtSnapshot];
   }
+  if (r.teamStep === true) out.teamStep = true;
   return out;
 }
 

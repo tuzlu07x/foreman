@@ -172,6 +172,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
   const serviceIds = doneServiceIds(serviceCatalog, storedNames);
   const agentRows = services.registry.list();
   const policyRuleCount = countPolicyRules(services.policyPath);
+  const teamAdded = ctx.state.teamResult?.added ?? [];
   // Agents without an identity file (generic-mcp) aren't push targets.
   const identityTargets = installSummary
     ? installSummary.registered.length -
@@ -271,6 +272,14 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
           {policyRuleCount} policy rule
           {policyRuleCount === 1 ? "" : "s"}   smart defaults active
         </Text>
+        {teamAdded.length > 0 ? (
+          <Text color={theme.fg.muted}>
+            {"  "}
+            {teamAdded.length} role{teamAdded.length === 1 ? "" : "s"}
+            {teamAdded.length === 1 ? "          " : "         "}
+            {teamAdded.map((m) => m.title).join(", ")} · `foreman org show`
+          </Text>
+        ) : null}
       </Box>
       <TalkToForeman services={serviceIds} />
       {installSummary && (

@@ -179,6 +179,7 @@ const ALL_BEFORE: Record<Step, Step[]> = {
   'chat-primary': ['welcome', 'providers', 'foreman-llm', 'agents', 'services', 'integrations'],
   'required-setup': ['welcome', 'providers', 'foreman-llm', 'agents', 'services', 'integrations', 'chat-primary'],
   install: ['welcome', 'providers', 'foreman-llm', 'agents', 'services', 'integrations', 'chat-primary', 'required-setup'],
+  team: ['welcome', 'providers', 'foreman-llm', 'agents', 'services', 'integrations', 'chat-primary', 'required-setup', 'install'],
   done: [
     'welcome',
     'providers',
@@ -189,6 +190,7 @@ const ALL_BEFORE: Record<Step, Step[]> = {
     'chat-primary',
     'required-setup',
     'install',
+    'team',
   ],
 }
 
@@ -310,6 +312,12 @@ async function mount(
     voiceConfigPath: join(dir, 'voice.yaml'),
     launchEditor,
     ...(integrations ? { integrations } : {}),
+    orgConfigPath: join(dir, 'org.yaml'),
+    // The team step's instances: registered here, nothing installed.
+    addTeamAgent: vi.fn(async (id: string, runsOn: string) => {
+      registry.register({ id, displayName: id, transport: 'stdio', metadata: { registryId: runsOn } })
+      return null
+    }),
   }
   const onQuit = vi.fn<() => void>()
   const wizard = React.createElement(SetupWizard, {
@@ -391,7 +399,7 @@ async function mount(
     await press('c')
     // A fast (mocked) install can go straight on to Done.
     const deadline = Date.now() + 5_000
-    while (!/Install \+ configure|Setup complete/.test(frame())) {
+    while (!/Install \+ configure|Setup complete|Your team/.test(frame())) {
       if (Date.now() > deadline) {
         throw new Error(`install did not start; frame:\n${frame()}`)
       }
@@ -496,7 +504,7 @@ describe('welcome step', () => {
   it('previews the steps and starts on Enter', async () => {
     const w = await mount('welcome')
     await w.until('Welcome to Foreman')
-    await w.until("We'll wire this up in 6 steps")
+    await w.until("We'll wire this up in 7 steps")
     await w.until('[Enter] Start setup')
     await w.press(ENTER, 'LLM Providers ▸ pick which to configure')
   })
@@ -519,13 +527,13 @@ describe('welcome step', () => {
 
 describe('step numbering', () => {
   it.each([
-    ['providers', 'Step 1 of 6 ▸ LLM Providers'],
-    ['foreman-llm', "Step 2 of 6 ▸ Foreman's brain"],
-    ['agents', 'Step 3 of 6 ▸ Agents'],
-    ['services', 'Step 4 of 6 ▸ Services'],
-    ['integrations', 'Step 5 of 6 ▸ Integrations'],
-    ['required-setup', 'Step 6 of 6 ▸ Required setup'],
-    ['install', 'Step 6 of 6 ▸ Install + configure'],
+    ['providers', 'Step 1 of 7 ▸ LLM Providers'],
+    ['foreman-llm', "Step 2 of 7 ▸ Foreman's brain"],
+    ['agents', 'Step 3 of 7 ▸ Agents'],
+    ['services', 'Step 4 of 7 ▸ Services'],
+    ['integrations', 'Step 5 of 7 ▸ Integrations'],
+    ['required-setup', 'Step 6 of 7 ▸ Required setup'],
+    ['install', 'Step 6 of 7 ▸ Install + configure'],
   ] as const)('%s shows "%s"', async (step, header) => {
     const w = await mount(step)
     if (step === 'install') await w.startInstall()
@@ -1028,7 +1036,7 @@ describe('integrations step', () => {
 
   it('resumes at the picker, and empty + Enter skips the step', async () => {
     const w = await mount('integrations')
-    await w.until('Step 5 of 6 ▸ Integrations ▸ optional')
+    await w.until('Step 5 of 7 ▸ Integrations ▸ optional')
     await w.until('GitHub — token')
     await w.until('GitLab — browser sign-in, after setup')
     await w.press(ENTER, 'Required setup')
@@ -1400,8 +1408,62 @@ describe('resume never uninstalls on its own', () => {
     expect(vi.mocked(runInstallStep).mock.calls.length - before).toBe(1)
     expect(call?.[0]).toEqual(['hermes'])
     expect(call?.[1]).toEqual([])
-    await resumed.press('s', 'Setup complete')
+    // Codex is registered, so the optional team step shows: Enter skips it.
+    await resumed.press('s', 'Your team')
+    await resumed.press(ENTER, 'Setup complete')
   }, 40_000)
+})
+
+describe('team step', () => {
+  it('moves straight on when neither Claude Code nor Codex is registered', async () => {
+    const w = await mount('team', { registered: ['hermes'] })
+    await w.until('Setup complete')
+  })
+
+  it('skips on Enter with nothing picked', async () => {
+    const w = await mount('team', { registered: ['claude-code'] })
+    await w.until('Nothing picked: Enter skips this step.')
+    await w.press(ENTER, 'Setup complete')
+    expect(w.services.addTeamAgent).not.toHaveBeenCalled()
+  })
+
+  it('adds ready-made roles and your own, each on its own instance, into a new org.yaml', async () => {
+    const w = await mount('team', { registered: ['claude-code', 'codex'] })
+    await w.until('Step 7 of 7 ▸ Your team')
+    await w.press(SPACE, '1 picked. Everyone reports to the Manager, who reports to you.')
+    await w.press(DOWN)
+    await w.press(DOWN)
+    await w.press(SPACE, '2 picked.')
+    // Code Reviewer runs on Claude Code; [r] switches it to Codex.
+    await w.press('r', /Code Reviewer\s+Codex/)
+    for (let i = 0; i < 6; i++) await w.press(DOWN)
+    await w.until('❯ + Your own role…')
+    await w.press(ENTER, 'Your own role')
+    await w.type('Chores')
+    await w.press(ENTER, 'What should Chores do?')
+    await w.type('Tidy the issue tracker.')
+    await w.press(ENTER, 'What may Chores do?')
+    await w.press(DOWN)
+    await w.press(DOWN)
+    await w.press(DOWN)
+    await w.press(SPACE, /\[✓\] use the web/)
+    await w.press(ENTER, '3 picked.')
+    await w.press(ENTER, "Your company or team's name")
+    await w.type('Acme')
+    await w.press(ENTER, 'reports to manager')
+    await w.until('✓ Chores')
+    expect(vi.mocked(w.services.addTeamAgent!).mock.calls).toEqual([
+      ['manager', 'claude-code'],
+      ['code-reviewer', 'codex'],
+      ['chores', 'claude-code'],
+    ])
+    const org = readFileSync(w.services.orgConfigPath!, 'utf-8')
+    expect(org).toContain('company: "Acme"')
+    expect(org).toMatch(/code-reviewer:\n\s+title: Code Reviewer\n\s+agent: code-reviewer\n\s+reports_to: manager/)
+    expect(org).toMatch(/chores:\n\s+title: Chores\n\s+agent: chores\n\s+reports_to: manager\n\s+instructions: Tidy the issue tracker.\n\s+can:\n\s+- read\n\s+- network/)
+    await w.press(ENTER, 'Setup complete')
+    await w.until('3 roles         Manager, Code Reviewer, Chores')
+  }, 30_000)
 })
 
 describe('install step', () => {

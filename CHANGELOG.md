@@ -26,6 +26,13 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Added
 
+- **Set up your team in the setup wizard.** A new optional step, *Your
+  team*, comes after install when Claude Code or Codex is registered:
+  tick ready-made roles or add your own (a title, what it does in your
+  own words, and what it may do), pick Claude Code or Codex for each,
+  and Foreman adds each role as its own instance and writes them to
+  `org.yaml`, with everyone reporting to the manager when you pick one.
+  Setups finished before this step aren't sent back to it ([#736](https://github.com/tuzlu07x/foreman/issues/736)).
 - **Ready-made roles, your own roles, and what each role may do.**
   `foreman org roles` lists ready-made roles (manager, developer,
   code-reviewer, researcher, writer, analyst, support, assistant).

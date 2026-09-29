@@ -13,6 +13,7 @@ import type { Layout } from "../layout.js";
 import type { Step } from "../setup-state.js";
 import type { ChatPrimaryChannel } from "./chat-primary.js";
 import type { WizardSetters, WizardState } from "./state.js";
+import type { TeamRuntime } from "./team-logic.js";
 import type { FailureResolution, QuitReason, WizardServices } from "./types.js";
 
 /**
@@ -47,6 +48,8 @@ export interface WizardContext {
   llmPickerOptions: string[];
   requiredSetupResolution: RequiredSetupResolution;
   chatPrimaryChannelsNeeded: ChatPrimaryChannel[];
+  /** Claude Code / Codex, when registered: what team roles run on. */
+  teamRuntimes: TeamRuntime[];
   failureResolverRef: RefObject<
     ((resolution: FailureResolution) => void) | null
   >;

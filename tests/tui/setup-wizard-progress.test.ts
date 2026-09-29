@@ -28,6 +28,7 @@ describe('stepProgress', () => {
       'chat-primary': 6,
       'required-setup': 6,
       install: 6,
+      team: 7,
     })
   })
 

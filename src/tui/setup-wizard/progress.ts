@@ -18,6 +18,7 @@ const WELCOME_STEP_NAME: Record<Exclude<Step, "welcome" | "done">, string> = {
   "chat-primary": "Install + Verify",
   "required-setup": "Install + Verify",
   install: "Install + Verify",
+  team: "Your team",
 };
 
 export type ProgressStep = keyof typeof WELCOME_STEP_NAME;

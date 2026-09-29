@@ -178,6 +178,8 @@ describe('wizard state ↔ snapshot', () => {
       ...session,
       integrationsSelected: [],
       registeredAtSnapshot: ['codex'],
+      // This wizard has the "Your team" step after install.
+      teamStep: true,
     })
   })
 })
