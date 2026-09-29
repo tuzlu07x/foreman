@@ -1,6 +1,7 @@
 import { and, desc, eq, gte, or } from "drizzle-orm";
 import type { ForemanDb } from "../db/client.js";
-import { requests, sessions } from "../db/schema.js";
+import { controlCommands, requests, sessions } from "../db/schema.js";
+import { loadOrg, type OrgDoc } from "./org/org.js";
 import type { RegistryService } from "./registry.js";
 
 // =============================================================================
@@ -55,9 +56,78 @@ export interface OrchestratorSnapshot {
     lastSeenAt: number | null;
     responsibilityNote: string | null;
   }>;
+  /** Your org chart (org.yaml): the roles Foreman can hand work to. Null
+   *  without one; `error` when it doesn't parse. */
+  team: TeamSnapshot | null;
+  /** Latest hand-offs (`write` / `assign`), newest first. */
+  handoffs: Array<{
+    source: string;
+    target: string;
+    task: string;
+    status: "pending" | "applied" | "failed" | "rejected";
+    createdAt: number;
+  }>;
   /** When the snapshot was built. LLM uses this to anchor relative
    *  phrasing like "5 minutes ago". */
   capturedAt: number;
+}
+
+export interface TeamSnapshot {
+  company: string;
+  error?: string;
+  departments: Array<{ id: string; name: string; head: string }>;
+  roles: Array<{
+    id: string;
+    title: string;
+    agent: string;
+    /** "Claude Code", "Codex"… from the registry; null when unregistered. */
+    runsOn: string | null;
+    department: string | null;
+    reportsTo: string;
+    /** org.yaml `can`; null = no role limits. */
+    can: string[] | null;
+    instructions: string | null;
+  }>;
+}
+
+const RUNTIME_NAMES: Record<string, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  hermes: "Hermes",
+  openclaw: "OpenClaw",
+  zeroclaw: "ZeroClaw",
+};
+
+/** The org chart as the chat sees it. Never throws. */
+export function teamSnapshot(orgConfigPath: string | undefined, registry: RegistryService): TeamSnapshot | null {
+  if (!orgConfigPath) return null;
+  let org: OrgDoc | null;
+  try {
+    org = loadOrg(orgConfigPath);
+  } catch (err) {
+    const reason = err instanceof Error ? (err.message.split("\n")[0] ?? "") : String(err);
+    return { company: "", error: reason.slice(0, 200), departments: [], roles: [] };
+  }
+  if (!org) return null;
+  const agents = new Map(registry.listAll().map((a) => [a.id.toLowerCase(), a]));
+  return {
+    company: org.company,
+    departments: Object.entries(org.departments).map(([id, d]) => ({ id, name: d.name, head: d.head })),
+    roles: Object.entries(org.roles).map(([id, r]) => {
+      const agent = agents.get(r.agent.toLowerCase());
+      const type = agent ? (typeof agent.metadata?.registryId === "string" ? agent.metadata.registryId : agent.id) : null;
+      return {
+        id,
+        title: r.title,
+        agent: r.agent,
+        runsOn: type ? (RUNTIME_NAMES[type] ?? type) : null,
+        department: r.department ?? null,
+        reportsTo: r.reports_to,
+        can: r.can ?? null,
+        instructions: r.instructions ?? r.responsibility ?? null,
+      };
+    }),
+  };
 }
 
 export interface BuildSnapshotOptions {
@@ -68,6 +138,8 @@ export interface BuildSnapshotOptions {
   agentId?: string;
   /** Override for tests; defaults to Date.now(). */
   now?: () => number;
+  /** org.yaml, for the team the chat can hand work to. */
+  orgConfigPath?: string;
 }
 
 export function buildOrchestratorSnapshot(
@@ -114,6 +186,13 @@ export function buildOrchestratorSnapshot(
     .all();
 
   const registered = registry.listAll();
+  const handoffRows = db
+    .select()
+    .from(controlCommands)
+    .where(or(eq(controlCommands.command, "write"), eq(controlCommands.command, "assign")))
+    .orderBy(desc(controlCommands.createdAt))
+    .limit(10)
+    .all();
 
   return {
     windowMs: { start: oldestRequestAt, end: now },
@@ -144,6 +223,17 @@ export function buildOrchestratorSnapshot(
       lastSeenAt: a.lastSeenAt,
       responsibilityNote: a.responsibilityNote,
     })),
+    team: teamSnapshot(opts.orgConfigPath, registry),
+    handoffs: handoffRows.map((c) => {
+      const args = parseJsonArray(c.args);
+      return {
+        source: c.sourceAgent,
+        target: args[0] ?? "?",
+        task: args.slice(1).join(" ").slice(0, 160),
+        status: c.status,
+        createdAt: c.createdAt,
+      };
+    }),
     capturedAt: now,
   };
 }
