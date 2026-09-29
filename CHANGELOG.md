@@ -6,6 +6,27 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Departments in the setup wizard's Your team step and on the Team
+  page.** **+ Add a department…** (or `d` on the Team page) adds a
+  ready-made department (IT: backend, frontend and devops developers;
+  Marketing: a marketing manager, a content creator and social media;
+  Customer Support: a support lead and a support agent) or your own, and
+  asks whether Claude Code or Codex runs it. On a department's row, Space
+  picks all its roles, `r` switches all of them between Claude Code and
+  Codex, and `x` removes it; your own roles can join a department. The
+  department's first role leads it and reports to the Manager (or you);
+  the rest report to the lead. If the lead's agent can't be added, the
+  next role leads instead, and no one is left reporting to a role that
+  wasn't added. `foreman org roles` lists the new roles grouped by
+  department.
+- **Which agent runs each role is easier to see and change.** The team
+  picker shows Claude Code or Codex in its own column, highlighted on the
+  row under the cursor, and the footer always shows `[r] Claude Code ⇄
+  Codex` when both are registered. The step's result and the Done screen
+  list each role with what it runs on.
+
 ### Changed
 
 - **The setup wizard says which value you pasted.** Slack and Discord

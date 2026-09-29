@@ -21,6 +21,7 @@ import {
   safeFind,
 } from "./shared.js";
 import { wizardServiceChoices } from "./services-logic.js";
+import { teamRoleList } from "./team-logic.js";
 import { hasForemanHook, type ClaudeSettings } from "../../core/agent-hook.js";
 import { resolveAgentSettingsPath } from "../../core/agent-permissions.js";
 import type { WizardOauthRunStep } from "./types.js";
@@ -277,7 +278,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
             {"  "}
             {teamAdded.length} role{teamAdded.length === 1 ? "" : "s"}
             {teamAdded.length === 1 ? "          " : "         "}
-            {teamAdded.map((m) => m.title).join(", ")} · `foreman org show`
+            {teamRoleList(teamAdded)} · `foreman org show`
           </Text>
         ) : null}
       </Box>

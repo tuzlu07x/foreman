@@ -82,6 +82,7 @@ const PAGE_HINTS: Record<TuiPage, KeyHint[]> = {
   team: [
     { key: "↑↓", label: "select" },
     { key: "n", label: "add a role" },
+    { key: "d", label: "add a department" },
     { key: "Esc", label: "home" },
   ],
   chat: [
