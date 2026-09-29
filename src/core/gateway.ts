@@ -1,7 +1,8 @@
 import { readForemanPidInfo, type PidProbe } from "./foreman-pidfile.js";
 import { buildEnabledChannels } from "./notification/channel-factory.js";
-import { channelConfig, routeFor, type NotifyConfig } from "./notification/notify-config.js";
+import { channelConfig, routeFor, type ChannelToggle, type NotifyConfig } from "./notification/notify-config.js";
 import type { ChannelSecrets } from "./notification/channel-factory.js";
+import { resolveTelegramListener } from "./notification/telegram-listener.js";
 
 // =============================================================================
 // The gateway: who runs it on this home, and where its approvals go
@@ -52,12 +53,21 @@ export interface ApprovalReach {
 
 /** Where a running gateway sends approvals, from notify.yaml. Builds the
  *  channels to validate them only; nothing is started. */
-export function approvalReach(config: NotifyConfig, secrets: ChannelSecrets): ApprovalReach {
-  const { channels } = buildEnabledChannels(config, { secrets, signApproval: () => "", signButton: () => "" });
+export function approvalReach(config: NotifyConfig, secrets: ChannelSecrets, telegramSharedWith: string[] = []): ApprovalReach {
+  const { channels } = buildEnabledChannels(config, {
+    secrets,
+    signApproval: () => "",
+    signButton: () => "",
+    telegramSharedWith,
+  });
   const routed = new Set((["critical", "warning", "info"] as const).flatMap((level) => routeFor(config, level).channels));
   const notified = [...channels.keys()].filter((c) => routed.has(c));
   const decide = notified.filter((c) => {
-    if (c === "telegram") return Boolean(channelConfig(config, "telegram")?.approval_bot_token_ref);
+    if (c === "telegram") {
+      // The approval bot, or the one bot when no chat agent shares it.
+      const toggle: Pick<ChannelToggle, "approval_bot_token_ref" | "listener"> = channelConfig(config, "telegram") ?? {};
+      return Boolean(toggle.approval_bot_token_ref) || resolveTelegramListener(toggle, telegramSharedWith) === "foreman";
+    }
     if (c === "slack") return Boolean(channelConfig(config, "slack")?.app_token_ref);
     if (c === "discord") return channelConfig(config, "discord")?.interactive === true;
     return false;

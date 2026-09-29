@@ -16,6 +16,12 @@ const ChannelToggleSchema = z
      *  prompts go through it, so the chat agent that shares the main bot
      *  never sees an approval button. */
     approval_bot_token_ref: z.string().optional(),
+    /** Telegram: who reads the bot's updates. `foreman`: Foreman does, so
+     *  one bot carries notifications, approval buttons and `/foreman`.
+     *  `agent`: a chat agent shares the bot and reads them (approvals then
+     *  need approval_bot_token_ref to be tapped). Unset: Foreman, unless a
+     *  registered chat agent may use the bot (telegram-listener.ts). */
+    listener: z.enum(["foreman", "agent"]).optional(),
     /** Slack: app-level token (`xapp-…`, secret ref). Turns on two-way
      *  Slack over Socket Mode: approval buttons and `/foreman` (#615). */
     app_token_ref: z.string().optional(),

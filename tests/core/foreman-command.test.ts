@@ -10,6 +10,7 @@ import {
 } from "../../src/core/event-bus.js";
 import {
   ForemanCommandRouter,
+  plainTextRefusal,
   registerBuiltinCommands,
   relayedCommandAccess,
   type ForemanCommandContext,
@@ -1377,23 +1378,26 @@ credentials:
       expect(call.question).toBe("ne yapıyorsunuz");
     });
 
-    it("/foreman report when chat is disabled returns NOT_AVAILABLE", async () => {
+    it("/foreman report me with chat disabled gives today's company report, not an error", async () => {
       const chat = makeStubChat({ enabled: false });
-      const result = await router.dispatch("report", ["me"], {
+      const withChat = {
         ...ctx,
-        orchestratorChat: chat as unknown as NonNullable<
-          ForemanCommandContext["orchestratorChat"]
-        >,
-      });
-      expect(result.ok).toBe(false);
-      expect(result.errorCode).toBe("NOT_AVAILABLE");
+        orchestratorChat: chat as unknown as NonNullable<ForemanCommandContext["orchestratorChat"]>,
+      };
+      const result = await router.dispatch("report", ["me"], withChat);
+      expect(result.ok).toBe(true);
+      expect(result.text).toBe((await router.dispatch("report", [], withChat)).text);
       expect(chat.answer).not.toHaveBeenCalled();
+      // A real question still needs the LLM, and says so.
+      const question = await router.dispatch("report", ["why", "is", "marketing", "slow?"], withChat);
+      expect(question.errorCode).toBe("NOT_AVAILABLE");
+      expect(question.text).toContain("or ask for `report`");
     });
 
-    it("/foreman report without orchestratorChat in ctx returns NOT_AVAILABLE", async () => {
+    it("/foreman report me without orchestratorChat in ctx gives the company report too", async () => {
       const result = await router.dispatch("report", ["me"], ctx);
-      expect(result.ok).toBe(false);
-      expect(result.errorCode).toBe("NOT_AVAILABLE");
+      expect(result.ok).toBe(true);
+      expect(result.text).toBe((await router.dispatch("report", [], ctx)).text);
     });
 
     it("unknown verb falls through to LLM when orchestratorChat is enabled", async () => {
@@ -1461,31 +1465,37 @@ credentials:
       const chat = makeStubChat({
         outcome: { status: "budget_exceeded", spentUsd: 6.2, capUsd: 5 },
       });
-      const result = await router.dispatch("report", ["me"], {
+      const withChat = {
         ...ctx,
-        orchestratorChat: chat as unknown as NonNullable<
-          ForemanCommandContext["orchestratorChat"]
-        >,
-      });
-      expect(result.ok).toBe(false);
-      expect(result.errorCode).toBe("NOT_AVAILABLE");
+        orchestratorChat: chat as unknown as NonNullable<ForemanCommandContext["orchestratorChat"]>,
+      };
+      // report me: the company report, with why the LLM didn't narrate it.
+      const result = await router.dispatch("report", ["me"], withChat);
+      expect(result.ok).toBe(true);
       expect(result.text).toContain("$6.20");
       expect(result.text).toContain("$5.00");
+      // A question: the budget error itself.
+      const question = await router.dispatch("report", ["what", "broke?"], withChat);
+      expect(question.ok).toBe(false);
+      expect(question.errorCode).toBe("NOT_AVAILABLE");
+      expect(question.text).toContain("$6.20");
     });
 
     it("failed outcome surfaces the reason", async () => {
       const chat = makeStubChat({
         outcome: { status: "failed", reason: "network timeout" },
       });
-      const result = await router.dispatch("report", ["me"], {
+      const withChat = {
         ...ctx,
-        orchestratorChat: chat as unknown as NonNullable<
-          ForemanCommandContext["orchestratorChat"]
-        >,
-      });
-      expect(result.ok).toBe(false);
-      expect(result.errorCode).toBe("NOT_AVAILABLE");
+        orchestratorChat: chat as unknown as NonNullable<ForemanCommandContext["orchestratorChat"]>,
+      };
+      const result = await router.dispatch("report", ["me"], withChat);
+      expect(result.ok).toBe(true);
       expect(result.text).toContain("network timeout");
+      const question = await router.dispatch("report", ["what", "broke?"], withChat);
+      expect(question.ok).toBe(false);
+      expect(question.errorCode).toBe("NOT_AVAILABLE");
+      expect(question.text).toContain("network timeout");
     });
   });
 
@@ -1781,9 +1791,10 @@ credentials:
       expect(plain.text).not.toContain("Latest results");
     });
 
-    it("report me still goes to Foreman's LLM", async () => {
+    it("report me without Foreman's LLM gives today's company report", async () => {
       const result = await router.dispatch("report", ["me"], ctx);
-      expect(result.errorCode).toBe("NOT_AVAILABLE");
+      expect(result.ok).toBe(true);
+      expect(result.text).toBe((await router.dispatch("report", [], ctx)).text);
     });
 
     it("an over-budget, paused department takes no new work from agents, but does from you", async () => {
@@ -1948,5 +1959,25 @@ describe("relayedCommandAccess (#656)", () => {
     expect(result.ok).toBe(true);
     const [row] = channel.recent(1);
     expect(row).toMatchObject({ command: "write", sourceAgent: "hermes", sourceUser: null });
+  });
+});
+
+describe("plain text in chat (#716)", () => {
+  const router = new ForemanCommandRouter();
+  registerBuiltinCommands(router);
+  const registry = { findByCommandToken: () => ({ kind: "none" as const }) };
+
+  it("reads freely, but never changes Foreman or hands out work without /foreman", () => {
+    for (const [verb, ...args] of [["report", "me"], ["status"], ["help"], ["how", "are", "my", "agents?"], ["integration", "list"], ["pause", "claude-code"]]) {
+      expect(plainTextRefusal(router, registry, verb!, args), verb).toBeNull();
+    }
+    for (const [verb, ...args] of [["stop"], ["tell", "marketing", "ship", "it"], ["integration", "disable", "github"], ["write", "codex", "fix", "it"], ["llm", "disable"]]) {
+      expect(plainTextRefusal(router, registry, verb!, args), verb).toBe(
+        `That would change something, so I only run it as a command: send \`/foreman ${[verb, ...args].join(" ")}\`.`,
+      );
+    }
+    // `<agent> <task>` hands out work: a command too.
+    const withAgent = { findByCommandToken: () => ({ kind: "match" as const, agent: { id: "codex" } }) };
+    expect(plainTextRefusal(router, withAgent as never, "codex", ["fix", "the", "tests"])).not.toBeNull();
   });
 });
