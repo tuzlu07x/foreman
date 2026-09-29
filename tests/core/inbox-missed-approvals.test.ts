@@ -43,9 +43,14 @@ describe('approvals that timed out while Foreman was not running', () => {
     expect(recordMissedApprovals(db, inbox, now)).toBe(2)
     const unread = inbox.list({ unreadOnly: true })
     expect(unread.map((i) => i.title)).toEqual([
-      "2 approvals timed out while Foreman wasn't running; start `foreman start` to approve",
+      "2 approvals timed out while Foreman wasn't running",
     ])
-    expect(unread[0]?.body).toBe('Denied: shell_exec for qa-bot, read_file for qa-bot')
+    expect(unread[0]?.body).toBe(
+      'Denied: shell_exec for qa-bot, read_file for qa-bot. ' +
+        'To be asked next time, keep Foreman running: `foreman start` or the background service (`foreman service install`).',
+    )
+    // Often read in a running TUI: never "start `foreman start` to approve".
+    expect(unread[0]?.title).not.toContain('to approve')
     const all = inbox.list().map((i) => i.title)
     expect(all).toContain('Denied shell_exec for qa-bot (no answer in time)')
     expect(all).toContain('Denied read_file for qa-bot (no answer in time)')

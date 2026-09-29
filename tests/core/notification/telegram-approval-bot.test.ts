@@ -22,7 +22,7 @@ interface Call {
   body: Record<string, unknown>
 }
 
-function harness(updates: unknown[][], status: number[] = []) {
+function harness(updates: unknown[][], status: number[] = [], foremanBot = APPROVAL) {
   const calls: Call[] = []
   const queue = [...updates]
   const statuses = [...status]
@@ -51,7 +51,7 @@ function harness(updates: unknown[][], status: number[] = []) {
     fetchImpl,
     signApproval: relaySign,
     signButton: sign,
-    approvalBotToken: APPROVAL,
+    approvalBotToken: foremanBot,
     onWarning: (w) => warnings.push(w),
     pollTimeoutSeconds: 0,
     pollBackoffMs: 10,
@@ -180,6 +180,23 @@ describe('Telegram approval bot (#610)', () => {
     await second.channel.listen(async () => {})
     await settle(60)
     expect(second.warnings).toEqual(['Telegram rejected the approval bot token; approvals fall back to the TUI.'])
+  })
+
+  it('names your one Telegram bot, not an approval bot, in one-bot mode', async () => {
+    // listener: foreman — Foreman reads the main bot; there is no approval
+    // bot, so a warning about one would send you looking for the wrong token.
+    const { channel, warnings } = harness([], [409, 401], MAIN)
+    active = channel
+    await channel.listen(async () => {})
+    await settle(80)
+    expect(warnings[0]).toContain('Another program is reading your Telegram bot')
+    expect(warnings[0]).toContain('listener: agent')
+    await channel.shutdown()
+    const second = harness([], [401], MAIN)
+    await second.channel.listen(async () => {})
+    await settle(60)
+    expect(second.warnings).toEqual(['Telegram rejected your Telegram bot token; approvals fall back to the TUI.'])
+    expect(second.warnings.join(' ')).not.toContain('approval bot')
   })
 
   it('without an approval bot, listen() stays a no-op (relay mode)', async () => {
