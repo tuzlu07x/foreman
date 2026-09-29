@@ -19,8 +19,15 @@ import {
 } from '../types.js'
 
 // =============================================================================
-// Telegram Bot API channel — outbound-only after #406 (Yol C alignment)
+// Telegram Bot API channel
 // =============================================================================
+//
+// Which bot Foreman reads is decided by the caller (channel-factory.ts,
+// telegram-listener.ts) and passed in as `approvalBotToken`:
+//   - no chat agent uses the bot: the main bot itself. One bot carries
+//     notifications, approval buttons and `/foreman` (plain text too);
+//   - a chat agent shares the main bot: a second bot only Foreman reads
+//     (#610), or none — then Foreman only sends, as below.
 //
 // Before #406 this channel did both `sendMessage` (push approval prompts)
 // AND `getUpdates` polling (receive Allow/Deny callback_query taps). When
@@ -78,7 +85,14 @@ export interface TelegramChannelOptions {
   minPollIntervalMs?: number
   /** `/integrations`, `/integration …` and `/foreman …` sent to the
    *  approval bot from your own private chat. Returns the reply text. */
-  onCommand?: (text: string, userId: string) => Promise<string>
+  onCommand?: (text: string, userId: string, opts?: ChatCommandOptions) => Promise<string>
+}
+
+/** How a chat command was typed: `plain` is text without a leading slash,
+ *  taken as `/foreman <text>` but only for reading (see foreman-command.ts
+ *  plainTextRefusal). */
+export interface ChatCommandOptions {
+  plain?: boolean
 }
 
 /** Commands the approval bot takes (Telegram lists them in the chat menu). */
@@ -130,7 +144,7 @@ export class TelegramChannel implements NotificationChannel {
   private readonly approvalBotToken?: string
   private readonly signButton?: (approvalId: string, actionId: string) => string
   private readonly onWarning: (message: string) => void
-  private readonly onCommand?: (text: string, userId: string) => Promise<string>
+  private readonly onCommand?: (text: string, userId: string, opts?: ChatCommandOptions) => Promise<string>
   private readonly pollTimeoutSeconds: number
   private readonly pollBackoffMs: number
   private readonly minPollIntervalMs: number
@@ -152,6 +166,12 @@ export class TelegramChannel implements NotificationChannel {
     this.minPollIntervalMs = opts.minPollIntervalMs ?? 1_000
     this.fetchImpl =
       opts.fetchImpl ?? ((url, init) => fetch(url, init) as never)
+  }
+
+  /** Whether Foreman reads a bot's updates here (taps and `/foreman`):
+   *  its own bot, or the main one when no chat agent shares it. */
+  get readsUpdates(): boolean {
+    return this.approvalBotToken !== undefined
   }
 
   async isReady(): Promise<boolean> {
@@ -360,15 +380,19 @@ export class TelegramChannel implements NotificationChannel {
   /** A command from your own private chat only: the sender, the chat and
    *  the configured chat_id are the same id, the chat is private and the
    *  sender isn't a bot. Anything else is ignored without a reply. */
-  private async handleApprovalBotCommand(msg: NonNullable<TelegramUpdate['message']>): Promise<void> {
+  private async handleApprovalBotCommand(
+    msg: NonNullable<TelegramUpdate['message']>,
+    typed: string = msg.text!.trim(),
+    opts: ChatCommandOptions = {},
+  ): Promise<void> {
     const fromId = String(msg.from?.id ?? '')
     const chatId = String(msg.chat?.id ?? '')
     if (msg.chat?.type !== 'private' || msg.from?.is_bot === true) return
     if (fromId !== this.chatId || chatId !== this.chatId) return
-    const text = msg.text!.trim().replace(APPROVAL_BOT_COMMAND_RE, (_m, verb: string) => `/${verb.toLowerCase()}`)
+    const text = typed.replace(APPROVAL_BOT_COMMAND_RE, (_m, verb: string) => `/${verb.toLowerCase()}`)
     let reply: string
     try {
-      reply = await this.onCommand!(text, fromId)
+      reply = await this.onCommand!(text, fromId, opts)
     } catch (err) {
       reply = `That didn't work: ${err instanceof Error ? err.message : String(err)}`
     }
@@ -395,10 +419,19 @@ export class TelegramChannel implements NotificationChannel {
           'sendMessage',
           {
             chat_id: this.chatId,
-            text: 'Foreman approval bot connected. Approval requests will appear here; tap a button to decide.',
+            text: this.onCommand
+              ? 'Foreman is connected. Approval requests appear here with buttons. Ask me anything, e.g. "report me" or "what is claude-code doing?", or send /foreman help.'
+              : 'Foreman approval bot connected. Approval requests will appear here; tap a button to decide.',
           },
           this.approvalBotToken,
         )
+        return
+      }
+      // Plain text in your own chat is a question for Foreman, as if it
+      // began with /foreman. Other slash commands aren't Foreman's.
+      const plain = msg?.text?.trim()
+      if (msg && this.onCommand && plain && !plain.startsWith('/')) {
+        await this.handleApprovalBotCommand(msg, `/foreman ${plain}`, { plain: true })
       }
       return
     }

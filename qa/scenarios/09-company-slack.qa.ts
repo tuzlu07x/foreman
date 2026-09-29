@@ -389,6 +389,13 @@ it('A company on Slack: department channels, approvals, budgets and integrations
     expect(text).toContain('Spend $2.50')
     expect(text).toMatch(/Budget marketing \(month\): \$2\.50 of \$1\.00/)
     ev(`${BOSS} /foreman report marketing → ephemeral reply: "${text.split('\n').slice(0, 4).join(' | ')}"`)
+    // `report me` with Foreman's LLM off: today's company report, not an error (#716).
+    const me = slack.slash(BOSS, 'report me')
+    await slack.acked(me.envelopeId)
+    const meText = String((await slack.hook('the report me', me.path)).body.text)
+    expect(meText).not.toContain('orchestrator chat is off')
+    expect(meText).toContain('Acme QA · today')
+    ev(`${BOSS} /foreman report me (no LLM) → the company report: "${meText.split('\n').slice(0, 3).join(' | ')}"`)
     const stranger = slack.slash(STRANGER, 'report marketing')
     await slack.acked(stranger.envelopeId)
     const refused = await slack.hook('the refusal', stranger.path)
@@ -431,12 +438,13 @@ it('A company on Slack: department channels, approvals, budgets and integrations
     const fromSlack = sb.events<CommandEvent>('foreman:command').filter((e) => e.sourceAgent === 'slack')
     expect(fromSlack.map((e) => `${e.sourceUser} ${e.command} ${e.args.join(' ')}`.trim())).toEqual([
       `slack:${BOSS} report marketing`,
+      `slack:${BOSS} report me`,
       `slack:${BOSS} integrations`,
       `slack:${TEAMMATE} integration disable github`,
       `slack:${BOSS} integration disable github`,
     ])
-    expect(fromSlack.map((e) => e.ok)).toEqual([true, true, false, true])
-    expect(fromSlack[2]?.errorCode).toBe('NOT_AUTHORIZED')
+    expect(fromSlack.map((e) => e.ok)).toEqual([true, true, true, false, true])
+    expect(fromSlack[3]?.errorCode).toBe('NOT_AUTHORIZED')
     ev(`audit_events foreman:command from slack: ${fromSlack.map((e) => `${e.sourceUser} "${[e.command, ...e.args].join(' ')}" ok=${e.ok}`).join('; ')}`)
     const relayed = sb.events<CommandEvent>('foreman:command').filter((e) => e.sourceAgent === 'it-lead' && e.command === 'integration')
     expect(relayed).toEqual([expect.objectContaining({ ok: false, errorCode: 'NOT_AUTHORIZED' })])

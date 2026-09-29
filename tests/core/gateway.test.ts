@@ -115,6 +115,15 @@ describe("gateway: where approvals go", () => {
     expect(approvalReach(config, secretsWithUrl)).toEqual({ notified: ["telegram", "slack"], decide: ["telegram"] });
   });
 
+  it("decides on the one Telegram bot when no chat agent shares it (#716)", () => {
+    const config = NotifyConfigSchema.parse({
+      channels: { telegram: { enabled: true, bot_token_ref: "tg", chat_id: "1" } },
+      routing: { critical: { channels: ["telegram"] } },
+    });
+    expect(approvalReach(config, secrets)).toEqual({ notified: ["telegram"], decide: ["telegram"] });
+    expect(approvalReach(config, secrets, ["hermes"])).toEqual({ notified: ["telegram"], decide: [] });
+  });
+
   it("leaves out a channel that is enabled but no level routes to, or that can't be built", () => {
     const config = NotifyConfigSchema.parse({
       channels: { telegram: { enabled: true }, system: { enabled: true } },

@@ -29,6 +29,21 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Changed
 
+- **One Telegram bot is enough** ([#716](https://github.com/tuzlu07x/foreman/issues/716)).
+  When no registered chat agent (Hermes, OpenClaw) can use your Telegram
+  bot, Foreman reads it itself. The same bot then carries notifications,
+  approval buttons and `/foreman`. Before, approving from Telegram or
+  talking to Foreman there needed a second bot. With a chat agent on the
+  bot, nothing changes, and the approval bot is still how you approve.
+  `listener: foreman | agent` under `channels.telegram` overrides the
+  choice, and `foreman doctor` shows it (`telegram (one bot)`).
+- Plain messages to a bot Foreman reads are questions for Foreman
+  (`report me`, `what is claude-code doing?`), from your own chat only.
+  Plain text only reads: `stop`, `write …` or `integration disable …` run
+  only when typed with `/foreman`.
+- `/foreman report` and `report me` give today's company report when
+  Foreman's LLM is off, over budget or failing, instead of an error, from
+  Telegram, Slack, Discord and the TUI alike.
 - The pidfile (`foreman.pid`) records which kind of Foreman holds the home
   (`tui` or `headless`) on a second line and is refreshed every 5 seconds;
   a pidfile left from before a reboot, or whose pid now belongs to

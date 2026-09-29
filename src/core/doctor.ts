@@ -28,6 +28,7 @@ import { detectProviderByPrefix } from "./key-prefix-detect.js";
 import { loadVoiceConfig } from "./notification/voice-config.js";
 import { buildEnabledChannels } from "./notification/channel-factory.js";
 import { channelConfig, loadNotifyConfig } from "./notification/notify-config.js";
+import { agentsSharingTelegram, resolveTelegramListener } from "./notification/telegram-listener.js";
 import { enabledServers, loadHubConfig } from "./mcp-hub/config.js";
 import { missingSecrets } from "./mcp-hub/manage.js";
 import { ToolPinStore } from "./mcp-hub/pins.js";
@@ -1605,15 +1606,24 @@ export function checkNotifyChannels(): CheckResult {
   const telegram = channelConfig(config, "telegram");
   const slack = channelConfig(config, "slack");
   const discord = channelConfig(config, "discord");
+  const sharedWith = doctorTelegramSharedWith();
+  const telegramListener = resolveTelegramListener(telegram ?? {}, sharedWith);
   const twoWay = [
-    channels.has("telegram") && telegram?.approval_bot_token_ref ? "telegram (approval bot)" : null,
+    channels.has("telegram") && telegram?.approval_bot_token_ref
+      ? "telegram (approval bot)"
+      : channels.has("telegram") && telegramListener === "foreman"
+        ? "telegram (one bot)"
+        : null,
     channels.has("slack") && slack?.app_token_ref ? `slack (${slack.allowed_user_ids?.length ?? 0} user(s))` : null,
     channels.has("discord") && discord?.interactive ? `discord (${discord.allowed_user_ids?.length ?? 0} user(s))` : null,
   ].filter((c): c is string => c !== null);
   const parts = [`ready: ${[...channels.keys()].join(", ")}`];
   if (twoWay.length > 0) parts.push(`two-way: ${twoWay.join(", ")}`);
-  if (channels.has("telegram") && !telegram?.approval_bot_token_ref) {
-    parts.push("tip: `foreman notify approval-bot` keeps Telegram approvals away from your chat agent");
+  if (channels.has("telegram") && !telegram?.approval_bot_token_ref && telegramListener === "agent") {
+    parts.push(
+      `tip: ${sharedWith.length > 0 ? `${sharedWith.join(", ")} reads your Telegram bot, so ` : ""}` +
+        "`foreman notify approval-bot` lets you approve from Telegram",
+    );
   } else if (channels.has("slack") && !slack?.app_token_ref) {
     parts.push("tip: `foreman notify slack-interactive` lets you approve from Slack");
   } else if (channels.has("discord") && !discord?.interactive) {
@@ -1743,6 +1753,20 @@ export function checkDaemon(
   };
 }
 
+/** Registered chat agents that may read the Telegram bot (#716). Doctor
+ *  never creates the database: none without one. */
+function doctorTelegramSharedWith(): string[] {
+  try {
+    if (!existsSync(getForemanPaths().dbPath)) return [];
+    return agentsSharingTelegram(
+      new RegistryService(getDb(), new EventBus<ForemanEventMap>()).listAll(),
+      loadActiveRegistry().doc.agents,
+    );
+  } catch {
+    return [];
+  }
+}
+
 // The gateway (src/core/gateway.ts): who runs the approval bridge and the
 // chat channels on this home, and so whether an approval reaches chat now.
 export function checkGateway(): CheckResult {
@@ -1752,7 +1776,7 @@ export function checkGateway(): CheckResult {
   if (existsSync(paths.notifyConfigPath)) {
     try {
       const config = loadNotifyConfig(paths.notifyConfigPath);
-      reach = withDoctorSecretStore((secrets) => approvalReach(config, secrets));
+      reach = withDoctorSecretStore((secrets) => approvalReach(config, secrets, doctorTelegramSharedWith()));
     } catch {
       // notify_config and database report these
     }

@@ -10,7 +10,7 @@ const CHAT = '424242'
 
 function harness(messages: unknown[]) {
   const calls: Array<{ method: string; body: Record<string, unknown> }> = []
-  const seen: Array<{ text: string; user: string }> = []
+  const seen: Array<{ text: string; user: string; plain?: boolean }> = []
   let served = false
   const fetchImpl: TelegramFetch = async (url, init) => {
     const method = /\/(\w+)$/.exec(url)![1]!
@@ -32,8 +32,8 @@ function harness(messages: unknown[]) {
     pollTimeoutSeconds: 0,
     pollBackoffMs: 10,
     minPollIntervalMs: 10,
-    onCommand: async (text, user) => {
-      seen.push({ text, user })
+    onCommand: async (text, user, opts) => {
+      seen.push({ text, user, ...(opts?.plain ? { plain: true } : {}) })
       return `ran: ${text}`
     },
   })
@@ -74,12 +74,38 @@ describe('Telegram approval bot commands', () => {
       dm('/integration disable jira', { chat: { id: -100, type: 'private' } }),
       dm('/integration disable jira', { from: { id: Number(CHAT), is_bot: true } }),
       dm('/integrationsXYZ'),
-      dm('please /integration disable jira'),
+      dm('/weather berlin'),
+      dm('report me', { from: { id: 999, is_bot: false } }),
     ])
     await h.channel.listen(async () => undefined)
     await settle()
     await h.channel.shutdown()
     expect(h.seen).toEqual([])
     expect(h.calls.filter((c) => c.method === 'sendMessage')).toEqual([])
+  })
+
+  it('reads plain text from your chat as /foreman, marked plain (#716)', async () => {
+    const h = harness([dm('report me'), dm('  what is claude-code doing?  ')])
+    await h.channel.listen(async () => undefined)
+    await settle()
+    await h.channel.shutdown()
+    expect(h.seen).toEqual([
+      { text: '/foreman report me', user: CHAT, plain: true },
+      { text: '/foreman what is claude-code doing?', user: CHAT, plain: true },
+    ])
+    expect(h.calls.filter((c) => c.method === 'sendMessage').map((c) => c.body.text)).toEqual([
+      'ran: /foreman report me',
+      'ran: /foreman what is claude-code doing?',
+    ])
+  })
+
+  it('says how to talk to it on /start', async () => {
+    const h = harness([dm('/start')])
+    await h.channel.listen(async () => undefined)
+    await settle()
+    await h.channel.shutdown()
+    const reply = h.calls.find((c) => c.method === 'sendMessage')?.body.text
+    expect(reply).toContain('Ask me anything, e.g. "report me"')
+    expect(h.seen).toEqual([])
   })
 })

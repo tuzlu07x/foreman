@@ -339,6 +339,22 @@ export function relayedCommandAccess(
   return lookup.kind === "match" && task.length > 0 ? "delegate" : "read";
 }
 
+/** Plain text in a chat (no leading `/foreman`) is read as a command, but
+ *  only to read: a report, a status, a question. A verb that changes
+ *  Foreman or hands out work runs only when typed with `/foreman`, so a
+ *  casual "stop" or "pause claude-code" never does. Returns the reply for
+ *  plain text that would change something, else null. */
+export function plainTextRefusal(
+  router: Pick<ForemanCommandRouter, "has">,
+  registry: Pick<RegistryService, "findByCommandToken">,
+  command: string,
+  args: readonly string[],
+): string | null {
+  if (relayedCommandAccess(router, registry, command, args) === "read") return null;
+  const typed = [command, ...args].join(" ");
+  return `That would change something, so I only run it as a command: send \`/foreman ${typed}\`.`;
+}
+
 // #524 — Strip a single run of leading punctuation right after the agent
 // name so chat-native phrasing parses cleanly: "OpenClaw, todo app yap" →
 // task "todo app yap"; "OpenClaw: build X" → "build X". Only the FIRST
@@ -441,7 +457,7 @@ export function registerBuiltinCommands(router: ForemanCommandRouter): void {
   router.register(
     "report",
     reportHandler,
-    "What a department, role or agent did and what it cost: `report marketing month`. `report me` asks Foreman's LLM.",
+    "What a department, role or agent did and what it cost: `report marketing month`. `report me`: today's report, told by Foreman's LLM when it is on.",
   );
   router.register(
     "tell",
@@ -676,14 +692,19 @@ function reportHandler(
   // `report marketing month`, `report codex today`: the org report, no LLM.
   const deterministic = orgReport(args, ctx, false);
   if (deterministic) return deterministic;
-  // Plain `report` without Foreman's LLM: the company report for today.
-  if (args.length === 0 && !ctx.orchestratorChat?.isEnabled()) return orgReport([], ctx, true)!;
+  // `report`, `report me` (`ben`): the default question. Anything else is
+  // the question itself.
+  const trailing = args.join(" ").trim();
+  const isMeOrEmpty = trailing.length === 0 || ["me", "ben"].includes(trailing.toLowerCase());
+  // Without Foreman's LLM (off, not wired here, over budget, failing) the
+  // default question still gets today's company report, never an error.
+  if (isMeOrEmpty && !ctx.orchestratorChat?.isEnabled()) return orgReport([], ctx, true)!;
   if (!ctx.orchestratorChat) {
     return {
       ok: false,
       text:
-        "Orchestrator chat isn't wired in this process — `/foreman report` needs Foreman LLM. " +
-        "Run `foreman llm enable orchestrator_chat` on the host.",
+        "Orchestrator chat isn't wired in this process — questions need Foreman LLM. " +
+        "Run `foreman llm enable orchestrator_chat` on the host, or ask for `report`.",
       errorCode: "NOT_AVAILABLE",
     };
   }
@@ -692,26 +713,21 @@ function reportHandler(
       ok: false,
       text:
         "Foreman LLM orchestrator chat is off. " +
-        "Enable it via `foreman llm enable orchestrator_chat` on the host.",
+        "Enable it via `foreman llm enable orchestrator_chat` on the host, or ask for `report`.",
       errorCode: "NOT_AVAILABLE",
     };
   }
-  // `/foreman report me` / `/foreman report` / `/foreman report --tr` all
-  // map to the default question. Anything else is treated as the question.
-  const trailing = args.join(" ").trim();
-  const isMeOrEmpty =
-    trailing.length === 0 ||
-    trailing.toLowerCase() === "me" ||
-    trailing.toLowerCase() === "ben";
   const language = detectLanguageFromArgs(args);
   const question = isMeOrEmpty
     ? language === "tr"
       ? REPORT_DEFAULT_QUESTION_TR
       : REPORT_DEFAULT_QUESTION_EN
     : trailing;
-  return ctx.orchestratorChat
-    .answer({ question })
-    .then(renderChatOutcome);
+  return ctx.orchestratorChat.answer({ question }).then((outcome) => {
+    if (outcome.status === "ok" || !isMeOrEmpty) return renderChatOutcome(outcome);
+    const fallback = orgReport([], ctx, true)!;
+    return { ...fallback, text: `${fallback.text}\n\n(${renderChatOutcome(outcome).text})` };
+  });
 }
 
 // `/foreman activity` — non-LLM view of recent control_commands rows so

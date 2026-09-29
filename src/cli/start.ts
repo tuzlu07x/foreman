@@ -50,6 +50,7 @@ import { probeGateway, type GatewayProbe } from "../core/gateway.js";
 import { defaultLlmConfig, saveLlmConfig } from "../core/llm/config.js";
 import {
   ForemanCommandRouter,
+  plainTextRefusal,
   registerBuiltinCommands,
 } from "../core/foreman-command.js";
 import {
@@ -67,6 +68,7 @@ import { RiskScorer } from "../core/risk-scorer.js";
 import { SessionManager } from "../core/session.js";
 import { checkAgentUpdates } from "../core/agent-update-check.js";
 import { loadActiveRegistry } from "../core/registry-catalog.js";
+import { agentsSharingTelegram } from "../core/notification/telegram-listener.js";
 import { checkForUpdate } from "../core/update-check.js";
 import { closeDb, getDb, getSqlite, type ForemanDb } from "../db/client.js";
 import { controlCommands } from "../db/schema.js";
@@ -590,6 +592,7 @@ export function startForeman(
     channel: "slack" | "discord" | "telegram",
     text: string,
     userId: string,
+    opts: { plain?: boolean } = {},
   ): Promise<string> => {
     // `/integrations` and `/integration …` are verbs of their own; a
     // Telegram `@bot` suffix never reaches here (the channel strips it).
@@ -600,6 +603,18 @@ export function startForeman(
       .split(/\s+/)
       .filter(Boolean);
     const sourceUser = `${channel}:${userId}`;
+    const refusal = opts.plain ? plainTextRefusal(commandRouter, registry, verb, args) : null;
+    if (refusal !== null) {
+      audit.logEvent("foreman:command", {
+        command: verb,
+        args,
+        sourceAgent: channel,
+        sourceUser,
+        ok: false,
+        errorCode: "PLAIN_TEXT_CHANGE",
+      });
+      return refusal;
+    }
     const result = await commandRouter.dispatch(verb, args, {
       ...commandContext,
       sourceAgent: channel,
@@ -630,6 +645,7 @@ export function startForeman(
   const notificationSetup = attach ? null : setupNotificationBridge({
     db,
     secretStore,
+    telegramSharedWith: telegramSharedWith(registry),
     onChatCommand: runChatCommand,
     onChannelDecision: (info) =>
       audit.logEvent("approval:channel-decision", info),
@@ -1578,6 +1594,8 @@ function setupNotificationBridge(args: {
   ) => Promise<string>;
   onChannelDecision?: NotificationBridgeOptions["onChannelDecision"];
   onInteractionRefused?: InteractionRefusalSink;
+  /** Chat agents that may read the Telegram bot (agentsSharingTelegram). */
+  telegramSharedWith?: string[];
 }): {
   bridge: NotificationBridge;
   scheduler: DailyScheduler | null;
@@ -1608,6 +1626,7 @@ function setupNotificationBridge(args: {
     ...(args.onInteractionRefused
       ? { onInteractionRefused: args.onInteractionRefused }
       : {}),
+    ...(args.telegramSharedWith ? { telegramSharedWith: args.telegramSharedWith } : {}),
   });
 
   if (channels.size === 0) return null;
@@ -2196,4 +2215,16 @@ export const startCommand = new Command("start")
 export function attachedGatewayState(configDir: string): { pid: number } | null {
   const gateway: GatewayProbe = probeGateway(configDir);
   return gateway.state === "running" && gateway.mode === "headless" ? { pid: gateway.pid } : null;
+}
+
+/** Registered chat agents that may read the Telegram bot's updates; when
+ *  there are none, Foreman reads them (telegram-listener.ts). */
+function telegramSharedWith(registry: RegistryService): string[] {
+  try {
+    return agentsSharingTelegram(registry.listAll(), loadActiveRegistry().doc.agents);
+  } catch {
+    // Without the catalog we can't tell: assume an agent may share the bot,
+    // so Foreman never fights it for updates.
+    return ["unknown"];
+  }
 }

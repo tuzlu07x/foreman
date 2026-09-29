@@ -140,7 +140,30 @@ foreman notify test telegram
 
 `notify enable telegram` points the channel at the `telegram-bot-token` secret and saves the chat id in `notify.yaml` (`chat_id`, a quoted string). Without `--chat-id` it uses the chat id the setup wizard stored, or asks for one when you run it in a terminal. It prints whatever is still missing, for example `foreman secrets add telegram-bot-token`.
 
-### Approval bot (recommended)
+### Approve and talk to Foreman on the same bot
+
+While `foreman start` (or the background service) runs, Foreman reads your
+bot itself, so one bot does everything:
+
+- approval requests arrive with **Allow** / **Deny** buttons, and a tap
+  decides them (audited as `user:telegram`);
+- `/foreman …` runs commands: `/foreman status`, `/foreman write codex …`;
+- plain messages are questions: `report me`, `what is claude-code doing?`.
+  Plain text only reads. Anything that would change something (`stop`,
+  `write`, `integration disable …`) runs only when you type it with
+  `/foreman`, so a casual message never stops Foreman or hands out work.
+
+Foreman accepts taps and messages only from your own private chat (the
+`chat_id` you set), and a button only with the HMAC tag Foreman put on it.
+Press **Start** in the bot's chat once; Telegram requires it.
+
+This works as long as no chat agent reads the same bot: Telegram lets only
+one program read a bot's updates. When a registered agent can (Hermes,
+OpenClaw), Foreman leaves the bot to it and only sends, and `foreman
+doctor` says so. Set `listener: foreman` or `listener: agent` under
+`channels.telegram` in `notify.yaml` to decide yourself.
+
+### A second bot when an agent shares yours
 
 If an agent (Hermes, OpenClaw, …) also uses your Telegram bot, it reads every
 update that bot receives, including your taps on approval buttons. Give

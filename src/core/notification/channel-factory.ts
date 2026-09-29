@@ -4,10 +4,11 @@ import { outboundUrlProblem, type HttpFetch } from "./channels/http-post.js";
 import { NtfyChannel } from "./channels/ntfy.js";
 import { SlackChannel, type SlackChannelOptions } from "./channels/slack.js";
 import { SystemNotifyChannel } from "./channels/system.js";
-import { TelegramChannel } from "./channels/telegram.js";
+import { TelegramChannel, type ChatCommandOptions } from "./channels/telegram.js";
 import { WebhookChannel, webhookUrlProblem } from "./channels/webhook.js";
 import { channelConfig, isChannelEnabled, type ChannelToggle, type NotifyConfig } from "./notify-config.js";
 import type { InteractionRefusalSink } from "./interaction-refusals.js";
+import { resolveTelegramListener } from "./telegram-listener.js";
 import type { SmtpSecurity } from "./smtp.js";
 import { KNOWN_CHANNELS, type ChannelId, type NotificationChannel } from "./types.js";
 
@@ -39,12 +40,21 @@ export interface ChannelFactoryDeps {
    *  Slack Socket Mode, the Discord Gateway) report trouble here: a
    *  conflicting poller, a revoked token. */
   onChannelWarning?: (message: string) => void;
-  /** Runs `/foreman <command>` typed in Slack or Discord by an allowed
-   *  user. Omitted: those channels still take approval buttons. */
-  onChatCommand?: (channel: "slack" | "discord" | "telegram", text: string, userId: string) => Promise<string>;
+  /** Runs `/foreman <command>` typed in Slack, Discord or Telegram by an
+   *  allowed user. Omitted: those channels still take approval buttons. */
+  onChatCommand?: (
+    channel: "slack" | "discord" | "telegram",
+    text: string,
+    userId: string,
+    opts?: ChatCommandOptions,
+  ) => Promise<string>;
   /** Told when Slack or Discord refuses a tap or command from a user who
    *  is not in allowed_user_ids, for the audit log. */
   onInteractionRefused?: InteractionRefusalSink;
+  /** Registered chat agents that may read the Telegram bot's updates
+   *  (agentsSharingTelegram). Empty or omitted: Foreman reads them itself,
+   *  unless notify.yaml's `listener` says otherwise. */
+  telegramSharedWith?: string[];
 }
 
 export type ChannelBuild = { channel: NotificationChannel } | { problem: string };
@@ -83,18 +93,27 @@ export function buildChannel(id: ChannelId, toggle: ChannelToggle, deps: Channel
         if (!toggle.bot_token_ref || !toggle.chat_id) {
           return { problem: "telegram needs bot_token_ref and chat_id in notify.yaml" };
         }
+        const botToken = secret(toggle.bot_token_ref);
+        // The bot Foreman reads (telegram-listener.ts): the approval bot
+        // when there is one, else the main bot unless a chat agent reads it.
+        const foremanBot = toggle.approval_bot_token_ref
+          ? secret(toggle.approval_bot_token_ref)
+          : resolveTelegramListener(toggle, deps.telegramSharedWith ?? []) === "foreman"
+            ? botToken
+            : undefined;
         return {
           channel: new TelegramChannel({
-            botToken: secret(toggle.bot_token_ref),
+            botToken,
             chatId: toggle.chat_id,
             ...(deps.signApproval ? { signApproval: deps.signApproval } : {}),
-            ...(toggle.approval_bot_token_ref
-              ? { approvalBotToken: secret(toggle.approval_bot_token_ref) }
-              : {}),
-            // Commands only through the approval bot (only Foreman polls it)
-            // and only from your own private chat (TelegramChannel checks).
-            ...(toggle.approval_bot_token_ref && deps.onChatCommand
-              ? { onCommand: (text: string, user: string) => deps.onChatCommand!("telegram", text, user) }
+            ...(foremanBot !== undefined ? { approvalBotToken: foremanBot } : {}),
+            // Commands only on a bot Foreman reads, and only from your own
+            // private chat (TelegramChannel checks).
+            ...(foremanBot !== undefined && deps.onChatCommand
+              ? {
+                  onCommand: (text: string, user: string, opts?: ChatCommandOptions) =>
+                    deps.onChatCommand!("telegram", text, user, opts),
+                }
               : {}),
             ...(deps.signButton ? { signButton: deps.signButton } : {}),
             ...(deps.onChannelWarning ? { onWarning: deps.onChannelWarning } : {}),
