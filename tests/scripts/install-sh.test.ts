@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -7,16 +7,27 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 // install.sh, run with stand-ins for foreman, npm and nvm: nothing is
 // installed, nothing reaches the network, and no real config is touched.
+//
+// PATH holds only this test's own `node` link and the system tools, never
+// the directory of the Node running the tests: on a machine with Foreman
+// installed through nvm, that directory holds the real `foreman` and
+// `npm`, and `install.sh --uninstall` found and ran them, uninstalling
+// the developer's Foreman (real-services test, 2.3.0).
 
 const INSTALL_SH = resolve(dirname(fileURLToPath(import.meta.url)), '../../install.sh')
 
 describe.skipIf(process.platform === 'win32')('install.sh', () => {
   let root: string
   let calls: string
+  /** `node` only, for install.sh's own Node checks. */
+  let sysBin: string
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'fm-install-'))
     calls = join(root, 'calls.log')
     writeFileSync(calls, '')
+    sysBin = join(root, 'sysbin')
+    mkdirSync(sysBin)
+    symlinkSync(process.execPath, join(sysBin, 'node'))
   })
   afterEach(() => {
     rmSync(root, { recursive: true, force: true })
@@ -38,10 +49,12 @@ describe.skipIf(process.platform === 'win32')('install.sh', () => {
     return bin
   }
 
+  const safePath = (): string => `${sysBin}:/usr/bin:/bin`
+
   const run = (args: string[], env: Record<string, string> = {}) =>
     spawnSync('bash', [INSTALL_SH, ...args], {
       env: {
-        PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+        PATH: safePath(),
         HOME: join(root, 'home'),
         NVM_DIR: join(root, 'home', '.nvm'),
         FOREMAN_HOME: join(root, 'data'),
@@ -51,6 +64,16 @@ describe.skipIf(process.platform === 'win32')('install.sh', () => {
       // No terminal: every question takes its default.
       stdio: ['ignore', 'pipe', 'pipe'],
     })
+
+  it('can only reach its own stand-ins: no real foreman or npm on PATH', () => {
+    nvmInstall([])
+    const found = spawnSync('bash', ['-c', 'command -v foreman npm || true'], {
+      env: { PATH: safePath(), HOME: join(root, 'home') },
+      encoding: 'utf-8',
+    })
+    expect(found.stdout.trim()).toBe('')
+    expect(safePath()).not.toContain(dirname(process.execPath))
+  })
 
   it('--uninstall finds foreman under an nvm Node, takes it out of every agent, then removes the package', () => {
     nvmInstall(['claude-code', 'codex'])
