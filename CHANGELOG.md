@@ -6,6 +6,8 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-09-29
+
 ### Security
 
 - **`rm -rf /` and friends are refused outright.** A recursive delete of
