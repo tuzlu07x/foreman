@@ -145,6 +145,13 @@ export function percentLabel(value: number, total: number): string {
   return `${Math.round((value / total) * 100)}%`;
 }
 
+/** A file path as the TUI shows it, in at most `maxWidth` columns (8 or
+ *  more): the home directory as `~` and middle folders cut out
+ *  (`~/Library/…/foreman/policy.yaml`), so the file name stays readable. */
+export function displayPath(path: string, maxWidth: number, home: string = homedir()): string {
+  return shortenPath(terminalSafe(path), Math.max(8, maxWidth), home);
+}
+
 export function startOfTodayMs(now: number = Date.now()): number {
   const d = new Date(now);
   d.setHours(0, 0, 0, 0);

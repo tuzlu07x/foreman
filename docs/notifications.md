@@ -161,7 +161,10 @@ This works as long as no chat agent reads the same bot: Telegram lets only
 one program read a bot's updates. When a registered agent can (Hermes,
 OpenClaw), Foreman leaves the bot to it and only sends, and `foreman
 doctor` says so. Set `listener: foreman` or `listener: agent` under
-`channels.telegram` in `notify.yaml` to decide yourself.
+`channels.telegram` in `notify.yaml` to decide yourself. If another
+program reads the bot while Foreman does, the TUI inbox warns about *your
+Telegram bot*; set `listener: agent` and add an approval bot (below). The
+TUI's Services page shows which of the two your Telegram is set to.
 
 ### A second bot when an agent shares yours
 

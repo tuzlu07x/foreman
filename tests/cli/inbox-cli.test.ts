@@ -66,7 +66,7 @@ describe('foreman inbox after approvals nobody could answer', () => {
     const out = run('inbox', '--unread')
     expect(out.status).toBe(0)
     expect(out.stdout).not.toContain('all caught up')
-    expect(out.stdout).toContain("1 approval timed out while Foreman wasn't running; start `foreman start` to approve")
+    expect(out.stdout).toContain("1 approval timed out while Foreman wasn't running")
     expect(out.stdout).toContain('1 unread')
     // Only reported once.
     expect(run('inbox', 'read').stdout).toContain('marked 1 item read')

@@ -482,7 +482,7 @@ const MISSED_APPROVALS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
  * announced them (no `approval:<id>:requested` item) and no recorder saw
  * how they ended. Without this they were denied without a trace, and
  * `foreman inbox` said "all caught up". Each one gets a (read) item of its
- * own, plus one unread summary saying what to do. Idempotent: an approval
+ * own, plus one unread summary saying what to do next time. Idempotent: an approval
  * is only counted once. Returns how many were found.
  */
 export function recordMissedApprovals(db: ForemanDb, inbox: InboxService, now = Date.now()): number {
@@ -529,8 +529,12 @@ export function recordMissedApprovals(db: ForemanDb, inbox: InboxService, now = 
   inbox.add({
     level: "warning",
     kind: "approval",
-    title: `${n} approval${n === 1 ? "" : "s"} timed out while Foreman wasn't running; start \`foreman start\` to approve`,
-    body: `Denied: ${what.slice(0, 5).join(", ")}${n > 5 ? `, +${n - 5} more` : ""}`,
+    // Read later, often in a running TUI: say what happened and how to be
+    // asked next time, not "start foreman start" to someone already in it.
+    title: `${n} approval${n === 1 ? "" : "s"} timed out while Foreman wasn't running`,
+    body:
+      `Denied: ${what.slice(0, 5).join(", ")}${n > 5 ? `, +${n - 5} more` : ""}. ` +
+      "To be asked next time, keep Foreman running: `foreman start` or the background service (`foreman service install`).",
     dedupeKey: `approvals-missed:${last.id}`,
     createdAt: last.decidedAt ?? last.createdAt,
   });

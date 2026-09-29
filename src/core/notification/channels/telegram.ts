@@ -174,6 +174,12 @@ export class TelegramChannel implements NotificationChannel {
     return this.approvalBotToken !== undefined
   }
 
+  /** The bot Foreman reads, as its warnings name it: the approval bot, or
+   *  in one-bot mode (listener: foreman) your only Telegram bot. */
+  private get foremanBotName(): string {
+    return this.approvalBotToken === this.botToken ? 'your Telegram bot' : 'the Telegram approval bot'
+  }
+
   async isReady(): Promise<boolean> {
     const res = (await this.call('getMe', {})) as { ok?: boolean } | null
     return Boolean(res?.ok)
@@ -338,7 +344,7 @@ export class TelegramChannel implements NotificationChannel {
         if (!warnedUnreachable) {
           warnedUnreachable = true
           this.onWarning(
-            `Telegram approval bot unreachable (${err instanceof Error ? err.message : String(err)}); retrying.`,
+            `Can't reach ${this.foremanBotName} (${err instanceof Error ? err.message : String(err)}); retrying.`,
           )
         }
         await pause(this.pollBackoffMs, state.abort.signal)
@@ -347,13 +353,19 @@ export class TelegramChannel implements NotificationChannel {
       warnedUnreachable = false
       if (res.status === 409) {
         this.onWarning(
-          'Another process is polling the Telegram approval bot. It must be a bot only Foreman uses — see docs/notifications.md.',
+          this.approvalBotToken === this.botToken
+            ? 'Another program is reading your Telegram bot (a chat agent?), so Foreman gets no taps. Set listener: agent under channels.telegram in notify.yaml and add an approval bot (foreman notify approval-bot) — see docs/notifications.md.'
+            : 'Another process is polling the Telegram approval bot. It must be a bot only Foreman uses — see docs/notifications.md.',
         )
         await pause(Math.max(this.pollBackoffMs, 30_000), state.abort.signal)
         continue
       }
       if (res.status === 401 || res.status === 404) {
-        this.onWarning('Telegram rejected the approval bot token; approvals fall back to the TUI.')
+        this.onWarning(
+          this.approvalBotToken === this.botToken
+            ? 'Telegram rejected your Telegram bot token; approvals fall back to the TUI.'
+            : 'Telegram rejected the approval bot token; approvals fall back to the TUI.',
+        )
         return
       }
       if (!res.ok) {
@@ -421,7 +433,9 @@ export class TelegramChannel implements NotificationChannel {
             chat_id: this.chatId,
             text: this.onCommand
               ? 'Foreman is connected. Approval requests appear here with buttons. Ask me anything, e.g. "report me" or "what is claude-code doing?", or send /foreman help.'
-              : 'Foreman approval bot connected. Approval requests will appear here; tap a button to decide.',
+              : this.approvalBotToken === this.botToken
+                ? 'Foreman is connected. Approval requests will appear here; tap a button to decide.'
+                : 'Foreman approval bot connected. Approval requests will appear here; tap a button to decide.',
           },
           this.approvalBotToken,
         )
