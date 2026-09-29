@@ -6,7 +6,12 @@ import {
   consumingAgentsFor,
 } from "../../src/tui/setup-wizard.js";
 import type { ServiceEntry } from "../../src/core/registry-catalog.js";
-import { servicesPreChecked } from "../../src/tui/setup-wizard/services-logic.js";
+import {
+  applyServiceChannelSubmit,
+  channelPromptDefault,
+  nextIdxAfterSkippedToken,
+  servicesPreChecked,
+} from "../../src/tui/setup-wizard/services-logic.js";
 
 function service(overrides: Partial<ServiceEntry>): ServiceEntry {
   return {
@@ -236,5 +241,101 @@ describe('services step on a resumed setup', () => {
     ] as never
     const store = { exists: (n: string) => n === 'github-pat' }
     expect(servicesPreChecked(['slack'], catalog, store)).toEqual(['github', 'slack'])
+  })
+})
+
+// Real-user test: a Discord public key pasted as the bot token was saved
+// at once ("… Saved anyway"). A value that fails its paste check now needs
+// the same value submitted again.
+describe('applyServiceValueSubmit — a value with the wrong shape', () => {
+  const base = { serviceId: 'discord-bot-token', currentIdx: 0, totalSelected: 2 }
+  const warning = "that doesn't look like a Discord bot token (three dot-separated parts)."
+
+  it('holds it back on the first Enter and stays on the prompt', () => {
+    const r = applyServiceValueSubmit({ ...base, value: 'f'.repeat(64), pasteWarning: warning })
+    expect(r).toMatchObject({ shouldSave: false, confirm: true, nextPhase: 'values', nextIdx: 0 })
+    expect(r.warning).toBe(`${warning} Press Enter again to save it anyway, or paste the right value.`)
+  })
+
+  it('saves the same value submitted again, and says how to fix it later', () => {
+    const value = 'f'.repeat(64)
+    const r = applyServiceValueSubmit({ ...base, value, pasteWarning: warning, pendingValue: value })
+    expect(r).toMatchObject({ shouldSave: true, nextPhase: 'values', nextIdx: 1 })
+    expect(r.confirm).toBeUndefined()
+    expect(r.warning).toContain('Saved anyway — fix it with `foreman secrets rotate discord-bot-token`')
+  })
+
+  it('holds back a different wrong value again', () => {
+    const r = applyServiceValueSubmit({ ...base, value: 'e'.repeat(64), pasteWarning: warning, pendingValue: 'f'.repeat(64) })
+    expect(r).toMatchObject({ shouldSave: false, confirm: true, nextIdx: 0 })
+  })
+
+  it('saves a value that passes the check at once', () => {
+    const r = applyServiceValueSubmit({ ...base, value: 'good', pasteWarning: null, pendingValue: 'f'.repeat(64) })
+    expect(r).toMatchObject({ shouldSave: true, warning: null, nextIdx: 1 })
+  })
+
+  it('still skips on empty input while a value is held back', () => {
+    const r = applyServiceValueSubmit({ ...base, value: '', pasteWarning: warning, pendingValue: 'f'.repeat(64) })
+    expect(r).toMatchObject({ shouldSave: false, nextIdx: 1 })
+    expect(r.confirm).toBeUndefined()
+    expect(r.warning).toContain('Skipped discord-bot-token')
+  })
+})
+
+describe('channel prompts for Slack and Discord', () => {
+  const slack = service({ id: 'slack', name: 'Slack', secret_name: 'slack-bot-token', extra_secrets: [] })
+  const discord = service({ id: 'discord', name: 'Discord', secret_name: 'discord-bot-token', extra_secrets: [] })
+  const telegram = service({ extra_secrets: [{ name: 'telegram-chat-id', format_hint: 'x', setup_steps: ['s'], optional: true }] })
+
+  it('asks for the channel right after the bot token', () => {
+    const list = buildServicePromptList(['telegram', 'slack', 'discord'], [telegram, slack, discord])
+    expect(list.map((p) => `${p.serviceId}:${p.kind}:${p.secretName}`)).toEqual([
+      'telegram:primary:telegram-bot-token',
+      'telegram:extra:telegram-chat-id',
+      'slack:primary:slack-bot-token',
+      'slack:channel:slack-channel',
+      'discord:primary:discord-bot-token',
+      'discord:channel:discord-channel-id',
+    ])
+    expect(list[3]!.setupSteps.join(' ')).toContain('/invite @yourapp')
+    expect(list[5]!.setupSteps.join(' ')).toContain('Copy Channel ID')
+    expect(channelPromptDefault('slack')).toBe('#foreman')
+    expect(channelPromptDefault('discord')).toBe('')
+  })
+
+  it('skips the channel prompt when the bot token was skipped', () => {
+    const list = buildServicePromptList(['slack', 'discord'], [slack, discord])
+    expect(nextIdxAfterSkippedToken(list, 1, 'slack')).toBe(2)
+    expect(nextIdxAfterSkippedToken(list, 3, 'discord')).toBe(4)
+    // Nothing to skip after a Telegram token (its chat id prompt stays).
+    const tg = buildServicePromptList(['telegram'], [telegram])
+    expect(nextIdxAfterSkippedToken(tg, 1, 'telegram')).toBe(1)
+  })
+
+  it('accepts a Slack channel name or id, adding the # to a bare name', () => {
+    const at = { serviceId: 'slack', currentIdx: 1, totalSelected: 2 }
+    expect(applyServiceChannelSubmit({ ...at, value: '#foreman' })).toMatchObject({ target: '#foreman', error: null, nextPhase: 'summary', nextIdx: 2 })
+    expect(applyServiceChannelSubmit({ ...at, value: 'alerts' }).target).toBe('#alerts')
+    expect(applyServiceChannelSubmit({ ...at, value: 'C0123456789' }).target).toBe('C0123456789')
+    expect(applyServiceChannelSubmit({ ...at, value: 'my channel' })).toMatchObject({ target: null, nextIdx: 1, nextPhase: 'values' })
+  })
+
+  it('accepts only a 17–20 digit Discord channel id', () => {
+    const at = { serviceId: 'discord', currentIdx: 1, totalSelected: 3 }
+    expect(applyServiceChannelSubmit({ ...at, value: ' 123456789012345678 ' })).toMatchObject({ target: '123456789012345678', error: null, nextPhase: 'values', nextIdx: 2 })
+    for (const bad of ['#general', '1234567890123456', '123456789012345678901', '12345678901234567x']) {
+      const r = applyServiceChannelSubmit({ ...at, value: bad })
+      expect(r).toMatchObject({ target: null, nextIdx: 1 })
+      expect(r.error).toContain('17–20 digits')
+    }
+  })
+
+  it('skips on empty input and says how to finish later', () => {
+    const r = applyServiceChannelSubmit({ serviceId: 'slack', value: '', currentIdx: 1, totalSelected: 2 })
+    expect(r).toMatchObject({ target: null, error: null, nextPhase: 'summary', nextIdx: 2 })
+    expect(r.warning).toContain("foreman notify enable slack --channel '#foreman'")
+    const d = applyServiceChannelSubmit({ serviceId: 'discord', value: '  ', currentIdx: 0, totalSelected: 2 })
+    expect(d.warning).toContain('foreman notify enable discord --channel <channel-id>')
   })
 })

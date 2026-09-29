@@ -67,6 +67,28 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Fixed
 
+- **The setup wizard's Services step no longer saves a wrong paste.** A
+  value that fails its format check (a Discord public key pasted as the
+  bot token) was stored at once with *Saved anyway*. Now the prompt stays
+  and asks you to press Enter again to keep it, or to paste the right
+  value; empty input still skips.
+- **The wizard no longer turns on a chat app it can't send to.** A
+  skipped token, chat id or channel still left Telegram, Slack or Discord
+  `enabled: true` in `notify.yaml` with only `bot_token_ref`, and
+  `foreman doctor` warned. A chat app is enabled only when its token and
+  its chat id or channel are set (this run, or already stored); otherwise
+  it is left off and the summary names the command that finishes it.
+- **The wizard asks where Slack and Discord bots post.** After the Slack
+  bot token it asks for the channel (default `#foreman`; invite the bot
+  with `/invite @yourapp`), after the Discord bot token for the channel id
+  (17–20 digits, via Developer Mode → *Copy Channel ID*), and writes it as
+  `channel` in `notify.yaml`, like `foreman notify enable slack|discord
+  --channel`. Before, both channels were enabled without one and could not
+  be built.
+- A Slack or Discord set up in the wizard now receives approvals, alerts
+  and the digest: the default routing named Telegram only, so nothing was
+  sent to them until `foreman notify route …`. A channel you already
+  routed keeps your routing.
 - **Setup: an API key is never swapped for a browser sign-in.** For
   Anthropic and OpenAI, Step 1 asked "Sign in with your subscription
   instead of pasting a key? (y/n)", and Enter meant yes. A key pasted at

@@ -143,6 +143,11 @@ export interface WizardState {
   servicesSaved: string[];
   servicesSkipped: string[];
   servicesWarning: string | null;
+  /** A pasted secret held back because it failed its paste check; the same
+   *  value submitted again at that prompt is saved. Never snapshotted. */
+  servicesPendingPaste: { secretName: string; value: string } | null;
+  /** Slack channel / Discord channel id per service id, for notify.yaml. */
+  servicesChannelTargets: Record<string, string>;
 
   // Integrations step (docs/plans/integrations.md §7). `integrationDraft`
   // holds a typed credential only until that integration is saved.
@@ -243,6 +248,8 @@ export function createInitialWizardState(
     servicesSaved: [],
     servicesSkipped: [],
     servicesWarning: null,
+    servicesPendingPaste: null,
+    servicesChannelTargets: {},
 
     integrationsSelected: session?.integrationsSelected ?? [],
     integrationQueue: [],

@@ -20,6 +20,13 @@ describe('wizard paste checks', () => {
     expect(servicePasteWarning('github-pat', 'ghp_' + 'a'.repeat(36))).toBeNull()
   })
 
+  // The value isn't saved yet when this shows (the Services step holds it
+  // back for a second Enter), so the check itself doesn't claim it was.
+  it('flags a Discord public key pasted as the bot token without claiming it was saved', () => {
+    const warning = servicePasteWarning('discord-bot-token', 'f'.repeat(64))
+    expect(warning).toBe("that doesn't look like a Discord bot token (three dot-separated parts).")
+  })
+
   it('says nothing about secrets it has no shape for', () => {
     expect(servicePasteWarning('atlassian-api-token', 'anything')).toBeNull()
   })
