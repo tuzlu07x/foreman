@@ -20,10 +20,12 @@ All three run only on a published release or a manual dispatch, never on pull re
 1. Update `package.json` `version` (e.g. `2.1.0`), then run `npm install --package-lock-only` so the lockfile matches.
 2. In `CHANGELOG.md`, move **Unreleased** under `## [2.1.0] - <date>`.
 3. Merge that as a PR. `verify` and `qa` must be green.
-4. Create the release from `main`:
+4. Create the release on the merge commit of that PR, not on `main`: if
+   anything else was merged since, `--target main` would tag (and release)
+   that too.
 
    ```bash
-   gh release create v2.1.0 --target main --title "v2.1.0" --notes-file <notes.md>
+   gh release create v2.1.0 --target <merge commit sha> --title "v2.1.0" --notes-file <notes.md>
    ```
 
    The tag must be `v` + the `package.json` version, otherwise `release-npm` stops before publishing.
@@ -37,7 +39,25 @@ All three run only on a published release or a manual dispatch, never on pull re
 - **npm:** Actions → `release-npm` → Run workflow. `dry_run` defaults to on: it runs every check and `npm publish --dry-run --provenance`, and publishes nothing.
 - **Binaries:** Actions → `release-binaries` → Run workflow. It builds and smoke-tests all four binaries and writes `SHA256SUMS` as workflow artifacts; nothing is attached to a release.
 
-Publish only through `release-npm`. The repo's `.npmrc` sets `ignore-scripts=true`, so a hand-run `npm publish` from a checkout would skip `prepublishOnly` (build and tests); the workflow runs lint, build and tests itself.
+Publish through `release-npm` when you can. The repo's `.npmrc` sets `ignore-scripts=true`, so a hand-run `npm publish` from a checkout skips `prepublishOnly` (build and tests) and packs whatever `dist/` happens to hold; the workflow runs lint, build and tests itself.
+
+## Publishing by hand
+
+Without the `NPM_TOKEN` secret, `release-npm` can't publish. Then publish from a clean checkout of the release tag, never from `main` or a working tree:
+
+```bash
+git fetch origin --tags
+git switch --detach v2.1.0
+git status --short                  # must print nothing
+node -p "require('./package.json').name + ' ' + require('./package.json').version"   # foreman-agent 2.1.0
+npm ci
+npm run lint && npm run build && npm test
+npm publish --access public --dry-run   # check the file list and version
+npm publish --access public
+git switch main
+```
+
+`npm login` first if `npm whoami` fails: an expired session makes the publish fail with a misleading `404 Not Found - PUT`. The "bin script name … was invalid and removed" warning only means npm dropped the leading `./` from the `bin` paths; the commands are still installed. npm never lets a version be published twice, so a wrong upload can only be fixed with the next version.
 
 ## Standalone binaries
 
