@@ -43,6 +43,17 @@ const DEFAULT_RECOMMENDATIONS: Record<RiskBucket, RiskRecommendation> = {
 
 export type BucketOverrides = Partial<Record<RiskBucket, RiskRecommendation>>
 
+/** Commands that wreck the machine (`rm -rf /`, `mkfs` or `dd` onto a disk,
+ *  a fork bomb): refused outright instead of asked about, so a tired tap on
+ *  "allow" or a timeout that nobody sees can't let one through. An explicit
+ *  `buckets.critical` in policy.yaml still decides for itself. */
+export const CATASTROPHIC_RULES: ReadonlySet<string> = new Set([
+  'shell_rm_rf_catastrophic',
+  'shell_dd_to_disk',
+  'shell_mkfs_on_disk',
+  'shell_fork_bomb',
+])
+
 export const DEFAULT_RISK_RULES: readonly RiskRule[] = [
   secretPatternRule,
   networkPatternRule,
@@ -115,7 +126,9 @@ export function composeAssessment(
   const raw = factors.reduce((sum, f) => sum + f.points, 0)
   const totalScore = Math.max(0, Math.min(100, raw))
   const bucket = bucketFor(totalScore)
-  const recommendation = recommendationFor(bucket, overrides)
+  const catastrophic =
+    overrides?.critical === undefined && factors.some((f) => CATASTROPHIC_RULES.has(f.rule))
+  const recommendation = catastrophic ? 'deny' : recommendationFor(bucket, overrides)
   return { factors, totalScore, bucket, recommendation, llmVerification }
 }
 

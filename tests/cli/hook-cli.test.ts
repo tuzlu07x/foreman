@@ -311,20 +311,30 @@ describe("foreman hook claude-code — Faz 4 (#517)", () => {
   });
 
   it("exits 2 on a high-risk shell-destructive command after the user-default-deny timeout", () => {
-    // `rm -rf /` trips shell-pattern rules + lands in the `ask` bucket
-    // (RiskScorer's default recommendation table maps high → ask, not
-    // deny). Without a TUI/Telegram approver wired into the test, the
-    // DB approval bridge waits + the configured 200ms timeout fires +
-    // the default-deny resolution returns. The hook exits 2 (Claude
-    // Code's "block + surface stderr" code).
+    // `rm -rf build` lands in the high bucket, which asks. Without a
+    // TUI/Telegram approver wired into the test, the DB approval bridge
+    // waits, the configured 200ms timeout fires and the default-deny
+    // resolution returns. The hook exits 2 (Claude Code's "block +
+    // surface stderr" code).
     const payload = {
       session_id: "sess-deny",
       tool_name: "Bash",
-      tool_input: { command: "rm -rf /" },
+      tool_input: { command: "rm -rf build" },
     };
     const r = runHook(JSON.stringify(payload), env);
     expect(r.exit).toBe(2);
     expect(r.stderr).toMatch(/denied|blocked/i);
+  });
+
+  it("refuses rm -rf / outright, without asking", () => {
+    const r = runHook(
+      JSON.stringify({ session_id: "sess-cat", tool_name: "Bash", tool_input: { command: "rm -rf /" } }),
+      env,
+    );
+    expect(r.exit).toBe(2);
+    expect(r.stderr).toContain("risk:critical");
+    const pending = spawnSync("node", [FM_BIN, "log", "tail", "--json"], { env, encoding: "utf-8" });
+    expect(pending.stdout).toContain("risk:critical");
   });
 
   it("times out + denies a borderline call when no approver is reachable", () => {

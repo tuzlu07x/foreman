@@ -265,7 +265,7 @@ describe("the Foreman daemon (#616)", () => {
 
   it("blocks the call (exit 2) when the daemon dies while the call waits for approval", async () => {
     await startDaemon();
-    const running = hook("claude-code", bash("rm -rf /"), { args: ["--timeout-ms", "60000"] });
+    const running = hook("claude-code", bash("rm -rf build"), { args: ["--timeout-ms", "60000"] });
     await until(() => pendingApprovals() > 0);
     await killDaemon("SIGKILL");
     const r = await running;
@@ -276,7 +276,7 @@ describe("the Foreman daemon (#616)", () => {
   it("cancels (denies) a hook's pending approval when the hook process goes away", async () => {
     await startDaemon();
     const child = spawn("node", [HOOK_BIN, "claude-code", "--timeout-ms", "60000"], { env });
-    child.stdin.end(JSON.stringify(bash("rm -rf /")));
+    child.stdin.end(JSON.stringify(bash("rm -rf build")));
     await until(() => pendingApprovals() > 0);
     child.kill("SIGKILL");
     await until(() => pendingApprovals() === 0);
