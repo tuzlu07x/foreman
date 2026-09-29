@@ -8,7 +8,7 @@ import { findAgent, loadActiveRegistry, type AgentEntry } from "../core/registry
 import { isUntrustedSource } from "../core/agent-identity.js";
 import { rememberScope } from "../core/remember-scope.js";
 import type { BootInfo } from "./boot-info.js";
-import { AppHeader, NavTabs, nextTab, Toast } from "./components/app-header.js";
+import { AppHeader, NavTabs, navTabsHeight, nextTab, Toast } from "./components/app-header.js";
 import { CommandBar, type ConsoleEntry } from "./components/command-bar.js";
 import { ConfirmBar, type PendingConfirm } from "./components/confirm-bar.js";
 import { InboxPage } from "./pages/inbox-page.js";
@@ -56,6 +56,8 @@ import { AgentsPage } from "./pages/agents-page.js";
 import { ProvidersPage } from "./pages/providers-page.js";
 import { ServicesPage } from "./pages/services-page.js";
 import { IntegrationsPage } from "./pages/integrations-page.js";
+import { TeamPage } from "./pages/team-page.js";
+import { HomeGuide } from "./components/home-guide.js";
 import { ModelPicker, type ModelOption } from "./components/model-picker.js";
 import { providerModelTiers } from "../core/provider-resolver.js";
 import { discoverModels, type DiscoveryProvider } from "../core/llm/models-discovery.js";
@@ -1017,7 +1019,10 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     ...(gateway ? { gateway } : {}),
   };
   // Rows left for the page between the chrome (header, tabs, toast, bar).
-  const pageHeight = Math.max(8, terminal.rows - 6 - (inbox.toast ? 1 : 0));
+  const pageHeight = Math.max(
+    8,
+    terminal.rows - 5 - navTabsHeight(terminal.cols, inbox.unread) - (inbox.toast ? 1 : 0),
+  );
 
   return (
     <Box flexDirection="column">
@@ -1112,7 +1117,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           onAgentStartLlmEdit={onAgentStartLlmEdit}
           onAgentSaveLlm={onAgentSaveLlm}
           onAgentCancelEdit={onAgentCancelEdit}
-          commandOpen={commandOpen}
+          commandOpen={commandOpen || page === "chat"}
           openCommand={() => {
             setBooting(false);
             setCommandOpen(true);
@@ -1169,8 +1174,18 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
       ) : null}
       {helpOpen ? (
         <HelpOverlay width={terminal.cols} height={pageHeight + 1} />
-      ) : commandOpen ? (
+      ) : commandOpen || (page === "chat" && !pendingApproval) ? (
         <Box flexDirection="column">
+          {page === "chat" && !commandOpen ? (
+            <Box paddingX={1}>
+              <Text wrap="truncate-end">
+                <Text color={theme.accent.primary} bold>
+                  Chat with Foreman
+                </Text>
+                <Text color={theme.fg.muted}> · try: report me · help · Esc leaves</Text>
+              </Text>
+            </Box>
+          ) : null}
           {pendingApproval ? (
             <Box paddingX={1}>
               <Text color={theme.accent.warning} bold>
@@ -1183,9 +1198,12 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           ) : null}
           <CommandBar
             env={commandEnv}
-            onClose={() => setCommandOpen(false)}
+            onClose={() => {
+              setCommandOpen(false);
+              if (page === "chat") setPage("dashboard");
+            }}
             width={terminal.cols}
-            height={pageHeight + 1 - (pendingApproval ? 1 : 0)}
+            height={pageHeight + 1 - (pendingApproval || (page === "chat" && !commandOpen) ? 1 : 0)}
             history={commandHistory}
             onHistory={setCommandHistory}
             scrollback={consoleEntries}
@@ -1253,7 +1271,9 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           expanded={delegationsExpanded}
           notice={delegationsNotice}
         />
-      ) : page === "chat" ? (
+      ) : page === "team" ? (
+        <TeamPage onLeave={() => setPage("dashboard")} onEditingChange={setPageEditing} height={pageHeight} />
+      ) : page === "test" ? (
         <ChatPage
           selectedAgentIdx={chatAgentIdx}
           inputMode={chatInputMode}
@@ -1326,10 +1346,15 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
           }}
         />
       )}
-      {commandOpen ? null : pendingConfirm && !pendingApproval && !helpOpen ? (
+      {commandOpen || (page === "chat" && !pendingApproval) ? null : pendingConfirm && !pendingApproval && !helpOpen ? (
         <ConfirmBar confirm={pendingConfirm} />
       ) : (
-        <StatusBar quitConfirm={quitConfirm} page={page} approval={pendingApproval !== null && !helpOpen} />
+        <StatusBar
+          quitConfirm={quitConfirm}
+          page={page}
+          approval={pendingApproval !== null && !helpOpen}
+          pageKeysShown={page === "team" && pageEditing}
+        />
       )}
         </>
       )}
@@ -1586,7 +1611,8 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     // Keys that work on every page, unless the page is taking typed text.
     const textEntry =
       (page === "logs" && logSearchMode) ||
-      (page === "chat" && chatInputMode) ||
+      (page === "test" && chatInputMode) ||
+      (page === "team" && pageEditing) ||
       (page === "secrets" && (addSecretMode !== null || rotateMode !== null)) ||
       (page === "agents" && agentsEditMode !== "none") ||
       ((page === "providers" || page === "services" || page === "integrations") && pageEditing);
@@ -1700,7 +1726,8 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
         page !== "secrets" &&
         page !== "providers" &&
         page !== "services" &&
-        page !== "integrations"
+        page !== "integrations" &&
+        page !== "team"
       ) {
         setPage("inbox");
         return;
@@ -1810,7 +1837,7 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
       }
       return;
     }
-    if (page === "chat") {
+    if (page === "test") {
       if (chatInputMode) {
         if (key.escape) setChatInputMode(false);
         return;
@@ -1931,10 +1958,11 @@ function KeyboardHandler(props: KeyboardHandlerProps): null {
     // ProvidersPage / ServicesPage run their own useInput; short-circuit
     // here so a key (e.g. `s` for show-value) isn't double-handled by the
     // global dispatch (which would simultaneously try to setPage('sessions')).
-    if (page === "providers" || page === "services" || page === "integrations") return;
+    if (page === "providers" || page === "services" || page === "integrations" || page === "team") return;
     if (input === "/") openCommand();
     else if (input === "?" || input === "h") setHelpOpen(true);
     else if (input === "c") setPage("chat");
+    else if (input === "t") setPage("team");
     else if (input === "g") setPage("settings");
     else if (input === "k") setPage("secrets");
     else if (input === "a") setPage("agents");
@@ -1954,7 +1982,10 @@ function renderPanels(layout: "wide" | "medium" | "narrow"): JSX.Element {
     return (
       <>
         <AgentList width="20%" />
-        <ActivityFeed width="60%" />
+        <Box width="60%" flexDirection="column">
+          <ActivityFeed />
+          <HomeGuide />
+        </Box>
         <StatsPanel width="20%" />
       </>
     );
@@ -1964,6 +1995,7 @@ function renderPanels(layout: "wide" | "medium" | "narrow"): JSX.Element {
       <Box flexDirection="column" width="100%">
         <AgentList compact />
         <ActivityFeed />
+        <HomeGuide />
       </Box>
     );
   }

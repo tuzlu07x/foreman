@@ -34,6 +34,18 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Added
 
+- **A Team page in the TUI** (`t`): your org chart as a tree, with who
+  fills each role, on what (Claude Code, Codex…), what it may do and who
+  it reports to. `n` adds a role there, ready-made or your own, as in
+  the setup wizard ([#739](https://github.com/tuzlu07x/foreman/issues/739)).
+- **Chat with Foreman in the TUI** (`c`). The *Test* tab was a developer
+  tool (send a test call as an agent); the tab is now a chat with
+  Foreman: plain questions like `report me` or commands like `write` and
+  `approve`, the same as the `:` console. The test console is still
+  there with `:open test`.
+- **Home says what to do next**: a Team line (`Acme · 5 roles in 2
+  departments`) and the setup steps still open (connect your phone,
+  install the background service, add roles), each with its command.
 - **Set up your team in the setup wizard.** A new optional step, *Your
   team*, comes after install when Claude Code or Codex is registered:
   tick ready-made roles or add your own (a title, what it does in your
@@ -88,6 +100,11 @@ All notable changes to Foreman are documented here. The format follows
   hook in `<dir>/.claude/settings.json`, for one project only.
 
 ### Changed
+
+- The TUI's tab bar shows every page: on two rows when one isn't wide
+  enough (80 to ~150 columns). Before, at 120 columns the pages after
+  Keys were hidden. The *Keys* tab is now called *Secrets*, like its
+  page.
 
 - **A new mascot** ([#724](https://github.com/tuzlu07x/foreman/issues/724)). The boot screen and the setup wizard's welcome show a
   small pixel-art beaver foreman with a hard hat, drawn with coloured

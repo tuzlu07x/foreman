@@ -28,7 +28,9 @@ export type TuiPage =
   | "integrations"
   | "secrets"
   | "settings"
-  | "chat";
+  | "team"
+  | "chat"
+  | "test";
 
 export interface CommandEnv {
   /** Run a chat verb through the ForemanCommandRouter (audited). */
@@ -91,7 +93,11 @@ export const PAGE_ALIASES: Record<string, TuiPage> = {
   keys: "secrets",
   secrets: "secrets",
   settings: "settings",
-  test: "chat",
+  team: "team",
+  org: "team",
+  chat: "chat",
+  foreman: "chat",
+  test: "test",
 };
 
 function decide(
@@ -140,7 +146,7 @@ const LOCAL_COMMANDS: LocalCommand[] = [
     name: "open",
     aliases: ["go"],
     usage: "open <page>",
-    description: "Switch page (inbox, agents, sessions, logs, policy, keys, settings, …)",
+    description: "Switch page (inbox, agents, team, sessions, logs, policy, secrets, settings, test, …)",
     run: (args, env) => {
       const page = PAGE_ALIASES[(args[0] ?? "").toLowerCase()];
       if (!page) {

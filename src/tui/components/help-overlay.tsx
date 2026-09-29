@@ -38,15 +38,16 @@ const NAV_SECTIONS: HelpSection[] = [
     rows: [
       { key: "n", label: "Inbox" },
       { key: "a", label: "Agents" },
+      { key: "t", label: "Team (roles)" },
+      { key: "c", label: "Chat with Foreman" },
       { key: "d", label: "Delegations" },
       { key: "v", label: "Providers" },
       { key: "V", label: "Services" },
       { key: "i", label: "Integrations" },
-      { key: "k", label: "Secrets / keys" },
+      { key: "k", label: "Secrets" },
       { key: "l", label: "Logs" },
       { key: "p", label: "Policy" },
       { key: "s", label: "Sessions" },
-      { key: "c", label: "Mediator test" },
       { key: "g", label: "Settings" },
     ],
   },
@@ -135,7 +136,15 @@ const EXTRA_SECTIONS: HelpSection[] = [
     ],
   },
   {
-    title: "Mediator test console",
+    title: "Team page",
+    rows: [
+      { key: "↑ ↓", label: "select a role" },
+      { key: "n", label: "add a role (ready-made or your own)" },
+      { key: "r", label: "while adding: Claude Code / Codex" },
+    ],
+  },
+  {
+    title: "Mediator test console (:open test)",
     rows: [
       { key: "← →", label: "switch source agent" },
       { key: "i", label: "input mode" },

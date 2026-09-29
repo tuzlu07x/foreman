@@ -34,7 +34,7 @@ These work on every page, unless you are typing into a field:
 | --- | --- |
 | `:` | open the [command console](#command-console) |
 | `Tab` / `Shift+Tab` | next / previous page |
-| `n` | the [inbox](#inbox), except on Keys, Providers, Services and Integrations, where `n` means "new" |
+| `n` | the [inbox](#inbox), except on Secrets, Team, Providers, Services and Integrations, where `n` means "new" |
 | `Esc` | back to Home |
 | `q` / `Ctrl-C` | quit: at once, or after a `y` / `n` question while approvals are waiting |
 
@@ -42,11 +42,12 @@ On the Home page:
 
 | Key | Page | Key | Page |
 | --- | --- | --- | --- |
-| `n` | Inbox | `k` | Keys (the secret store) |
+| `n` | Inbox | `k` | Secrets (the secret store) |
 | `a` | Agents | `v` | Providers (LLM keys and sign-ins) |
+| `t` | Team (your org chart) | `c` | Chat with Foreman |
 | `s` | Sessions | `V` | Services (chat apps: Telegram, Slack, Discord) |
 | `d` | Delegations | `g` | Settings |
-| `l` | Logs | `c` | Test (send a test call as an agent) |
+| `l` | Logs |  |  |
 | `p` | Policy | `i` | [Integrations](integrations.md) (GitHub, GitLab, Jira, Trello, Linear, Notion) |
 |  |  | `?` / `h` | help |
 
@@ -61,11 +62,13 @@ Keys on each page:
 | Policy | `↑↓` select, `Enter` details (the rule's raw condition), `d` turn the rule on / off, `e` edit `policy.yaml` in `$EDITOR`. See [`policy.md`](policy.md#the-tui-policy-page). |
 | Sessions | `↑↓` select, `Enter` details, `k` halt the session |
 | Delegations | `↑↓` select, `Enter` details |
-| Keys | `↑↓` select, `Enter` details, `n` new secret, `v` reveal, `r` rotate, `d` delete |
+| Team | `↑↓` select a role (who fills it, on what, what it may do, who it reports to), `n` add a role: a ready-made one or your own (title, what it does, what it may do), `r` switches it between Claude Code and Codex. See [`org.md`](org.md#roles-ready-made-your-own-and-what-each-may-do). |
+| Chat | Type to Foreman: plain questions (`report me`, `what is claude-code doing?`) or commands (`write`, `assign`, `approve`, `help`). The same as the `:` console, as a page. `Esc` leaves. |
+| Secrets | `↑↓` select, `Enter` details, `n` new secret, `v` reveal, `r` rotate, `d` delete |
 | Providers, Services | `↑↓` select, `Enter` details, `n` configure the selected one, `r` rotate, `d` remove (asks first), `s` show the value for 10 s; `o` sign in with a Claude / ChatGPT subscription (Providers), `w` setup walkthrough (Services) |
 | Integrations | `↑↓` select, `Enter` details (credentials, sign-in, which agents may use it), `n` add (variant, access level, who, token or browser sign-in, then review and enable), `space` enable / disable, `e` edit (access level, who, replace a credential, sign in again), `t` tools (`←→` sets a per-tool rule), `r` review, `o` sign in, `d` remove (asks first; `Enter` cancels) |
 | Settings | `↑↓` select, `Enter` open, `e` edit `SOUL.md`, `p` edit `policy.yaml`, `P` Policy page, `m` pick Foreman's model (the registry's fast / balanced / strongest, plus the provider's live list when a key is stored), `w` how to re-run the wizard |
-| Test | `←→` pick the source agent, `i` type a request, `Enter` send |
+| Test (`:open test`) | Send a test call as an agent: `←→` pick the source agent, `i` type a request, `Enter` send |
 
 What some pages show:
 
@@ -83,7 +86,7 @@ What some pages show:
 - **Settings** shows file paths with `~` for your home folder, shortened
   in the middle when the terminal is narrow.
 
-Regenerating an agent's key (`r`), removing an agent (`x`) and deleting a secret (`d` on Keys) ask first: `y` goes ahead, any other key cancels. The Keys page doesn't list agents' identity tokens; manage those with `foreman agent token rotate` and `foreman agent rewire`.
+Regenerating an agent's key (`r`), removing an agent (`x`) and deleting a secret (`d` on Secrets) ask first: `y` goes ahead, any other key cancels. The Secrets page doesn't list agents' identity tokens; manage those with `foreman agent token rotate` and `foreman agent rewire`.
 
 ## Approvals
 
@@ -201,7 +204,7 @@ restarts:
 
 ![Inbox](images/tui-inbox.png)
 
-`n` opens it from any page except Keys, Providers, Services and Integrations (there `n`
+`n` opens it from any page except Secrets, Team, Providers, Services and Integrations (there `n`
 means "new"; press `Esc`, then `n`). New warnings pop up as a one-line
 toast on whatever page you're on. On the inbox page: `↑↓` select, `Enter` details,
 `r` mark read, `R` mark all read, `f` filter (all, unread, warnings).

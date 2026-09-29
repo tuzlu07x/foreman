@@ -137,11 +137,12 @@ function unique(base: string, taken: Set<string>): string {
 
 /** The roles to add, with ids free in org.yaml and the registry. With a
  *  manager among them, everyone else reports to the manager; otherwise to
- *  you. */
+ *  `existingManager` (a role already in org.yaml) when given, else to you. */
 export function planTeam(
   picked: readonly TeamChoice[],
   existingRoles: readonly string[],
   registered: readonly string[],
+  existingManager?: string,
 ): TeamMember[] {
   const taken = new Set([...existingRoles, ...registered]);
   const members = picked.map((c) => {
@@ -153,7 +154,7 @@ export function planTeam(
       instructions: c.instructions,
       can: c.can,
       runsOn: c.runsOn,
-      reportsTo: "human",
+      reportsTo: existingManager ?? "human",
     };
   });
   const manager = members.find((m, i) => picked[i]!.presetId === "manager");

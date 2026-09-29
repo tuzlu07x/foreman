@@ -1,7 +1,7 @@
 import React from 'react'
 import { render } from 'ink-testing-library'
 import { describe, expect, it } from 'vitest'
-import { AppHeader, NavTabs, nextTab, TABS } from '../../src/tui/components/app-header.js'
+import { AppHeader, NavTabs, navTabsHeight, nextTab, TABS } from '../../src/tui/components/app-header.js'
 import { consoleLines } from '../../src/tui/components/command-bar.js'
 
 const strip = (s: string | undefined): string => (s ?? '').replace(/\x1b\[[0-9;]*m/g, '')
@@ -26,9 +26,22 @@ describe('AppHeader (#611)', () => {
 })
 
 describe('NavTabs', () => {
+  it('shows every page, on two rows when one is not wide enough (80 and 100 columns)', () => {
+    for (const width of [80, 100]) {
+      const out = strip(render(React.createElement(NavTabs, { page: 'settings', unread: 0, width })).lastFrame())
+      for (const t of TABS) expect(out).toContain(t.label)
+      expect(out).toContain('▎Settings')
+      expect(out).not.toContain('‹')
+      expect(out.split('\n')).toHaveLength(2)
+      expect(navTabsHeight(width)).toBe(2)
+    }
+    expect(navTabsHeight(80, 12)).toBe(2) // with an unread count on Inbox too
+    expect(navTabsHeight(200)).toBe(1)
+  })
+
   it('keeps the active tab visible even when it is far right', () => {
-    const out = strip(render(React.createElement(NavTabs, { page: 'chat', unread: 0, width: 80 })).lastFrame())
-    expect(out).toContain('▎Test')
+    const out = strip(render(React.createElement(NavTabs, { page: 'settings', unread: 0, width: 50 })).lastFrame())
+    expect(out).toContain('▎Settings')
     expect(out).toContain('‹')
   })
 
