@@ -77,6 +77,31 @@ function ptyCommand(argv: readonly string[]): { file: string; args: string[] } {
  *  changes (KEY_SETTLE_MS in src/tui/app.tsx is 600 ms). */
 export const KEY_SETTLE_MS = 1_000
 
+/** The `foreman start` process the pty runner started: its child, or a
+ *  grandchild when `script` runs it through a shell. */
+function foremanUnder(runner: number | undefined): number | null {
+  if (runner === undefined || process.platform === 'win32') return null
+  const res = spawnSync('ps', ['-A', '-o', 'pid=,ppid=,command='], { encoding: 'utf-8' })
+  const procs = (res.stdout ?? '').split('\n').flatMap((line) => {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)
+    return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), command: m[3]! }] : []
+  })
+  const tree = new Set([runner])
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const p of procs) {
+      if (tree.has(p.ppid) && !tree.has(p.pid)) {
+        tree.add(p.pid)
+        grew = true
+      }
+    }
+  }
+  const foreman = procs.find(
+    (p) => p.pid !== runner && tree.has(p.pid) && p.command.startsWith(process.execPath) && p.command.includes(`${FOREMAN_BIN} start`),
+  )
+  return foreman?.pid ?? null
+}
+
 export const KEY = {
   enter: '\r',
   escape: '\u001b',
@@ -107,8 +132,10 @@ export class Tui {
   }
 
   /** `foreman start --skip-setup` at 120×40, waiting until the gateway runs
-   *  and its daemon listens. */
-  static async start(sandbox: Sandbox): Promise<Tui> {
+   *  and its daemon listens. `attached`: the background service already
+   *  runs the gateway, so this `foreman start` only attaches (TUI only) and
+   *  the pidfile is the service's, not this process's. */
+  static async start(sandbox: Sandbox, opts: { attached?: boolean } = {}): Promise<Tui> {
     const { file, args } = ptyCommand([process.execPath, FOREMAN_BIN, 'start', '--skip-setup'])
     const child = spawn(file, args, {
       cwd: sandbox.cwd,
@@ -121,6 +148,11 @@ export class Tui {
     sandbox.onDispose(async () => {
       await tui.stop()
     })
+    if (opts.attached) {
+      await tui.waitForText(/│  attached( to the background gateway)?  │/, { timeoutMs: 30_000 })
+      tui.foremanPid = foremanUnder(child.pid)
+      return tui
+    }
     const pidFile = sandbox.path('foreman.pid')
     tui.foremanPid = await waitFor('foreman start to write its pidfile', () => {
       if (child.exitCode !== null) throw new GiveUp(`foreman start exited early: ${tui.screen().slice(-2_000)}`)

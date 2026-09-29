@@ -6,12 +6,14 @@ import React from "react";
 import {
   ApprovalBridge,
   BusApprovalService,
+  DbApprovalService,
+  ownApprovalTimeoutMs,
   ReadlineApprovalService,
   type ApprovalService,
 } from "../core/approval.js";
 import { AgentDaemonManager } from "../core/agent-daemon-manager.js";
 import { AuditLogger } from "../core/audit.js";
-import { bus } from "../core/event-bus.js";
+import { bus, EventBus, type ForemanEventMap } from "../core/event-bus.js";
 import {
   composeEscalationText,
   composeNudgeText,
@@ -37,11 +39,14 @@ import {
 } from "../core/control-channel.js";
 import {
   acquireForemanPidfile,
-  deleteForemanPidfile,
   ForemanAlreadyRunningError,
   getForemanPidfilePath,
   otherForemanPid,
+  PIDFILE_HEARTBEAT_MS,
+  releaseForemanPidfile,
+  touchForemanPidfile,
 } from "../core/foreman-pidfile.js";
+import { probeGateway, type GatewayProbe } from "../core/gateway.js";
 import { defaultLlmConfig, saveLlmConfig } from "../core/llm/config.js";
 import {
   ForemanCommandRouter,
@@ -159,6 +164,10 @@ import { FOREMAN_VERSION } from "../version.js";
 
 const APP_VERSION = FOREMAN_VERSION;
 
+/** How often the headless gateway checks whether it can take the daemon
+ *  socket over from a plain `foreman daemon`. */
+const HUB_RETRY_MS = 3_000;
+
 export class NotInitialisedError extends Error {
   constructor(public readonly rootPath: string) {
     super(
@@ -177,13 +186,36 @@ export interface StartedForeman {
   sessionManager: SessionManager;
   publicKey: Buffer;
   bootInfo: BootInfo;
+  /** "tui": `foreman start` running the gateway itself; "headless": the
+   *  background service's gateway; "attached": a TUI on top of a headless
+   *  gateway that runs in another process. */
+  mode: StartMode;
+  /** Chat channels this process sends notifications to (empty when it
+   *  runs none, e.g. attached). */
+  channels: string[];
   waitForExit: () => Promise<void>;
   shutdown: () => Promise<void>;
 }
 
+export type StartMode = "tui" | "headless" | "attached";
+
 export interface StartForemanOptions {
   /** Skip mounting the Ink TUI. Tests use this to avoid touching stdout. */
   withTui?: boolean;
+  /**
+   * Run as the headless gateway (`foreman daemon --service`): everything
+   * `foreman start` runs except the TUI. Approvals of the tasks it runs
+   * itself are DB-backed, so a TUI attached later shows them too. `log`
+   * receives what a person should read (the service's log file).
+   */
+  headless?: { log: (message: string) => void };
+  /**
+   * Attach to the headless gateway with this pid, which owns the home:
+   * run the TUI only. No second notification bridge, control drain,
+   * scheduler, watcher, OTLP receiver, agent daemons or hub daemon; the
+   * TUI works over the database (approvals, inbox, the control channel).
+   */
+  attach?: { pid: number };
 }
 
 export function startForeman(
@@ -193,13 +225,19 @@ export function startForeman(
   if (!existsSync(paths.root) || !existsSync(paths.identityPath)) {
     throw new NotInitialisedError(paths.root);
   }
-  // One `foreman start` per home (#657): refuse before touching anything.
-  const running = otherForemanPid(paths.configDir);
-  if (running !== null) {
-    throw new ForemanAlreadyRunningError(
-      running,
-      getForemanPidfilePath(paths.configDir),
-    );
+  const attach = options.attach ?? null;
+  const headless = options.headless ?? null;
+  const mode: StartMode = attach ? "attached" : headless ? "headless" : "tui";
+  // One gateway per home (#657): refuse before touching anything. An
+  // attached TUI runs next to the gateway that holds the home.
+  if (!attach) {
+    const running = otherForemanPid(paths.configDir);
+    if (running !== null) {
+      throw new ForemanAlreadyRunningError(
+        running,
+        getForemanPidfilePath(paths.configDir),
+      );
+    }
   }
   const { publicKey } = loadOrCreateMasterKey();
   const db = getDb();
@@ -221,14 +259,33 @@ export function startForeman(
   // can signal us when a user types `/foreman stop` into an agent's
   // Telegram chat. Cleanup happens in shutdown(). Taking it is also the
   // single-instance lock (a start that raced the check above loses here).
-  acquireForemanPidfile(paths.configDir);
+  // It records which kind of gateway holds the home, and its mtime is a
+  // heartbeat, so a `foreman start` can tell a live headless gateway (and
+  // attach to it) from a stale file.
+  let heartbeat: NodeJS.Timeout | null = null;
+  if (!attach) {
+    acquireForemanPidfile(paths.configDir, headless ? "headless" : "tui");
+    heartbeat = setInterval(() => touchForemanPidfile(paths.configDir), PIDFILE_HEARTBEAT_MS);
+    heartbeat.unref();
+  }
   const registry = new RegistryService(db, bus);
   const audit = new AuditLogger(db, bus);
   const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
   const withTui = options.withTui ?? true;
-  const approval: ApprovalService = withTui
-    ? new BusApprovalService({ bus })
-    : new ReadlineApprovalService({ bus });
+  // The tasks the headless gateway runs itself (the control drain's ACP /
+  // codex spawns) keep their approvals in the database, like an agent's
+  // `foreman mcp-stdio` does, so the chat channels and a TUI attached later
+  // both see them. The service's own bus is private: the mediator's
+  // announcement on the shared bus is the one that counts (the bridge
+  // adopts it, see adoptAnnounced below).
+  const approval: ApprovalService = headless
+    ? new DbApprovalService(db, {
+        bus: new EventBus<ForemanEventMap>(),
+        timeoutMs: ownApprovalTimeoutMs(),
+      })
+    : withTui
+      ? new BusApprovalService({ bus })
+      : new ReadlineApprovalService({ bus });
   const daemonManager = new AgentDaemonManager({
     paths,
     registry,
@@ -269,7 +326,9 @@ export function startForeman(
       }
     },
   });
-  daemonManager.startAll();
+  // Agent daemons belong to the gateway; an attached TUI leaves them alone
+  // (stopAll on its exit would SIGTERM the gateway's).
+  if (!attach) daemonManager.startAll();
   const risk = new RiskScorer(db, undefined, {
     bucketOverrides: () => policy.getBucketOverrides(),
     // Wire the responsibility-violation rule (#300). Both lookups close
@@ -320,17 +379,23 @@ export function startForeman(
   // fires for cross-process requests too (#117).
   // Started below, once the inbox and notification listeners are attached,
   // so approvals already pending at launch reach them too.
-  const approvalBridge = new ApprovalBridge(db, { bus });
+  // Both a gateway and an attached TUI run one: a decision is written to
+  // the row only while it is still pending, so exactly one counts, and
+  // each process learns the outcome from the database.
+  const approvalBridge = new ApprovalBridge(db, { bus, adoptAnnounced: headless !== null });
 
   // In-app inbox (#613): every approval, block, crash and update, kept
   // with read state so the TUI shows what happened while you were away —
-  // with or without external channels configured.
+  // with or without external channels configured. The gateway records it;
+  // an attached TUI reads it (it refreshes from the database).
   const inbox = new InboxService(db, bus);
   // Approvals that timed out while Foreman wasn't running (#657).
-  try {
-    recordMissedApprovals(db, inbox);
-  } catch {
-    /* best-effort, like the rest of the inbox */
+  if (!attach) {
+    try {
+      recordMissedApprovals(db, inbox);
+    } catch {
+      /* best-effort, like the rest of the inbox */
+    }
   }
   const inboxRecorder = new InboxRecorder(db, inbox, { bus });
   reportPolicyError = (message) => {
@@ -343,33 +408,66 @@ export function startForeman(
     });
   };
   for (const message of earlyPolicyErrors.splice(0)) reportPolicyError(message);
-  inboxRecorder.start();
-  warnAboutAgentTokens(registry, secretStore, inbox, withTui);
+  if (!attach) {
+    inboxRecorder.start();
+    warnAboutAgentTokens(registry, secretStore, inbox, withTui);
+  }
 
   // The daemon (#616): agents' `foreman mcp-stdio` and the PreToolUse hook
   // connect to it instead of each booting the mediation stack (and every
   // MCP hub server) themselves. They fall back to doing that when it isn't
   // there, with the same decisions.
+  //
+  // An attached TUI never hosts it: the gateway it attached to does.
   let hubDaemon: HubDaemon | null = null;
   let hubDaemonStopping = false;
-  const hubDaemonReady: Promise<void> = daemonSupported()
-    ? startHubDaemon({
-        paths,
-        log: (message) =>
-          inbox.add({
-            level: "warning",
-            kind: "system",
-            title: "Foreman daemon",
-            body: message,
-            dedupeKey: `daemon:${message}`,
-          }),
-      })
-        .then(async (daemon) => {
-          if (hubDaemonStopping) await daemon.close();
-          else hubDaemon = daemon;
-        })
+  // Wakes the headless gateway's wait for the socket on shutdown.
+  let wakeHubRetry: (() => void) | null = null;
+  const hubLog = (message: string): void => {
+    headless?.log(message);
+    inbox.add({
+      level: "warning",
+      kind: "system",
+      title: "Foreman daemon",
+      body: message,
+      dedupeKey: `daemon:${message}`,
+    });
+  };
+  const startHub = async (): Promise<void> => {
+    for (let waiting = false; ; ) {
+      try {
+        const daemon = await startHubDaemon({ paths, log: hubLog });
+        if (hubDaemonStopping) {
+          await daemon.close();
+          return;
+        }
+        hubDaemon = daemon;
+        headless?.log(`listening on ${daemon.socketPath}`);
+        return;
+      } catch (err) {
+        // The headless gateway takes the socket over from a plain
+        // `foreman daemon` once that one stops, as the 2.2.0 service did;
+        // `foreman start` leaves agents on it (below).
+        if (!headless || !(err instanceof DaemonAlreadyRunningError) || hubDaemonStopping) throw err;
+        if (!waiting) headless.log(`${err.message}; waiting to take over when it stops`);
+        waiting = true;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, HUB_RETRY_MS);
+          wakeHubRetry = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+        });
+        wakeHubRetry = null;
+        if (hubDaemonStopping) return;
+      }
+    }
+  };
+  const hubDaemonReady: Promise<void> = daemonSupported() && !attach
+    ? startHub()
         .catch((err: unknown) => {
           const reason = err instanceof Error ? err.message : String(err);
+          headless?.log(`agents run without the daemon: ${reason}`);
           if (err instanceof DaemonAlreadyRunningError) {
             // The background service (`foreman service`) or a `foreman
             // daemon` got there first: agents use it. Its approvals are
@@ -414,12 +512,14 @@ export function startForeman(
     onRecorded: () => onUsageRecorded(),
   });
   let otlpBoundPort: number | null = null;
-  otlp
+  // The gateway's receiver takes the port; an attached TUI has none.
+  if (!attach) otlp
     .start()
     .then((port) => {
       otlpBoundPort = port;
     })
     .catch(() => {
+      headless?.log(`agent spend tracking is off: port ${otlpPort()} is in use`);
       inbox.add({
         level: "warning",
         kind: "system",
@@ -524,7 +624,10 @@ export function startForeman(
     (event) => audit.logEvent("notify:interaction-refused", event),
     { isKnownCommand: (verb) => commandRouter.has(verb) },
   );
-  const notificationSetup = setupNotificationBridge({
+  // One notification bridge per home: the gateway's. Telegram allows one
+  // getUpdates poller per bot, and Slack / Discord must not get every
+  // approval twice, so an attached TUI runs none.
+  const notificationSetup = attach ? null : setupNotificationBridge({
     db,
     secretStore,
     onChatCommand: runChatCommand,
@@ -538,13 +641,15 @@ export function startForeman(
     llmConfigPath: paths.llmConfigPath,
     // Channel trouble (e.g. someone else polling the approval bot) lands
     // in the inbox, once per distinct message.
-    onChannelWarning: (message) =>
+    onChannelWarning: (message) => {
+      headless?.log(message);
       inbox.add({
         level: "warning",
         kind: "system",
         title: message,
         dedupeKey: `channel:${message}`,
-      }),
+      });
+    },
   });
   const notificationBridge = notificationSetup?.bridge ?? null;
   const dailyScheduler = notificationSetup?.scheduler ?? null;
@@ -563,7 +668,8 @@ export function startForeman(
     bus,
     inbox,
   });
-  reviewWorker.start();
+  // The gateway asks the managers; an attached TUI only reads their advice.
+  if (!attach) reviewWorker.start();
   approvalBridge.start();
 
   // Department channels (#630): mirror what agents say to each other to
@@ -576,7 +682,7 @@ export function startForeman(
     ),
     inbox,
   });
-  commsMirror.start();
+  if (!attach) commsMirror.start();
 
   // Department budgets from org.yaml (#629): inbox + alert channels.
   const budgetWatcher = new BudgetWatcher(db, {
@@ -599,7 +705,7 @@ export function startForeman(
         }
       : {}),
   });
-  budgetWatcher.start();
+  if (!attach) budgetWatcher.start();
   onUsageRecorded = () => budgetWatcher.checkSoon();
 
   // #303 / #304 / #305 — ForemanVoice + pattern detection. Only started
@@ -756,6 +862,7 @@ export function startForeman(
           audit,
           orgConfigPath: paths.orgConfigPath,
           ...(integrationWiring ? { integrations: integrationWiring } : {}),
+          ...(attach ? { attachedGateway: () => attachedGatewayState(paths.configDir) } : {}),
         },
       }),
       { exitOnCtrlC: false },
@@ -784,6 +891,10 @@ export function startForeman(
       clearInterval(watchdogTimer);
       watchdogTimer = null;
     }
+    if (heartbeat) {
+      clearInterval(heartbeat);
+      heartbeat = null;
+    }
     if (exitResolve) {
       const r = exitResolve;
       exitResolve = null;
@@ -793,10 +904,14 @@ export function startForeman(
     // process while the rest shuts down; calls still waiting on the daemon
     // are refused (fail closed), never left to be allowed later.
     hubDaemonStopping = true;
+    wakeHubRetry?.();
     await hubDaemonReady;
     const daemon = hubDaemon as HubDaemon | null;
     hubDaemon = null;
     if (daemon) await daemon.close().catch(() => undefined);
+    // The headless gateway's own tasks: an approval still open is
+    // cancelled (denied) now, never left for a decision nobody relays.
+    if (approval instanceof DbApprovalService) approval.close();
     approvalBridge.stop();
     reviewWorker.stop();
     inboxRecorder.stop();
@@ -821,16 +936,21 @@ export function startForeman(
       ]);
     }
     // SIGTERM every tracked agent daemon, wait up to 5s, then SIGKILL.
-    // Awaited so foreman doesn't exit with stranded children.
-    await daemonManager.stopAll().catch(() => {
-      /* best-effort cleanup */
-    });
+    // Awaited so foreman doesn't exit with stranded children. An attached
+    // TUI leaves them to the gateway.
+    if (!attach) {
+      await daemonManager.stopAll().catch(() => {
+        /* best-effort cleanup */
+      });
+    }
     try {
       // May throw if another process holds the database past its busy
       // timeout (#594); the pidfile and the handle still go.
       audit.dispose();
     } finally {
-      deleteForemanPidfile(paths.configDir);
+      // Only our own: an attached TUI must not remove the gateway's, and a
+      // gateway that took over meanwhile keeps its own.
+      releaseForemanPidfile(paths.configDir);
       closeDb();
     }
   };
@@ -1287,7 +1407,9 @@ export function startForeman(
     ],
   ]);
   const controlPoller = new ControlDrainPoller(controlChannel, controlHandlers);
-  controlPoller.start();
+  // The drain runs in the gateway only: two would spawn every delegated
+  // task twice. An attached TUI's console enqueues; the gateway drains.
+  if (!attach) controlPoller.start();
 
   // Autonomous loop watchdog — periodically scan delegations where
   // the peer's output arrived but the initiator hasn't followed up.
@@ -1306,7 +1428,7 @@ export function startForeman(
   const nudgeChatId = secretStore.exists("telegram-chat-id")
     ? secretStore.get("telegram-chat-id")
     : undefined;
-  watchdogTimer = setInterval(() => {
+  if (!attach) watchdogTimer = setInterval(() => {
     void runDelegationWatchdog({
       tracker: delegationTracker,
       telegramBotToken: nudgeBotToken,
@@ -1322,7 +1444,13 @@ export function startForeman(
   // Avoid keeping Node alive purely on the timer when the rest of
   // the process is winding down (e.g. CLI test runners) — the
   // signal handler at the top of run() handles graceful exit.
-  watchdogTimer.unref();
+  watchdogTimer?.unref();
+
+  const channels = notificationSetup?.channelIds ?? [];
+  if (headless) {
+    const reach = channels.length > 0 ? channels.join(", ") : "none (notify.yaml has no working channel)";
+    headless.log(`gateway running (pid ${process.pid}): approvals and notifications go to ${reach}`);
+  }
 
   return {
     registry,
@@ -1333,6 +1461,8 @@ export function startForeman(
     sessionManager,
     publicKey,
     bootInfo,
+    mode,
+    channels,
     waitForExit,
     shutdown,
   };
@@ -1452,6 +1582,7 @@ function setupNotificationBridge(args: {
   bridge: NotificationBridge;
   scheduler: DailyScheduler | null;
   service: NotificationService;
+  channelIds: string[];
 } | null {
   let config;
   try {
@@ -1533,7 +1664,7 @@ function setupNotificationBridge(args: {
     }
   }
 
-  return { bridge, scheduler, service };
+  return { bridge, scheduler, service, channelIds: [...channels.keys()] };
 }
 
 // =============================================================================
@@ -2022,29 +2153,47 @@ export const startCommand = new Command("start")
       seedHomeIfMissing();
       if (options.skipSetup) rememberSetupSkipped();
     }
+    // The background service's headless gateway owns this home: this
+    // window is its TUI (approvals, inbox, logs, console), nothing more.
+    const configDir = getForemanPaths().configDir;
     let started: StartedForeman;
     try {
-      started = startForeman();
+      const gateway = attachedGatewayState(configDir);
+      started = gateway ? startForeman({ attach: gateway }) : startForeman();
     } catch (err) {
-      if (err instanceof NotInitialisedError) {
+      // The service took the home between the check and the lock.
+      const gateway = err instanceof ForemanAlreadyRunningError ? attachedGatewayState(configDir) : null;
+      if (gateway) {
+        closeDb();
+        started = startForeman({ attach: gateway });
+      } else if (err instanceof NotInitialisedError) {
         console.error(
           red("error: ") +
             `${err.message} Tip: run 'foreman setup' to configure interactively, or 'foreman init' to seed the home and use defaults.`,
         );
         process.exit(1);
-      }
-      if (err instanceof PolicyLoadError) {
+      } else if (err instanceof PolicyLoadError) {
         printPolicyLoadError(err);
         closeDb();
         process.exit(1);
-      }
-      if (err instanceof ForemanAlreadyRunningError) {
+      } else if (err instanceof ForemanAlreadyRunningError) {
         console.error(red("error: ") + err.message);
         closeDb();
         process.exit(1);
+      } else {
+        throw err;
       }
-      throw err;
     }
     await started.waitForExit();
     await started.shutdown();
+    if (started.mode === "attached") {
+      // Quitting the TUI leaves the gateway (and its channels) running.
+      console.log(dim("Foreman keeps guarding in the background (`foreman service status`)."));
+    }
   });
+
+/** The live headless gateway that owns this home, if any. */
+export function attachedGatewayState(configDir: string): { pid: number } | null {
+  const gateway: GatewayProbe = probeGateway(configDir);
+  return gateway.state === "running" && gateway.mode === "headless" ? { pid: gateway.pid } : null;
+}

@@ -1,11 +1,15 @@
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
+import { uptime } from "node:os";
 import { dirname, resolve } from "node:path";
 
 // =============================================================================
@@ -67,12 +71,15 @@ export function otherForemanPid(configDir: string): number | null {
  * is gone is stale and replaced. Throws ForemanAlreadyRunningError when
  * another live process holds it.
  */
-export function acquireForemanPidfile(configDir: string): void {
+export function acquireForemanPidfile(configDir: string, mode?: ForemanMode): void {
   const path = getForemanPidfilePath(configDir);
   mkdirSync(dirname(path), { recursive: true });
+  // The pid stays alone on the first line, so older readers (and anything
+  // that only parses an integer) keep working.
+  const content = mode ? `${process.pid}\n${mode}\n` : String(process.pid);
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      writeFileSync(path, String(process.pid), { encoding: "utf-8", flag: "wx", mode: 0o600 });
+      writeFileSync(path, content, { encoding: "utf-8", flag: "wx", mode: 0o600 });
       return;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
@@ -101,18 +108,126 @@ export function deleteForemanPidfile(configDir: string): void {
 }
 
 // Returns the recorded PID, or null when the file is missing /
-// malformed / points at a dead process. The caller treats null as
+// malformed / stale (see readForemanPidInfo). The caller treats null as
 // "Foreman is not running" — same trust model as the agent daemon
 // manager's pidfile-stale check.
 export function readForemanPid(configDir: string): number | null {
+  return readForemanPidInfo(configDir)?.pid ?? null;
+}
+
+// =============================================================================
+// Which Foreman holds the home: `foreman start` or the headless gateway
+// =============================================================================
+//
+// Two kinds of process run the gateway (approval bridge, chat channels,
+// control drain, schedulers): `foreman start` with its TUI ("tui"), and
+// the background service's `foreman daemon --service` without one
+// ("headless"). The pidfile says which on its second line, and the holder
+// refreshes the file's mtime every few seconds (a heartbeat). A
+// `foreman start` that finds a live headless gateway attaches to it and
+// runs only the TUI.
+
+export type ForemanMode = "tui" | "headless";
+
+/** How often the holder refreshes the pidfile's mtime. */
+export const PIDFILE_HEARTBEAT_MS = 5_000;
+/** A heartbeat older than this is suspicious: the pid then only counts if
+ *  that process is recognisably Foreman. */
+export const PIDFILE_STALE_MS = 30_000;
+
+export interface ForemanPidInfo {
+  pid: number;
+  /** null: a pidfile written without a mode (a Foreman before the headless
+   *  gateway, or a caller that passed none) — treated as a TUI. */
+  mode: ForemanMode | null;
+  /** Milliseconds since the last heartbeat (the file's mtime). */
+  heartbeatAgeMs: number;
+}
+
+/** Test seams for liveness and identity. */
+export interface PidProbe {
+  alive?: (pid: number) => boolean;
+  /** The process's command line, or null when it can't be read. */
+  command?: (pid: number) => string | null;
+  now?: () => number;
+  /** When this machine booted (ms since the epoch). */
+  bootTime?: () => number;
+}
+
+/**
+ * The live Foreman that holds this home, or null. A stale pidfile doesn't
+ * count:
+ *   - a dead or malformed pid (a crash, a kill -9);
+ *   - a file last written before this machine booted: its pid has been
+ *     handed out again since (common right after a reboot, when the
+ *     service starts at login and pids are small);
+ *   - a heartbeat that stopped (files with a mode only) and a process that
+ *     isn't Foreman: the pid was reused within this boot.
+ * A Foreman whose heartbeat is merely late (a busy event loop, a machine
+ * that just woke up) still counts: two gateways on one home would be worse
+ * than a refused start.
+ */
+export function readForemanPidInfo(configDir: string, probe: PidProbe = {}): ForemanPidInfo | null {
   const path = getForemanPidfilePath(configDir);
-  if (!existsSync(path)) return null;
+  let raw: string;
+  let mtimeMs: number;
   try {
-    const raw = readFileSync(path, "utf-8").trim();
-    const pid = Number.parseInt(raw, 10);
-    if (!Number.isFinite(pid) || pid <= 0) return null;
-    if (!isProcessAlive(pid)) return null;
-    return pid;
+    raw = readFileSync(path, "utf-8");
+    mtimeMs = statSync(path).mtimeMs;
+  } catch {
+    return null;
+  }
+  const [first = "", second = ""] = raw.split("\n");
+  const pid = Number.parseInt(first.trim(), 10);
+  if (!Number.isFinite(pid) || pid <= 0) return null;
+  const modeText = second.trim();
+  const mode: ForemanMode | null = modeText === "tui" || modeText === "headless" ? modeText : null;
+  if (!(probe.alive ?? isProcessAlive)(pid)) return null;
+  const now = (probe.now ?? Date.now)();
+  // A minute of slack: uptime() is whole seconds, and clocks drift.
+  if (mtimeMs < (probe.bootTime ?? machineBootTime)() - 60_000) return null;
+  const heartbeatAgeMs = Math.max(0, now - mtimeMs);
+  if (mode !== null && heartbeatAgeMs > PIDFILE_STALE_MS && pid !== process.pid) {
+    const command = (probe.command ?? processCommand)(pid);
+    if (command !== null && !/foreman/i.test(command)) return null;
+  }
+  return { pid, mode, heartbeatAgeMs };
+}
+
+/** Refresh the heartbeat, only on a pidfile that is still this process's. */
+export function touchForemanPidfile(configDir: string): void {
+  const path = getForemanPidfilePath(configDir);
+  try {
+    if (readFileSync(path, "utf-8").split("\n")[0]?.trim() !== String(process.pid)) return;
+    const now = new Date();
+    utimesSync(path, now, now);
+  } catch {
+    // gone (shutting down) or unreadable: nothing to refresh
+  }
+}
+
+/** Remove the pidfile only while it is this process's: a gateway that took
+ *  over in the meantime keeps its own. */
+export function releaseForemanPidfile(configDir: string): void {
+  const path = getForemanPidfilePath(configDir);
+  try {
+    if (readFileSync(path, "utf-8").split("\n")[0]?.trim() === String(process.pid)) rmSync(path);
+  } catch {
+    /* best-effort */
+  }
+}
+
+function machineBootTime(): number {
+  return Date.now() - uptime() * 1000;
+}
+
+/** `ps` for one pid's command line; null when it can't be read. */
+function processCommand(pid: number): string | null {
+  if (process.platform === "win32") return null;
+  try {
+    const res = spawnSync("ps", ["-ww", "-o", "command=", "-p", String(pid)], { encoding: "utf-8", timeout: 2_000 });
+    const out = res.status === 0 ? res.stdout.trim() : "";
+    return out === "" ? null : out;
   } catch {
     return null;
   }

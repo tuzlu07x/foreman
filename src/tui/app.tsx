@@ -17,6 +17,7 @@ import { ApprovalQueueStrip } from "./components/approval-queue-strip.js";
 import type { CommandEnv, TuiPage } from "./tui-commands.js";
 import { useApprovalQueue } from "./use-approval-queue.js";
 import { useInbox } from "./use-inbox.js";
+import { useAttachedGateway } from "./use-attached-gateway.js";
 import { useDashboardState } from "./use-dashboard-state.js";
 import { useTerminalSize } from "./hooks.js";
 import {
@@ -108,8 +109,10 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     commandContext,
     audit,
     orgConfigPath,
+    attachedGateway,
   } = useDashboardServices();
   const { exit } = useApp();
+  const gateway = useAttachedGateway(attachedGateway);
 
   const [page, setPage] = useState<Page>("dashboard");
   const [quitConfirm, setQuitConfirm] = useState(false);
@@ -1011,6 +1014,7 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     unread: inbox.unread,
     allowedToday: dashboard.todayStats.allowed,
     deniedToday: dashboard.todayStats.denied,
+    ...(gateway ? { gateway } : {}),
   };
   // Rows left for the page between the chrome (header, tabs, toast, bar).
   const pageHeight = Math.max(8, terminal.rows - 6 - (inbox.toast ? 1 : 0));

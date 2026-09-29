@@ -22,6 +22,10 @@ export interface HeaderStats {
   unread: number;
   allowedToday: number;
   deniedToday: number;
+  /** Attached to the background gateway: "attached" while it runs,
+   *  "stopped" once it is gone. Undefined when this process is the
+   *  gateway itself. */
+  gateway?: "attached" | "stopped";
 }
 
 export function AppHeader({ stats, width }: { stats: HeaderStats; width: number }): JSX.Element {
@@ -38,6 +42,17 @@ export function AppHeader({ stats, width }: { stats: HeaderStats; width: number 
           <Text color={theme.accent.success}>{theme.symbols.activeDot}</Text>
           <Text color={theme.fg.default}>{compact ? " on" : " guarding"}</Text>
         </Chip>
+        {stats.gateway === "attached" ? (
+          <Chip>
+            <Text color={theme.accent.info}>{compact ? "attached" : "attached to the background gateway"}</Text>
+          </Chip>
+        ) : stats.gateway === "stopped" ? (
+          <Chip>
+            <Text color={theme.accent.warning} bold>
+              {compact ? `${theme.symbols.warn} gateway stopped` : `${theme.symbols.warn} background gateway stopped`}
+            </Text>
+          </Chip>
+        ) : null}
         <Chip>
           <Text color={theme.fg.default}>{`${stats.agentsOnline}/${stats.agentsTotal}`}</Text>
           <Text color={theme.fg.muted}> agents</Text>

@@ -261,8 +261,8 @@ the Inbox says why when `foreman start` couldn't start it.
 
 ### Run the daemon at login (`foreman service`)
 
-To have the daemon without a terminal open, install it as a background
-service of your own user:
+To have the daemon, and your approvals in chat, without a terminal open,
+install Foreman as a background service of your own user:
 
 ```bash
 foreman service install     # start it now and at every login
@@ -298,22 +298,37 @@ written through a symlink or outside your home directory, and the macOS log
 is 0600. The daemon's socket, token and checks are the same as when
 `foreman start` hosts it.
 
-**With `foreman start`.** Only one daemon serves a Foreman home. When the
-service is already running, `foreman start` leaves agents on it (the Inbox
-says so) and runs everything else as usual. Approvals from calls the
-service decides still appear in the TUI and on your channels: they are kept
-in the database, which `foreman start` watches, the same way it shows
-approvals from an agent's own `foreman mcp-stdio`. When `foreman start` got
-there first, the service waits and takes over within a few seconds of
-`foreman start` quitting. Without `foreman start` running, nothing shows an
-approval: a call that needs one waits until it times out and is denied
-(`foreman inbox` lists what was missed).
+**What the service runs.** `foreman daemon --service` is the whole
+headless gateway: the daemon, and everything else `foreman start` runs
+besides the TUI. Approvals go to the channels routed in `notify.yaml`, and
+your taps come back (the Telegram approval bot, Slack Socket Mode, the
+Discord Gateway); `/foreman` commands from chat, schedules, the daily
+digest and budget alerts run there too. A call that needs your OK reaches
+your phone with no terminal open.
+
+**With `foreman start`.** Exactly one gateway runs per Foreman home. When
+the service is running, `foreman start` **attaches** to it: it runs the TUI
+only, and the header says *attached*. Approvals
+are kept in the database, so the TUI shows them and decides them; the
+first answer wins, from the TUI or from chat, and the chat message is
+updated to say so. Quitting the attached TUI leaves the service running.
+When `foreman start` got there first, it runs the gateway itself and the
+service waits, then takes over within a few seconds of `foreman start`
+quitting. With neither running, nothing shows an approval: a call that
+needs one waits until it times out and is denied (`foreman inbox` lists
+what was missed). `foreman service status` and `foreman doctor` (the
+`gateway` row) say which one runs it, and doctor says where approvals go.
+
+A plain `foreman daemon` (without `--service`) still runs only the daemon;
+a service started while one is listening runs the rest of the gateway and
+takes the socket over when that daemon stops.
 
 If the daemon can't start for a reason a restart won't fix (Foreman isn't
 initialised, the state directory is open to other users), the service logs
 why and stops instead of restarting in a loop. Fix it, then run
 `foreman service install` again. `foreman doctor` warns when the service is
-installed but the daemon isn't running.
+installed but the daemon isn't running, and when the gateway has stopped
+checking in.
 
 How it stays safe:
 

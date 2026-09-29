@@ -109,12 +109,22 @@ wrap`, or `foreman start` itself for the tasks it runs (`foreman write`,
 shows the approval here, sends it to the channels routed in
 [`notify.yaml`](notifications.md) and receives your taps from Telegram,
 Slack and Discord. **Keep `foreman start` running while your agents
-work.**
+work**, or install the background service (`foreman service install`),
+which does all of that except the TUI, so approvals reach your chat with no
+terminal open.
+
+With the service running, `foreman start` **attaches** to it: the header
+says *attached* (*attached to the background gateway* on a wide terminal), and the TUI shows approvals and
+decides them as usual, while the service keeps sending them to your
+channels. Quitting the TUI leaves the service running. If the service
+stops while you are attached, the header says *background gateway
+stopped*: approvals still show here, but reach no chat channel until the
+service is back (`foreman service status`).
 
 An approval nobody answers in time is **denied**. It shows as
 `approval-timeout` in `foreman log tail`, and the agent gets an error
-(`Denied by approval-timeout`). The same happens when `foreman start`
-isn't running: nothing shows the approval, no notification is sent, and
+(`Denied by approval-timeout`). The same happens when neither
+`foreman start` nor the background service is running: nothing shows the approval, no notification is sent, and
 the call is denied when it times out. The next `foreman inbox` or
 `foreman start` records what was denied that way ("N approvals timed out
 while Foreman wasn't running"), and `foreman inbox` says when approvals

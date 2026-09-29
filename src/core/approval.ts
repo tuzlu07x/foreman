@@ -178,6 +178,13 @@ const DB_DEFAULT_TIMEOUT_MS = 600_000; // 10 min
 // service classes below) keep working without case-by-case overrides.
 const DEFAULT_TIMEOUT_MS = CLI_DEFAULT_TIMEOUT_MS;
 
+/** How long the tasks Foreman runs itself wait for a person (the same in
+ *  `foreman start` and in the headless gateway): FOREMAN_APPROVAL_TIMEOUT,
+ *  else 60 seconds. */
+export function ownApprovalTimeoutMs(): number {
+  return envTimeoutMs() ?? DEFAULT_TIMEOUT_MS;
+}
+
 export interface ReadlineApprovalOptions {
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
@@ -721,6 +728,12 @@ export interface ApprovalBridgeOptions {
   pollIntervalMs?: number;
   /** Cap on how old a pending row can be before we auto-deny it (defensive). */
   staleMs?: number;
+  /** Treat approvals announced on the bus by someone else (an in-process
+   *  mediator whose approval service writes the row) as already announced,
+   *  so the poll doesn't announce them a second time. The headless gateway
+   *  sets it: its own mediator's approvals are DB-backed so an attached TUI
+   *  sees them too, and a chat channel must get each approval once. */
+  adoptAnnounced?: boolean;
 }
 
 export class ApprovalBridge {
@@ -731,6 +744,10 @@ export class ApprovalBridge {
   private readonly seen = new Map<string, ForemanEventMap["approval:requested"]>();
   private timer: NodeJS.Timeout | null = null;
   private offResolved: (() => void) | null = null;
+  private offRequested: (() => void) | null = null;
+  private readonly adoptAnnounced: boolean;
+  /** Set while this bridge emits, so its own announcements aren't adopted. */
+  private announcing = false;
 
   constructor(
     private readonly db: ForemanDb,
@@ -739,10 +756,16 @@ export class ApprovalBridge {
     this.bus = opts.bus ?? defaultBus;
     this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.staleMs = opts.staleMs ?? 5 * 60 * 1000;
+    this.adoptAnnounced = opts.adoptAnnounced === true;
   }
 
   start(): void {
     if (this.timer) return;
+    if (this.adoptAnnounced) {
+      this.offRequested = this.bus.on("approval:requested", (e) => {
+        if (!this.announcing && !this.seen.has(e.requestId)) this.seen.set(e.requestId, e);
+      });
+    }
     this.offResolved = this.bus.on("approval:resolved", (e) => {
       const written = this.db
         .update(pendingApprovals)
@@ -786,6 +809,10 @@ export class ApprovalBridge {
     if (this.offResolved) {
       this.offResolved();
       this.offResolved = null;
+    }
+    if (this.offRequested) {
+      this.offRequested();
+      this.offRequested = null;
     }
   }
 
@@ -849,7 +876,12 @@ export class ApprovalBridge {
         ...(row.deadlineMs != null ? { deadlineMs: row.deadlineMs } : {}),
       };
       this.seen.set(row.requestId, announcement);
-      this.bus.emit("approval:requested", announcement);
+      this.announcing = true;
+      try {
+        this.bus.emit("approval:requested", announcement);
+      } finally {
+        this.announcing = false;
+      }
     }
     // Approvals this process surfaced that are no longer pending were
     // decided elsewhere: in another process (a relayed Telegram tap, the

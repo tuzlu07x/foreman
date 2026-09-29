@@ -6,6 +6,34 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Approvals reach your chat with no terminal open.** The background
+  service (`foreman service install`) now runs the whole headless gateway,
+  not just the daemon: approvals go to the channels routed in
+  `notify.yaml` and your taps come back (the Telegram approval bot, Slack
+  Socket Mode, the Discord Gateway), and `/foreman` from chat, schedules,
+  the daily digest and budget alerts run there too. Before, all of that ran
+  only while `foreman start` was open, and a call that needed your OK with
+  the TUI closed waited unseen until it was denied
+  ([docs/mcp-hub.md](docs/mcp-hub.md#run-the-daemon-at-login-foreman-service)).
+- **`foreman start` attaches to the running service.** Exactly one gateway
+  runs per home. With the service up, `foreman start` runs the TUI only
+  (the header says *attached*): approvals show
+  and are decided there, each is sent to chat once, and quitting the TUI
+  leaves the service running. A service started while `foreman start` runs
+  waits and takes over when it quits.
+- `foreman service status` and `foreman doctor` (a new `gateway` row) say
+  which process runs the gateway; doctor says where approvals go, and warns
+  when the gateway stopped checking in.
+
+### Changed
+
+- The pidfile (`foreman.pid`) records which kind of Foreman holds the home
+  (`tui` or `headless`) on a second line and is refreshed every 5 seconds;
+  a pidfile left from before a reboot, or whose pid now belongs to
+  another program, no longer counts as a running Foreman.
+
 ## [2.2.0] - 2026-09-29
 
 Foreman keeps guarding when the TUI is closed, can run its own model locally,

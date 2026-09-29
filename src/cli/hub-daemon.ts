@@ -33,6 +33,7 @@ import { encodeMessage } from "../mcp/framing.js";
 import type { JSONRPCMessage } from "../mcp/types.js";
 import { getForemanPaths, type ForemanPaths } from "../utils/config.js";
 import { red } from "./colors.js";
+import { runGatewayService } from "./gateway-service.js";
 import { evaluateHookPayload } from "./hook-cli.js";
 import { MAX_PAYLOAD_BYTES } from "./hook-client.js";
 import {
@@ -590,9 +591,6 @@ function removeOwnToken(path: string, token: string): void {
   }
 }
 
-/** How often a waiting service daemon checks whether it can take over. */
-const SERVICE_RETRY_MS = 3_000;
-
 export const daemonCommand = new Command("daemon")
   .description(
     "Run Foreman's local daemon without the TUI: agents' `foreman mcp-stdio` and the PreToolUse hook connect to it " +
@@ -601,8 +599,9 @@ export const daemonCommand = new Command("daemon")
   )
   .option(
     "--service",
-    "run as the background service (`foreman service install`): wait while another daemon is listening and take over " +
-      "when it stops, and exit 0 (so the service manager doesn't restart it) when Foreman can't start",
+    "run as the background service (`foreman service install`): the whole headless gateway (the daemon, approvals to " +
+      "your chat channels, schedulers, the control drain); wait while `foreman start` or another gateway runs and take " +
+      "over when it stops, and exit 0 (so the service manager doesn't restart it) when Foreman can't start",
   )
   .action(async (opts: { service?: boolean }) => {
     const service = opts.service === true;
@@ -624,29 +623,22 @@ export const daemonCommand = new Command("daemon")
       process.once("SIGINT", resolve);
       process.once("SIGTERM", resolve);
     });
-    let stopping = false;
-    void stopped.then(() => {
-      stopping = true;
-    });
-    let daemon: HubDaemon | null = null;
-    let waiting = false;
-    while (!daemon) {
-      try {
-        daemon = await startHubDaemon({ paths, log });
-      } catch (err) {
-        if (!(service && err instanceof DaemonAlreadyRunningError)) {
-          fail(err instanceof Error ? err.message : String(err));
-        }
-        // `foreman start` (or another `foreman daemon`) serves agents for
-        // now; this one takes over when that one stops.
-        if (!waiting) log(`${(err as Error).message}; waiting to take over when it stops`);
-        waiting = true;
-        await Promise.race([stopped, new Promise((resolve) => setTimeout(resolve, SERVICE_RETRY_MS))]);
-        if (stopping) {
-          closeDb();
-          process.exit(0);
-        }
-      }
+    if (service) {
+      // The background service runs the whole headless gateway: the daemon
+      // plus the notification bridge, chat listeners, schedulers and the
+      // control drain (src/cli/gateway-service.ts). A static import on
+      // purpose: a dynamic one makes the bundle hoist dependencies above
+      // env-preflight (tests/cli/no-color.test.ts). The cycle through
+      // start.ts is only used at run time.
+      await runGatewayService({ log, fail, stopped });
+      closeDb();
+      process.exit(0);
+    }
+    let daemon: HubDaemon;
+    try {
+      daemon = await startHubDaemon({ paths, log });
+    } catch (err) {
+      return fail(err instanceof Error ? err.message : String(err));
     }
     log(`listening on ${daemon.socketPath}`);
     await stopped;
