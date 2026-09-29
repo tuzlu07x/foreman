@@ -124,7 +124,7 @@ export function SecretsPage({
       flexGrow={1}
     >
       <PageHeader
-        title="Secrets (advanced)"
+        title="Secrets"
         right={`${rows.length} stored · AES-256-GCM`}
       />
       <Text color={theme.fg.muted}>

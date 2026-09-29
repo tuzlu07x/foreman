@@ -21,9 +21,9 @@ export interface KeyHint {
 const PAGE_HINTS: Record<TuiPage, KeyHint[]> = {
   dashboard: [
     { key: ":", label: "command" },
+    { key: "c", label: "chat" },
     { key: "n", label: "inbox" },
-    { key: "a", label: "agents" },
-    { key: "l", label: "logs" },
+    { key: "t", label: "team" },
     { key: "Tab", label: "pages" },
   ],
   inbox: [{ key: "Esc", label: "home" }],
@@ -79,7 +79,18 @@ const PAGE_HINTS: Record<TuiPage, KeyHint[]> = {
     { key: "Enter", label: "open" },
     { key: "Esc", label: "home" },
   ],
+  team: [
+    { key: "↑↓", label: "select" },
+    { key: "n", label: "add a role" },
+    { key: "Esc", label: "home" },
+  ],
   chat: [
+    { key: "Enter", label: "send" },
+    { key: "↑", label: "earlier" },
+    { key: "Tab", label: "complete" },
+    { key: "Esc", label: "home" },
+  ],
+  test: [
     { key: "←→", label: "agent" },
     { key: "i", label: "type" },
     { key: "Esc", label: "home" },
@@ -113,9 +124,12 @@ export interface StatusBarProps {
   quitConfirm?: boolean;
   /** An approval is on screen: show its keys instead of the page's. */
   approval?: boolean;
+  /** The page shows its own keys for what's on screen (a form, a picker):
+   *  leave them out here instead of listing the page's usual ones. */
+  pageKeysShown?: boolean;
 }
 
-export function StatusBar({ page = "dashboard", quitConfirm, approval }: StatusBarProps): JSX.Element {
+export function StatusBar({ page = "dashboard", quitConfirm, approval, pageKeysShown }: StatusBarProps): JSX.Element {
   const layout = useLayout();
   if (quitConfirm) {
     // One paragraph that wraps as a whole, and the keys on their own line:
@@ -142,7 +156,7 @@ export function StatusBar({ page = "dashboard", quitConfirm, approval }: StatusB
     );
   }
   const hints = hintsFor(page, layout);
-  const left = approval ? APPROVAL_HINTS : hints.left;
+  const left = approval ? APPROVAL_HINTS : pageKeysShown ? [] : hints.left;
   const { right } = hints;
   return (
     <Box paddingX={1} justifyContent="space-between">

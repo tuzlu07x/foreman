@@ -107,22 +107,60 @@ export const TABS: TabSpec[] = [
   { page: "dashboard", label: "Home", key: "Esc" },
   { page: "inbox", label: "Inbox", key: "n" },
   { page: "agents", label: "Agents", key: "a" },
+  { page: "team", label: "Team", key: "t" },
+  { page: "chat", label: "Chat", key: "c" },
   { page: "sessions", label: "Sessions", key: "s" },
   { page: "delegations", label: "Delegations", key: "d" },
   { page: "logs", label: "Logs", key: "l" },
   { page: "policy", label: "Policy", key: "p" },
-  { page: "secrets", label: "Keys", key: "k" },
+  { page: "secrets", label: "Secrets", key: "k" },
   { page: "providers", label: "Providers", key: "v" },
   { page: "services", label: "Services", key: "V" },
   { page: "integrations", label: "Integrations", key: "i" },
   { page: "settings", label: "Settings", key: "g" },
-  { page: "chat", label: "Test", key: "c" },
 ];
 
 export function nextTab(page: TuiPage, delta: number): TuiPage {
   const i = TABS.findIndex((t) => t.page === page);
   const n = TABS.length;
   return TABS[((i === -1 ? 0 : i) + delta + n) % n]!.page;
+}
+
+/** Tab labels, the Inbox one with its unread count. */
+function tabLabels(unread: number): string[] {
+  return TABS.map((t) => `${t.label}${t.page === "inbox" && unread > 0 ? ` ${unread}` : ""}`);
+}
+
+/** A tab's width beyond its label: ` label ` plus the two-space gap. */
+const TAB_GAP = 4;
+/** "Tab next · : command" on the right of a single row. */
+const HINT_WIDTH = 26;
+
+/** Every tab laid out in rows of `width` columns, or null when it takes
+ *  more than two rows (the bar then scrolls instead). Exported for tests. */
+export function tabRowsFor(width: number, unread = 0): number[][] | null {
+  const labels = tabLabels(unread);
+  const total = labels.reduce((sum, l) => sum + l.length + TAB_GAP, 0);
+  if (total <= Math.max(20, width - HINT_WIDTH)) return [labels.map((_, i) => i)];
+  // Two rows pack tighter: one space between tabs instead of two.
+  const room = width - 2;
+  const rows: number[][] = [[]];
+  let used = 0;
+  labels.forEach((l, i) => {
+    const cost = l.length + TAB_GAP - 1;
+    if (used + cost > room && rows.at(-1)!.length > 0) {
+      rows.push([]);
+      used = 0;
+    }
+    rows.at(-1)!.push(i);
+    used += cost;
+  });
+  return rows.length <= 2 ? rows : null;
+}
+
+/** How many terminal rows the tab bar takes (1 or 2). */
+export function navTabsHeight(width: number, unread = 0): number {
+  return tabRowsFor(width, unread)?.length ?? 1;
 }
 
 export function NavTabs({
@@ -134,10 +172,50 @@ export function NavTabs({
   unread: number;
   width: number;
 }): JSX.Element {
-  // Show as many tabs as fit, keeping the active one visible.
-  const labels = TABS.map((t) => `${t.label}${t.page === "inbox" && unread > 0 ? ` ${unread}` : ""}`);
-  const cost = (i: number): number => labels[i]!.length + 4;
-  const budget = Math.max(20, width - 26);
+  const labels = tabLabels(unread);
+  const tab = (i: number, gap = "  "): JSX.Element => {
+    const t = TABS[i]!;
+    const label = labels[i]!;
+    return (
+      <Text key={t.page}>
+        {t.page === page ? (
+          <Text color={theme.accent.primary} bold>{`▎${label} `}</Text>
+        ) : (
+          <Text color={t.page === "inbox" && unread > 0 ? theme.accent.info : theme.fg.muted}>{` ${label} `}</Text>
+        )}
+        <Text color={theme.fg.muted}>{gap}</Text>
+      </Text>
+    );
+  };
+  const hint = (
+    <Text color={theme.fg.muted}>
+      <Text color={theme.fg.default}>Tab</Text> next · <Text color={theme.fg.default}>:</Text> command
+    </Text>
+  );
+  // Every page in view: one row, or two when one isn't wide enough.
+  const rows = tabRowsFor(width, unread);
+  if (rows && rows.length === 1) {
+    return (
+      <Box justifyContent="space-between" paddingX={1}>
+        <Text wrap="truncate-end">{rows[0]!.map((i) => tab(i))}</Text>
+        {hint}
+      </Box>
+    );
+  }
+  if (rows) {
+    return (
+      <Box flexDirection="column" paddingX={1}>
+        {rows.map((r, n) => (
+          <Text key={n} wrap="truncate-end">
+            {r.map((i) => tab(i, " "))}
+          </Text>
+        ))}
+      </Box>
+    );
+  }
+  // Too narrow even for two rows: as many as fit, keeping the active one visible.
+  const cost = (i: number): number => labels[i]!.length + TAB_GAP;
+  const budget = Math.max(20, width - HINT_WIDTH);
   const active = Math.max(0, TABS.findIndex((t) => t.page === page));
   let from = 0;
   let used = 0;
@@ -151,27 +229,10 @@ export function NavTabs({
     <Box justifyContent="space-between" paddingX={1}>
       <Text wrap="truncate-end">
         {from > 0 ? <Text color={theme.fg.muted}>{"‹ "}</Text> : null}
-        {TABS.slice(from, to).map((t, i) => {
-          const isActive = t.page === page;
-          const label = labels[from + i]!;
-          return (
-            <Text key={t.page}>
-              {isActive ? (
-                <Text color={theme.accent.primary} bold>{`▎${label} `}</Text>
-              ) : (
-                <Text color={t.page === "inbox" && unread > 0 ? theme.accent.info : theme.fg.muted}>
-                  {` ${label} `}
-                </Text>
-              )}
-              <Text color={theme.fg.muted}>{"  "}</Text>
-            </Text>
-          );
-        })}
+        {Array.from({ length: to - from }, (_, k) => tab(from + k))}
         {to < TABS.length ? <Text color={theme.fg.muted}>{"›"}</Text> : null}
       </Text>
-      <Text color={theme.fg.muted}>
-        <Text color={theme.fg.default}>Tab</Text> next · <Text color={theme.fg.default}>:</Text> command
-      </Text>
+      {hint}
     </Box>
   );
 }
