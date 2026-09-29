@@ -958,7 +958,7 @@ describe('services step', () => {
     await w.pressInList(SPACE)
     await w.press(ENTER, 'prompt 1 of 2')
     await w.type(FAKE_DISCORD_PUBLIC_KEY)
-    await w.press(ENTER, loose("doesn't look like a Discord bot token (three dot-separated parts)"))
+    await w.press(ENTER, loose("that's the Public Key, not a Discord bot token"))
     await w.until(loose('Press Enter again to save it anyway, or paste the right value'))
     expect(w.frame()).not.toContain('Saved anyway')
     expect(w.secretStore.exists('discord-bot-token')).toBe(false)

@@ -6,6 +6,16 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **The setup wizard says which value you pasted.** Slack and Discord
+  settings pages show several look-alike values. Pasting Slack's
+  app-level token (`xapp-…`), Discord's Application ID, Public Key or
+  Client Secret, or a Telegram chat id as the bot token (or the other way
+  round) now says what it is and where the right value is, for example
+  *that's the Public Key, not a Discord bot token: the bot token is under
+  discord.com/developers → your app → Bot → Reset Token → Copy*.
+
 ### Fixed
 
 - **The setup wizard shows Claude Code and Codex after a subscription
