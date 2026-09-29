@@ -24,6 +24,8 @@ Other agent platforms run agents. Foreman watches them, scores their actions, an
 
 Phishing attempt at 3 AM? Foreman knows AND can tell you. You tap *Deny* on your phone. Agent gets the denial. You go back to sleep.
 
+Approvals reach your channels while Foreman's **gateway** runs: `foreman start`, or the background service (`foreman service install`), which runs it at login with no terminal open. With the service running, `foreman start` attaches to it and only adds the TUI. `foreman doctor` (the `gateway` row) says which one runs and where approvals go. See [Run the daemon at login](mcp-hub.md#run-the-daemon-at-login-foreman-service).
+
 ---
 
 ## 2. `notify.yaml` config
@@ -508,7 +510,7 @@ await approval.request(...)   ← mediator blocks here
 mediator finalize + return to agent
 ```
 
-The **`NotificationBridge`** wires `onAnyDecision` back to `bus.emit('approval:resolved')`. Calls mediated in another process (`foreman mcp-stdio`, `foreman wrap`, the Claude Code hook) reach it through `DbApprovalService` + `ApprovalBridge`: pending_approvals row → the `foreman start` process's bus → notification → tap → bus.emit('approval:resolved') → the requesting process's `DbApprovalService` poll picks it up. Both bridges run inside `foreman start`.
+The **`NotificationBridge`** wires `onAnyDecision` back to `bus.emit('approval:resolved')`. Calls mediated in another process (`foreman mcp-stdio`, `foreman wrap`, the Claude Code hook) reach it through `DbApprovalService` + `ApprovalBridge`: pending_approvals row → the gateway's bus → notification → tap → bus.emit('approval:resolved') → the requesting process's `DbApprovalService` poll picks it up. Both bridges run in the gateway: `foreman start`, or the background service's `foreman daemon --service`. A `foreman start` attached to the service runs an `ApprovalBridge` only (for the TUI), never a `NotificationBridge`, so each approval is sent to chat once.
 
 ---
 

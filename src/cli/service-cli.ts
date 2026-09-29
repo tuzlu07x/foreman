@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { Command } from "commander";
 import { trustedDaemonFiles } from "../core/daemon/client.js";
 import { daemonFiles, MAX_SOCKET_PATH } from "../core/daemon/protocol.js";
+import { gatewayHolder, probeGateway } from "../core/gateway.js";
 import {
   installService,
   installedServiceFile,
@@ -125,10 +126,18 @@ serviceCommand
       const { stateDir } = getForemanPaths();
       const { socketPath } = daemonFiles(stateDir);
       const socket = trustedDaemonFiles(stateDir).ok ? `listening at ${socketPath}` : "not listening";
+      const gateway = probeGateway(getForemanPaths().configDir);
+      // The service runs the gateway unless `foreman start` holds it; then
+      // it waits and takes over when that quits.
+      const gatewayLine =
+        gateway.state === "running" && gateway.mode === "tui" && file
+          ? `${gatewayHolder(gateway)} ${dim("— the service takes over when it quits")}`
+          : gatewayHolder(gateway);
       console.log(`Foreman daemon service — ${managerName(ctx)}`);
       if (!file) {
         console.log(`  installed  no ${dim("(`foreman service install` adds it)")}`);
         console.log(`  daemon     ${socket}`);
+        console.log(`  gateway    ${gatewayLine}`);
         return;
       }
       const installed = readInstalledService(ctx.manager, ctx.home);
@@ -149,5 +158,6 @@ serviceCommand
       }
       console.log(`  log        ${logHint(ctx, installed?.logPath ?? null)}`);
       console.log(`  daemon     ${socket}`);
+      console.log(`  gateway    ${gatewayLine}`);
     });
   });

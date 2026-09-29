@@ -53,6 +53,8 @@ import {
 import { getUpdateCachePath, isNewer } from "./update-check.js";
 import { trustedDaemonFiles } from "./daemon/client.js";
 import { installedServiceFile, serviceManagerFor } from "./service.js";
+import { PIDFILE_STALE_MS } from "./foreman-pidfile.js";
+import { approvalReach, gatewayHolder, probeGateway, type ApprovalReach } from "./gateway.js";
 import { daemonDisabled, daemonFiles, daemonSupported, MAX_SOCKET_PATH, NO_DAEMON_ENV } from "./daemon/protocol.js";
 
 export type CheckStatus = "ok" | "warn" | "fail";
@@ -1741,6 +1743,49 @@ export function checkDaemon(
   };
 }
 
+// The gateway (src/core/gateway.ts): who runs the approval bridge and the
+// chat channels on this home, and so whether an approval reaches chat now.
+export function checkGateway(): CheckResult {
+  const paths = getForemanPaths();
+  const gateway = probeGateway(paths.configDir);
+  let reach: ApprovalReach = { notified: [], decide: [] };
+  if (existsSync(paths.notifyConfigPath)) {
+    try {
+      const config = loadNotifyConfig(paths.notifyConfigPath);
+      reach = withDoctorSecretStore((secrets) => approvalReach(config, secrets));
+    } catch {
+      // notify_config and database report these
+    }
+  }
+  const chat =
+    reach.notified.length === 0
+      ? "approvals wait in the TUI (no chat channel routed)"
+      : `approvals go to ${reach.notified.join(", ")}` +
+        (reach.decide.length > 0 ? `; decide from ${reach.decide.join(", ")}` : "");
+  if (gateway.state === "none") {
+    return {
+      name: "gateway",
+      status: "ok",
+      message:
+        reach.notified.length === 0
+          ? "not running — `foreman start` or `foreman service install` runs it"
+          : `not running — ${reach.notified.join(", ")} get approvals only while \`foreman start\` or the background service (\`foreman service install\`) runs`,
+    };
+  }
+  if (gateway.heartbeatAgeMs > PIDFILE_STALE_MS) {
+    return {
+      name: "gateway",
+      status: "warn",
+      message: `${gatewayHolder(gateway)} hasn't checked in for ${Math.round(gateway.heartbeatAgeMs / 1000)}s — it may be stuck`,
+      remediation:
+        gateway.mode === "headless"
+          ? "Check `foreman service status` and its log; `foreman service install` restarts it."
+          : "Check the `foreman start` window; quit it and start it again if it doesn't respond.",
+    };
+  }
+  return { name: "gateway", status: "ok", message: `${gatewayHolder(gateway)} — ${chat}` };
+}
+
 // Integrations (`foreman integrations`): an enabled one that needs a
 // credential, a sign-in or a review can't work; a disabled one is only noted.
 export function checkIntegrations(): CheckResult {
@@ -1920,6 +1965,7 @@ const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkMcpHub,
   checkIntegrations,
   checkDaemon,
+  checkGateway,
   checkOrg,
   checkLegacyHome,
   checkUpdate,

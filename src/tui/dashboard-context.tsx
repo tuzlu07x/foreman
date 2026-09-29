@@ -46,6 +46,9 @@ export interface DashboardServices {
   orgConfigPath?: string;
   /** Integrations page (`foreman integrations` in the TUI). */
   integrations?: IntegrationWiring;
+  /** Set when this TUI is attached to the background gateway (`foreman
+   *  service`): that gateway's pid while it runs, null once it stopped. */
+  attachedGateway?: () => { pid: number } | null;
 }
 
 const DashboardContext = createContext<DashboardServices | null>(null);
