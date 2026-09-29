@@ -50,8 +50,8 @@ import type { JSONRPCMessage } from '../../src/mcp/types.js'
 //   2. Simulate wizard completion via the persist helpers (real on-disk
 //      writes for llm.yaml / notify.yaml / voice.yaml + secret store
 //      seeded). The wizard's UI itself is owner-eyeball-tested.
-//   3. foreman doctor — expect every check to pass except chafa (cosmetic
-//      warning, not a regression).
+//   3. foreman doctor — expect every check to pass (acp:* and the unwired
+//      agent may warn).
 //   4. Boot a real MediatorService + RiskScorer + AuditLogger with the
 //      wired-up policies + responsibility map.
 //   5. Drive a risky tool call (read .env) → assert the modal would have
@@ -184,12 +184,11 @@ describe('#308 — fresh setup to demo (E2E gate)', () => {
     expect(voice.proactive_notifications.pattern_detection.enabled).toBe(true)
   })
 
-  it('phase 3: foreman doctor reports every required check ok (only chafa / acp:* / the unwired agent may warn)', () => {
+  it('phase 3: foreman doctor reports every required check ok (only acp:* / the unwired agent may warn)', () => {
     const report = runDoctor()
     const failed = report.checks.filter((c) => c.status === 'fail')
     expect(failed).toEqual([])
     // Acceptable warnings:
-    //   - chafa: cosmetic, terminal mascot rendering
     //   - acp:<agentId>: ACP-mediated agent's binary not on PATH —
     //     means the agent itself isn't installed yet (Hermes /
     //     OpenClaw / ZeroClaw all warn in a vanilla setup). Not a
@@ -203,7 +202,6 @@ describe('#308 — fresh setup to demo (E2E gate)', () => {
     const otherWarns = report.checks.filter(
       (c) =>
         c.status === 'warn' &&
-        c.name !== 'chafa' &&
         !c.name.startsWith('acp:') &&
         c !== unverified,
     )

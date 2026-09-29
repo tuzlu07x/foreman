@@ -18,7 +18,7 @@ All commands run **inside the Ubuntu shell**, not PowerShell.
 ```bash
 # 1. Update apt + install the optional dependencies
 sudo apt update
-sudo apt install -y curl tmux chafa python3   # tmux + chafa = nicer demo
+sudo apt install -y curl tmux python3   # tmux = nicer demo
 
 # 2. Install Foreman
 curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash
@@ -52,8 +52,7 @@ Every item below was hit on the Windows 11 + WSL2 (Ubuntu 22.04) verification ru
 
 ### Terminal
 
-- **Use Windows Terminal**, not the legacy console. Default font on modern Windows Terminal (Cascadia Code) renders the Unicode block characters Foreman uses for the mascot fallback (`█▓▒░`); the legacy console renders them as boxes.
-- **`chafa` is optional but worth it.** `apt install chafa` gets you the premium PNG-rendered boot mascot (#59). Without it, Foreman falls back to the hand-coded Unicode mascot.
+- **Use Windows Terminal**, not the legacy console: the TUI's borders and the colour-block mascot need a modern terminal.
 - **256-color / true-color is on by default** in Windows Terminal. If your output looks monochrome, you're probably in `cmd.exe`. Check `echo $COLORTERM` — should print `truecolor`.
 
 ### Network

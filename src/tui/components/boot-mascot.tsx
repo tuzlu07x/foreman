@@ -1,97 +1,35 @@
-import { Box, Text } from "ink";
-import { type JSX, useEffect, useMemo, useState } from "react";
-import { theme } from "../theme.js";
-import {
-  blockFallbackFrame,
-  buildMorphFrame,
-  MORPH_GLYPHS,
-  pickChafaBlinkAsset,
-  pickChafaSize,
-  type MascotFrame,
-} from "./mascot-frames.js";
-import {
-  detectChafa,
-  renderChafaPng,
-  resolveMascotAsset,
-} from "./mascot-renderer.js";
+import { type JSX, useEffect, useState } from "react";
+import { MASCOT_HEIGHT } from "./mascot-frames.js";
+import { PixelMascot } from "./pixel-mascot.js";
 
-const MORPH_STEP_MS = 90;
+// Boot: the mascot draws itself row by row, top to bottom, then blinks now
+// and then. Without animations it is shown at once and never blinks.
+
+const REVEAL_STEP_MS = 60;
 const BLINK_INTERVAL_MS = 4800;
 const BLINK_HOLD_MS = 140;
 
-export interface ResolvedFrames {
-  normal: MascotFrame;
-  blink: MascotFrame;
-  source: "chafa" | "block";
-}
-
 export interface BootMascotProps {
-  termCols: number;
   enabled: boolean;
+  /** Called once the mascot is fully drawn. */
   onMorphComplete?: () => void;
 }
 
-export function resolveFrames(termCols: number): ResolvedFrames {
-  if (detectChafa()) {
-    const { cols, rows, asset } = pickChafaSize(termCols);
-    const path = resolveMascotAsset(asset);
-    if (path) {
-      const rendered = renderChafaPng(path, cols, rows);
-      if (rendered) {
-        const blinkAsset = pickChafaBlinkAsset(termCols);
-        const blinkPath = blinkAsset ? resolveMascotAsset(blinkAsset) : null;
-        const blinkRendered = blinkPath
-          ? renderChafaPng(blinkPath, cols, rows)
-          : null;
-        return {
-          normal: { lines: rendered, width: cols, height: rendered.length },
-          blink: blinkRendered
-            ? {
-                lines: blinkRendered,
-                width: cols,
-                height: blinkRendered.length,
-              }
-            : { lines: rendered, width: cols, height: rendered.length },
-          source: "chafa",
-        };
-      }
-    }
-  }
-  return {
-    normal: blockFallbackFrame(false),
-    blink: blockFallbackFrame(true),
-    source: "block",
-  };
-}
-
-export function BootMascot({
-  termCols,
-  enabled,
-  onMorphComplete,
-}: BootMascotProps): JSX.Element {
-  const frames = useMemo(() => resolveFrames(termCols), [termCols]);
-  const morphTarget = useMemo(() => blockFallbackFrame(false).lines, []);
-  const [morphIdx, setMorphIdx] = useState<number>(
-    enabled ? 0 : MORPH_GLYPHS.length,
-  );
+export function BootMascot({ enabled, onMorphComplete }: BootMascotProps): JSX.Element | null {
+  const [rows, setRows] = useState<number>(enabled ? 0 : MASCOT_HEIGHT);
   const [blinking, setBlinking] = useState(false);
 
   useEffect(() => {
-    if (!enabled) {
+    if (!enabled || rows >= MASCOT_HEIGHT) {
       onMorphComplete?.();
       return;
     }
-    if (morphIdx >= MORPH_GLYPHS.length) {
-      onMorphComplete?.();
-      return;
-    }
-    const t = setTimeout(() => setMorphIdx((m) => m + 1), MORPH_STEP_MS);
+    const t = setTimeout(() => setRows((r) => r + 1), REVEAL_STEP_MS);
     return () => clearTimeout(t);
-  }, [morphIdx, enabled, onMorphComplete]);
+  }, [rows, enabled, onMorphComplete]);
 
   useEffect(() => {
-    if (!enabled) return;
-    if (morphIdx < MORPH_GLYPHS.length) return;
+    if (!enabled || rows < MASCOT_HEIGHT) return;
     let release: ReturnType<typeof setTimeout> | null = null;
     const cycle = setInterval(() => {
       setBlinking(true);
@@ -104,24 +42,7 @@ export function BootMascot({
       clearInterval(cycle);
       if (release) clearTimeout(release);
     };
-  }, [enabled, morphIdx]);
+  }, [enabled, rows]);
 
-  const morphing = morphIdx < MORPH_GLYPHS.length;
-  const lines = morphing
-    ? buildMorphFrame(morphTarget, morphIdx)
-    : blinking
-      ? frames.blink.lines
-      : frames.normal.lines;
-
-  const color = morphing ? theme.accent.primary : undefined;
-
-  return (
-    <Box flexDirection="column">
-      {lines.map((line, i) => (
-        <Text key={i} color={color}>
-          {line}
-        </Text>
-      ))}
-    </Box>
-  );
+  return <PixelMascot blink={blinking} rows={rows} />;
 }

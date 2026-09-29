@@ -10,7 +10,7 @@ Foreman is published on npm as [`foreman-agent`](https://www.npmjs.com/package/f
 
 | Step | macOS | Linux | Windows |
 | --- | --- | --- | --- |
-| 1. Prereqs | Node 22.12+ (the installer can set it up), `chafa` (optional) | same | WSL2 with Ubuntu, then as Linux |
+| 1. Prereqs | Node 22.12+ (the installer can set it up) | same | WSL2 with Ubuntu, then as Linux |
 | 2. Install | `curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh \| bash` or `npm install -g foreman-agent` | same | same, inside WSL2 |
 | 3. First run | `foreman start`, then the setup wizard | same | same |
 | 4. Verify | `foreman doctor`: exit code 0 or 1 (warnings only) | same | same |
@@ -126,7 +126,6 @@ To uninstall, delete the binary and the `runtime/` directory in the cache dir, t
 
 ```bash
 brew install node       # or nvm; you need Node 22.12+
-brew install chafa      # optional: the higher-fidelity boot mascot
 node --version          # v22.12 or later
 ```
 
@@ -153,7 +152,6 @@ export NVM_DIR="$HOME/.nvm"
 nvm install 22
 node --version          # v22.12 or later
 
-sudo apt install chafa  # optional: the higher-fidelity boot mascot
 ```
 
 Foreman follows the XDG layout:
@@ -167,7 +165,6 @@ Foreman follows the XDG layout:
 Gotchas:
 
 - **nvm doesn't load in every shell.** If a fresh SSH session says `foreman: command not found`, run `. "$HOME/.nvm/nvm.sh"` first.
-- **`chafa`** is packaged as `chafa` on Debian and Ubuntu; build it from source on older distros.
 - **The Hermes gateway runs as a systemd user service** (`hermes gateway install` creates `~/.config/systemd/user/hermes-gateway.service`). Run `loginctl enable-linger $USER` so it survives logout.
 
 ### Windows
@@ -239,7 +236,7 @@ foreman agent list      # the agents you picked
 foreman secrets list    # the keys you entered
 ```
 
-On a fresh machine `doctor` warns that no agents are registered yet and that the optional `chafa` is missing. Exit code 2 is a real failure. See [`doctor.md`](doctor.md).
+On a fresh machine `doctor` warns that no agents are registered yet. Exit code 2 is a real failure. See [`doctor.md`](doctor.md).
 
 ---
 
@@ -358,6 +355,6 @@ Keys Foreman projected into an agent's own files (for example `~/.hermes/.env`, 
 | An agent toggle didn't take in the wizard | Check the `Checked:` line above the list and the confirm screen (`Selected: …`). If your pick isn't there, Esc back, Space again, Enter. |
 | Telegram polling fails on Linux | Check that outbound TCP to `api.telegram.org` isn't blocked. The gateway prints `httpx.ConnectError: All connection attempts failed` in journalctl. |
 | Bot still says "Hermes Agent" instead of "Foreman" after registration | Run `hermes sessions prune --older-than 0 --yes`, then restart the gateway. The session prompt was cached before the SOUL write. |
-| `foreman doctor` exits 1 on a fresh machine | Normal: warnings only (no agents yet, `chafa` missing). Exit 2 is a real failure (missing identity key, missing `secrets.key` while secrets are stored, corrupt database, malformed `policy.yaml`). |
+| `foreman doctor` exits 1 on a fresh machine | Normal: warnings only (no agents registered yet). Exit 2 is a real failure (missing identity key, missing `secrets.key` while secrets are stored, corrupt database, malformed `policy.yaml`). |
 
 Open an issue at `github.com/tuzlu07x/foreman/issues` if something here doesn't match what you see.

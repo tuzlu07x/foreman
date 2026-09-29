@@ -1,13 +1,13 @@
 # `foreman doctor` — environment + state diagnostics
 
-`foreman doctor` checks the Foreman home, database, identity key, secret store key, policy file and registered agents, plus the optional configs (`notify.yaml`, `llm.yaml`, `voice.yaml`, `mcp.yaml`, `org.yaml`), agent identity tokens, the CLIs of registered agents Foreman launches, the update cache and a few optional extras such as `chafa`. It is safe to run repeatedly and changes nothing: it creates no files (not even `secrets.key` or the database), never writes or removes a secret, and reads secrets without marking them accessed.
+`foreman doctor` checks the Foreman home, database, identity key, secret store key, policy file and registered agents, plus the optional configs (`notify.yaml`, `llm.yaml`, `voice.yaml`, `mcp.yaml`, `org.yaml`), agent identity tokens, the CLIs of registered agents Foreman launches and the update cache. It is safe to run repeatedly and changes nothing: it creates no files (not even `secrets.key` or the database), never writes or removes a secret, and reads secrets without marking them accessed.
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
 | `0` | All checks passed. |
-| `1` | One or more warnings (no failures). Examples: no agents registered yet, a registered agent's CLI not on your PATH, the optional `chafa` missing. |
+| `1` | One or more warnings (no failures). Examples: no agents registered yet, a registered agent's CLI not on your PATH. |
 | `2` | One or more failures. Examples: corrupt database, missing identity key, `secrets.key` missing while secrets are stored, a `policy.yaml` that doesn't load, FTS5 unavailable. |
 
 The contract is deliberately permissive on exit code 1 — fresh installs warn rather than fail, so CI bootstrap scripts can run `foreman doctor` without their own status-parsing logic and tolerate the expected warnings.
@@ -50,10 +50,8 @@ Foreman doctor
   ✓ org                  no org.yaml — agents work without an org chart (try `foreman org templates`)
   ✓ legacy_home          no legacy ~/.foreman/ files detected
   ✓ update               no cached check yet — 'foreman start' will refresh on next run
-  ⚠ chafa                chafa not found
-     → Optional: 'brew install chafa' (macOS) or 'apt install chafa' (Debian/Ubuntu) for the higher-fidelity boot mascot.
 
-27 ok  ·  2 warning  (exit 1 — warnings only)
+27 ok  ·  1 warning  (exit 1 — warnings only)
 ```
 
 A few checks add a row per agent once agents are registered: `acp:<id>` for each registered Hermes, OpenClaw or ZeroClaw (it warns while that agent's CLI isn't on your PATH), `agent_tokens:<id>` for an agent whose wiring doctor can't see, and `node_engines:<id>` when an agent needs a newer Node. `daemon` warns when agents can't use the daemon `foreman start` hosts: its socket path is too long (use a shorter `FOREMAN_HOME`), or the socket or token file isn't one agents trust. It also warns when the background service (`foreman service install`) is installed but the daemon isn't running; `foreman service status` says why. Everything still works then, only slower. The footer always names the exit code so you can match what you see to what your shell scripts will read.
@@ -75,17 +73,11 @@ The same checks, in order (shortened here):
       "status": "warn",
       "message": "no agents registered yet",
       "remediation": "Add one with 'foreman agent add' or 'foreman registry list' to pick from the curated catalog."
-    },
-    {
-      "name": "chafa",
-      "status": "warn",
-      "message": "chafa not found",
-      "remediation": "Optional: 'brew install chafa' (macOS) or 'apt install chafa' (Debian/Ubuntu) for the higher-fidelity boot mascot."
     }
   ],
   "summary": {
     "ok": 25,
-    "warn": 2,
+    "warn": 1,
     "fail": 0
   },
   "exitCode": 1
@@ -99,7 +91,6 @@ The same checks, in order (shortened here):
 **Fresh install:**
 ```
 agents_registered    warn   no agents registered yet
-chafa                warn   chafa not found
 (exit 1 — warnings only)
 ```
 Expected. Run `foreman setup` (the wizard) or `foreman agent add <registry-id>` to register the first agent.

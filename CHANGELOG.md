@@ -45,6 +45,13 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Changed
 
+- **A new mascot** ([#724](https://github.com/tuzlu07x/foreman/issues/724)). The boot screen and the setup wizard's welcome show a
+  small pixel-art beaver foreman with a hard hat, drawn with coloured
+  spaces. It is 20 columns wide in every terminal and font: the old one
+  used block glyphs whose width varies by terminal, or needed the optional
+  `chafa`. It draws itself row by row at boot and blinks now and then. A
+  terminal without colour (`NO_COLOR`) shows none. `chafa` is no longer
+  used, so `foreman doctor` no longer warns that it is missing.
 - **One Telegram bot is enough** ([#716](https://github.com/tuzlu07x/foreman/issues/716)).
   When no registered chat agent (Hermes, OpenClaw) can use your Telegram
   bot, Foreman reads it itself. The same bot then carries notifications,

@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -1385,35 +1384,6 @@ export function checkMigrations(): CheckResult {
   }
 }
 
-export function checkChafa(env: NodeJS.ProcessEnv = process.env): CheckResult {
-  if (whichOnPath("chafa", env)) {
-    return {
-      name: "chafa",
-      status: "ok",
-      message: "chafa on PATH (premium boot mascot will render)",
-    };
-  }
-  try {
-    execFileSync("chafa", ["--version"], {
-      stdio: "ignore",
-      timeout: 1000,
-      env,
-    });
-    return {
-      name: "chafa",
-      status: "ok",
-      message: "chafa available",
-    };
-  } catch {
-    return {
-      name: "chafa",
-      status: "warn",
-      message: "chafa not found",
-      remediation:
-        "Optional: 'brew install chafa' (macOS) or 'apt install chafa' (Debian/Ubuntu) for the higher-fidelity boot mascot.",
-    };
-  }
-}
 
 /**
  * #445 / #552 — Verify ACP-mediated agents have their binaries on
@@ -2044,7 +2014,6 @@ const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkOrg,
   checkLegacyHome,
   checkUpdate,
-  () => checkChafa(),
 ];
 
 export function runDoctor(_options: DoctorOptions = {}): DoctorReport {

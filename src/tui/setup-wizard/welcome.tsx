@@ -1,7 +1,7 @@
 import { Box, Text } from "ink";
 import type { Key } from "ink";
 import type { JSX } from "react";
-import { blockFallbackFrame } from "../components/mascot-frames.js";
+import { PixelMascot } from "../components/pixel-mascot.js";
 import { theme } from "../theme.js";
 import type { WizardContext } from "./context.js";
 
@@ -30,13 +30,9 @@ export function totalEstimatedMinutes(
   return steps.reduce((sum, s) => sum + s.estimateMinutes, 0);
 }
 
-// Welcome-screen mascot. Reuses the boot-time block-character frame
-// (#365) so the wizard's first impression matches the post-boot
-// dashboard the user sees seconds later. Static — no morph/blink — to
-// keep the welcome screen quiet. Only on wide terminals (>= 120 cols):
-// at 80 columns it squeezed the text past the edge, and the screen grew
-// taller than 24 rows, so its top stayed on screen under later steps.
-const WELCOME_MASCOT = blockFallbackFrame(false).lines;
+// Welcome-screen mascot: the same pixel mascot as the boot screen, static
+// to keep the welcome screen quiet. Only on wide terminals (>= 120 cols):
+// at 80 columns it squeezed the text past the edge.
 /** Long lines are hard to read on a very wide terminal. */
 const WELCOME_TEXT_MAX = 90;
 
@@ -94,12 +90,8 @@ export function renderWelcomeStep(ctx: WizardContext): JSX.Element {
   }
   return (
     <Box paddingY={1}>
-      <Box flexDirection="column" marginRight={2} flexShrink={0}>
-        {WELCOME_MASCOT.map((row, i) => (
-          <Text key={i} color={theme.accent.primary}>
-            {row}
-          </Text>
-        ))}
+      <Box marginRight={3} flexShrink={0}>
+        <PixelMascot />
       </Box>
       <Box flexDirection="column" flexShrink={1} width={WELCOME_TEXT_MAX}>
         {stepList}
