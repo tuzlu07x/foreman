@@ -82,6 +82,21 @@ All notable changes to Foreman are documented here. The format follows
   custom OpenAI-compatible provider picked in Step 1 is now written to
   `llm.yaml`. The Done screen says where to talk to Foreman: `:` in the
   TUI, your Telegram bot, `/foreman` in Slack or Discord.
+- **The install script no longer reports success when new terminals can't
+  find `foreman`.** When it has to switch to Node 22 through nvm while your
+  nvm default is an older Node (for example 20), it says so and, in a
+  terminal, asks whether to make Node 22 your default. It never changes it
+  unasked (`FOREMAN_NVM_DEFAULT=1` / `=0` decide ahead).
+- **`install.sh --uninstall` removes Foreman, not just the package.** It
+  removes the background service and each agent (their `foreman` MCP entry
+  and Claude Code hook go with them), then the package, then asks before
+  deleting Foreman's data (`--purge`: without asking). It finds a Foreman
+  installed under another nvm Node than your shell's, and tells you to use
+  `brew uninstall` for a Homebrew one. Before, only `npm uninstall` ran,
+  under the shell's Node, which could leave everything behind.
+- docs/install.md: Homebrew 7 needs `brew trust --formula
+  tuzlu07x/foreman/foreman-agent` before `brew install`
+  ([#718](https://github.com/tuzlu07x/foreman/issues/718)).
 
 ## [2.2.0] - 2026-09-29
 

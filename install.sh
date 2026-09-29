@@ -38,7 +38,11 @@ ${c_bold}USAGE${c_reset}
   curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash -s -- --uninstall
 
 ${c_bold}FLAGS${c_reset}
-  --uninstall     Remove the global ${PACKAGE} package (leaves Foreman's home directory intact)
+  --uninstall     Remove Foreman: the background service, Foreman's entries in
+                  your agents' configs (MCP server, Claude Code hook) and the
+                  ${PACKAGE} package. Asks before deleting Foreman's data.
+  --purge         With --uninstall: also delete Foreman's data (identity,
+                  policy, audit log, stored secrets) without asking
   --help, -h      Show this help
 
 ${c_bold}ENVIRONMENT${c_reset}
@@ -47,7 +51,32 @@ ${c_bold}ENVIRONMENT${c_reset}
   FOREMAN_SKIP_NVM          set to 1 to refuse the nvm bootstrap path
   FOREMAN_REUSE_ANY_NODE    set to 1 to reuse a Node >=22 outside the tested
                             LTS lines (${SUPPORTED_NODE_MAJORS}); may require a C/C++ toolchain
+  FOREMAN_NVM_DEFAULT       1: make Node ${NODE_LTS_MAJOR} your nvm default without asking;
+                            0: leave the default alone (see below)
+
+When the installer has to switch to Node ${NODE_LTS_MAJOR} through nvm while your nvm
+default is another Node, new terminals won't find 'foreman'. It says so,
+and in a terminal asks whether to make Node ${NODE_LTS_MAJOR} the default.
 EOF
+}
+
+# A yes/no question on the terminal, even under `curl | bash` (stdin is
+# the script). $2 (y or n) is what Enter means. Without a terminal the
+# answer is no: nothing of yours changes unasked.
+ask() {
+  local question="$1" default="${2:-n}" reply=""
+  if ! ( : </dev/tty ) 2>/dev/null; then
+    return 1
+  fi
+  local hint="[y/N]"
+  [ "${default}" = "y" ] && hint="[Y/n]"
+  printf "  %s?%s %s %s " "${c_orange}" "${c_reset}" "${question}" "${hint}" >/dev/tty
+  read -r reply </dev/tty || reply=""
+  case "${reply}" in
+    [Yy]*) return 0 ;;
+    [Nn]*) return 1 ;;
+    *) [ "${default}" = "y" ] ;;
+  esac
 }
 
 current_node_major() {
@@ -106,6 +135,30 @@ ensure_node() {
   nvm use "${NODE_LTS_MAJOR}" >&2
   set -u
   ok "Node $(node --version) ready via nvm"
+  SWITCHED_NODE=1
+}
+
+# After switching Node through nvm: new terminals start with nvm's default
+# Node, where foreman isn't installed, unless that is a supported one too.
+# Say so, and offer to change the default.
+check_default_node() {
+  [ "${SWITCHED_NODE:-0}" = "1" ] || return 0
+  local default_major
+  default_major=$(set +u; nvm version default 2>/dev/null | sed -e 's/^v//' -e 's/\..*$//' || true)
+  if is_supported_node_major "${default_major}"; then
+    return 0
+  fi
+  local current="${default_major:-none}"
+  [ "${current}" = "N/A" ] && current="none"
+  warn "Your nvm default is Node ${current}, so new terminals won't find 'foreman' (it is installed for Node ${NODE_LTS_MAJOR})."
+  local decide="${FOREMAN_NVM_DEFAULT:-}"
+  if [ "${decide}" = "1" ] || { [ -z "${decide}" ] && ask "Make Node ${NODE_LTS_MAJOR} your nvm default (nvm alias default ${NODE_LTS_MAJOR})" y; }; then
+    (set +u; nvm alias default "${NODE_LTS_MAJOR}" >/dev/null)
+    ok "Node ${NODE_LTS_MAJOR} is now your nvm default: open a new terminal and 'foreman' is there"
+    return 0
+  fi
+  warn "Left your default alone. In each new terminal run: nvm use ${NODE_LTS_MAJOR}"
+  warn "Or once: nvm alias default ${NODE_LTS_MAJOR}"
 }
 
 bootstrap_nvm() {
@@ -166,29 +219,125 @@ next_steps() {
   printf "%sRun 'foreman doctor' to see the platform-native paths Foreman uses.%s\n" "${c_dim}" "${c_reset}"
 }
 
-uninstall_foreman() {
-  step "Removing global ${PACKAGE}"
-  if ! command -v npm >/dev/null 2>&1; then
-    err "npm is not on PATH — cannot uninstall via this script"
-    exit 1
+# The directory holding the foreman binary: FOREMAN_INSTALL_PREFIX, on
+# PATH, else under any nvm Node (the shell may default to another one).
+locate_foreman_bin_dir() {
+  if [ -n "${FOREMAN_INSTALL_PREFIX:-}" ] && [ -x "${FOREMAN_INSTALL_PREFIX}/bin/foreman" ]; then
+    printf "%s\n" "${FOREMAN_INSTALL_PREFIX}/bin"
+    return 0
   fi
-  if [ -n "${FOREMAN_INSTALL_PREFIX:-}" ]; then
-    npm uninstall --prefix "${FOREMAN_INSTALL_PREFIX}" -g "${PACKAGE}" || warn "npm uninstall reported a non-zero exit"
+  if command -v foreman >/dev/null 2>&1; then
+    dirname "$(command -v foreman)"
+    return 0
+  fi
+  local dir
+  for dir in "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin; do
+    if [ -x "${dir}/foreman" ]; then
+      printf "%s\n" "${dir}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Foreman's data directories (resolveDirs in src/utils/config.ts).
+foreman_data_dirs() {
+  if [ -n "${FOREMAN_HOME:-}" ]; then
+    printf "%s\n" "${FOREMAN_HOME}"
+  elif [ "$(uname -s)" = "Darwin" ]; then
+    printf "%s\n" "$HOME/Library/Application Support/foreman" "$HOME/Library/Caches/foreman"
   else
-    npm uninstall -g "${PACKAGE}" || warn "npm uninstall reported a non-zero exit"
+    printf "%s\n" "${XDG_CONFIG_HOME:-$HOME/.config}/foreman" "${XDG_STATE_HOME:-$HOME/.local/state}/foreman" "${XDG_CACHE_HOME:-$HOME/.cache}/foreman"
   fi
-  ok "${PACKAGE} removed"
-  printf "\n%sNote:%s your Foreman home (identity, policy, audit log) was NOT removed.\n" "${c_orange}" "${c_reset}"
-  printf "Run %sforeman doctor%s before uninstalling to see its location, then remove it manually for a clean slate.\n" "${c_bold}" "${c_reset}"
+  if [ -d "$HOME/.foreman" ]; then
+    printf "%s\n" "$HOME/.foreman"
+  fi
+  return 0
+}
+
+uninstall_foreman() {
+  local purge="${1:-0}" bin_dir="" brew_install=0
+  bin_dir=$(locate_foreman_bin_dir || true)
+  if [ -n "${bin_dir}" ]; then
+    # Foreman's own Node first, whatever the shell's default is.
+    PATH="${bin_dir}:${PATH}"
+    export PATH
+    case "$(cd "${bin_dir}" && pwd -P)" in
+      */Cellar/*|*/homebrew/*|*/linuxbrew/*) brew_install=1 ;;
+    esac
+
+    step "Taking Foreman out of your agents"
+    if foreman service uninstall >/dev/null 2>&1; then
+      ok "background service removed (if it was installed)"
+    fi
+    local ids id
+    ids=$(foreman agent list --json 2>/dev/null | node -e 'let s="";process.stdin.on("data",(d)=>s+=d).on("end",()=>{try{for(const a of JSON.parse(s))console.log(a.id)}catch{}})' || true)
+    if [ -z "${ids}" ]; then
+      ok "no agents registered"
+    fi
+    for id in ${ids}; do
+      if foreman agent remove "${id}" --yes >/dev/null 2>&1; then
+        ok "${id}: removed, with Foreman's MCP entry (and Claude Code hook) in its config"
+      else
+        warn "${id}: couldn't remove it; run 'foreman agent remove ${id} --yes' yourself"
+      fi
+    done
+    log "  ${c_dim}A hook added to one project (--project) stays: 'foreman agent hook uninstall claude-code --project <dir>' removes it.${c_reset}"
+  else
+    warn "foreman isn't installed here (not on PATH, not under nvm): nothing to take out of your agents"
+  fi
+
+  step "Removing ${PACKAGE}"
+  if [ "${brew_install}" = "1" ]; then
+    warn "This foreman came from Homebrew: run 'brew uninstall foreman-agent'"
+  elif ! command -v npm >/dev/null 2>&1; then
+    err "npm is not on PATH — cannot uninstall ${PACKAGE}"
+  elif [ -n "${FOREMAN_INSTALL_PREFIX:-}" ]; then
+    npm uninstall --prefix "${FOREMAN_INSTALL_PREFIX}" -g "${PACKAGE}" >/dev/null || warn "npm uninstall reported a non-zero exit"
+    ok "${PACKAGE} removed"
+  else
+    npm uninstall -g "${PACKAGE}" >/dev/null || warn "npm uninstall reported a non-zero exit"
+    ok "${PACKAGE} removed"
+  fi
+
+  step "Foreman's data"
+  local dirs=() dir
+  while IFS= read -r dir; do
+    if [ -n "${dir}" ] && [ -e "${dir}" ]; then
+      dirs+=("${dir}")
+    fi
+  done < <(foreman_data_dirs)
+  if [ "${#dirs[@]}" -eq 0 ]; then
+    ok "none found"
+    return 0
+  fi
+  for dir in "${dirs[@]}"; do log "  ${dir}"; done
+  if [ "${purge}" = "1" ] || ask "Delete it too (identity key, policy, audit log, stored secrets)? This can't be undone" n; then
+    for dir in "${dirs[@]}"; do rm -rf -- "${dir}"; done
+    ok "deleted"
+  else
+    ok "left in place (delete those folders yourself, or run again with --purge)"
+  fi
 }
 
 main() {
-  case "${1:-}" in
-    --uninstall)  uninstall_foreman; exit 0;;
-    --help|-h)    usage; exit 0;;
-    "")           ;;
-    *)            err "unknown flag: $1"; usage; exit 1;;
-  esac
+  local uninstall=0 purge=0 arg
+  for arg in "$@"; do
+    case "${arg}" in
+      --uninstall)  uninstall=1 ;;
+      --purge)      purge=1 ;;
+      --help|-h)    usage; exit 0 ;;
+      *)            err "unknown flag: ${arg}"; usage; exit 1 ;;
+    esac
+  done
+  if [ "${uninstall}" = "1" ]; then
+    uninstall_foreman "${purge}"
+    exit 0
+  fi
+  if [ "${purge}" = "1" ]; then
+    err "--purge goes with --uninstall"
+    exit 1
+  fi
 
   printf "%sForeman installer%s\n" "${c_orange}${c_bold}" "${c_reset}"
 
@@ -196,7 +345,11 @@ main() {
   ensure_node
   npm_install_foreman
   verify_install
+  check_default_node
   next_steps
 }
 
-main "${1:-}"
+# Tests load the functions without running the installer.
+if [ "${FOREMAN_INSTALL_SOURCE_ONLY:-0}" != "1" ]; then
+  main "$@"
+fi

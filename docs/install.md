@@ -56,11 +56,13 @@ The script reuses the `node` on your PATH when it is Node 22 or 24. Otherwise it
 | `FOREMAN_INSTALL_PREFIX=<dir>` | Use a non-default npm prefix |
 | `FOREMAN_SKIP_NVM=1` | Never bootstrap nvm; fail if no supported Node is found |
 | `FOREMAN_REUSE_ANY_NODE=1` | Reuse a Node >= 22 outside the tested 22 / 24 lines |
-| `--uninstall` | Remove the global package (Foreman's data is left in place) |
+| `FOREMAN_NVM_DEFAULT=1` / `=0` | Make Node 22 your nvm default without asking / leave it alone (see below) |
+| `--uninstall` | Remove Foreman: the background service, Foreman's entries in your agents' configs (MCP server, Claude Code hook) and the package. Asks before deleting Foreman's data |
+| `--uninstall --purge` | The same, and delete Foreman's data (identity, policy, audit log, stored secrets) without asking |
 
 Flags go after `bash -s --`, for example `curl -fsSL …/install.sh | bash -s -- --uninstall`.
 
-If the script installed Node through nvm, open a new shell (or run `. "$HOME/.nvm/nvm.sh"`) before running `foreman`.
+If the script installed Node through nvm, open a new shell (or run `. "$HOME/.nvm/nvm.sh"`) before running `foreman`. If your nvm default is an older Node (for example 20), new shells start with that one and don't have `foreman`. The script says so and, in a terminal, asks whether to make Node 22 your default (`nvm alias default 22`). Say no to keep your default and run `nvm use 22` in each shell where you use Foreman. Without a terminal it changes nothing unless `FOREMAN_NVM_DEFAULT=1` is set.
 
 ### npm
 
@@ -73,8 +75,12 @@ npm install -g foreman-agent
 ### Homebrew (macOS, Linuxbrew)
 
 ```bash
-brew tap tuzlu07x/foreman && brew install foreman-agent
+brew tap tuzlu07x/foreman
+brew trust --formula tuzlu07x/foreman/foreman-agent   # Homebrew 7+ asks you to trust a third-party formula once
+brew install foreman-agent
 ```
+
+Homebrew 7 refuses formulae from taps you haven't trusted (`Refusing to load formula … from untrusted tap`). `brew trust` records your choice in `~/.homebrew/trust.json`; `--formula` trusts only this formula, not the whole tap. `brew untrust --formula tuzlu07x/foreman/foreman-agent` takes it back.
 
 ### From source (contributors)
 
@@ -304,7 +310,13 @@ foreman doctor --json    # the same checks, for scripts
 
 ## Uninstall
 
-Do it in this order: the first steps need the `foreman` command, which step 5 removes.
+The install script does steps 1, 4, 5 and 6 below for you, whichever Node Foreman was installed under:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash -s -- --uninstall
+```
+
+It asks before deleting Foreman's data; add `--purge` to delete it without asking. It doesn't restore SOUL files (step 3) or remove a hook added to one project with `--project`. By hand, do it in this order: the first steps need the `foreman` command, which step 5 removes.
 
 ```bash
 # 1. Remove the PreToolUse hook Foreman added to Claude Code (if you installed it),
