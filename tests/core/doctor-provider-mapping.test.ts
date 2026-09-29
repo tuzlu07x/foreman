@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runInit } from "../../src/cli/init.js";
-import { checkProviderMapping } from "../../src/core/doctor.js";
+import { checkProviderMapping, runRouteVerify } from "../../src/core/doctor.js";
 import { bus } from "../../src/core/event-bus.js";
 import { RegistryService } from "../../src/core/registry.js";
 import { SecretStore } from "../../src/core/secret-store.js";
@@ -89,21 +89,61 @@ describe("checkProviderMapping", () => {
     expect(r.remediation).toContain("foreman secrets add openrouter-key");
   });
 
-  it("⚠ when agent uses OAuth variant (we can't auto-verify OAuth completed)", () => {
-    runInit();
-    const registry = new RegistryService(getDb(), bus);
-    registry.register({
-      id: "codex",
-      displayName: "Codex",
-      transport: "stdio",
-      llmProvider: "openai",
-      // OAuth is the preferred variant for codex/openai → status: warn.
+  describe("an OAuth route: its registry verify command decides", () => {
+    const registerOAuth = (): void => {
+      runInit();
+      const registry = new RegistryService(getDb(), bus);
+      // OAuth is the preferred variant for codex/openai.
+      registry.register({ id: "codex", displayName: "Codex", transport: "stdio", llmProvider: "openai" });
+      registry.register({
+        id: "claude-code",
+        displayName: "Claude Code",
+        transport: "stdio",
+        llmProvider: "anthropic",
+        providerVariant: "oauth",
+      });
+    };
+
+    it("✓ right after a sign-in: the verify commands pass", () => {
+      registerOAuth();
+      const ran: string[] = [];
+      const r = checkProviderMapping({
+        verify: (command, timeoutMs) => {
+          ran.push(command);
+          expect(timeoutMs).toBeLessThanOrEqual(10_000);
+          return "ok";
+        },
+      });
+      expect(ran.sort()).toEqual(["claude auth status", "codex login status"]);
+      expect(r.status).toBe("ok");
+      expect(r.message).toContain("codex — openai/oauth · model=(variant default) signed in (`codex login status` passed)");
+      expect(r.message).toContain("claude-code — anthropic/oauth · model=(variant default) signed in (`claude auth status` passed)");
+      expect(r.message).not.toContain("if not done");
     });
-    const r = checkProviderMapping();
-    expect(r.status).toBe("warn");
-    expect(r.message).toContain("codex");
-    expect(r.message).toContain("OAuth");
-    expect(r.message).toMatch(/codex login/);
+
+    it("⚠ only when a verify command fails, naming the sign-in to run", () => {
+      registerOAuth();
+      const r = checkProviderMapping({ verify: (command) => (command.startsWith("codex") ? "failed" : "ok") });
+      expect(r.status).toBe("warn");
+      expect(r.message).toContain("⚠ codex — openai/oauth · model=(variant default) not signed in (`codex login status` failed)");
+      expect(r.message).toContain("✓ claude-code");
+      expect(r.remediation).toBe("Try: codex login");
+    });
+
+    it("a plain note, not a warning, when the verify command can't run", () => {
+      registerOAuth();
+      const r = checkProviderMapping({ verify: () => "unavailable" });
+      expect(r.status).toBe("ok");
+      expect(r.message).toContain("· codex — openai/oauth · model=(variant default) uses OAuth; couldn't run `codex login status`");
+      expect(r.message).toMatch(/run `claude auth login` if not done/);
+    });
+  });
+
+  it.skipIf(process.platform === "win32")("runRouteVerify: pass, fail, and can't-run (missing program, timeout)", () => {
+    expect(runRouteVerify("true", 5_000)).toBe("ok");
+    expect(runRouteVerify("exit 1", 5_000)).toBe("failed");
+    expect(runRouteVerify("foreman-no-such-program-xyz status", 5_000)).toBe("unavailable");
+    expect(runRouteVerify("sleep 5", 100)).toBe("unavailable");
   });
 
   it("✗ when provider isn't in the agent's mapping (e.g. claude-code/openai)", () => {

@@ -461,7 +461,10 @@ describe("defaultHookCommand (#714)", () => {
     // The program is gone: 127 from the shell, blocked all the same.
     const missing = run([join(dir, "no-such-node"), join(dir, "no-such-hook.js")]);
     expect(missing.status).toBe(2);
-    expect(missing.stderr).toContain("so this call is blocked");
+    expect(missing.stderr).toContain("Foreman's hook could not run (exit 127), so this call is blocked");
+    // With Foreman gone its doctor is gone too: the text names the way out.
+    expect(missing.stderr).toContain("reinstall it (npm install -g foreman-agent)");
+    expect(missing.stderr).toContain("remove Foreman's entry (managed_by: foreman.pre-tool-use) under hooks.PreToolUse");
   });
 
   it("puts a project hook in <dir>/.claude/settings.json", () => {

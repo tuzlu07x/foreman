@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -1153,7 +1154,34 @@ export function checkAgentTokens(): CheckResult | CheckResult[] {
 // provider_mapping has its required secret (or OAuth credential) in
 // place. Surfaces ✓ / ⚠ / ✗ per-agent so the operator can see at a
 // glance which agents will start cleanly and which need attention.
-export function checkProviderMapping(): CheckResult {
+//
+// An OAuth route (a subscription sign-in) has no secret to look for, so its
+// registry verify command (`claude auth status`, `codex login status`) says
+// whether the sign-in is there: ✓ when it passes, ⚠ only when it fails, a
+// plain note when it can't run (CLI not on PATH, timed out).
+
+/** How a route's verify command went. */
+export type RouteVerifyOutcome = "ok" | "failed" | "unavailable";
+/** Runs a verify command; its output is never read, so no token shows. */
+export type RouteVerifyRunner = (command: string, timeoutMs: number) => RouteVerifyOutcome;
+
+export const ROUTE_VERIFY_TIMEOUT_MS = 5_000;
+
+export function runRouteVerify(command: string, timeoutMs: number): RouteVerifyOutcome {
+  const result = spawnSync(command, { shell: true, stdio: "ignore", timeout: timeoutMs });
+  if (result.error || result.signal) return "unavailable";
+  if (result.status === 0) return "ok";
+  // The shell's own "not executable" / "not found": nothing was checked.
+  if (result.status === 126 || result.status === 127) return "unavailable";
+  return "failed";
+}
+
+export interface ProviderMappingDeps {
+  verify?: RouteVerifyRunner;
+}
+
+export function checkProviderMapping(deps: ProviderMappingDeps = {}): CheckResult {
+  const verify = deps.verify ?? runRouteVerify;
   const paths = getForemanPaths();
   if (!existsSync(paths.dbPath)) {
     return {
@@ -1227,10 +1255,20 @@ export function checkProviderMapping(): CheckResult {
           anyFail = true;
         }
       } else if (variant.interactive_setup) {
-        lines.push(
-          `  ⚠ ${row.id} — ${provider}/${variantId}${modelTag} uses OAuth (run \`${variant.interactive_setup}\` if not done)`,
-        );
-        anyWarn = true;
+        const setup = variant.interactive_setup;
+        const check = variant.post_setup_verify;
+        const outcome = check ? verify(check, ROUTE_VERIFY_TIMEOUT_MS) : "unavailable";
+        const route = `${row.id} — ${provider}/${variantId}${modelTag}`;
+        if (outcome === "ok") {
+          lines.push(`  ✓ ${route} signed in (\`${check}\` passed)`);
+        } else if (outcome === "failed") {
+          lines.push(`  ⚠ ${route} not signed in (\`${check}\` failed) — run \`${setup}\``);
+          remediations.push(setup);
+          anyWarn = true;
+        } else {
+          const why = check ? `couldn't run \`${check}\` to check the sign-in` : "no way to check the sign-in";
+          lines.push(`  · ${route} uses OAuth; ${why} (run \`${setup}\` if not done)`);
+        }
       } else {
         lines.push(
           `  ✓ ${row.id} — ${provider}/${variantId}${modelTag} (no auth needed)`,
@@ -1261,6 +1299,7 @@ export function checkProviderMapping(): CheckResult {
         name: "provider_mapping",
         status: "warn",
         message,
+        remediation: `Try: ${[...new Set(remediations)].join(" · ")}`,
       };
     }
     return {
@@ -1785,7 +1824,7 @@ export function checkGateway(): CheckResult {
 // PATH (2.2.0) lets tool calls through unguarded whenever Claude Code's PATH
 // lacks it; one whose pinned program is gone blocks every call.
 export function checkClaudeHook(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): CheckResult {
-  const settingsPath = join(env.CLAUDE_CONFIG_DIR || join(home, ".claude"), "settings.json");
+  const settingsPath = claudeSettingsPath(env, home);
   let settings: ClaudeSettings;
   try {
     if (!existsSync(settingsPath)) return { name: "claude_hook", status: "ok", message: "no Claude Code settings" };
@@ -1818,6 +1857,73 @@ export function checkClaudeHook(env: NodeJS.ProcessEnv = process.env, home: stri
     }
   }
   return { name: "claude_hook", status: "ok", message: `installed in ${settingsPath}, pinned to this Foreman` };
+}
+
+/** Claude Code's user settings: `$CLAUDE_CONFIG_DIR/settings.json`, else
+ *  `~/.claude/settings.json`. */
+function claudeSettingsPath(env: NodeJS.ProcessEnv, home: string): string {
+  return join(env.CLAUDE_CONFIG_DIR || join(home, ".claude"), "settings.json");
+}
+
+// Claude Code applies `env` from its settings.json to itself, and an
+// ANTHROPIC_API_KEY there wins over the subscription sign-in: with claude-code
+// on the subscription route, every task then runs on that key (a revoked
+// one fails with "401 API key is invalid"). Read-only; the key never shows.
+export function checkClaudeSubscriptionKey(
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = homedir(),
+): CheckResult {
+  const name = "claude_subscription";
+  let route: string | null;
+  try {
+    route = claudeCodeSubscriptionRoute();
+  } catch (err) {
+    return { name, status: "ok", message: `skipped — ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (route === null) {
+    return { name, status: "ok", message: "skipped — claude-code isn't on the Claude subscription route" };
+  }
+  const settingsPath = claudeSettingsPath(env, home);
+  let settings: unknown;
+  try {
+    if (!existsSync(settingsPath)) {
+      return { name, status: "ok", message: `claude-code uses your Claude subscription (${route})` };
+    }
+    settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+  } catch {
+    return { name, status: "ok", message: `skipped — ${settingsPath} isn't valid JSON` };
+  }
+  const settingsEnv = isRecord(settings) ? settings.env : undefined;
+  const key = isRecord(settingsEnv) ? settingsEnv.ANTHROPIC_API_KEY : undefined;
+  if (typeof key === "string" && key.trim() !== "") {
+    return {
+      name,
+      status: "warn",
+      message: `Claude Code uses the API key from ${settingsPath} instead of your Claude subscription`,
+      remediation: `Remove env.ANTHROPIC_API_KEY from ${settingsPath} to use the subscription.`,
+    };
+  }
+  return { name, status: "ok", message: `claude-code uses your Claude subscription (${route}); no API key in ${settingsPath}` };
+}
+
+/** claude-code's `provider/variant` when that is an OAuth (subscription)
+ *  route, else null (not registered, no provider yet, an API-key route). */
+function claudeCodeSubscriptionRoute(): string | null {
+  if (!existsSync(getForemanPaths().dbPath)) return null;
+  const registry = new RegistryService(getDb(), new EventBus<ForemanEventMap>());
+  const row = registry.listAll().find((r) => r.id === "claude-code");
+  if (!row?.llmProvider) return null;
+  const entry = loadActiveRegistry().doc.agents.find((a) => a.id === "claude-code");
+  const mapping = entry?.provider_mapping?.[row.llmProvider];
+  if (!mapping) return null;
+  const variantId = row.providerVariant ?? mapping.preferred;
+  const variant = mapping.variants[variantId];
+  if (!variant || variant.required_secret || !variant.interactive_setup) return null;
+  return `${row.llmProvider}/${variantId}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** The arguments before the first `;` of a hook command, unquoted. */
@@ -2004,7 +2110,8 @@ const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkAgentTokens,
   checkAcpAgents,
   () => checkAgentNodeEngines(),
-  checkProviderMapping,
+  () => checkProviderMapping(),
+  () => checkClaudeSubscriptionKey(),
   checkMcpGateway,
   checkMcpHub,
   checkIntegrations,

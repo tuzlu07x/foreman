@@ -15,8 +15,42 @@ All notable changes to Foreman are documented here. The format follows
   round) now says what it is and where the right value is, for example
   *that's the Public Key, not a Discord bot token: the bot token is under
   discord.com/developers → your app → Bot → Reset Token → Copy*.
+- **`foreman doctor` checks a subscription sign-in instead of guessing.**
+  `provider_mapping` warned *uses OAuth (run `claude auth login` if not
+  done)* for Claude Code and Codex even right after a sign-in. It now runs
+  the route's verify command from the registry (`claude auth status`,
+  `codex login status`) with a 5-second limit and never prints its output:
+  ✓ when it passes, a warning only when it fails, a plain note when it
+  can't run ([docs/doctor.md](docs/doctor.md)).
+- **Claude Code's hook says how to get out when Foreman is gone.** With
+  Foreman's package removed, the hook blocks every Claude Code tool call
+  (it never lets one through unguarded) and said *Run: foreman doctor*,
+  which is gone too. It now says to reinstall Foreman (`npm install -g
+  foreman-agent`) or remove Foreman's entry under `hooks.PreToolUse` in
+  Claude Code's `settings.json`. Run the hook install again to get the new
+  text into an existing hook.
 
 ### Fixed
+
+- **An API key in Claude Code's settings no longer hides behind your
+  subscription.** An `env.ANTHROPIC_API_KEY` in Claude Code's
+  `settings.json` wins over the Claude subscription you chose for it, so a
+  revoked key failed its tasks with *401 API key is invalid*. `foreman
+  doctor` now warns (`claude_subscription`) when claude-code is on the
+  subscription route and that key is set, and says to remove it. It only
+  reads the file and never shows the key.
+- **`install.sh --uninstall` never leaves Claude Code blocked.** It now
+  removes Foreman's Claude Code hook before the package, even when Claude
+  Code wasn't a registered agent, and says what to delete by hand when it
+  can't.
+- **`install.sh` switches to the Node 22 nvm already has.** It said *Node
+  22 LTS not detected — installing* when nvm had Node 22 that just wasn't
+  active; it now says so and switches to it without reinstalling. Its
+  *Next* list starts with `nvm use 22` when it switched Node (the terminal
+  that ran it keeps the old one). The `[Y/n]` question for the nvm default
+  takes an answer with spaces or a Windows line ending, and a failing
+  `nvm alias default` prints the command to run instead of ending the
+  installer.
 
 - **The setup wizard shows Claude Code and Codex after a subscription
   sign-in.** Choosing your Claude or ChatGPT subscription in Step 1 (sign
