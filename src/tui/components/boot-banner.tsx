@@ -90,7 +90,6 @@ export function BootBanner({
     <Box flexDirection="column">
       <Box flexDirection="row" gap={2}>
         <BootMascot
-          termCols={termCols}
           enabled={animationsEnabled}
           onMorphComplete={handleMorphComplete}
         />

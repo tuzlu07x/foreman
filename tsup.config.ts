@@ -24,5 +24,5 @@ export default defineConfig({
   treeshake: true,
   minify: false,
   onSuccess:
-    "chmod +x dist/cli/index.js dist/cli/hook.js && mkdir -p dist/db/migrations/meta && cp src/db/migrations/*.sql dist/db/migrations/ && cp src/db/migrations/meta/*.json dist/db/migrations/meta/ && mkdir -p dist/assets/mascot && cp assets/mascot/terminal-*.png dist/assets/mascot/ && rm -rf dist/registry && mkdir -p dist/registry && cp -R registry/. dist/registry/",
+    "chmod +x dist/cli/index.js dist/cli/hook.js && mkdir -p dist/db/migrations/meta && cp src/db/migrations/*.sql dist/db/migrations/ && cp src/db/migrations/meta/*.json dist/db/migrations/meta/ && rm -rf dist/registry && mkdir -p dist/registry && cp -R registry/. dist/registry/",
 });

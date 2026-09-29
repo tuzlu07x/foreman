@@ -48,7 +48,7 @@ Every subcommand lives in its own file under `src/cli/`. The root `src/cli/index
 | `foreman secrets add / list / show / rotate / remove` | Manages the encrypted secret store (AES-256-GCM at rest). `show` refuses without `--reveal`. |
 | `foreman registry list / info / update / validate` | Curated catalogue lookup. `update` refreshes from the upstream URL (24 h TTL). |
 | `foreman identity show / edit / reset / push` | Foreman's canonical SOUL.md propagated into each partner runtime's identity hook (`~/.hermes/SOUL.md`, etc.). |
-| `foreman doctor` | Checks paths, identity, db, fts5, policy, agents and their tokens, optional configs (notify, llm, voice, mcp hub, org), legacy home, updates, chafa. Exit codes 0 / 1 / 2. See [`doctor.md`](doctor.md). |
+| `foreman doctor` | Checks paths, identity, db, fts5, policy, agents and their tokens, optional configs (notify, llm, voice, mcp hub, org), legacy home, updates. Exit codes 0 / 1 / 2. See [`doctor.md`](doctor.md). |
 | `foreman migrate-config` | Migrates a legacy `~/.foreman/` install (the layout before platform-native dirs) into the XDG / macOS / Windows dirs. |
 | `foreman migrate --check / --apply` | DB schema migration runner. |
 | `foreman completion bash / zsh / fish` | Prints a shell-completion script. |

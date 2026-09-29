@@ -10,7 +10,6 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   checkAgentsRegistered,
-  checkChafa,
   checkDatabase,
   checkExpectedFiles,
   checkForemanHome,
@@ -315,26 +314,6 @@ describe("checkAgentsRegistered", () => {
 describe("checkMcpGateway", () => {
   it("instantiates and disposes cleanly", () => {
     expect(checkMcpGateway().status).toBe("ok");
-  });
-});
-
-describe("checkChafa", () => {
-  it("warns when chafa is not on PATH", () => {
-    const result = checkChafa({ PATH: "/nowhere" });
-    expect(result.status).toBe("warn");
-    expect(result.remediation).toContain("chafa");
-  });
-
-  it("passes when a chafa binary is found on PATH", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "foreman-chafa-"));
-    try {
-      const fakeChafa = join(tmp, "chafa");
-      writeFileSync(fakeChafa, "#!/bin/sh\necho ok\n");
-      chmodSync(fakeChafa, 0o755);
-      expect(checkChafa({ PATH: tmp }).status).toBe("ok");
-    } finally {
-      rmSync(tmp, { recursive: true, force: true });
-    }
   });
 });
 
