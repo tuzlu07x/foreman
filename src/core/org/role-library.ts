@@ -8,7 +8,8 @@ import type { RoleCapability } from "./org.js";
 // (Claude Code, Codex) can fill many as instances (agent-instance.ts). These
 // are starting points for `foreman org add-role --preset` and the setup
 // wizard; everything is editable in org.yaml, and "your own role" is just a
-// title plus instructions in your own words.
+// title plus instructions in your own words. Ready-made departments (IT,
+// Marketing, Customer Support) group some of them under a lead.
 
 export interface RolePreset {
   id: string;
@@ -20,6 +21,21 @@ export interface RolePreset {
   /** What its agent may do with its own tools. */
   can: RoleCapability[];
   /** The agent that fits best by default. */
+  runsOn: "claude-code" | "codex";
+  /** The ready-made department it comes with (DEPARTMENT_PRESETS id). Such
+   *  roles are offered as part of their department, not on their own. */
+  department?: string;
+}
+
+/** A ready-made group of roles: its first role leads it (org.yaml `head`). */
+export interface DepartmentPreset {
+  /** Department id in org.yaml. Never a role id (`support` is one). */
+  id: string;
+  name: string;
+  summary: string;
+  /** Role preset ids, the lead first. */
+  roles: readonly string[];
+  /** The agent its roles run on by default. */
   runsOn: "claude-code" | "codex";
 }
 
@@ -105,8 +121,140 @@ export const ROLE_PRESETS: readonly RolePreset[] = [
     can: ["read", "write", "network"],
     runsOn: "claude-code",
   },
+  // ---- IT ----
+  {
+    id: "backend-developer",
+    title: "Backend Developer",
+    summary: "servers, APIs and databases; leads IT",
+    instructions:
+      "You build the backend: services, APIs, database schemas and migrations. Keep changes small, run the " +
+      "tests, and hand frontend or infrastructure work to the colleague who owns it. Report what you changed.",
+    can: ["read", "write", "shell"],
+    runsOn: "codex",
+    department: "it",
+  },
+  {
+    id: "frontend-developer",
+    title: "Frontend Developer",
+    summary: "screens, components and styles",
+    instructions:
+      "You build the frontend: pages, components, styles and their tests. Follow the design you are given, " +
+      "keep it accessible, run the tests, and report what you changed.",
+    can: ["read", "write", "shell"],
+    runsOn: "codex",
+    department: "it",
+  },
+  {
+    id: "devops-engineer",
+    title: "DevOps Engineer",
+    summary: "builds, deploys, CI and infrastructure",
+    instructions:
+      "You own builds, CI, deployment and infrastructure configuration. Change them carefully, explain the " +
+      "risk of anything that touches production, and report what you changed and how to roll it back.",
+    can: ["read", "write", "shell", "network"],
+    runsOn: "codex",
+    department: "it",
+  },
+  // ---- Marketing ----
+  {
+    id: "marketing-manager",
+    title: "Marketing Manager",
+    summary: "plans campaigns and leads Marketing",
+    instructions:
+      "You lead marketing. Turn the owner's goals into campaigns, hand drafts and posts to your team, check " +
+      "their work before it goes out, and report what shipped and how it did.",
+    can: ["read", "network"],
+    runsOn: "claude-code",
+    department: "marketing",
+  },
+  {
+    id: "content-creator",
+    title: "Content Creator",
+    summary: "writes posts, articles and newsletters",
+    instructions:
+      "You create content: blog posts, articles, newsletters and landing-page copy. Match the tone you are " +
+      "given, check facts, and save drafts where you are told for your manager to review.",
+    can: ["read", "write", "network"],
+    runsOn: "claude-code",
+    department: "marketing",
+  },
+  {
+    id: "social-media",
+    title: "Social Media",
+    summary: "drafts social posts and watches replies",
+    instructions:
+      "You handle social media. Draft short posts for each network, keep an eye on replies and mentions, " +
+      "and bring anything sensitive to your manager. Never post without approval.",
+    can: ["read", "network"],
+    runsOn: "claude-code",
+    department: "marketing",
+  },
+  // ---- Customer support ----
+  {
+    id: "support-lead",
+    title: "Support Lead",
+    summary: "sorts tickets and leads Customer Support",
+    instructions:
+      "You lead customer support. Sort incoming questions, answer the tricky ones, hand routine ones to your " +
+      "team, and escalate anything about money, security or a real bug to your manager.",
+    can: ["read", "network"],
+    runsOn: "claude-code",
+    department: "customer-support",
+  },
+  {
+    id: "support-agent",
+    title: "Support Agent",
+    summary: "answers customers from the docs",
+    instructions:
+      "You answer customers. Use the documentation and past answers, be polite and brief, and pass anything " +
+      "you can't answer to your lead.",
+    can: ["read", "network"],
+    runsOn: "claude-code",
+    department: "customer-support",
+  },
+];
+
+export const DEPARTMENT_PRESETS: readonly DepartmentPreset[] = [
+  {
+    id: "it",
+    name: "IT",
+    summary: "backend, frontend and devops",
+    roles: ["backend-developer", "frontend-developer", "devops-engineer"],
+    runsOn: "codex",
+  },
+  {
+    id: "marketing",
+    name: "Marketing",
+    summary: "a marketing manager, a content creator and social media",
+    roles: ["marketing-manager", "content-creator", "social-media"],
+    runsOn: "claude-code",
+  },
+  {
+    id: "customer-support",
+    name: "Customer Support",
+    summary: "a support lead and a support agent",
+    roles: ["support-lead", "support-agent"],
+    runsOn: "claude-code",
+  },
 ];
 
 export function findRolePreset(id: string): RolePreset | undefined {
   return ROLE_PRESETS.find((p) => p.id === id);
+}
+
+export function findDepartmentPreset(id: string): DepartmentPreset | undefined {
+  return DEPARTMENT_PRESETS.find((d) => d.id === id);
+}
+
+/** The roles offered on their own (not part of a ready-made department). */
+export function generalRolePresets(): RolePreset[] {
+  return ROLE_PRESETS.filter((p) => !p.department);
+}
+
+/** A ready-made department's roles, the lead first. */
+export function departmentRolePresets(department: DepartmentPreset): RolePreset[] {
+  return department.roles.flatMap((id) => {
+    const preset = findRolePreset(id);
+    return preset ? [preset] : [];
+  });
 }
