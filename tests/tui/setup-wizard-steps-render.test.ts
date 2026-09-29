@@ -1501,6 +1501,9 @@ describe('foreman-llm step with a subscription sign-in (#575 follow-up)', () => 
     const llmYaml = readFileSync(w.services.llmConfigPath, 'utf-8')
     expect(llmYaml).toContain('provider: anthropic')
     expect(llmYaml).toMatch(/anthropic:\n\s+auth_mode: oauth/)
+    // Real-services test (2.3.0): with no key stored yet, the picker hid
+    // Claude Code (it needs Anthropic) and showed only Generic MCP.
+    await w.until('Claude Code')
   })
 
   it('lists models with stored Claude sign-in tokens', async () => {

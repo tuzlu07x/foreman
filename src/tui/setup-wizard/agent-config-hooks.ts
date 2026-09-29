@@ -9,7 +9,7 @@ import {
   computeSingleCompatProviderSeeds,
 } from "./agents-logic.js";
 import type { WizardContext } from "./context.js";
-import { configuredProviderIds } from "./shared.js";
+import { configuredBrainProviderIds } from "./shared.js";
 import type { WizardState } from "./state.js";
 
 // #358 — Computed once per relevant state change so both render and the
@@ -22,7 +22,11 @@ export function useLlmPickerOptions(
   > &
     Pick<
       WizardState,
-      "agentsPhase" | "agentConfigPrompts" | "agentConfigIdx" | "providersSaved"
+      | "agentsPhase"
+      | "agentConfigPrompts"
+      | "agentConfigIdx"
+      | "providersSaved"
+      | "providersSignedIn"
     >,
 ): string[] {
   const {
@@ -32,6 +36,7 @@ export function useLlmPickerOptions(
     agentCatalog,
     providerCatalog,
     providersSaved,
+    providersSignedIn,
     services,
   } = args;
   return useMemo<string[]>(() => {
@@ -44,9 +49,8 @@ export function useLlmPickerOptions(
     const storedNames = new Set(
       services.secretStore.list().map((s) => s.name),
     );
-    const configured = new Set(
-      configuredProviderIds(providerCatalog, storedNames),
-    );
+    // Subscriptions chosen in Step 1 count, as in the agents picker.
+    const configured = configuredBrainProviderIds(providerCatalog, storedNames, providersSignedIn);
     const available = compat.filter((id) => configured.has(id));
     const prefOrder = providersSaved
       .map((name) => providerCatalog.find((p) => p.secret_name === name)?.id)
@@ -66,6 +70,7 @@ export function useLlmPickerOptions(
     agentCatalog,
     providerCatalog,
     providersSaved,
+    providersSignedIn,
     services.secretStore,
   ]);
 }
