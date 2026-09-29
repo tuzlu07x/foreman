@@ -7,7 +7,7 @@
 // makes it look the same:
 //
 //   - The files Foreman reads next to itself (database migrations, the
-//     bundled registry, the mascot art) and the better-sqlite3 native addon
+//     bundled registry) and the better-sqlite3 native addon
 //     are written once to a private runtime directory in Foreman's cache
 //     dir, and checked against their SHA-256 on every start. A missing or
 //     changed file makes the whole directory be written again.
@@ -81,7 +81,10 @@ function classifyInvocation(argv, execPath) {
     } else {
       const interpreter = readShebang(first);
       if (interpreter !== null && sameFile(interpreter, execPath)) {
-        return { mode: "script", argv: [execPath, path.resolve(first), ...args.slice(1)] };
+        return {
+          mode: "script",
+          argv: [execPath, path.resolve(first), ...args.slice(1)],
+        };
       }
     }
   }
@@ -91,9 +94,15 @@ function classifyInvocation(argv, execPath) {
 /** Where the runtime directories live: Foreman's own cache dir. Mirrors
  *  `resolveDirs` in src/utils/config.ts. */
 function runtimeRoot(env, platform, home) {
-  if (env.FOREMAN_HOME) return path.resolve(env.FOREMAN_HOME, "cache", "runtime");
-  if (platform === "darwin") return path.resolve(home, "Library", "Caches", "foreman", "runtime");
-  return path.resolve(env.XDG_CACHE_HOME || path.join(home, ".cache"), "foreman", "runtime");
+  if (env.FOREMAN_HOME)
+    return path.resolve(env.FOREMAN_HOME, "cache", "runtime");
+  if (platform === "darwin")
+    return path.resolve(home, "Library", "Caches", "foreman", "runtime");
+  return path.resolve(
+    env.XDG_CACHE_HOME || path.join(home, ".cache"),
+    "foreman",
+    "runtime",
+  );
 }
 
 /** True when `dir` is a directory owned by us that nobody else can write
@@ -102,7 +111,8 @@ function verifyDir(dir, files) {
   try {
     const st = fs.lstatSync(dir);
     if (!st.isDirectory()) return false;
-    if (typeof process.getuid === "function" && st.uid !== process.getuid()) return false;
+    if (typeof process.getuid === "function" && st.uid !== process.getuid())
+      return false;
     if ((st.mode & 0o022) !== 0) return false;
     const real = fs.realpathSync(dir);
     for (const f of files) {
@@ -119,7 +129,10 @@ function verifyDir(dir, files) {
 /** SHA-256 of a regular file, read through one descriptor that never
  *  follows a symlink, so the type check and the bytes are the same file. */
 function readRegularFile(p) {
-  const fd = fs.openSync(p, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  const fd = fs.openSync(
+    p,
+    fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0),
+  );
   try {
     if (!fs.fstatSync(fd).isFile()) return null;
     return sha256(fs.readFileSync(fd));
@@ -132,7 +145,10 @@ function writeFiles(dir, files) {
   for (const f of files) {
     const p = path.join(dir, f.path);
     fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(p, Buffer.from(f.data, "base64"), { mode: f.mode, flag: "wx" });
+    fs.writeFileSync(p, Buffer.from(f.data, "base64"), {
+      mode: f.mode,
+      flag: "wx",
+    });
   }
 }
 
@@ -156,7 +172,8 @@ function materialize(root, name, files) {
   const tmp = fs.mkdtempSync(path.join(root, `.${name}-`));
   try {
     writeFiles(tmp, files);
-    if (!verifyDir(tmp, files)) throw new Error(`could not write the runtime files to ${tmp}`);
+    if (!verifyDir(tmp, files))
+      throw new Error(`could not write the runtime files to ${tmp}`);
     try {
       fs.renameSync(tmp, target);
       return target;
@@ -167,7 +184,8 @@ function materialize(root, name, files) {
       fs.renameSync(target, path.join(aside, "old"));
       removeQuietly(aside);
       fs.renameSync(tmp, target);
-      if (!verifyDir(target, files)) throw new Error(`runtime files at ${target} changed while starting`);
+      if (!verifyDir(target, files))
+        throw new Error(`runtime files at ${target} changed while starting`);
       return target;
     }
   } finally {
@@ -177,7 +195,12 @@ function materialize(root, name, files) {
 
 /** The runtime dir for this payload: Foreman's cache dir, or a private
  *  per-process temp dir (removed on exit) when the cache isn't writable. */
-function ensureRuntimeDir(payload, env = process.env, platform = process.platform, home = os.homedir()) {
+function ensureRuntimeDir(
+  payload,
+  env = process.env,
+  platform = process.platform,
+  home = os.homedir(),
+) {
   const name = `${payload.version}-${payload.digest.slice(0, 16)}`;
   try {
     return materialize(runtimeRoot(env, platform, home), name, payload.files);
@@ -185,7 +208,8 @@ function ensureRuntimeDir(payload, env = process.env, platform = process.platfor
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "foreman-runtime-"));
     process.once("exit", () => removeQuietly(dir));
     writeFiles(dir, payload.files);
-    if (!verifyDir(dir, payload.files)) throw new Error(`could not prepare Foreman's runtime files in ${dir}`);
+    if (!verifyDir(dir, payload.files))
+      throw new Error(`could not prepare Foreman's runtime files in ${dir}`);
     return dir;
   }
 }
@@ -220,10 +244,15 @@ function boot(payload) {
     mode: "cli",
     metaUrl: url.pathToFileURL(path.join(dir, "cli", "index.js")).href,
     resolve(specifier) {
-      throw new Error(`Cannot resolve '${specifier}' inside the standalone foreman binary`);
+      throw new Error(
+        `Cannot resolve '${specifier}' inside the standalone foreman binary`,
+      );
     },
     loadAddon(name) {
-      if (name !== ADDON) throw new Error(`the standalone foreman binary has no native addon '${name}'`);
+      if (name !== ADDON)
+        throw new Error(
+          `the standalone foreman binary has no native addon '${name}'`,
+        );
       if (addon === undefined) {
         const mod = { exports: {} };
         process.dlopen(mod, path.join(dir, "lib", ADDON));
@@ -234,4 +263,12 @@ function boot(payload) {
   };
 }
 
-module.exports = { ADDON, boot, classifyInvocation, ensureRuntimeDir, runtimeRoot, verifyDir, sha256 };
+module.exports = {
+  ADDON,
+  boot,
+  classifyInvocation,
+  ensureRuntimeDir,
+  runtimeRoot,
+  verifyDir,
+  sha256,
+};
