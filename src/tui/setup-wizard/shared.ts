@@ -106,6 +106,21 @@ export function configuredBrainProviderIds(
   return ids;
 }
 
+/** Providers still to sign in to after the wizard: a subscription was
+ *  chosen, and no API key for the provider was saved in this run (a key
+ *  saved now wins, as in llm.yaml; a key from an earlier run doesn't cancel
+ *  a sign-in chosen now). */
+export function foremanLlmLoginsNeeded(
+  signedIn: readonly string[],
+  providers: ProviderEntry[],
+  savedThisRun: ReadonlySet<string>,
+): string[] {
+  return signedIn.filter((pid) => {
+    const secret = providers.find((p) => p.id === pid)?.secret_name;
+    return !(secret && savedThisRun.has(secret));
+  });
+}
+
 export function configuredServiceIds(
   services: { id: string; secret_name: string }[],
   storedNames: Set<string>,

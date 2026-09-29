@@ -56,11 +56,13 @@ The script reuses the `node` on your PATH when it is Node 22 or 24. Otherwise it
 | `FOREMAN_INSTALL_PREFIX=<dir>` | Use a non-default npm prefix |
 | `FOREMAN_SKIP_NVM=1` | Never bootstrap nvm; fail if no supported Node is found |
 | `FOREMAN_REUSE_ANY_NODE=1` | Reuse a Node >= 22 outside the tested 22 / 24 lines |
-| `--uninstall` | Remove the global package (Foreman's data is left in place) |
+| `FOREMAN_NVM_DEFAULT=1` / `=0` | Make Node 22 your nvm default without asking / leave it alone (see below) |
+| `--uninstall` | Remove Foreman: the background service, Foreman's entries in your agents' configs (MCP server, Claude Code hook) and the package. Asks before deleting Foreman's data |
+| `--uninstall --purge` | The same, and delete Foreman's data (identity, policy, audit log, stored secrets) without asking |
 
 Flags go after `bash -s --`, for example `curl -fsSL …/install.sh | bash -s -- --uninstall`.
 
-If the script installed Node through nvm, open a new shell (or run `. "$HOME/.nvm/nvm.sh"`) before running `foreman`.
+If the script installed Node through nvm, open a new shell (or run `. "$HOME/.nvm/nvm.sh"`) before running `foreman`. If your nvm default is an older Node (for example 20), new shells start with that one and don't have `foreman`. The script says so and, in a terminal, asks whether to make Node 22 your default (`nvm alias default 22`). Say no to keep your default and run `nvm use 22` in each shell where you use Foreman. Without a terminal it changes nothing unless `FOREMAN_NVM_DEFAULT=1` is set.
 
 ### npm
 
@@ -73,8 +75,12 @@ npm install -g foreman-agent
 ### Homebrew (macOS, Linuxbrew)
 
 ```bash
-brew tap tuzlu07x/foreman && brew install foreman-agent
+brew tap tuzlu07x/foreman
+brew trust --formula tuzlu07x/foreman/foreman-agent   # Homebrew 7+ asks you to trust a third-party formula once
+brew install foreman-agent
 ```
+
+Homebrew 7 refuses formulae from taps you haven't trusted (`Refusing to load formula … from untrusted tap`). `brew trust` records your choice in `~/.homebrew/trust.json`; `--formula` trusts only this formula, not the whole tap. `brew untrust --formula tuzlu07x/foreman/foreman-agent` takes it back.
 
 ### From source (contributors)
 
@@ -204,7 +210,7 @@ On a fresh machine Foreman says it isn't configured yet and offers:
 Enter creates Foreman's home (identity key, secret store key, default `policy.yaml`, `SOUL.md`, database) and starts the setup wizard. You can also run the wizard on its own with `foreman setup`. The wizard has six steps:
 
 1. **Welcome.** Enter starts setup, `q` quits. You can quit later with Ctrl-C (except while agents are installing) and pick up where you left off with `foreman setup --resume`. A Ctrl-C quit exits with code 130, like any interrupted command, so a script can tell it from a finished setup (exit 0).
-2. **Step 1 of 6: LLM Providers.** Space toggles the providers you have (Anthropic, OpenAI, Google Gemini, local Ollama, a custom OpenAI-compatible endpoint), Enter confirms. For Anthropic and OpenAI you can sign in with your Claude or ChatGPT subscription instead of pasting a key. Otherwise paste each key at its prompt; a help URL is shown. You can confirm with nothing selected and add providers later.
+2. **Step 1 of 6: LLM Providers.** Space toggles the providers you have (Anthropic, OpenAI, Google Gemini, local Ollama, a custom OpenAI-compatible endpoint), Enter confirms. For Anthropic and OpenAI the wizard first asks how to connect: **API key** (highlighted, so Enter takes it) or your Claude / ChatGPT **subscription**, which signs you in through your browser when setup ends. Paste each key at its prompt; a help URL is shown. On the summary, `n` goes back to change your picks. You can confirm with nothing selected and add providers later.
 3. **Step 2 of 6: Foreman's brain.** Pick the LLM Foreman itself uses to check risky calls and write summaries: Anthropic, OpenAI or Google Gemini (rows you haven't configured in Step 1 are greyed out), a local or remote **Ollama** server (base URL, then one of its models), an **OpenAI-compatible** preset or your own endpoint (base URL, optional key, model), or **Skip: heuristics only**. See [llm-providers.md](llm-providers.md#foremans-brain-on-ollama-or-an-openai-compatible-endpoint).
 4. **Step 3 of 6: Agents.** Space toggles the agents to install; Hermes and Claude Code are pre-checked when their LLM is configured, and agents whose LLM isn't configured are hidden. For each agent you pick its LLM, route and model and an optional responsibility note, then confirm. On a re-run, unticking an agent unregisters it and leaves its binary installed; if Foreman installed it, `u` on the confirm screen uninstalls it too.
 5. **Step 4 of 6: Services** (optional). Tokens for the chat apps: Telegram, Discord, Slack. After the bot token you give where it posts: the Telegram chat id, the Slack channel (default `#foreman`; invite the bot there with `/invite @yourapp`) or the Discord channel id (Developer Mode, then right-click the channel → *Copy Channel ID*). A pasted value that doesn't look like that token or id isn't saved on the first Enter: press Enter again to keep it anyway, or paste the right one. A chat app is turned on in `notify.yaml` only when both its token and its chat id or channel are set; skip either and the summary shows the command that finishes it later (e.g. `foreman notify enable slack --channel '#foreman'`). Empty input skips a prompt. GitHub, Jira and Notion are set up in the next step.
@@ -304,7 +310,13 @@ foreman doctor --json    # the same checks, for scripts
 
 ## Uninstall
 
-Do it in this order: the first steps need the `foreman` command, which step 5 removes.
+The install script does steps 1, 4, 5 and 6 below for you, whichever Node Foreman was installed under:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash -s -- --uninstall
+```
+
+It asks before deleting Foreman's data; add `--purge` to delete it without asking. It doesn't restore SOUL files (step 3) or remove a hook added to one project with `--project`. By hand, do it in this order: the first steps need the `foreman` command, which step 5 removes.
 
 ```bash
 # 1. Remove the PreToolUse hook Foreman added to Claude Code (if you installed it),

@@ -89,6 +89,36 @@ All notable changes to Foreman are documented here. The format follows
   and the digest: the default routing named Telegram only, so nothing was
   sent to them until `foreman notify route …`. A channel you already
   routed keeps your routing.
+- **Setup: an API key is never swapped for a browser sign-in.** For
+  Anthropic and OpenAI, Step 1 asked "Sign in with your subscription
+  instead of pasting a key? (y/n)", and Enter meant yes. A key pasted at
+  that question was dropped, a browser sign-in was queued, and the
+  summary said "0 LLM providers". It is now an explicit choice with
+  **API key** highlighted. A key saved in the run sets `auth_mode:
+  api_key` and cancels a queued sign-in for that provider. Going back
+  (Esc, or `n` on the summary, which used to continue like `y`) keeps
+  your ticks and asks again. The Done screen counts subscriptions as
+  providers ([#720](https://github.com/tuzlu07x/foreman/issues/720)).
+- Setup: Step 2 (Foreman's brain) shows, on each ✗ row, why it can't be
+  picked yet ("needs an OpenAI key or ChatGPT sign-in in Step 1"). A
+  custom OpenAI-compatible provider picked in Step 1 is now written to
+  `llm.yaml`. The Done screen says where to talk to Foreman: `:` in the
+  TUI, your Telegram bot, `/foreman` in Slack or Discord.
+- **The install script no longer reports success when new terminals can't
+  find `foreman`.** When it has to switch to Node 22 through nvm while your
+  nvm default is an older Node (for example 20), it says so and, in a
+  terminal, asks whether to make Node 22 your default. It never changes it
+  unasked (`FOREMAN_NVM_DEFAULT=1` / `=0` decide ahead).
+- **`install.sh --uninstall` removes Foreman, not just the package.** It
+  removes the background service and each agent (their `foreman` MCP entry
+  and Claude Code hook go with them), then the package, then asks before
+  deleting Foreman's data (`--purge`: without asking). It finds a Foreman
+  installed under another nvm Node than your shell's, and tells you to use
+  `brew uninstall` for a Homebrew one. Before, only `npm uninstall` ran,
+  under the shell's Node, which could leave everything behind.
+- docs/install.md: Homebrew 7 needs `brew trust --formula
+  tuzlu07x/foreman/foreman-agent` before `brew install`
+  ([#718](https://github.com/tuzlu07x/foreman/issues/718)).
 
 ## [2.2.0] - 2026-09-29
 

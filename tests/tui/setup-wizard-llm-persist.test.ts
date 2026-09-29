@@ -315,6 +315,38 @@ describe("buildLlmConfigFromWizard — signedInProviders (Faz 4b-3)", () => {
     expect(result.next.credentials.anthropic?.auth_mode).toBe("oauth");
   });
 
+  it("a key saved in the same run wins over a sign-in for that provider (real-services test)", () => {
+    const result = buildLlmConfigFromWizard({
+      savedStorageNames: ["openai-api-key"],
+      signedInProviders: ["openai"],
+      providerCatalog: CATALOG,
+      existing: defaultLlmConfig(),
+    });
+    expect(result.next.credentials.openai).toMatchObject({ secret_name: "openai-api-key", auth_mode: "api_key" });
+  });
+
+  it("a key pasted now turns an earlier run's subscription back into an API key", () => {
+    const existing = defaultLlmConfig();
+    existing.credentials.openai = { ...existing.credentials.openai, auth_mode: "oauth" };
+    const result = buildLlmConfigFromWizard({
+      savedStorageNames: ["openai-api-key"],
+      providerCatalog: CATALOG,
+      existing,
+    });
+    expect(result.next.credentials.openai?.auth_mode).toBe("api_key");
+  });
+
+  it("wires the catalog's openai-compatible entry (it was mapped under an old id)", () => {
+    const result = buildLlmConfigFromWizard({
+      savedStorageNames: ["openai-compatible-endpoint"],
+      providerCatalog: [
+        entry({ id: "openai-compatible", secret_name: "openai-compatible-key", endpoint_required: true }),
+      ],
+      existing: defaultLlmConfig(),
+    });
+    expect(result.wiredProviders).toEqual(["openai_compatible"]);
+  });
+
   it("absent signedInProviders is a no-op (existing call sites unaffected)", () => {
     const result = buildLlmConfigFromWizard({
       savedStorageNames: ["anthropic-api-key"],
