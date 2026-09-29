@@ -52,6 +52,8 @@ roles:
     agent: reviewer
     department: engineering
     reports_to: tech-lead
+    instructions: Review the change and report findings with file and line. Don't edit files.
+    can: [read]
 `
 
 const PLAYBOOK = {
@@ -195,6 +197,7 @@ it('One runtime, several roles: two Codex and a Claude Code instance each work a
     expect(reviewer).toMatchObject({ agent: 'claude-code', spawnedBy: 'reviewer' })
     expect(reviewer.server?.args.slice(-3)).toEqual(['mcp-stdio', '--source', 'reviewer'])
     expect(reviewer.argv).toContain('--append-system-prompt')
+    expect(reviewer.argv.join(' ')).toContain("Review the change and report findings with file and line. Don't edit files.")
     // The lead is the agent itself: launched as before.
     expect(byTask('Ship the signup feature')).toMatchObject({ agent: 'claude-code', spawnedBy: 'claude-code', server: null })
     ev(`backend: codex exec … -c mcp_servers.foreman.args=[…,"--source","backend"] -c mcp_servers.foreman.env={FOREMAN_AGENT_TOKEN_FILE=…/agent-tokens/backend.token}; its task starts "You are Backend Developer …"`)
@@ -218,6 +221,30 @@ it('One runtime, several roles: two Codex and a Claude Code instance each work a
     const events = sb.events<{ sourceAgent: string; ok: boolean }>('org:message').filter((e) => e.ok)
     expect(events.map((e) => e.sourceAgent).sort()).toEqual(['backend', 'frontend'])
     ev(`org_messages #engineering: ${posts.map((p) => `${p.from_agent} "${p.text}"`).join('; ')} — posted by the instances' own mcp-stdio, as themselves (not untrusted:, not codex)`)
+  })
+
+  await j.step("the reviewer's role may only read: Claude Code's hook refuses its edits and shell, not the lead's", (ev) => {
+    const hook = (tool: object, spawnedBy?: string) =>
+      sb.run(['hook', 'claude-code', '--timeout-ms', '300'], {
+        input: JSON.stringify(tool),
+        env: spawnedBy ? { FOREMAN_SPAWNED_BY: spawnedBy } : {},
+      })
+    const write = { tool_name: 'Write', tool_input: { file_path: join(sb.cwd, 'review.md'), content: 'LGTM' } }
+    const bash = { tool_name: 'Bash', tool_input: { command: 'git status' } }
+    const read = { tool_name: 'Read', tool_input: { file_path: join(sb.cwd, 'README.md') } }
+    const w = hook(write, 'reviewer')
+    expect(w.status).toBe(2)
+    expect(w.stderr).toContain('Write blocked by Foreman: Code Reviewer (code-reviewer) may not write files: this role may only read files')
+    expect(hook(bash, 'reviewer').status).toBe(2)
+    expect(hook(read, 'reviewer').status).toBe(0)
+    expect(hook(bash).status).toBe(0)
+    const rows = sb.query<{ source_agent: string; target_tool: string; decided_by: string }>(
+      "SELECT source_agent, target_tool, decided_by FROM requests WHERE decided_by = 'org:role' ORDER BY created_at",
+    )
+    expect(rows.map((r) => `${r.source_agent} ${r.target_tool}`)).toEqual(['reviewer file_write', 'reviewer shell_exec'])
+    ev(`FOREMAN_SPAWNED_BY=reviewer: Write → exit 2 "${w.stderr.trim()}"; Bash → exit 2; Read → exit 0`)
+    ev('claude-code itself (the lead, no role limits): Bash git status → exit 0')
+    ev(`audit: ${rows.map((r) => `${r.source_agent} ${r.target_tool} → ${r.decided_by}`).join('; ')}`)
   })
 
   await j.step('removing an instance takes its token file with it', (ev) => {

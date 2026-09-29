@@ -82,6 +82,7 @@ export function hookProcessContext(env: NodeJS.ProcessEnv = process.env): Record
     claudeConfigDir: env.CLAUDE_CONFIG_DIR ?? null,
     argv1: process.argv[1] ?? null,
     execPath: process.execPath,
+    spawnedBy: env.FOREMAN_SPAWNED_BY ?? null,
   };
 }
 

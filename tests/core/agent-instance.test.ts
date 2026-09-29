@@ -104,6 +104,11 @@ describe("agent instances", () => {
     expect(lstatSync(join(dir, "agent-tokens", "x.token")).isSymbolicLink()).toBe(true);
   });
 
+  it("puts the role's instructions between who it is and how to work", () => {
+    const text = rolePrompt({ company: "Acme", roleId: "reviewer", title: "Code Reviewer", agentId: "reviewer", instructions: "Review diffs. Don't edit files." });
+    expect(text).toContain('at Acme, working as the agent "reviewer".\n\nReview diffs. Don\'t edit files.\n\nWork only on the task');
+  });
+
   it("describes the role from org.yaml", () => {
     expect(
       rolePrompt({ company: "Acme", roleId: "backend-dev", title: "Backend Developer", department: "Engineering", responsibility: "the API", agentId: "backend" }),

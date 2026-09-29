@@ -18,7 +18,7 @@ describe('foreman org / usage (#629)', () => {
 
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), 'foreman-org-spend-'))
-    env = { ...process.env, FOREMAN_HOME: home, NO_COLOR: '1' }
+    env = { ...process.env, FOREMAN_HOME: home, HOME: home, NO_COLOR: '1' }
     expect(run('init').status).toBe(0)
     expect(run('org', 'init', '--template', 'startup', '--company', 'Acme').status).toBe(0)
   })
@@ -42,6 +42,34 @@ describe('foreman org / usage (#629)', () => {
 
     expect(run('org', 'add-role', 'x', '--agent', 'codex', '--reports-to', 'nobody').status).toBe(1)
     expect(run('org', 'add-department', 'ops', '--head', 'coo').stderr).toContain('--agent')
+    expect(readFileSync(join(home, 'org.yaml'), 'utf-8')).toBe(yaml)
+  })
+
+  it('adds ready-made roles, your own roles and role permissions, filled by a new instance', () => {
+    const roles = run('org', 'roles')
+    expect(roles.status).toBe(0)
+    expect(roles.stdout).toContain('code-reviewer')
+    expect(roles.stdout).toContain('may: read')
+
+    const reviewer = run('org', 'add-role', 'reviewer', '--preset', 'code-reviewer', '--runs-on', 'claude-code')
+    expect(reviewer.status, reviewer.stderr).toBe(0)
+    expect(reviewer.stdout).toContain('may: read')
+    const own = run('org', 'add-role', 'chores', '--runs-on', 'codex', '--title', 'Chores', '--describe', 'Tidy the issue tracker.', '--can', 'read, network')
+    expect(own.status, own.stderr).toBe(0)
+    const yaml = readFileSync(join(home, 'org.yaml'), 'utf-8')
+    expect(yaml).toMatch(/reviewer:\n\s+title: Code Reviewer\n\s+agent: reviewer/)
+    expect(yaml).toContain('Tidy the issue tracker.')
+    expect(yaml).toMatch(/can:\n\s+- read\n\s+- network/)
+    expect(run('org', 'validate').status).toBe(0)
+    const agents = run('agent', 'list', '--json')
+    expect(agents.stdout).toContain('"reviewer"')
+    expect(agents.stdout).toContain('"chores"')
+
+    expect(run('org', 'add-role', 'x', '--preset', 'wizard', '--agent', 'codex').stderr).toContain('foreman org roles')
+    expect(run('org', 'add-role', 'x', '--agent', 'codex', '--can', 'read,sudo').stderr).toContain('not sudo')
+    expect(run('org', 'add-role', 'x', '--agent', 'codex', '--runs-on', 'codex').stderr).toContain('not both')
+    expect(run('org', 'add-role', 'x').stderr).toContain('--runs-on')
+    expect(run('org', 'add-role', 'x', '--runs-on', 'hermes').stderr).toContain('pass --agent hermes')
     expect(readFileSync(join(home, 'org.yaml'), 'utf-8')).toBe(yaml)
   })
 

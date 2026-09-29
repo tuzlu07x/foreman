@@ -373,6 +373,7 @@ function serveHook(conn: Conn, line: string, ctx: ServeContext): void {
         ...(req.ctx.claudeConfigDir ? { CLAUDE_CONFIG_DIR: req.ctx.claudeConfigDir } : {}),
       },
       self: foremanSelfOf({ argv1: req.ctx.argv1 ?? undefined, execPath: req.ctx.execPath, path: req.ctx.path }),
+      spawnedBy: req.ctx.spawnedBy,
     },
     requestId,
     onApproval: (a) => {
@@ -397,6 +398,8 @@ interface HookRequest {
     claudeConfigDir: string | null;
     argv1: string | null;
     execPath: string;
+    /** FOREMAN_SPAWNED_BY in the hook's environment (hook-cli.ts). */
+    spawnedBy: string | null;
   };
 }
 
@@ -416,7 +419,7 @@ export function parseHookRequest(line: string): HookRequest | string {
   const absolute = (v: unknown): v is string => str(v) && isAbsolute(v);
   const optional = (v: unknown): v is string | null => v === null || v === undefined || str(v);
   if (!absolute(c.cwd) || !absolute(c.home) || !str(c.path) || !absolute(c.execPath)) return "context";
-  if (!optional(c.claudeConfigDir) || !optional(c.argv1)) return "context";
+  if (!optional(c.claudeConfigDir) || !optional(c.argv1) || !optional(c.spawnedBy)) return "context";
   return {
     agentId,
     timeoutMs,
@@ -428,6 +431,7 @@ export function parseHookRequest(line: string): HookRequest | string {
       claudeConfigDir: (c.claudeConfigDir as string | null | undefined) ?? null,
       argv1: (c.argv1 as string | null | undefined) ?? null,
       execPath: c.execPath,
+      spawnedBy: (c.spawnedBy as string | null | undefined) ?? null,
     },
   };
 }

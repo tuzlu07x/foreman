@@ -85,6 +85,35 @@ describe('MediatorService — unit', () => {
     expect(approval.request).not.toHaveBeenCalled()
   })
 
+  it("denies a call outside the agent's role (org.yaml `can`) before policy, without asking", async () => {
+    registry.register({ id: 'reviewer', displayName: 'R', transport: 'stdio' })
+    const roleGuard = vi.fn((agent: string, tool: string | undefined) =>
+      agent === 'reviewer' && tool === 'file_write' ? 'Code Reviewer (reviewer) may not write files' : null,
+    )
+    const evaluate = vi.spyOn(policy, 'evaluate')
+    const mediator = new MediatorService({ registry, policy, risk, approval, bus, roleGuard })
+    const result = await mediator.handleRequest({
+      sourceAgent: 'reviewer',
+      targetTool: 'file_write',
+      message: callMessage(1, 'file_write', { path: 'x.ts', content: '' }),
+    })
+    expect(result.decision).toBe('denied')
+    expect(result.decidedBy).toBe('org:role')
+    expect(result.riskFactors).toEqual([
+      { rule: 'org_role', points: 0, reason: 'Code Reviewer (reviewer) may not write files', category: 'structural' },
+    ])
+    expect(evaluate).not.toHaveBeenCalled()
+    expect(approval.request).not.toHaveBeenCalled()
+
+    const read = await mediator.handleRequest({
+      sourceAgent: 'reviewer',
+      targetTool: 'read_file',
+      message: callMessage(2, 'read_file', { path: 'x.ts' }),
+    })
+    expect(read.decidedBy).not.toBe('org:role')
+    expect(evaluate).toHaveBeenCalledOnce()
+  })
+
   it.each([['QA-BOT'], ['Qa-Bot'], ['untrusted:QA-BOT'], ['untrusted:qa-bot']])(
     'a block on qa-bot holds for %s: ids are compared ignoring case (#656)',
     async (sourceAgent) => {

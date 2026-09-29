@@ -70,6 +70,13 @@ export interface MediatorOutput {
   durationMs: number;
 }
 
+/** Why a denied call was denied, for the agent, when there is more to say
+ *  than the deciding rule: a role's limits (org.yaml `can`). */
+export function denialReason(out: Pick<MediatorOutput, "decidedBy" | "riskFactors">): string | undefined {
+  if (out.decidedBy !== "org:role") return undefined;
+  return out.riskFactors.find((f) => f.rule === "org_role")?.reason;
+}
+
 export interface MediatorDeps {
   registry: RegistryService;
   policy: PolicyEngine;
@@ -87,6 +94,9 @@ export interface MediatorDeps {
   /** Secret names only the MCP hub may read (integration credentials).
    *  `secrets/get` refuses them whatever the policy says. */
   hubOnlySecrets?: () => ReadonlySet<string>;
+  /** Role permissions from org.yaml (org/role-guard.ts): why this agent's
+   *  role may not use this tool, or null. Checked before policy.yaml. */
+  roleGuard?: (sourceAgent: string, targetTool: string | undefined) => string | null;
 }
 
 export interface SecretGetInput {
@@ -178,6 +188,23 @@ export class MediatorService {
         decision: "denied",
         decidedBy: "session:halted",
         assessment: emptyAssessment,
+        createdAt,
+      });
+    }
+
+    // The role's own limits (org.yaml `can`) come before policy: a call
+    // outside them is denied whatever policy.yaml allows.
+    const roleRefusal = this.deps.roleGuard?.(input.sourceAgent, input.targetTool) ?? null;
+    if (roleRefusal !== null) {
+      return this.finalize({
+        requestId,
+        input,
+        decision: "denied",
+        decidedBy: "org:role",
+        assessment: {
+          ...emptyAssessment,
+          factors: [{ rule: "org_role", points: 0, reason: roleRefusal, category: "structural" }],
+        },
         createdAt,
       });
     }

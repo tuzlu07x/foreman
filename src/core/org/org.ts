@@ -51,6 +51,10 @@ export const RESERVED_ORG_IDS: ReadonlySet<string> = new Set([
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
 
+/** What a role's agent may do with its own tools (RoleSchema `can`). */
+export const ROLE_CAPABILITIES = ["read", "write", "shell", "network"] as const;
+export type RoleCapability = (typeof ROLE_CAPABILITIES)[number];
+
 const RoleSchema = z
   .object({
     title: z.string().min(1).max(80),
@@ -65,6 +69,14 @@ const RoleSchema = z
     model: z.string().min(1).max(120).optional(),
     /** MCP hub servers this role may use. Overrides the department list. */
     mcp_servers: z.array(z.string().min(1)).optional(),
+    /** What the role does, in your own words: the agent is told this when
+     *  Foreman hands it work (role-library.ts has ready-made ones). */
+    instructions: z.string().min(1).max(4000).optional(),
+    /** What its agent may do with its own tools: read files, write files,
+     *  run shell commands, reach the network. Unset: no limit beyond
+     *  policy.yaml. Talking to colleagues (org_post, …) is always allowed
+     *  (role-guard.ts). */
+    can: z.array(z.enum(ROLE_CAPABILITIES)).optional(),
   })
   .strict();
 

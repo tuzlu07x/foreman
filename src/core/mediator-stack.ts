@@ -1,3 +1,5 @@
+import { createRoleGuard } from "./org/role-guard.js";
+import { getForemanPaths } from "../utils/config.js";
 import type { ForemanDb } from "../db/client.js";
 import { claimedAgentOf } from "./agent-identity.js";
 import type { ApprovalService } from "./approval.js";
@@ -37,6 +39,8 @@ export interface MediatorStackOptions {
   verifier?: LlmVerifier;
   /** mcp.yaml to follow for hub-only (integration) secrets. */
   mcpConfigPath?: string | null;
+  /** org.yaml, for role permissions. Default: this home's. */
+  orgConfigPath?: string | null;
 }
 
 export interface MediatorStack {
@@ -82,6 +86,8 @@ export function createMediatorStack(opts: MediatorStackOptions): MediatorStack {
     ...(opts.secretStore ? { secretStore: opts.secretStore } : {}),
     ...(opts.verifier ? { verifier: opts.verifier } : {}),
     ...(opts.mcpConfigPath ? { hubOnlySecrets: followHubOnlySecrets(opts.mcpConfigPath) } : {}),
+    // Role permissions (org.yaml `can`), on every transport.
+    roleGuard: createRoleGuard(opts.orgConfigPath ?? getForemanPaths().orgConfigPath),
   });
   return { registry, policy, risk, sessionManager, mediator };
 }

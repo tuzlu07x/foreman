@@ -39,7 +39,7 @@ import {
   type NormalisedDecision,
 } from './adapters/index.js'
 import type { MediatorLike } from './codex-mediator-connector.js'
-import type { MediatorOutput } from './mediator.js'
+import { denialReason, type MediatorOutput } from './mediator.js'
 
 /** Specific adapter shape the connector needs — the third argument
  *  to encodeDecision (the ACP-offered options list) is not part of
@@ -147,6 +147,7 @@ export function wireAcpBridgeToMediator(
         : {
             kind: 'deny',
             reason:
+              denialReason(mediatorOutput) ??
               mediatorOutput.riskReasons?.[0] ??
               `denied by ${mediatorOutput.decidedBy}`,
           }
