@@ -136,6 +136,8 @@ Every rule looks at the whole line **and at each command the line runs** (#698),
 
 `shell_rm_rf_catastrophic` (+85, lands `critical` bucket on first match) fires when a recursive rm (any spelling of the flags) targets one of: `/`, `/*`, `~`, `~/`, `~/*`, `$HOME`, `${HOME}`, `/usr`, `/etc`, `/var`, `/boot`. Strips a leading `sudo` / `doas` wrapper so `sudo rm -rf /` is equivalent.
 
+**Refused outright.** `shell_rm_rf_catastrophic`, `shell_dd_to_disk`, `shell_mkfs_on_disk` and `shell_fork_bomb` don't ask: the call is denied (`risk:critical`) whatever `policy.yaml` allows, so a hurried "allow" or an approval nobody sees can't let one through. Setting `buckets.critical` in `policy.yaml` explicitly (for example `critical: ask`) puts these back under that setting.
+
 ### Safe-list (-10 each)
 
 - `rm` under `/tmp` or `/var/tmp` is conventional cleanup

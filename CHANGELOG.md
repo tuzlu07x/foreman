@@ -8,6 +8,14 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Security
 
+- **`rm -rf /` and friends are refused outright.** A recursive delete of
+  `/`, `~`, `$HOME`, `/usr`, `/etc`, `/var` or `/boot`, `mkfs` or `dd`
+  onto a disk, and a fork bomb used to ask for your approval (and were
+  denied only when nobody answered). They are now denied at once
+  (`risk:critical`), whatever `policy.yaml` allows. An explicit
+  `buckets.critical` in `policy.yaml` still decides for itself
+  ([docs/detection.md](docs/detection.md)).
+
 - `foreman agent add` no longer prints the agent's private key. Nothing in
   Foreman uses it (agents authenticate with their identity token), and a
   key on screen ends up in scrollback and pasted chats. `--key-out <file>`

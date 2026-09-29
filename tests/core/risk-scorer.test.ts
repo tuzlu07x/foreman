@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   bucketFor,
+  CATASTROPHIC_RULES,
   composeAssessment,
   DEFAULT_RISK_RULES,
   recommendationFor,
@@ -556,5 +557,24 @@ describe('bucketFor / recommendationFor / composeAssessment', () => {
     expect(assessment.bucket).toBe('low')
     expect(assessment.recommendation).toBe('allow')
     expect(assessment.llmVerification).toBeNull()
+  })
+})
+
+describe('catastrophic commands', () => {
+  const factor = (rule: string, points = 85) => ({ rule, points, reason: rule, category: 'shell' as const })
+
+  it('are refused outright, not asked about', () => {
+    for (const rule of CATASTROPHIC_RULES) {
+      expect(composeAssessment([factor(rule)]).recommendation).toBe('deny')
+    }
+    // Even when a safe-list factor pulls the score below critical.
+    expect(composeAssessment([factor('shell_rm_rf_catastrophic'), factor('safe', -40)]).recommendation).toBe('deny')
+    // Other critical scores still ask by default.
+    expect(composeAssessment([factor('secret_file_pattern', 90)]).recommendation).toBe('ask')
+  })
+
+  it('follow an explicit buckets.critical in policy.yaml', () => {
+    expect(composeAssessment([factor('shell_rm_rf_catastrophic')], { critical: 'ask' }).recommendation).toBe('ask')
+    expect(composeAssessment([factor('shell_rm_rf_catastrophic')], { high: 'allow' }).recommendation).toBe('deny')
   })
 })
