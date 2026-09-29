@@ -14,9 +14,12 @@
 //                          real agents.
 //
 // What it does with a task comes from the playbook in QA_PLAYBOOK: a reply,
-// and work to hand on with `foreman write <agent> <task>` (as itself:
-// Foreman sets FOREMAN_SPAWNED_BY). Every task it receives is logged to
-// QA_AGENT_LOG. It touches no network and no file outside the sandbox.
+// work to hand on with `foreman write <agent> <task>` (as itself: Foreman
+// sets FOREMAN_SPAWNED_BY), and a post to a channel through the Foreman MCP
+// server this launch was given (an instance's own: Codex `-c
+// mcp_servers.foreman.*`, Claude Code `--mcp-config`). Every task it
+// receives is logged to QA_AGENT_LOG, with its argv. It touches no network
+// and no file outside the sandbox.
 
 const { spawnSync } = require('node:child_process')
 const fs = require('node:fs')
@@ -24,7 +27,46 @@ const readline = require('node:readline')
 
 const [agent, mode, ...rest] = process.argv.slice(2)
 
-function play(task) {
+/** The Foreman MCP server this launch was given, from its argv, or null. */
+function launchServer(argv) {
+  const cfg = argv.indexOf('--mcp-config')
+  if (cfg >= 0) return JSON.parse(argv[cfg + 1]).mcpServers.foreman
+  const server = {}
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] !== '-c') continue
+    const [key, ...value] = argv[i + 1].split('=')
+    const v = value.join('=')
+    if (key === 'mcp_servers.foreman.command') server.command = JSON.parse(v)
+    if (key === 'mcp_servers.foreman.args') server.args = JSON.parse(v)
+    const env = /^\{(\w+)=("(?:[^"\\]|\\.)*")\}$/.exec(v)
+    if (key === 'mcp_servers.foreman.env' && env) server.env = { [env[1]]: JSON.parse(env[2]) }
+  }
+  return server.command ? server : null
+}
+
+/** Post through Foreman's MCP server, as the launch says, and return its reply. */
+function mcpPost(server, to, text) {
+  const input = [
+    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'qa-company-agent', version: '0' } } },
+    { jsonrpc: '2.0', method: 'notifications/initialized' },
+    { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'org_post', arguments: { to, text } } },
+  ]
+    .map((m) => JSON.stringify(m))
+    .join('\n')
+  const env = { ...process.env, ...(server.env || {}) }
+  delete env.FOREMAN_AGENT_TOKEN
+  const r = spawnSync(server.command, server.args || [], { input: input + '\n', encoding: 'utf8', env, timeout: 30000 })
+  for (const line of (r.stdout || '').split('\n')) {
+    try {
+      const msg = JSON.parse(line)
+      if (msg.id === 2) return ((msg.result && msg.result.content) || []).map((c) => c.text).join(' ') || JSON.stringify(msg.error)
+    } catch {}
+  }
+  return 'no answer: ' + (r.stderr || '').trim().split('\n').pop()
+}
+
+function play(task, argv = []) {
+  const server = launchServer(argv)
   fs.appendFileSync(
     process.env.QA_AGENT_LOG,
     JSON.stringify({
@@ -32,12 +74,15 @@ function play(task) {
       task,
       spawnedBy: process.env.FOREMAN_SPAWNED_BY || null,
       depth: process.env.FOREMAN_SPAWN_DEPTH || null,
+      server,
+      argv,
     }) + '\n',
   )
   const book = JSON.parse(fs.readFileSync(process.env.QA_PLAYBOOK, 'utf8'))
   const rule = (book[agent] || []).find((r) => new RegExp(r.when, 'i').test(task))
   if (!rule) return 'Done: ' + task
   const lines = [rule.reply]
+  if (rule.post) lines.push('posted: ' + (server ? mcpPost(server, rule.post[0], rule.post[1]) : 'no Foreman server in this launch'))
   for (const [to, subtask] of rule.delegate || []) {
     const r = spawnSync('foreman', ['write', to, subtask], { encoding: 'utf8', env: process.env })
     const said = ((r.stderr || '') + (r.stdout || '')).trim().split('\n')[0]
@@ -51,7 +96,11 @@ if (mode === 'task') {
     process.stdout.write(agent + ' 0.0.0-qa-company\n')
     process.exit(0)
   }
-  process.stdout.write(play(rest[rest.length - 1] || '') + '\n')
+  // `codex exec <task> …` / `claude --print <task> …`: the task follows the
+  // subcommand; flags Foreman appends come after it.
+  const at = rest.findIndex((a) => a === 'exec' || a === '--print' || a === '-p')
+  const task = at >= 0 ? rest[at + 1] : rest[rest.length - 1]
+  process.stdout.write(play(task || '', rest) + '\n')
   process.exit(0)
 }
 

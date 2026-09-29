@@ -1,3 +1,4 @@
+import { isInstance, supportsInstances } from "../core/agent-instance.js";
 import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import {
@@ -189,6 +190,21 @@ export async function runAgentAddScripted(
           `you're wiring ${agentId} by hand: get its token with 'foreman agent rewire ${agentId} --token-out <file>' ` +
           `and pass it as ${AGENT_TOKEN_ENV} in the MCP server's env. Without it the agent runs untrusted.`,
       );
+    }
+  } else if (isInstance(agentId, entry) && supportsInstances(entry) && !options.configPath) {
+    // A second (third, …) instance: the agent's own config belongs to the
+    // agent itself (or whoever was wired first); rewiring it to this id
+    // would take that identity away. Foreman gives the instance its own
+    // Foreman server each time it hands it work (agent-instance.ts).
+    ensureAgentToken(store, agentId);
+    log(
+      green("✓") +
+        ` ${agentId} runs as its own ${entry.name}: Foreman gives it its own identity each time it hands it work` +
+        dim(` (${entry.name}'s config is left as it is)`),
+    );
+    if (options.tokenOut) {
+      rewireAgent(store, agentId, null, { tokenOut: options.tokenOut });
+      log(dim(`agent token written to ${options.tokenOut} (0600)`));
     }
   } else {
     const token = ensureAgentToken(store, agentId);

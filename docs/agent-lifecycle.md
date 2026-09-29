@@ -53,6 +53,10 @@ An unverified connection that claims a blocked or disabled id is refused too (se
 
 `foreman agents` is an alias for `foreman agent`.
 
+`foreman agent add <name> --type claude-code|codex` with a name other than the
+type adds another instance of that agent, for another role. It keeps the
+agent's own config as it is; see [Several roles on one agent](org.md#several-roles-on-one-agent).
+
 ### Claude Code's hook
 
 `foreman agent hook install claude-code` adds a PreToolUse hook to `~/.claude/settings.json`, so Claude Code's own tools (Bash, Read, Write, Edit, WebFetch, other MCP servers) go through Foreman's policy, risk scoring and approvals. With `--project [dir]` it goes into `<dir>/.claude/settings.json` instead and covers only sessions started in that project; `uninstall --project` removes it again.

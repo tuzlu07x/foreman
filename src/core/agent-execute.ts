@@ -7,6 +7,7 @@ import {
 import type { MediatorLike } from "./codex-mediator-connector.js";
 import type { FlowManager } from "./flow-manager.js";
 import type { FlowRouter, RoutingDecision } from "./flow-router.js";
+import type { InstanceLaunch } from "./agent-instance.js";
 import type { AgentEntry } from "./registry-catalog.js";
 import type { SessionManager } from "./session.js";
 
@@ -56,6 +57,9 @@ export interface ExecuteDirectiveInput {
   taskSkipPermissions?: boolean;
   /** Extra environment for the spawned agent — the telemetry exporter
    *  settings that report its token usage to Foreman (#629). */
+  /** A second (third, …) instance of the agent: its own Foreman MCP
+   *  server, env and role for this launch (agent-instance.ts). */
+  launch?: InstanceLaunch;
   extraEnv?: Record<string, string>;
   /** Working directory for the spawned process. Drain handler derives
    *  this from the task text via `extractCwdFromTask(message)` so an
@@ -286,7 +290,9 @@ export async function executeWriteDirective(
 
   const spawn = await spawnAgentTask({
     entry: input.entry,
-    task: input.message,
+    task: `${input.launch?.taskPrefix ?? ""}${input.message}`,
+    spawnedBy: input.agentId,
+    ...(input.launch && input.launch.args.length > 0 ? { extraArgs: input.launch.args } : {}),
     modelVersion: input.modelVersion ?? null,
     // #517 Faz 3 wiring — forward the trust flag so codex / claude-code
     // get their respective `--full-auto` / `--dangerously-skip-permissions`
@@ -298,7 +304,7 @@ export async function executeWriteDirective(
     // own checkout. Without this, codex's writable roots exclude the
     // target and the implementation never starts.
     ...(input.cwd ? { cwd: input.cwd } : {}),
-    ...(input.extraEnv ? { env: input.extraEnv } : {}),
+    ...(input.extraEnv || input.launch ? { env: { ...(input.extraEnv ?? {}), ...(input.launch?.env ?? {}) } } : {}),
     spawnImpl: deps.spawnImpl,
   });
 
@@ -502,7 +508,7 @@ async function executeAcpDirective(
     env: {
       ...(input.extraEnv ?? {}),
       FOREMAN_SPAWN_DEPTH: String(currentDepth + 1),
-      FOREMAN_SPAWNED_BY: input.entry.id,
+      FOREMAN_SPAWNED_BY: input.agentId,
     },
     hooks: { onNotification: (method, params) => reply.onNotification(method, params) },
   });
