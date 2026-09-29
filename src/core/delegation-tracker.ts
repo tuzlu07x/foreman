@@ -450,6 +450,36 @@ function truncatePrompt(s: string): string {
   return trimmed.slice(0, PROMPT_SUMMARY_MAX - 1) + "…";
 }
 
+/** Spawn outcomes that mean the target agent never did the task. */
+const FAILED_SPAWN_OUTCOMES = new Set([
+  "failed",
+  "timeout",
+  "spawn-error",
+  "unsupported",
+]);
+
+export type DelegationStatusLabel = Delegation["status"] | "failed";
+
+/**
+ * The status to show for a row (TUI Delegations page, `foreman
+ * delegations`). A hand-off whose agent could not run is stored as
+ * `awaiting` (then `nudged`), because the watchdog still nudges the
+ * initiator to deal with the failure; to the operator it failed. Display
+ * only: the stored status is not changed.
+ */
+export function delegationStatusLabel(
+  row: Pick<Delegation, "status" | "spawnOutcome">,
+): DelegationStatusLabel {
+  if (
+    (row.status === "awaiting" || row.status === "nudged") &&
+    row.spawnOutcome !== null &&
+    FAILED_SPAWN_OUTCOMES.has(row.spawnOutcome)
+  ) {
+    return "failed";
+  }
+  return row.status;
+}
+
 // =============================================================================
 // Nudge text builders — pure, exported for tests + the dispatcher.
 // =============================================================================

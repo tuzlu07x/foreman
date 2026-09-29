@@ -5,6 +5,7 @@ import {
   formatTime,
   percentBar,
   percentLabel,
+  shortenPath,
   startOfTodayMs,
   statusIconFor,
   summariseTool,
@@ -136,5 +137,62 @@ describe('startOfTodayMs', () => {
     expect(d.getMinutes()).toBe(0)
     expect(d.getSeconds()).toBe(0)
     expect(d.getDate()).toBe(new Date(now).getDate())
+  })
+})
+
+describe('shortenPath', () => {
+  const home = '/Users/me'
+  const long = '/Users/me/Projects/clients/acme/tuitour/.env'
+
+  it('replaces the home directory with ~', () => {
+    expect(shortenPath('/Users/me/src/app.ts', 80, home)).toBe('~/src/app.ts')
+    expect(shortenPath('/Users/me', 80, home)).toBe('~')
+    expect(shortenPath('/Users/me/src/app.ts', 80, '/Users/me/')).toBe('~/src/app.ts')
+    // Only a whole folder name counts as the home directory.
+    expect(shortenPath('/Users/meg/app.ts', 80, home)).toBe('/Users/meg/app.ts')
+  })
+
+  it('leaves a path that fits alone', () => {
+    expect(shortenPath('/etc/hosts', 80, home)).toBe('/etc/hosts')
+    expect(shortenPath('.env', 4, home)).toBe('.env')
+  })
+
+  it('gives up the middle folders first, keeping the file name', () => {
+    expect(shortenPath(long, 30, home)).toBe('~/…/clients/acme/tuitour/.env')
+    expect(shortenPath(long, 20, home)).toBe('~/…/tuitour/.env')
+    expect(shortenPath('/var/lib/some/deep/folder/file.txt', 20, home)).toBe('/…/folder/file.txt')
+  })
+
+  it('never exceeds the width', () => {
+    for (let w = 1; w <= long.length + 2; w++) {
+      expect(shortenPath(long, w, home).length).toBeLessThanOrEqual(w)
+    }
+  })
+
+  it('keeps the end of the file name on very short widths', () => {
+    expect(shortenPath(long, 8, home)).toBe('~/…/.env')
+    expect(shortenPath(long, 7, home)).toBe('…/.env')
+    expect(shortenPath('/Users/me/a/very-long-file-name.txt', 8, home)).toBe('…ame.txt')
+    expect(shortenPath(long, 1, home)).toBe('…')
+    expect(shortenPath(long, 0, home)).toBe('…')
+  })
+
+  it('returns nothing for no path', () => {
+    expect(shortenPath('', 20, home)).toBe('')
+  })
+})
+
+describe('summariseTool with a width', () => {
+  const args = JSON.stringify({ path: '/srv/data/clients/acme/tuitour/.env' })
+
+  it('shortens a path argument in the middle to fit', () => {
+    expect(summariseTool('read_file', args, 30)).toBe('read_file("/…/tuitour/.env")')
+  })
+  it('cuts other arguments at the end', () => {
+    const many = JSON.stringify({ a: 1, b: 2, c: 3 })
+    expect(summariseTool('a_very_long_tool_name', many, 12)).toBe('a_very_long…')
+  })
+  it('is unchanged without a width', () => {
+    expect(summariseTool('read_file', args)).toBe('read_file("/srv/data/clients/acme/tuitour/.env")')
   })
 })

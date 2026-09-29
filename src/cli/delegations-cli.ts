@@ -15,7 +15,11 @@
 
 import { Command } from "commander";
 import { closeDb, getDb } from "../db/client.js";
-import { DelegationTracker } from "../core/delegation-tracker.js";
+import {
+  DelegationTracker,
+  delegationStatusLabel,
+  type DelegationStatusLabel,
+} from "../core/delegation-tracker.js";
 import type { Delegation } from "../db/schema.js";
 import { bold, dim, green, orange, red } from "./colors.js";
 
@@ -112,7 +116,7 @@ delegationsCommand
       console.log(
         "  " + dim("initiator → target  ") + row.initiatorAgent + " → " + row.targetAgent,
       );
-      console.log("  " + dim("status              ") + statusLabel(row.status));
+      console.log("  " + dim("status              ") + statusLabel(delegationStatusLabel(row)));
       console.log(
         "  " + dim("prompt              ") + truncate(row.promptSummary, 100),
       );
@@ -186,7 +190,7 @@ function formatRow(row: Delegation): string {
       ? dim("waiting")
       : row.spawnOutcome ?? "?";
   return [
-    statusLabel(row.status).padEnd(11 + 12), // padding accounts for ANSI escapes
+    statusLabel(delegationStatusLabel(row)).padEnd(11 + 12), // padding accounts for ANSI escapes
     age.padEnd(8),
     row.initiatorAgent.padEnd(14),
     row.targetAgent.padEnd(14),
@@ -196,7 +200,7 @@ function formatRow(row: Delegation): string {
   ].join(" ");
 }
 
-function statusLabel(status: Delegation["status"]): string {
+function statusLabel(status: DelegationStatusLabel): string {
   switch (status) {
     case "open":
       return dim("open");
@@ -206,6 +210,8 @@ function statusLabel(status: Delegation["status"]): string {
       return orange("nudged");
     case "escalated":
       return red("escalated");
+    case "failed":
+      return red("failed");
     case "closed":
       return green("closed");
     case "abandoned":

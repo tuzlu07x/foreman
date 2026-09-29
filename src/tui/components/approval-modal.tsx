@@ -14,7 +14,9 @@ import type {
   ReportSource,
   SecurityReport,
 } from "../../core/security-report.js";
-import { safe } from "../format.js";
+import { redactSecretShapes } from "../../core/risk-rules/secret-patterns.js";
+import { safe, shortenPath } from "../format.js";
+import { useTerminalSize } from "../hooks.js";
 import { explain } from "../reason-explanations.js";
 import { borderForRisk, riskColor, theme } from "../theme.js";
 
@@ -121,10 +123,15 @@ export function ApprovalModal({
   maxRows,
 }: ApprovalModalProps): JSX.Element {
   const keys = { ...(rememberScope ? { rememberScope } : {}), confirm };
+  const { cols } = useTerminalSize();
+  // Columns inside the frame: border (2) + padding (4), one more is slack.
+  const lineWidth = Math.max(20, cols - 7);
   // On a short terminal the call line keeps its start and its end (the
   // file name) on one row, instead of wrapping its tail out of the frame.
   const fit: Fit =
-    maxRows !== undefined ? { maxHeight: Math.max(10, maxRows), compact: maxRows < 30 } : {};
+    maxRows !== undefined
+      ? { maxHeight: Math.max(10, maxRows), compact: maxRows < 30, lineWidth }
+      : { lineWidth };
   // Prefer the 3-layer security report when available; fall back to the
   // legacy factor-grouped view for cross-process / pre-#232 requests.
   if (request.securityReport) {
@@ -200,7 +207,7 @@ interface KeyHints {
   confirm: string | null;
 }
 
-type Fit = { maxHeight?: number; compact?: boolean };
+type Fit = { maxHeight?: number; compact?: boolean; lineWidth: number };
 
 function ReportModal({
   request,
@@ -224,6 +231,7 @@ function ReportModal({
   // calls, double for high, single for medium/low. Reinforces the colour
   // signal so the user reads severity even when colours are dim/disabled.
   const border = borderForRisk(report.technical.bucket);
+  const summary = fitSummary(report.oneLineSummary, request.args, fit.lineWidth);
   return (
     <Box
       flexDirection="column"
@@ -239,7 +247,7 @@ function ReportModal({
       <VerdictHeader report={report} color={color} />
 
       <Box marginTop={1}>
-        <Text wrap={fit.compact ? "truncate-middle" : "wrap"}>{safe(report.oneLineSummary)}</Text>
+        <Text wrap={fit.compact ? "truncate-middle" : "wrap"}>{summary}</Text>
       </Box>
 
       {/* Layer 2 — Narrative */}
@@ -432,6 +440,9 @@ function LegacyModal({
   const border = borderForRisk(bucket);
   const grouped = groupFactors(request.riskFactors ?? []);
   const hasFactors = grouped.length > 0;
+  const toolName = safe(request.targetTool ?? "(no tool)");
+  // What a path argument may use: indent (4), the tool, `("` and `")`.
+  const pathWidth = fit.lineWidth - 8 - toolName.length;
 
   return (
     <Box
@@ -464,8 +475,8 @@ function LegacyModal({
       <Box marginTop={1}>
         <Text wrap={fit.compact ? "truncate-middle" : "wrap"}>
           {"    "}
-          <Text bold>{safe(request.targetTool ?? "(no tool)")}</Text>
-          <Text>({renderArgs(request.args)})</Text>
+          <Text bold>{toolName}</Text>
+          <Text>({renderArgs(request.args, pathWidth)})</Text>
         </Text>
       </Box>
 
@@ -745,16 +756,42 @@ function TimerLabel({
 /** Arguments as the modal shows them. Every hidden character is shown
  *  visibly (#656): a path with `ESC[2K` + `CR` used to erase the start of
  *  its own line, and SGR 8 hid the `.env` at its end. */
-function renderArgs(args: unknown): string {
+function renderArgs(args: unknown, pathWidth: number): string {
   if (args === null || args === undefined) return "";
   if (typeof args !== "object") return safe(JSON.stringify(args) ?? String(args));
   const obj = args as Record<string, unknown>;
-  if (typeof obj.path === "string") return `"${safe(obj.path)}"`;
+  // A long path keeps its start and its file name on the one line; [i]
+  // shows it whole.
+  if (typeof obj.path === "string") {
+    return `"${shortenPath(safe(obj.path), Math.max(8, pathWidth))}"`;
+  }
   if (typeof obj.text === "string") {
     const text = obj.text as string;
     return text.length > 32 ? `"${safe(text.slice(0, 31))}…"` : `"${safe(text)}"`;
   }
   return safe(JSON.stringify(obj));
+}
+
+/** The report's one-line summary, fitted to `width` columns. When the call
+ *  has a path, the summary ends with it (security-report `buildSummary`,
+ *  redacted and cut at 60 characters, which can cut off the file name).
+ *  That tail is replaced by the redacted path shortened in the middle, so
+ *  the line stays one line and the file name stays in view. Anything else
+ *  is returned as is. */
+export function fitSummary(summary: string, args: unknown, width: number): string {
+  const text = safe(summary);
+  const path =
+    args !== null && typeof args === "object"
+      ? (args as Record<string, unknown>).path
+      : undefined;
+  if (typeof path !== "string" || path.length === 0) return text;
+  const redacted = redactSecretShapes(path).text;
+  const at = text.lastIndexOf(` ${safe(redacted.slice(0, 59))}`);
+  if (at < 0) return text;
+  const prefix = text.slice(0, at + 1);
+  const room = width - prefix.length;
+  if (room < 8) return text;
+  return prefix + shortenPath(safe(redacted), room);
 }
 
 function truncate(s: string, max: number): string {

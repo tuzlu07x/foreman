@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import type { Request } from "../db/schema.js";
 import { terminalSafe } from "../core/terminal-text.js";
 
@@ -55,11 +56,61 @@ export function statusIconFor(decision: "allowed" | "denied" | "pending"): {
   return { icon: "⚠", tone: "warning" };
 }
 
-export function summariseTool(tool: string | null, argsJson: string): string {
+/** `tool(args)` for one row. With `maxWidth`, the result fits in that many
+ *  columns: a path argument is shortened in the middle (so the file name at
+ *  its end stays readable), anything else is cut at the end. */
+export function summariseTool(
+  tool: string | null,
+  argsJson: string,
+  maxWidth?: number,
+): string {
   if (!tool) return "(no tool)";
   const args = parseArgs(argsJson);
+  const path = pathArg(args);
+  if (maxWidth !== undefined && path !== null) {
+    const name = terminalSafe(tool);
+    // `name("` + path + `")`
+    const room = maxWidth - name.length - 4;
+    if (room >= 1) return `${name}("${shortenPath(terminalSafe(path), room)}")`;
+  }
   const inline = formatArgsInline(args);
-  return terminalSafe(`${tool}(${inline})`);
+  const full = terminalSafe(`${tool}(${inline})`);
+  return maxWidth === undefined ? full : truncate(full, Math.max(1, maxWidth));
+}
+
+/** A file path shortened to fit `maxWidth` columns, for one-line rows.
+ *  The home directory becomes `~`, and when it is still too long the middle
+ *  folders give way to `…`, keeping the first folder and as much of the end
+ *  (the file name) as fits: `/Users/me/src/tuitour/.env` → `~/…/tuitour/.env`.
+ *  The full value stays available in the inspect views. */
+export function shortenPath(
+  path: string,
+  maxWidth: number,
+  home: string = homedir(),
+): string {
+  if (path.length === 0) return "";
+  let p = path;
+  if (home.length > 1) {
+    const h = home.endsWith("/") ? home.slice(0, -1) : home;
+    if (p === h) p = "~";
+    else if (p.startsWith(`${h}/`)) p = `~${p.slice(h.length)}`;
+  }
+  if (p.length <= maxWidth) return p;
+  if (maxWidth <= 1) return "…";
+  const parts = p.split("/");
+  const head = parts[0]!;
+  // Keep the first folder and the longest tail that fits…
+  for (let keep = parts.length - 2; keep >= 1; keep--) {
+    const candidate = `${head}/…/${parts.slice(-keep).join("/")}`;
+    if (candidate.length <= maxWidth) return candidate;
+  }
+  // …then the tail alone…
+  for (let keep = parts.length - 1; keep >= 1; keep--) {
+    const candidate = `…/${parts.slice(-keep).join("/")}`;
+    if (candidate.length <= maxWidth) return candidate;
+  }
+  // …and at the very least the end of the file name.
+  return `…${p.slice(-(maxWidth - 1))}`;
 }
 
 export function targetLabel(
@@ -106,6 +157,12 @@ function parseArgs(json: string): unknown {
   } catch {
     return null;
   }
+}
+
+function pathArg(args: unknown): string | null {
+  if (args === null || typeof args !== "object") return null;
+  const path = (args as Record<string, unknown>).path;
+  return typeof path === "string" ? path : null;
 }
 
 function formatArgsInline(args: unknown): string {
