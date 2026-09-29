@@ -50,6 +50,8 @@ export interface WizardContext {
   chatPrimaryChannelsNeeded: ChatPrimaryChannel[];
   /** Claude Code / Codex, when registered: what team roles run on. */
   teamRuntimes: TeamRuntime[];
+  /** The terminal's size, for screens that scroll a long list. */
+  terminal: { cols: number; rows: number };
   failureResolverRef: RefObject<
     ((resolution: FailureResolution) => void) | null
   >;
