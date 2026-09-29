@@ -126,6 +126,24 @@ describe("spawnAgentTask", () => {
     }
   });
 
+  it("runs an instance as itself: its extra argv after the task, FOREMAN_SPAWNED_BY its own id", async () => {
+    const cmd = makeScript(
+      "argv-env.sh",
+      '#!/bin/sh\nprintf "%s|" "$@"; echo; echo "by=$FOREMAN_SPAWNED_BY"\n',
+    );
+    const result = await spawnAgentTask({
+      entry: agent({ id: "codex", task_command_template: `${cmd} exec {task}` }),
+      task: "build the API",
+      extraArgs: ["-c", 'mcp_servers.foreman.args=["mcp-stdio","--source","backend"]'],
+      spawnedBy: "backend",
+    });
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.stdout).toContain('exec|build the API|-c|mcp_servers.foreman.args=["mcp-stdio","--source","backend"]|');
+      expect(result.stdout).toContain("by=backend");
+    }
+  });
+
   it("captures stderr separately", async () => {
     const cmd = makeScript(
       "stderr.sh",

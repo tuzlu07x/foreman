@@ -26,6 +26,19 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Added
 
+- **Several roles on one agent.** `foreman agent add backend --type codex`
+  (or `--type claude-code`) adds another instance of the agent for another
+  role, and it now works as its own agent. When Foreman hands it work, it
+  runs Codex or Claude Code as that instance: with its own Foreman MCP
+  server for that run, and its identity token in an owner-only file,
+  never on the command line. It is also told its org.yaml role. What it
+  posts and hands on is attributed to it, as trusted.
+
+  Before, work given to `backend` never ran: the program was looked up by
+  name. `agent add` also rewired the agent's own config to the new name,
+  taking that identity from the agent. The agent's config is now left
+  alone by `agent add`, `agent rewire` and `doctor` ([#732](https://github.com/tuzlu07x/foreman/issues/732))
+  ([docs/org.md](docs/org.md#several-roles-on-one-agent)).
 - **Approvals reach your chat with no terminal open.** The background
   service (`foreman service install`) now runs the whole headless gateway,
   not just the daemon: approvals go to the channels routed in

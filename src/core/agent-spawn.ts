@@ -67,6 +67,12 @@ export interface SpawnAgentTaskOptions {
    *  mediation remains the gate. Defaults to false. */
   taskSkipPermissions?: boolean;
   /** Override the spawn implementation — tests inject a stub. */
+  /** Argv appended after the agent's own flags: an instance's Foreman
+   *  MCP server and role (agent-instance.ts). */
+  extraArgs?: string[];
+  /** The registered agent this runs as (FOREMAN_SPAWNED_BY): an
+   *  instance's own id, not its type's. Default: the entry's id. */
+  spawnedBy?: string;
   spawnImpl?: SpawnLike;
 }
 
@@ -172,6 +178,9 @@ export async function spawnAgentTask(
   // sees a single string like "--sandbox workspace-write" and the
   // CLI parser rejects it). Single-token flags (claude-code's
   // --dangerously-skip-permissions) pass through unchanged.
+  // An instance's own Foreman MCP server and role (agent-instance.ts).
+  for (const arg of options.extraArgs ?? []) args.push(arg);
+
   if (
     options.taskSkipPermissions &&
     options.entry.task_skip_permissions_flag &&
@@ -204,7 +213,7 @@ export async function spawnAgentTask(
     ...process.env,
     ...(options.env ?? {}),
     FOREMAN_SPAWN_DEPTH: String(currentDepth + 1),
-    FOREMAN_SPAWNED_BY: options.entry.id,
+    FOREMAN_SPAWNED_BY: options.spawnedBy ?? options.entry.id,
   };
   // QA round 15 — strip env vars listed in `task_env_strip` so an
   // invalid/stale value (e.g. `ANTHROPIC_API_KEY` from an old shell)

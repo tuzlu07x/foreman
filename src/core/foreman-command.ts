@@ -40,6 +40,7 @@ import {
 } from "./llm/oauth/token-store.js";
 import { SecretNotFoundError } from "./secret-store.js";
 import { loadActiveRegistry } from "./registry-catalog.js";
+import { catalogEntryFor } from "./agent-instance.js";
 import type { RegistryService } from "./registry.js";
 import { clipForSurface, integrationChat, isIntegrationChange } from "./integrations/chat.js";
 import type { ConfirmationStore } from "./integrations/confirmations.js";
@@ -1251,7 +1252,8 @@ async function writeHandler(
   let isCallable = false;
   try {
     const catalog = loadActiveRegistry();
-    const entry = catalog.doc.agents.find((a) => a.id === targetAgent);
+    // An instance (`backend --type codex`) is callable as its type.
+    const entry = catalogEntryFor(catalog.doc, targetAgent, ctx.registry.get(targetAgent));
     // #445 / #552 — ACP agents (Hermes/OpenClaw/ZeroClaw with
     // `approval_adapter='acp-stdio-v1'` + `acp_command`) are also
     // callable: the drain handler spawns them via `runAcpMediatedTask`.

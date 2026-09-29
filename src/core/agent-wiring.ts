@@ -1,3 +1,4 @@
+import { isInstance, supportsInstances } from "./agent-instance.js";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { extname } from "node:path";
 import { pickMcpConfigPath } from "./agent-add-flow.js";
@@ -251,6 +252,9 @@ export function auditAgentTokens(
       audit.unverified.push(agent.id);
       continue;
     }
+    // A second (third, …) instance isn't wired in the agent's own config:
+    // Foreman gives it its identity at each launch (agent-instance.ts).
+    if (registryId !== agent.id && isInstance(agent.id, entry) && supportsInstances(entry)) continue;
     const verdicts: Array<"ok" | "stale" | "unwired"> = [];
     const configPath = pickMcpConfigPath(entry);
     if (configPath) {

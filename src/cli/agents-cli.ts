@@ -1,3 +1,4 @@
+import { isInstance, supportsInstances } from "../core/agent-instance.js";
 import { existsSync, writeFileSync } from "node:fs";
 import { Command, Option } from "commander";
 import { bus } from "../core/event-bus.js";
@@ -556,10 +557,14 @@ function rewireOne(
   const registryId = typeof agent.metadata?.registryId === "string" ? agent.metadata.registryId : null;
   const entry = registryId ? safeFindAgent(loadActiveRegistry().doc, registryId) : null;
   console.log(bold(agent.id));
+  // An instance (`backend --type codex`) has no wiring of its own to write:
+  // Foreman gives it its identity at each launch, and writing the agent's
+  // shared config would take it from the agent (agent-instance.ts).
+  const instance = entry !== null && isInstance(agent.id, entry) && supportsInstances(entry) && !options.configPath;
   let result;
   let issued = false;
   try {
-    result = rewireAgent(getTokenStore(), agent.id, entry, {
+    result = rewireAgent(getTokenStore(), agent.id, instance ? null : entry, {
       rotate: options.rotate,
       ...(options.configPath ? { configPath: options.configPath } : {}),
       ...(options.tokenOut ? { tokenOut: options.tokenOut } : {}),
@@ -582,6 +587,13 @@ function rewireOne(
     logWiring(agent.id, entry, result, (line) => console.log(`  ${line}`));
   }
   if (result.tokenOutPath) console.log(`  ${dim(`token written to ${result.tokenOutPath} (0600)`)}`);
+  if (instance) {
+    console.log(
+      `  ${green("✓")} ${agent.id} runs as its own ${entry.name}: Foreman hands it its ${options.rotate ? "new " : ""}token at each launch` +
+        dim(` (${entry.name}'s config is left as it is)`),
+    );
+    return "ok";
+  }
   const delivered = wiringDelivered(result) || result.tokenOutPath !== null;
   if (!delivered) {
     console.log(

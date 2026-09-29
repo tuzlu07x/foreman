@@ -1,4 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { getForemanPaths } from "../utils/config.js";
+import { removeInstanceTokenFile } from "./agent-instance.js";
 import {
   AGENT_TOKEN_ENV,
   AGENT_TOKEN_FILE_ENV,
@@ -121,6 +123,8 @@ export function ensureAgentToken(store: AgentTokenStore, agentId: string): strin
 
 export function revokeAgentToken(store: AgentTokenStore, agentId: string): boolean {
   const name = agentTokenSecretName(agentId);
+  // The copy an instance's launches read (agent-instance.ts) goes too.
+  removeInstanceTokenFile(getForemanPaths().stateDir, agentId);
   if (!store.exists(name)) return false;
   store.removeReserved(name);
   return true;

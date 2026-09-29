@@ -147,6 +147,40 @@ A new role reports to its department head unless you say otherwise
 they keep the comments in `org.yaml`. You can still edit the file by hand;
 it's read again on every delegation, so no restart is needed.
 
+### Several roles on one agent
+
+You don't need a different agent for each role. Register Claude Code or Codex
+again under a name per role, and give each name a role:
+
+```bash
+foreman agent add codex                          # the agent itself
+foreman agent add backend  --type codex          # a second Codex
+foreman agent add frontend --type codex          # a third
+foreman agent add reviewer --type claude-code    # a second Claude Code
+foreman org add-role backend-dev  --agent backend  --department engineering --responsibility "the login API"
+foreman org add-role frontend-dev --agent frontend --department engineering
+foreman org add-role code-reviewer --agent reviewer --department engineering
+```
+
+Each instance is its own agent. It has its own identity token, its own role,
+department channels and hub servers, and its own line in the audit log and
+reports. When Foreman hands an instance work, it runs Codex or Claude Code as
+that instance:
+
+- with its own Foreman MCP server for that run (Codex `-c mcp_servers.foreman.*`,
+  Claude Code `--mcp-config`, which takes precedence over the `foreman` entry
+  in your settings), and its identity token in an owner-only file under
+  Foreman's state directory, never on the command line. So what it posts
+  and hands on is attributed to it, as trusted;
+- told its role: the org.yaml title, department and responsibility
+  (`--append-system-prompt` for Claude Code, before the task for Codex).
+
+The agent's own config (`~/.codex/config.toml`, `~/.claude.json`) stays wired
+to the agent itself: adding an instance, `agent rewire` and `doctor` leave it
+alone. Instances work for Claude Code and Codex. For Hermes, OpenClaw and
+ZeroClaw a second instance runs with the agent's own wiring (pass
+`--config-path` to give it a config of its own).
+
 ## Department channels
 
 Agents talk to each other the way a company does: in department rooms,

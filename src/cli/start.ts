@@ -69,6 +69,19 @@ import { SessionManager } from "../core/session.js";
 import { checkAgentUpdates } from "../core/agent-update-check.js";
 import { loadActiveRegistry } from "../core/registry-catalog.js";
 import { agentsSharingTelegram } from "../core/notification/telegram-listener.js";
+import { ensureAgentToken } from "../core/agent-token.js";
+import { loadOrg } from "../core/org/org.js";
+import type { AgentEntry } from "../core/registry-catalog.js";
+import {
+  catalogEntryFor,
+  foremanCliArgv,
+  instanceLaunch,
+  isInstance,
+  rolePrompt,
+  supportsInstances,
+  writeInstanceTokenFile,
+  type InstanceLaunch,
+} from "../core/agent-instance.js";
 import { checkForUpdate } from "../core/update-check.js";
 import { closeDb, getDb, getSqlite, type ForemanDb } from "../db/client.js";
 import { controlCommands } from "../db/schema.js";
@@ -1124,7 +1137,8 @@ export function startForeman(
             };
           }
           const registryDoc = loadActiveRegistry();
-          const entry = registryDoc.doc.agents.find((a) => a.id === agentId);
+          // `backend --type codex` runs as Codex (agent-instance.ts).
+          const entry = catalogEntryFor(registryDoc.doc, agentId, registry.get(agentId));
           const inboundDir = entry?.inbound_dir;
           const telegramBotToken = secretStore.exists("telegram-bot-token")
             ? secretStore.get("telegram-bot-token")
@@ -1261,10 +1275,12 @@ export function startForeman(
             const taskUsageKey = otlpBoundPort
               ? otlp.issueTaskKey(agentId, String(row.id))
               : null;
+            const launch = entry ? instanceLaunchFor(agentId, entry, secretStore, paths) : null;
             const exec = await executeWriteDirective(
               {
                 agentId,
                 message,
+                ...(launch ? { launch } : {}),
                 sourceUser: row.sourceUser ?? undefined,
                 entry,
                 modelVersion: registryRow?.modelVersion ?? null,
@@ -2228,3 +2244,46 @@ function telegramSharedWith(registry: RegistryService): string[] {
     return ["unknown"];
   }
 }
+
+/**
+ * The launch additions for a second (third, …) instance of an agent: its own
+ * Foreman MCP server and identity, and its org.yaml role (agent-instance.ts).
+ * Null for the agent itself, or one Foreman can't point at its own server;
+ * a failure is logged and the agent runs with its config's wiring.
+ */
+function instanceLaunchFor(
+  agentId: string,
+  entry: AgentEntry,
+  store: SecretStore,
+  paths: { stateDir: string; orgConfigPath: string },
+): InstanceLaunch | null {
+  if (!isInstance(agentId, entry) || !supportsInstances(entry)) return null;
+  try {
+    const tokenFile = writeInstanceTokenFile(paths.stateDir, agentId, ensureAgentToken(store, agentId));
+    let role: string | null = null;
+    try {
+      const org = loadOrg(paths.orgConfigPath);
+      const found = org ? Object.entries(org.roles).find(([, r]) => r.agent === agentId) : undefined;
+      if (org && found) {
+        const [roleId, r] = found;
+        role = rolePrompt({
+          company: org.company,
+          roleId,
+          title: r.title,
+          department: r.department ? (org.departments[r.department]?.name ?? r.department) : undefined,
+          responsibility: r.responsibility,
+          agentId,
+        });
+      }
+    } catch {
+      // an unreadable org.yaml: no role, the task still runs
+    }
+    return instanceLaunch(entry, { agentId, tokenFile, foremanArgv: foremanCliArgv(), role });
+  } catch (err) {
+    process.stderr.write(
+      `foreman: couldn't give ${agentId} its own identity (${err instanceof Error ? err.message : String(err)}); it runs with ${entry.id}'s wiring\n`,
+    );
+    return null;
+  }
+}
+
