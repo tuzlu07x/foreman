@@ -11,6 +11,7 @@ import { servicePasteWarning } from "./paste-checks.js";
 import { stepProgress } from "./progress.js";
 import {
   applyServiceChannelSubmit,
+  applyServiceMemberSubmit,
   applyServicesPickerSubmit,
   applyServiceValueSubmit,
   buildServicePromptList,
@@ -21,6 +22,9 @@ import {
   notifyWiringNames,
   persistNotifyConfigFromWizardState,
   servicesPreChecked,
+  SLACK_APP_TOKEN_SECRET,
+  slackTwoWayConfigured,
+  slackTwoWayFromWizard,
   wizardServiceChoices,
 } from "./services-logic.js";
 
@@ -38,6 +42,7 @@ export function renderServicesStep(ctx: WizardContext): JSX.Element | null {
     servicesWarning,
     servicesPendingPaste,
     servicesChannelTargets,
+    servicesSlackMemberId,
   } = ctx.state;
   const {
     setServicesSelected,
@@ -48,6 +53,7 @@ export function renderServicesStep(ctx: WizardContext): JSX.Element | null {
     setServicesWarning,
     setServicesPendingPaste,
     setServicesChannelTargets,
+    setServicesSlackMemberId,
   } = ctx.set;
   // Only Slack and Discord bots take a channel.
   const channelTargets: ChannelTargets = {
@@ -115,13 +121,14 @@ if (servicesPhase === "values") {
   }
   const progress = `(${serviceIdx + 1}/${servicePrompts.length})`;
   const isChannel = prompt.kind === "channel";
-  const alreadyStored = !isChannel && services.secretStore.exists(prompt.secretName);
+  const isMember = prompt.kind === "member";
+  const alreadyStored = !isChannel && !isMember && services.secretStore.exists(prompt.secretName);
   const headerLabel =
     prompt.kind === "extra"
       ? `${service.name} — ${prompt.secretName}`
-      : isChannel
-        ? `${service.name} — ${prompt.label}`
-        : service.name;
+      : prompt.kind === "primary"
+        ? service.name
+        : `${service.name} — ${prompt.label}`;
   const channelDefault = channelPromptDefault(prompt.serviceId);
   return (
     <Box flexDirection="column" gap={1} paddingY={1}>
@@ -162,7 +169,9 @@ if (servicesPhase === "values") {
         </Box>
       )}
       <Text color={theme.fg.muted}>
-        {isChannel
+        {isMember
+          ? "(Enter to save · Enter on empty input to skip; two-way Slack then stays as it is)"
+          : isChannel
           ? channelDefault
             ? `(Enter keeps ${channelDefault} · clear it and press Enter to skip; ${service.name} then stays off)`
             : `(Enter to save · Enter on empty input to skip; ${service.name} then stays off)`
@@ -173,7 +182,28 @@ if (servicesPhase === "values") {
       {servicesWarning && (
         <Text color={theme.accent.warning}>⚠ {servicesWarning}</Text>
       )}
-      {isChannel ? (
+      {isMember ? (
+        <TextInput
+          key={`service:${prompt.secretName}`}
+          defaultValue={servicesSlackMemberId ?? ""}
+          placeholder="U0123ABCD"
+          onSubmit={(value) => {
+            const result = applyServiceMemberSubmit({
+              value,
+              currentIdx: serviceIdx,
+              totalSelected: servicePrompts.length,
+            });
+            if (result.error) {
+              setServicesWarning(result.error);
+              return;
+            }
+            setServicesSlackMemberId(result.memberId);
+            setServicesWarning(null);
+            setServiceIdx(result.nextIdx);
+            setServicesPhase(result.nextPhase);
+          }}
+        />
+      ) : isChannel ? (
         <TextInput
           key={`service:${prompt.secretName}`}
           defaultValue={channelDefault}
@@ -195,14 +225,17 @@ if (servicesPhase === "values") {
               else delete next[prompt.serviceId];
               return next;
             });
+            let nextIdx = result.nextIdx;
             if (!target) {
               setServicesSkipped((prev) =>
                 prev.includes(prompt.secretName) ? prev : [...prev, prompt.secretName],
               );
+              // No channel, so no two-way Slack to ask about.
+              nextIdx = nextIdxAfterSkippedToken(servicePrompts, nextIdx, prompt.serviceId);
             }
             setServicesWarning(result.warning);
-            setServiceIdx(result.nextIdx);
-            setServicesPhase(result.nextPhase);
+            setServiceIdx(nextIdx);
+            setServicesPhase(nextIdx >= servicePrompts.length ? "summary" : result.nextPhase);
           }}
         />
       ) : (
@@ -256,15 +289,24 @@ if (servicesPhase === "values") {
                 return;
               }
             } else {
-              setServicesSkipped((prev) =>
-                prev.includes(prompt.secretName)
-                  ? prev
-                  : [...prev, prompt.secretName],
-              );
-              // No bot token, so no channel to ask for.
+              // Two-way Slack is optional: skipping its token isn't a gap
+              // worth listing (Slack still posts).
+              if (prompt.kind !== "app-token") {
+                setServicesSkipped((prev) =>
+                  prev.includes(prompt.secretName)
+                    ? prev
+                    : [...prev, prompt.secretName],
+                );
+              }
+              // No bot token, so no channel to ask for (and no app token,
+              // no member id without it).
               nextIdx = nextIdxAfterSkippedToken(servicePrompts, nextIdx, prompt.serviceId);
             }
-            setServicesWarning(result.warning);
+            setServicesWarning(
+              !result.shouldSave && !result.keepStored && prompt.kind === "app-token"
+                ? null
+                : result.warning,
+            );
             setServiceIdx(nextIdx);
             setServicesPhase(nextIdx >= servicePrompts.length ? "summary" : result.nextPhase);
           }}
@@ -297,8 +339,17 @@ if (servicesPhase === "summary") {
   // Chat apps with a token but no chat id / channel stay off in notify.yaml
   // (doctor would flag them half-configured): say how to finish each one.
   const toFinish = notifyChannelsToFinish(services, serviceCatalog, wiringNames, channelTargets);
+  // Both optional two-way Slack values, or nothing (a re-run that skips
+  // them keeps what notify.yaml has).
+  const slackTwoWay = slackTwoWayFromWizard(servicesSaved, servicesSlackMemberId);
+  const slackWired = !toFinish.some((c) => c.channel === "slack") && wiringNames.includes("slack-bot-token");
+  const slackTwoWayHalf =
+    slackWired &&
+    !slackTwoWay &&
+    (servicesSlackMemberId !== null || servicesSaved.includes(SLACK_APP_TOKEN_SECRET)) &&
+    !slackTwoWayConfigured(services.notifyConfigPath);
   const persist = (): void => {
-    persistNotifyConfigFromWizardState(services, serviceCatalog, wiringNames, channelTargets);
+    persistNotifyConfigFromWizardState(services, serviceCatalog, wiringNames, channelTargets, slackTwoWay);
     // #305 — seed voice.yaml alongside notify.yaml so ForemanVoice
     // + pattern detection have a config to read on first boot.
     persistVoiceConfig(services.voiceConfigPath, servicesSaved);
@@ -352,6 +403,17 @@ if (servicesPhase === "summary") {
             <Text bold>foreman secrets add telegram-bot-token</Text>.
           </Text>
         </Box>
+      ) : null}
+      {slackWired && slackTwoWay ? (
+        <Text color={theme.accent.success}>
+          ✓ Two-way Slack on for {slackTwoWay.memberId}: Allow / Deny buttons and /foreman (restart foreman start after setup)
+        </Text>
+      ) : null}
+      {slackTwoWayHalf ? (
+        <Text color={theme.fg.muted}>
+          Two-way Slack needs both the app-level token and your member id; finish later with{" "}
+          <Text bold>foreman notify slack-interactive --user U0123ABCD</Text>
+        </Text>
       ) : null}
       {toFinish.length > 0 ? (
         <Box flexDirection="column">

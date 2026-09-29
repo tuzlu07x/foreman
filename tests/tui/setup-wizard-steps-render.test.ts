@@ -165,6 +165,7 @@ const BACKSPACE = '\u007F'
 // Obvious fakes in the shapes the Services step's paste checks accept.
 const FAKE_TELEGRAM_TOKEN = '123456789:AAHfake_telegram_token_0000000000000'
 const FAKE_SLACK_TOKEN = 'xoxb-000-fake-slack-token'
+const FAKE_SLACK_APP_TOKEN = 'xapp-1-FAKE000-fake-app-token'
 const FAKE_DISCORD_TOKEN = `${'F'.repeat(24)}.fake00.${'F'.repeat(27)}`
 // A Discord application's public key (64 hex chars), not a bot token.
 const FAKE_DISCORD_PUBLIC_KEY = 'f'.repeat(64)
@@ -977,19 +978,106 @@ describe('services step', () => {
     await w.pressInList(DOWN)
     await w.pressInList(DOWN)
     await w.pressInList(SPACE)
-    await w.press(ENTER, 'prompt 1 of 2')
+    await w.press(ENTER, 'prompt 1 of 4')
     await w.type(FAKE_SLACK_TOKEN)
     await w.press(ENTER, 'Slack — channel')
     await w.until('/invite @yourapp')
     await w.until('#foreman')
+    await w.press(ENTER, 'Slack — app-level token')
+    // Two-way Slack is optional: Enter on empty input skips it and the
+    // member id prompt after it.
     await w.press(ENTER, 'Services ▸ summary')
     expect(w.frame()).not.toContain('Not turned on yet')
+    expect(w.frame()).not.toContain('slack-app-token')
+    expect(w.frame()).not.toContain('Two-way Slack')
     await w.press('y', 'Integrations ▸ optional')
     const slack = loadNotifyConfig(w.services.notifyConfigPath).channels.slack!
     expect(slack).toEqual({ enabled: true, bot_token_ref: 'slack-bot-token', channel: '#foreman' })
     // What `foreman doctor` builds: the channel is complete.
     expect(buildChannel('slack', slack, { secrets: w.secretStore })).not.toHaveProperty('problem')
   })
+
+  it('turns on two-way Slack from the app-level token and member id', async () => {
+    const w = await mount('services')
+    await w.until('Services ▸ pick which to configure')
+    await w.pressInList(DOWN)
+    await w.pressInList(DOWN)
+    await w.pressInList(SPACE)
+    await w.press(ENTER, 'prompt 1 of 4')
+    await w.type(FAKE_SLACK_TOKEN)
+    await w.press(ENTER, 'Slack — channel')
+    await w.press(ENTER, 'Slack — app-level token')
+    await w.until('connections:write')
+    // The bot token pasted again is named and held back.
+    await w.type(FAKE_SLACK_TOKEN)
+    await w.press(ENTER, loose("that's the Slack bot token (xoxb-…), which you already gave above"))
+    expect(w.secretStore.exists('slack-app-token')).toBe(false)
+    await w.erase(FAKE_SLACK_TOKEN.length)
+    await w.type(FAKE_SLACK_APP_TOKEN)
+    await w.press(ENTER, 'Slack — your member id')
+    expect(w.secretStore.get('slack-app-token')).toBe(FAKE_SLACK_APP_TOKEN)
+    await w.until('Copy member ID')
+    await w.type('#general')
+    await w.press(ENTER, loose('a Slack member id starts with U'))
+    await w.erase('#general'.length)
+    await w.type('u0fakeboss')
+    await w.press(ENTER, 'Services ▸ summary')
+    await w.until(loose('Two-way Slack on for U0FAKEBOSS'))
+    expect(w.frame()).not.toContain(FAKE_SLACK_APP_TOKEN)
+    await w.press('y', 'Integrations ▸ optional')
+    const slack = loadNotifyConfig(w.services.notifyConfigPath).channels.slack!
+    // The fields `foreman notify slack-interactive --user U0FAKEBOSS` writes.
+    expect(slack).toEqual({
+      enabled: true,
+      bot_token_ref: 'slack-bot-token',
+      channel: '#foreman',
+      app_token_ref: 'slack-app-token',
+      allowed_user_ids: ['U0FAKEBOSS'],
+    })
+    // What `foreman start` builds (it supplies the button signer).
+    const built = buildChannel('slack', slack, { secrets: w.secretStore, signButton: () => 'fake-sig' })
+    expect(built).not.toHaveProperty('problem')
+  }, 20_000)
+
+  it('keeps two-way Slack on a re-run that skips its prompts', async () => {
+    const w = await mount('services', {
+      secrets: { 'slack-bot-token': FAKE_SLACK_TOKEN, 'slack-app-token': FAKE_SLACK_APP_TOKEN },
+    })
+    writeFileSync(
+      w.services.notifyConfigPath,
+      [
+        'channels:',
+        '  slack:',
+        '    enabled: true',
+        '    bot_token_ref: slack-bot-token',
+        "    channel: '#ops'",
+        '    app_token_ref: slack-app-token',
+        '    allowed_user_ids: [U0FAKEBOSS, U0FAKEPEER]',
+        '    owner_user_ids: [U0FAKEBOSS]',
+        '',
+      ].join('\n'),
+    )
+    await w.until('Services ▸ pick which to configure')
+    await w.until(/Slack — .* [✔√]/)
+    await w.press(ENTER, 'prompt 1 of 4')
+    await w.press(ENTER, 'Slack — channel')
+    await w.erase('#foreman'.length)
+    await w.type('#ops')
+    await w.press(ENTER, 'Slack — app-level token')
+    await w.until('already stored — Enter on empty input keeps it')
+    await w.press(ENTER, 'Slack — your member id')
+    await w.press(ENTER, 'Services ▸ summary')
+    // Already two-way in notify.yaml: no "finish later" hint.
+    expect(w.frame()).not.toContain('Two-way Slack needs both')
+    await w.press('y', 'Integrations ▸ optional')
+    const slack = loadNotifyConfig(w.services.notifyConfigPath).channels.slack!
+    expect(slack).toMatchObject({
+      channel: '#ops',
+      app_token_ref: 'slack-app-token',
+      allowed_user_ids: ['U0FAKEBOSS', 'U0FAKEPEER'],
+      owner_user_ids: ['U0FAKEBOSS'],
+    })
+  }, 20_000)
 
   it('asks for the Discord channel id, refuses one that is not 17–20 digits', async () => {
     const w = await mount('services')
@@ -1018,7 +1106,7 @@ describe('services step', () => {
     await w.pressInList(DOWN)
     await w.pressInList(DOWN)
     await w.pressInList(SPACE)
-    await w.press(ENTER, 'prompt 1 of 2')
+    await w.press(ENTER, 'prompt 1 of 4')
     await w.type(FAKE_SLACK_TOKEN)
     await w.press(ENTER, 'Slack — channel')
     await w.erase('#foreman'.length)
@@ -1524,6 +1612,30 @@ describe('foreman-llm step with a subscription sign-in (#575 follow-up)', () => 
       auth: 'oauth',
     })
   })
+})
+
+describe('done step team failures', () => {
+  // Real-services test (2.3.0): 10 of 11 roles were created and the reason
+  // for the missing one was only on the team step's own result screen.
+  it('names a role the team step could not create, with its reason', async () => {
+    const w = await mount('team', { registered: ['claude-code'] })
+    vi.mocked(w.services.addTeamAgent!).mockImplementation(async (id: string) =>
+      id === 'code-reviewer' ? 'fake failure: instance limit reached\nmore detail' : null,
+    )
+    await w.until('Step 7 of 7 ▸ Your team')
+    await w.press(SPACE, '1 picked.')
+    await w.press(DOWN)
+    await w.press(DOWN)
+    await w.press(SPACE, '2 picked.')
+    await w.press(ENTER, "Your company or team's name")
+    await w.press(ENTER, 'Code Reviewer')
+    await w.enterUntil('Setup complete')
+    await w.until(loose('1 role couldn\'t be created:'))
+    await w.until(loose('✗ Code Reviewer — fake failure: instance limit reached'))
+    await w.until(loose('add it later with `foreman org add-role`'))
+    expect(w.frame()).not.toContain('more detail')
+    await w.until(loose('1 role          Manager'))
+  }, 20_000)
 })
 
 describe('done step summary', () => {

@@ -452,3 +452,61 @@ describe("a wizard re-run keeps what it doesn't ask about", () => {
   })
 })
 
+describe('two-way Slack from the wizard', () => {
+  const catalog = [{ id: 'slack', secret_name: 'slack-bot-token' }] as unknown as ServiceEntry[]
+
+  it('writes app_token_ref and allowed_user_ids, like the slack-interactive command', () => {
+    const { next } = buildNotifyConfigFromWizard({
+      savedStorageNames: ['slack-bot-token', 'slack-app-token'],
+      serviceCatalog: catalog,
+      secretStore: makeReader({}),
+      existing: defaultNotifyConfig(),
+      channelTargets: { slack: '#foreman' },
+      slackTwoWay: { appTokenRef: 'slack-app-token', memberId: 'U0BOSS' },
+    })
+    expect(next.channels.slack).toEqual({
+      enabled: true,
+      bot_token_ref: 'slack-bot-token',
+      channel: '#foreman',
+      app_token_ref: 'slack-app-token',
+      allowed_user_ids: ['U0BOSS'],
+    })
+  })
+
+  it('adds the member id to the people already allowed and to an owner list', () => {
+    const existing = defaultNotifyConfig()
+    existing.channels.slack = {
+      enabled: true,
+      bot_token_ref: 'slack-bot-token',
+      channel: '#ops',
+      app_token_ref: 'slack-app-token',
+      allowed_user_ids: ['U0PEER', 'U0BOSS'],
+      owner_user_ids: ['U0PEER'],
+    }
+    const { next } = buildNotifyConfigFromWizard({
+      savedStorageNames: ['slack-bot-token', 'slack-app-token'],
+      serviceCatalog: catalog,
+      secretStore: makeReader({}),
+      existing,
+      slackTwoWay: { appTokenRef: 'slack-app-token', memberId: 'U0BOSS' },
+    })
+    expect(next.channels.slack).toMatchObject({
+      channel: '#ops',
+      allowed_user_ids: ['U0BOSS', 'U0PEER'],
+      owner_user_ids: ['U0BOSS', 'U0PEER'],
+    })
+  })
+
+  it('does nothing for two-way Slack when Slack itself is not wired', () => {
+    const { next, wiredChannels } = buildNotifyConfigFromWizard({
+      savedStorageNames: ['slack-bot-token', 'slack-app-token'],
+      serviceCatalog: catalog,
+      secretStore: makeReader({}),
+      existing: defaultNotifyConfig(),
+      slackTwoWay: { appTokenRef: 'slack-app-token', memberId: 'U0BOSS' },
+    })
+    expect(wiredChannels).toEqual([])
+    expect(next.channels.slack?.app_token_ref).toBeUndefined()
+  })
+})
+

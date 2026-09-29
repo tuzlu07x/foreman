@@ -15,8 +15,41 @@ All notable changes to Foreman are documented here. The format follows
   round) now says what it is and where the right value is, for example
   *that's the Public Key, not a Discord bot token: the bot token is under
   discord.com/developers → your app → Bot → Reset Token → Copy*.
+- **Approval messages say who wants to do what.** A Telegram, Slack or
+  Discord approval used to start with *Risk score: 100/100 (critical)*
+  and the raw arguments, and after its countdown refreshed the title was
+  gone too. It now starts with a plain line such as *manager wants to run
+  a shell command* or *claude-code wants to read a file*, followed by the
+  risk, the reasons and the arguments as before.
+- **The setup wizard can make Slack two-way.** After the Slack bot token
+  and channel, the Services step asks (optionally) for the app-level token
+  (`xapp-…`) and your Slack member id. Give both and Allow / Deny buttons
+  and `/foreman` work in Slack right after setup, as with
+  `foreman notify slack-interactive`. Skip them and Slack only posts; a
+  re-run that skips them keeps the two-way settings you have.
 
 ### Fixed
+
+- **A decided approval says where it was decided.** The chat message
+  ended with *✗ Denied (resolved elsewhere)*. It now says *in the TUI*,
+  *on Slack by U0123ABCD*, *on Telegram*, *relayed from hermes's chat*,
+  *timed out* or *request withdrawn*.
+- **A failed task no longer reads "finished your task".** A task an agent
+  couldn't finish (for example a 401 from its provider) was reported as
+  *Claude Code finished your task … Exit code: 1*. It now reads
+  *manager (Claude Code) couldn't finish your task* with the first line
+  of the error (*Failed to authenticate. API Error: 401*) before the task,
+  and every task message names the role that ran it with its program in
+  parentheses.
+- **The daily summary no longer tells you to turn on smart analysis when
+  it is on.** When Foreman's LLM failed (a usage limit, the provider
+  down), the digest said *Smart analysis is off. Enable with
+  `foreman llm enable`*. It now says *Smart analysis failed this time*
+  with a short reason; the enable hint stays for when it really is off.
+- **The setup wizard's Done screen lists roles it couldn't create.** When
+  the Your team step couldn't create a role (10 of 11 created), the reason
+  was only on that step's result screen. Done now lists each one, e.g.
+  *✗ Code Reviewer — (the reason) · add it later with `foreman org add-role`*.
 
 - **The setup wizard shows Claude Code and Codex after a subscription
   sign-in.** Choosing your Claude or ChatGPT subscription in Step 1 (sign
