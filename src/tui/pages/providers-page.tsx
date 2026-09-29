@@ -11,6 +11,7 @@ import {
   type ProviderEntry,
 } from "../../core/registry-catalog.js";
 import { isOAuthProviderId } from "../../core/llm/oauth/oauth-providers.js";
+import { oauthSecretName } from "../../core/llm/oauth/token-store.js";
 import type { SecretStore } from "../../core/secret-store.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { roundBorder, theme } from "../theme.js";
@@ -20,7 +21,52 @@ const REVEAL_AUTO_HIDE_MS = 10_000;
 
 interface Row {
   provider: ProviderEntry;
+  /** Its key (or endpoint) is stored: rotate / show / remove act on it. */
   configured: boolean;
+  /** How it is connected, in any way (providerConnections). */
+  connections: ProviderConnection[];
+}
+
+/** How a provider is connected: a stored API key, a Claude / ChatGPT
+ *  subscription sign-in (`foreman llm login`), or an endpoint (Ollama,
+ *  OpenAI-compatible). */
+export type ProviderConnection = "api-key" | "subscription" | "endpoint";
+
+/** Read from the secret store's names only, never its values. */
+export function providerConnections(
+  provider: Pick<ProviderEntry, "id" | "secret_name">,
+  has: (secretName: string) => boolean,
+): ProviderConnection[] {
+  const out: ProviderConnection[] = [];
+  if (has(`${provider.id}-endpoint`)) out.push("endpoint");
+  if (provider.secret_name && has(provider.secret_name)) out.push("api-key");
+  if (isOAuthProviderId(provider.id) && has(oauthSecretName(provider.id))) out.push("subscription");
+  return out;
+}
+
+/** "API key", "Claude subscription sign-in", "endpoint + API key", … */
+export function describeConnections(
+  providerId: string,
+  connections: ProviderConnection[],
+): string {
+  return connections
+    .map((c) => {
+      if (c === "api-key") return "API key";
+      if (c === "endpoint") return providerId === "ollama" ? "local endpoint" : "endpoint";
+      return `${providerId === "anthropic" ? "Claude" : "ChatGPT"} subscription sign-in`;
+    })
+    .join(" + ");
+}
+
+/** What an unconnected provider offers. */
+function connectHint(provider: ProviderEntry): string {
+  if (!provider.secret_name) return "not connected — [n] set its endpoint";
+  if (isOAuthProviderId(provider.id)) {
+    return "not connected — [n] add an API key or [o] sign in with your subscription";
+  }
+  return provider.endpoint_required
+    ? "not connected — [n] add its endpoint and API key"
+    : "not connected — [n] add an API key";
 }
 
 type Op =
@@ -181,7 +227,7 @@ export function ProvidersPage({ onLeave, onEditingChange }: ProvidersPageProps):
       setRows(buildRows(catalog, secretStore));
       setNotice(
         ok
-          ? `✓ signed in to ${selectedRow.provider.name} (auth_mode → oauth)`
+          ? `✓ signed in to ${selectedRow.provider.name} — Foreman calls it with your subscription`
           : `login did not complete — run 'foreman doctor' or retry [o]`,
       );
       return;
@@ -213,8 +259,8 @@ export function ProvidersPage({ onLeave, onEditingChange }: ProvidersPageProps):
       <PageHeader
         title="LLM Providers"
         right={
-          `${rows.filter((r) => r.configured).length} configured · ` +
-          `${rows.filter((r) => !r.configured).length} available`
+          `${rows.filter((r) => r.connections.length > 0).length} connected · ` +
+          `${rows.filter((r) => r.connections.length === 0).length} available`
         }
       />
 
@@ -292,7 +338,7 @@ export function ProvidersPage({ onLeave, onEditingChange }: ProvidersPageProps):
         <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>
       </Box>
       <Text color={theme.fg.muted}>
-        [↑↓] move · [n] new (on available) · [o] OAuth login (Claude/Codex) ·
+        [↑↓] move · [n] new (on available) · [o] subscription sign-in (Claude / ChatGPT) ·
         [r] rotate · [d] remove · [s] show 10s · [Esc] back
       </Text>
     </Box>
@@ -304,7 +350,11 @@ function buildRows(catalog: ProviderEntry[], secretStore: SecretStore): Row[] {
     const configured = p.secret_name
       ? secretStore.exists(p.secret_name)
       : secretStore.exists(`${p.id}-endpoint`);
-    return { provider: p, configured };
+    return {
+      provider: p,
+      configured,
+      connections: providerConnections(p, (name) => secretStore.exists(name)),
+    };
   });
 }
 
@@ -320,27 +370,34 @@ function ProviderRow({
   registry: ReturnType<typeof useDashboardServices>["registry"];
 }): JSX.Element {
   const cursor = selected ? "▸ " : "  ";
-  const dot = row.configured ? theme.symbols.activeDot : theme.symbols.idleDot;
-  const dotColor = row.configured ? theme.accent.success : theme.fg.muted;
-  const consumers = row.configured
+  const connected = row.connections.length > 0;
+  const dot = connected ? theme.symbols.activeDot : theme.symbols.idleDot;
+  const dotColor = connected ? theme.accent.success : theme.fg.muted;
+  const consumers = connected
     ? registry
         .list()
         .filter((a) => a.llmProvider === row.provider.id)
         .map((a) => a.id)
     : [];
+  const how = describeConnections(row.provider.id, row.connections);
   return (
     <Box flexDirection="column">
-      <Text>
+      <Text wrap="truncate-end">
         <Text color={selected ? theme.accent.primary : theme.fg.muted}>
           {cursor}
         </Text>
         <Text color={dotColor}>{dot}</Text>{" "}
         <Text color={theme.accent.primary}>{row.provider.name}</Text>{" "}
-        <Text color={theme.fg.muted}>
-          {row.configured
-            ? `(${row.provider.secret_name ?? `${row.provider.id}-endpoint`}) · used by ${consumers.length} agent${consumers.length === 1 ? "" : "s"}${consumers.length > 0 ? ` (${consumers.join(", ")})` : ""}`
-            : `(available — press [n] to configure)`}
-        </Text>
+        {connected ? (
+          <Text>
+            {how}
+            <Text color={theme.fg.muted}>
+              {` · used by ${consumers.length} agent${consumers.length === 1 ? "" : "s"}${consumers.length > 0 ? ` (${consumers.join(", ")})` : ""}`}
+            </Text>
+          </Text>
+        ) : (
+          <Text color={theme.fg.muted}>({connectHint(row.provider)})</Text>
+        )}
       </Text>
       {expanded ? (
         <Box
@@ -351,6 +408,10 @@ function ProviderRow({
         >
           <Text color={theme.fg.muted}>
             id: <Text color={theme.fg.default}>{row.provider.id}</Text>
+          </Text>
+          <Text color={theme.fg.muted}>
+            connected with:{" "}
+            <Text color={theme.fg.default}>{connected ? how : "nothing yet"}</Text>
           </Text>
           <Text color={theme.fg.muted}>
             secret_name:{" "}
@@ -369,7 +430,7 @@ function ProviderRow({
               {row.provider.where_to_get}
             </Text>
           </Text>
-          {row.configured ? (
+          {connected ? (
             <Text color={theme.fg.muted}>
               consumers:{" "}
               <Text color={theme.fg.default}>
@@ -382,7 +443,7 @@ function ProviderRow({
             {row.configured
               ? "[s] show · [r] rotate · [d] remove"
               : "[n] configure"}
-            {isOAuthProviderId(row.provider.id) ? " · [o] OAuth login" : ""}
+            {isOAuthProviderId(row.provider.id) ? " · [o] sign in with your subscription" : ""}
           </Text>
         </Box>
       ) : null}

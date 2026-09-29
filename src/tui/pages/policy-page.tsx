@@ -5,6 +5,7 @@ import { useDashboardServices } from "../dashboard-context.js";
 import { formatTime, safe } from "../format.js";
 import { roundBorder, theme } from "../theme.js";
 import { EmptyState } from "../components/empty-state.js";
+import { describeRule, effectLead } from "../policy-rule-text.js";
 import { PageHeader } from "../components/typography.js";
 
 export type PolicyRow = typeof policies.$inferSelect;
@@ -119,6 +120,14 @@ export function PolicyPage({
   );
 }
 
+/** Where a rule came from. Rules loaded from policy.yaml (including block
+ *  rules added there from an approval) are stored as "user". */
+const CREATED_BY: Record<PolicyRow["createdBy"], string> = {
+  yaml: "policy.yaml",
+  user: "policy.yaml",
+  "remember-action": "remembered",
+};
+
 function RuleRow({
   row,
   selected,
@@ -130,27 +139,25 @@ function RuleRow({
 }): JSX.Element {
   const effectColor = effectTone(row.effect);
   const enabled = row.enabled === 1;
-  const conditionsSummary = describeConditions(row.conditions);
-  // On the row itself (#657): "read_file ASK" next to "read_file ALLOW"
-  // looked contradictory until you opened each rule.
-  const when = conditionsSummary === "none" ? null : conditionsSummary;
+  // A plain sentence per rule; the raw pattern stays in the detail view.
+  // Conditions are part of it, so "read_file ASK" next to "read_file
+  // ALLOW" no longer looks contradictory (#657).
+  const sentence = describeRule(row);
+  const lead = effectLead(row.effect);
+  const who = row.sourceAgent === "*" ? "any agent" : safe(row.sourceAgent);
   return (
     <Box flexDirection="column">
       <Text wrap="truncate-end">
         <Text color={selected ? theme.accent.primary : theme.fg.muted}>
           {selected ? "▸ " : "  "}
         </Text>
-        <Text color={theme.accent.primary}>{safe(row.sourceAgent)}</Text>
-        <Text color={theme.fg.muted}>{"  →  "}</Text>
-        <Text bold={selected}>{safe(row.target)}</Text>{" "}
         <Text color={effectColor} bold>
-          {row.effect.toUpperCase()}
+          {lead}
         </Text>
-        {when ? <Text color={theme.fg.default}>{` if ${when}`}</Text> : null}
+        <Text bold={selected}>{sentence.slice(lead.length)}</Text>
         {!enabled && <Text color={theme.fg.muted}> · DISABLED</Text>}
         <Text color={theme.fg.muted}>
-          {" · "}
-          {row.createdBy} · {formatTime(row.createdAt)}
+          {` · ${who} → ${safe(row.target)} · ${CREATED_BY[row.createdBy]}`}
         </Text>
       </Text>
       {expanded && (
@@ -163,7 +170,16 @@ function RuleRow({
           borderDimColor
         >
           <Text color={theme.fg.muted}>rule id: {row.id}</Text>
-          <Text color={theme.fg.muted}>conditions: {conditionsSummary}</Text>
+          <Text color={theme.fg.muted}>
+            applies to: {who} → {safe(row.target)} ({row.effect})
+          </Text>
+          <Text color={theme.fg.muted}>
+            condition: {describeConditions(row.conditions)}
+          </Text>
+          <Text color={theme.fg.muted}>
+            from: {CREATED_BY[row.createdBy]} · {formatTime(row.createdAt)}
+            {enabled ? "" : " · disabled"}
+          </Text>
         </Box>
       )}
     </Box>
@@ -176,8 +192,8 @@ function effectTone(effect: "allow" | "deny" | "ask"): string {
   return theme.accent.warning;
 }
 
-/** A rule's conditions in words, e.g. `path ~ /\.env$/, not path ~ /tmp/`.
- *  "none" when it has none. Exported for tests. */
+/** A rule's raw conditions, e.g. `path ~ /\.env$/, path !~ /tmp/`, for the
+ *  detail view. "none" when it has none. Exported for tests. */
 export function describeConditions(conditions: string | null): string {
   if (!conditions) return "none";
   try {

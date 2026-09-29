@@ -268,7 +268,7 @@ Some approval messages in Telegram carry a **block** button for the pattern that
 
 ## The TUI Policy page
 
-`p` on the Home page lists every loaded rule with its conditions. `↑` `↓` select, `Enter` shows its details, `d` turns it on or off, and `e` opens `policy.yaml` in `$EDITOR`. A rule from `policy.yaml` that you turn off stays off while the rule is unchanged in the file; to drop it for good, delete it from the file.
+`p` on the Home page lists every loaded rule as a plain sentence with its conditions, for example "Ask before reading secret files (.env, *.key, SSH keys, .npmrc, ~/.ssh, AWS credentials)" or "Block reading the file "/p/.env"", then the agent and tool it applies to. `↑` `↓` select, `Enter` shows its details (including the raw pattern), `d` turns it on or off, and `e` opens `policy.yaml` in `$EDITOR`. A rule from `policy.yaml` that you turn off stays off while the rule is unchanged in the file; to drop it for good, delete it from the file.
 
 ## How edits apply
 

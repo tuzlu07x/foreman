@@ -2,10 +2,22 @@ import { ConfirmInput, PasswordInput } from "@inkjs/ui";
 import { Box, Text, useInput } from "ink";
 import { type JSX, useEffect, useMemo, useState } from "react";
 import {
+  loadActiveRegistry,
   loadActiveServices,
   type ServiceEntry,
 } from "../../core/registry-catalog.js";
 import type { SecretStore } from "../../core/secret-store.js";
+import {
+  channelConfig,
+  loadNotifyConfig,
+  type NotifyConfig,
+} from "../../core/notification/notify-config.js";
+import {
+  agentsSharingTelegram,
+  resolveTelegramListener,
+  type ChatCatalogEntry,
+} from "../../core/notification/telegram-listener.js";
+import { getForemanPaths } from "../../utils/config.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { osc8 } from "../osc8.js";
 import { roundBorder, theme } from "../theme.js";
@@ -16,6 +28,20 @@ const REVEAL_AUTO_HIDE_MS = 10_000;
 interface Row {
   service: ServiceEntry;
   configured: boolean;
+  /** How the chat app is set up in notify.yaml (chatAppMode). */
+  mode: ChatAppMode;
+}
+
+/** The chat apps this page manages. GitHub, Jira, Notion, … are
+ *  integrations now, on their own page. */
+export const CHAT_APP_IDS: readonly string[] = ["telegram", "slack", "discord"];
+
+export interface ChatAppMode {
+  /** One line: who reads the app and what it can do, e.g. "one bot —
+   *  Foreman reads it (approve with buttons, /foreman)". */
+  label: string;
+  /** The command that changes it, when there is one. */
+  change: string | null;
 }
 
 // Page-local op state (same pattern as providers-page) — keeps the App-level
@@ -37,9 +63,21 @@ export interface ServicesPageProps {
 
 export function ServicesPage({ onLeave, onEditingChange }: ServicesPageProps): JSX.Element {
   const { registry, secretStore, bus } = useDashboardServices();
-  const catalog = useMemo(() => loadActiveServices().doc.services, []);
+  const catalog = useMemo(
+    () => loadActiveServices().doc.services.filter((s) => CHAT_APP_IDS.includes(s.id)),
+    [],
+  );
+  // The agent catalog, to tell whether a chat agent may read the Telegram
+  // bot. Null when it doesn't load: then assume one may, as foreman start does.
+  const agentCatalog = useMemo(() => {
+    try {
+      return loadActiveRegistry().doc.agents;
+    } catch {
+      return null;
+    }
+  }, []);
   const [rows, setRows] = useState<Row[]>(() =>
-    secretStore ? buildRows(catalog, secretStore) : [],
+    secretStore ? buildRows(catalog, secretStore, registry, agentCatalog) : [],
   );
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
@@ -53,14 +91,14 @@ export function ServicesPage({ onLeave, onEditingChange }: ServicesPageProps): J
 
   useEffect(() => {
     if (!secretStore) return;
-    const refresh = (): void => setRows(buildRows(catalog, secretStore));
+    const refresh = (): void => setRows(buildRows(catalog, secretStore, registry, agentCatalog));
     const interval = setInterval(refresh, 1000);
     const off = bus.on("agent:registered", refresh);
     return () => {
       clearInterval(interval);
       off();
     };
-  }, [catalog, secretStore, bus]);
+  }, [catalog, secretStore, bus, registry, agentCatalog]);
 
   useEffect(() => {
     if (op.kind !== "revealed") return;
@@ -171,7 +209,7 @@ export function ServicesPage({ onLeave, onEditingChange }: ServicesPageProps): J
       flexGrow={1}
     >
       <PageHeader
-        title="Services"
+        title="Services · chat apps"
         right={
           `${rows.filter((r) => r.configured).length} configured · ` +
           `${rows.filter((r) => !r.configured).length} available`
@@ -181,7 +219,7 @@ export function ServicesPage({ onLeave, onEditingChange }: ServicesPageProps): J
       <Box flexDirection="column" marginTop={1}>
         {rows.length === 0 ? (
           <Text color={theme.fg.muted}>
-            (no services in catalog — re-install foreman-agent?)
+            (no chat apps in catalog — re-install foreman-agent?)
           </Text>
         ) : (
           rows.map((row, i) => (
@@ -260,6 +298,9 @@ export function ServicesPage({ onLeave, onEditingChange }: ServicesPageProps): J
         [↑↓] move · [n] new · [r] rotate · [d] remove · [s] show 10s · [w]
         walkthrough · [Esc] back
       </Text>
+      <Text color={theme.fg.muted}>
+        GitHub, Jira, Notion and other tools are on the Integrations page.
+      </Text>
     </Box>
   );
 }
@@ -267,11 +308,74 @@ export function ServicesPage({ onLeave, onEditingChange }: ServicesPageProps): J
 function buildRows(
   catalog: ServiceEntry[],
   secretStore: SecretStore,
+  registry: ReturnType<typeof useDashboardServices>["registry"],
+  agentCatalog: ChatCatalogEntry[] | null,
 ): Row[] {
+  const notify = readNotifyConfig();
+  // Registered chat agents that may read the Telegram bot, worked out as
+  // foreman start does.
+  const sharedWith = agentCatalog
+    ? agentsSharingTelegram(registry.listAll(), agentCatalog)
+    : ["unknown"];
   return catalog.map((s) => ({
     service: s,
     configured: secretStore.exists(s.secret_name),
+    mode: notify
+      ? chatAppMode(s.id, notify, sharedWith)
+      : { label: "notify.yaml doesn't load — run foreman doctor", change: null },
   }));
+}
+
+function readNotifyConfig(): NotifyConfig | null {
+  try {
+    return loadNotifyConfig(getForemanPaths().notifyConfigPath);
+  } catch {
+    return null;
+  }
+}
+
+/** How a chat app is set up, from notify.yaml: Telegram's one bot vs a
+ *  chat agent reading it (telegram-listener.ts), Slack / Discord two-way
+ *  vs notifications only. Same reading as `foreman doctor`. */
+export function chatAppMode(
+  id: string,
+  config: NotifyConfig,
+  telegramSharedWith: string[],
+): ChatAppMode {
+  const toggle = channelConfig(config, id);
+  if (!toggle?.enabled) {
+    return { label: "not sending notifications yet", change: `foreman notify enable ${id}` };
+  }
+  if (id === "telegram") {
+    if (toggle.approval_bot_token_ref) {
+      return {
+        label: "chat agent reads it · you approve through a second bot only Foreman reads",
+        change: "foreman notify approval-bot --off",
+      };
+    }
+    if (resolveTelegramListener(toggle, telegramSharedWith) === "foreman") {
+      return {
+        label: "one bot — Foreman reads it (approve with buttons, /foreman)",
+        change: null,
+      };
+    }
+    const who = telegramSharedWith.filter((a) => a !== "unknown");
+    return {
+      label: `chat agent reads it${who.length > 0 ? ` (${who.join(", ")})` : ""} — Foreman only sends`,
+      change: "foreman notify approval-bot",
+    };
+  }
+  if (id === "slack") {
+    return toggle.app_token_ref
+      ? { label: "two-way (Socket Mode: approve with buttons, /foreman)", change: null }
+      : { label: "notifications only", change: "foreman notify slack-interactive" };
+  }
+  if (id === "discord") {
+    return toggle.interactive
+      ? { label: "two-way (approve with buttons, /foreman)", change: null }
+      : { label: "notifications only", change: "foreman notify discord-interactive" };
+  }
+  return { label: "notifications", change: null };
 }
 
 function ServiceRow({
@@ -296,17 +400,22 @@ function ServiceRow({
     : [];
   return (
     <Box flexDirection="column">
-      <Text>
+      <Text wrap="truncate-end">
         <Text color={selected ? theme.accent.primary : theme.fg.muted}>
           {cursor}
         </Text>
         <Text color={dotColor}>{dot}</Text>{" "}
         <Text color={theme.accent.primary}>{row.service.name}</Text>{" "}
-        <Text color={theme.fg.muted}>
-          {row.configured
-            ? `(${row.service.secret_name}) · used by ${consumers.length} installed agent${consumers.length === 1 ? "" : "s"}${consumers.length > 0 ? ` (${consumers.join(", ")})` : ""}`
-            : `(available — press [n] to configure)`}
-        </Text>
+        {row.configured ? (
+          <Text>
+            {row.mode.label}
+            {consumers.length > 0 ? (
+              <Text color={theme.fg.muted}>{` · used by ${consumers.join(", ")}`}</Text>
+            ) : null}
+          </Text>
+        ) : (
+          <Text color={theme.fg.muted}>(available — press [n] to configure)</Text>
+        )}
       </Text>
       {expanded ? (
         <Box flexDirection="column" marginLeft={4} marginTop={1} marginBottom={1}>
@@ -316,6 +425,14 @@ function ServiceRow({
           <Text color={theme.fg.muted}>
             description:  <Text color={theme.fg.default}>{row.service.description}</Text>
           </Text>
+          <Text color={theme.fg.muted}>
+            mode:         <Text color={theme.fg.default}>{row.mode.label}</Text>
+          </Text>
+          {row.mode.change ? (
+            <Text color={theme.fg.muted}>
+              change mode:  <Text color={theme.fg.default}>{row.mode.change}</Text>
+            </Text>
+          ) : null}
           <Text color={theme.fg.muted}>
             secret_name:  <Text color={theme.fg.default}>{row.service.secret_name}</Text>
           </Text>

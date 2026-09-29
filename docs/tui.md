@@ -44,7 +44,7 @@ On the Home page:
 | --- | --- | --- | --- |
 | `n` | Inbox | `k` | Keys (the secret store) |
 | `a` | Agents | `v` | Providers (LLM keys and sign-ins) |
-| `s` | Sessions | `V` | Services (Telegram, GitHub, … tokens) |
+| `s` | Sessions | `V` | Services (chat apps: Telegram, Slack, Discord) |
 | `d` | Delegations | `g` | Settings |
 | `l` | Logs | `c` | Test (send a test call as an agent) |
 | `p` | Policy | `i` | [Integrations](integrations.md) (GitHub, GitLab, Jira, Trello, Linear, Notion) |
@@ -58,7 +58,7 @@ Keys on each page:
 | --- | --- |
 | Agents | `↑↓` select, `Enter` details, `d` / `e` disable / enable, `b` block / unblock, `N` note, `L` LLM, `m` model (or back to the default), `o` login, `r` regenerate key, `x` remove. See [`agent-lifecycle.md`](agent-lifecycle.md#tui-flow). |
 | Logs | `/` search (`Enter` keeps the filter, `Esc` clears it), `1`–`4` toggle allowed / denied / ask / errored, `↑↓` select, `Enter` details, `r` replay, `e` export |
-| Policy | `↑↓` select, `Enter` details, `d` turn the rule on / off, `e` edit `policy.yaml` in `$EDITOR`. See [`policy.md`](policy.md#the-tui-policy-page). |
+| Policy | `↑↓` select, `Enter` details (the rule's raw condition), `d` turn the rule on / off, `e` edit `policy.yaml` in `$EDITOR`. See [`policy.md`](policy.md#the-tui-policy-page). |
 | Sessions | `↑↓` select, `Enter` details, `k` halt the session |
 | Delegations | `↑↓` select, `Enter` details |
 | Keys | `↑↓` select, `Enter` details, `n` new secret, `v` reveal, `r` rotate, `d` delete |
@@ -66,6 +66,22 @@ Keys on each page:
 | Integrations | `↑↓` select, `Enter` details (credentials, sign-in, which agents may use it), `n` add (variant, access level, who, token or browser sign-in, then review and enable), `space` enable / disable, `e` edit (access level, who, replace a credential, sign in again), `t` tools (`←→` sets a per-tool rule), `r` review, `o` sign in, `d` remove (asks first; `Enter` cancels) |
 | Settings | `↑↓` select, `Enter` open, `e` edit `SOUL.md`, `p` edit `policy.yaml`, `P` Policy page, `m` pick Foreman's model (the registry's fast / balanced / strongest, plus the provider's live list when a key is stored), `w` how to re-run the wizard |
 | Test | `←→` pick the source agent, `i` type a request, `Enter` send |
+
+What some pages show:
+
+- **Policy** says what each rule does in plain words, for example "Ask
+  before reading secret files (.env, *.key, SSH keys, …)", followed by the
+  agent and tool it applies to. `Enter` shows the raw pattern.
+- **Providers** says how each LLM provider is connected: an API key, a
+  Claude / ChatGPT subscription sign-in, or an endpoint (Ollama,
+  OpenAI-compatible). Secret values only show when you press `s`.
+- **Services** lists the chat apps and how each is set up in
+  [`notify.yaml`](notifications.md): Telegram as *one bot* (Foreman reads
+  it) or *chat agent reads it*; Slack and Discord as *two-way* or
+  *notifications only*. `Enter` shows the command that changes it.
+  GitHub, Jira, Notion and other tools are on the Integrations page.
+- **Settings** shows file paths with `~` for your home folder, shortened
+  in the middle when the terminal is narrow.
 
 Regenerating an agent's key (`r`), removing an agent (`x`) and deleting a secret (`d` on Keys) ask first: `y` goes ahead, any other key cancels. The Keys page doesn't list agents' identity tokens; manage those with `foreman agent token rotate` and `foreman agent rewire`.
 

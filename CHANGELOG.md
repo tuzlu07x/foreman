@@ -107,6 +107,23 @@ All notable changes to Foreman are documented here. The format follows
   (`tui` or `headless`) on a second line and is refreshed every 5 seconds;
   a pidfile left from before a reboot, or whose pid now belongs to
   another program, no longer counts as a running Foreman.
+- **The TUI's Policy page says what each rule does in plain words**:
+  "Ask before reading secret files (.env, *.key, SSH keys, …)" instead of
+  `ASK if path ~ /(^|/)\.env(\..*)?$/`. The agent and tool follow on the
+  row, and `Enter` still shows the raw pattern. Rules work as before.
+- **The Services page lists only chat apps** (Telegram, Slack, Discord),
+  each with how it is set up: Telegram as *one bot* (Foreman reads it) or
+  *chat agent reads it*, Slack and Discord as *two-way* or *notifications
+  only*, and `Enter` shows the command that changes it. GitHub, Jira and
+  Notion are on the Integrations page.
+- **The Providers page shows how each provider is connected**: API key,
+  Claude / ChatGPT subscription sign-in, or endpoint (Ollama,
+  OpenAI-compatible). A provider you only signed in to no longer looks
+  unconfigured.
+- **The Settings page is easier to read**: file paths show your home
+  folder as `~` and are shortened to fit the terminal, and the chat-agent
+  setting says what it means ("none picked — every chat agent using it
+  gets the token") instead of "all agents receive secrets".
 
 ### Fixed
 
@@ -126,6 +143,13 @@ All notable changes to Foreman are documented here. The format follows
   every start. The same crash notice isn't added again while the last
   one is unread (every crash is still in the audit log), and identical
   notices show as one row with a count (`×4`) and the latest time.
+- With one Telegram bot (Foreman reads your main bot), a rejected token
+  or another program reading the bot is now reported about *your Telegram
+  bot*, not an "approval bot" you don't have.
+- The inbox note about approvals that timed out while Foreman wasn't
+  running no longer tells you to "start `foreman start` to approve" when
+  you are already in it; it says to keep `foreman start` or the
+  background service running to be asked next time.
 - Running `foreman setup` again no longer wipes two-way chat settings: a
   channel it rewrites keeps what the wizard doesn't ask about (Slack's
   `app_token_ref`, `allowed_user_ids`, `owner_user_ids`, Telegram's

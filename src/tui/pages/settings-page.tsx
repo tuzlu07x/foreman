@@ -14,6 +14,8 @@ import { checkProviderMapping } from "../../core/doctor.js";
 import { getDb } from "../../db/client.js";
 import { getForemanPaths } from "../../utils/config.js";
 import { useDashboardServices } from "../dashboard-context.js";
+import { displayPath } from "../format.js";
+import { useTerminalSize } from "../hooks.js";
 import { roundBorder, theme } from "../theme.js";
 import { PageHeader } from "../components/typography.js";
 
@@ -37,7 +39,7 @@ export function buildSettingsItems(
   if (soulPath) {
     items.push({
       key: "e",
-      title: "Edit Foreman SOUL.md (agent identity)",
+      title: "Edit SOUL.md (the persona your chat agents take on as Foreman)",
       detail: soulPath,
       action: "edit-soul",
     });
@@ -45,24 +47,36 @@ export function buildSettingsItems(
   if (policyPath) {
     items.push({
       key: "p",
-      title: "Edit policy.yaml",
+      title: "Edit policy.yaml (your ask / allow / block rules)",
       detail: policyPath,
       action: "edit-policy",
     });
     items.push({
       key: "P",
       title: "Open Policy page",
-      detail: "view + toggle rules without leaving the TUI",
+      detail: "see your rules and turn them on or off here",
       action: "open-policy",
     });
   }
   items.push({
     key: "w",
     title: "Re-run setup wizard",
-    detail: "quit and run: foreman setup --resume  (or --reset)",
+    detail: "quit, then: foreman setup --resume (continue) or --reset (start over)",
     action: "wizard-instruction",
   });
   return items;
+}
+
+/** Room for an item's detail line: the terminal minus the page frame
+ *  (border, padding) and the detail's indent. */
+const DETAIL_INDENT = 6;
+const PAGE_FRAME = 4;
+
+/** An item's detail as shown: file paths with `~` for home, cut in the
+ *  middle to fit `cols`; other text as is. Exported for tests. */
+export function settingsDetail(item: SettingsItem, cols: number): string {
+  if (item.action !== "edit-soul" && item.action !== "edit-policy") return item.detail;
+  return displayPath(item.detail, cols - PAGE_FRAME - DETAIL_INDENT);
 }
 
 export function SettingsPage({
@@ -74,6 +88,7 @@ export function SettingsPage({
   const items = buildSettingsItems(soulPath, policyPath ?? null);
   const safeSelected = Math.max(0, Math.min(selectedIdx, items.length - 1));
   const llmSnapshot = readLlmSnapshot();
+  const { cols } = useTerminalSize();
 
   return (
     <Box
@@ -97,8 +112,8 @@ export function SettingsPage({
               <Text color={theme.accent.primary}>[{item.key}]</Text>{" "}
               <Text bold>{item.title}</Text>
             </Text>
-            <Box marginLeft={6}>
-              <Text color={theme.fg.muted}>{item.detail}</Text>
+            <Box marginLeft={DETAIL_INDENT}>
+              <Text color={theme.fg.muted}>{settingsDetail(item, cols)}</Text>
             </Box>
           </Box>
         ))}
@@ -178,7 +193,7 @@ function LlmTile({ snapshot }: { snapshot: LlmSnapshot }): JSX.Element {
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text bold>LLM Smart Features</Text>
+      <Text bold>Foreman's own model (optional smart features)</Text>
       <Box marginLeft={2}>
         <Text color={headerColor}>{headerLabel}</Text>
       </Box>
@@ -203,22 +218,22 @@ function LlmTile({ snapshot }: { snapshot: LlmSnapshot }): JSX.Element {
         <Text color={theme.fg.muted}>
           Features:{" "}
           <Text color={snapshot.features.verification ? theme.accent.success : theme.fg.muted}>
-            verification {snapshot.features.verification ? "✓" : "✗"}
+            second opinion on risky calls {snapshot.features.verification ? "✓" : "✗"}
           </Text>
           {" · "}
           <Text color={snapshot.features.smart_report ? theme.accent.success : theme.fg.muted}>
-            smart_report {snapshot.features.smart_report ? "✓" : "✗"}
+            approval explanations {snapshot.features.smart_report ? "✓" : "✗"}
           </Text>
           {" · "}
           <Text color={snapshot.features.policy_suggestions ? theme.accent.success : theme.fg.muted}>
-            policy_suggestions {snapshot.features.policy_suggestions ? "✓" : "✗"}
+            rule suggestions {snapshot.features.policy_suggestions ? "✓" : "✗"}
           </Text>
         </Text>
       </Box>
       {snapshot.split.length > 0 ? (
         <Box marginLeft={2}>
           <Text color={theme.fg.muted}>
-            Split:{" "}
+            Spent on:{" "}
             {snapshot.split
               .map((s) => `${s.feature} $${s.spentUsd.toFixed(2)}`)
               .join(" · ")}
@@ -227,8 +242,14 @@ function LlmTile({ snapshot }: { snapshot: LlmSnapshot }): JSX.Element {
       ) : null}
       <Box marginLeft={2} marginTop={1}>
         <Text color={theme.fg.muted}>
-          Tweak via CLI: <Text bold>foreman llm budget --set N</Text> ·{" "}
+          Change from a terminal: <Text bold>foreman llm budget --set N</Text> ·{" "}
           <Text bold>foreman llm usage --since=7d</Text>
+        </Text>
+      </Box>
+      <Box marginLeft={2}>
+        <Text color={theme.fg.muted}>
+          Turn a feature on:{" "}
+          <Text bold>foreman llm enable verification | smart_report | policy_suggestions</Text>
         </Text>
       </Box>
     </Box>
@@ -281,7 +302,7 @@ function ProviderMappingTile(): JSX.Element | null {
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text bold>
-        Provider mappings <Text color={statusColor}>{statusIcon}</Text>
+        Which LLM provider each agent uses <Text color={statusColor}>{statusIcon}</Text>
       </Text>
       {lines.map((line, i) => (
         <Box key={`pm-${i}`} marginLeft={2}>
@@ -345,23 +366,27 @@ function ChatPrimaryTile(): JSX.Element | null {
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text bold>Primary chat agent</Text>
+      <Text bold>Which agent gets each chat app's bot token</Text>
       {CHAT_CHANNELS.map((ch) => {
         const row = rows.find((r) => r.channel === ch);
         return (
           <Box key={ch} marginLeft={2}>
-            <Text color={theme.fg.muted}>{ch.padEnd(9)}</Text>
-            {row ? (
-              <Text color={theme.accent.success}>● {row.agentId}</Text>
-            ) : (
-              <Text color={theme.fg.muted}>○ (unset — all agents receive secrets)</Text>
-            )}
+            <Text wrap="truncate-end">
+              <Text color={theme.fg.muted}>{ch.padEnd(9)}</Text>
+              {row ? (
+                <Text color={theme.accent.success}>● only {row.agentId}</Text>
+              ) : (
+                <Text color={theme.fg.muted}>
+                  ○ none picked — every chat agent using it gets the token
+                </Text>
+              )}
+            </Text>
           </Box>
         );
       })}
       <Box marginLeft={2} marginTop={1}>
         <Text color={theme.fg.muted}>
-          Switch via CLI:{" "}
+          Pick one from a terminal:{" "}
           <Text bold>foreman chat set-primary &lt;channel&gt; &lt;agent&gt;</Text>
         </Text>
       </Box>
