@@ -197,6 +197,7 @@ export function SetupWizard({
     agentCatalog,
     providerCatalog,
     providersSaved: state.providersSaved,
+    providersSignedIn: state.providersSignedIn,
     services,
   });
   const requiredSetupResolution = useRequiredSetupResolution({

@@ -13,7 +13,7 @@ import {
 } from "./agents-logic.js";
 import type { WizardContext } from "./context.js";
 import { stepProgress } from "./progress.js";
-import { configuredProviderIds } from "./shared.js";
+import { configuredBrainProviderIds } from "./shared.js";
 
 // Step 3 — Agents: picker → per-agent config (agent-config.tsx) → confirm.
 // Returns null when no agents phase renders (e.g. "running"), so the root
@@ -26,7 +26,7 @@ export function renderAgentsStep(ctx: WizardContext): JSX.Element | null {
     agentCatalog,
     initialRegistered,
   } = ctx;
-  const { agentsSelected, agentsPhase, agentsPickerChecked } = ctx.state;
+  const { agentsSelected, agentsPhase, agentsPickerChecked, providersSignedIn } = ctx.state;
   const {
     setAgentsSelected,
     setAgentsPhase,
@@ -45,10 +45,12 @@ export function renderAgentsStep(ctx: WizardContext): JSX.Element | null {
     const pickerStoredNames = new Set(
       services.secretStore.list().map((s) => s.name),
     );
-    const pickerConfiguredProviders = configuredProviderIds(
-      providerCatalog,
-      pickerStoredNames,
-    );
+    // A subscription chosen in Step 1 counts too: its sign-in runs when the
+    // wizard ends, so no key is stored yet (Claude Code and Codex were
+    // hidden for a user who signed in instead of pasting keys).
+    const pickerConfiguredProviders = [
+      ...configuredBrainProviderIds(providerCatalog, pickerStoredNames, providersSignedIn),
+    ];
     const gatingStatuses = computeAgentLlmStatuses(
       agentCatalog,
       providerCatalog,

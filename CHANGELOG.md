@@ -6,6 +6,16 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **The setup wizard shows Claude Code and Codex after a subscription
+  sign-in.** Choosing your Claude or ChatGPT subscription in Step 1 (sign
+  in when setup ends) instead of pasting an API key left the Agents step
+  with only *Generic MCP server*: it counted a provider as set up only
+  when a key was stored. A subscription chosen in Step 1 now counts, in
+  the agent list and in each agent's LLM choice, as it already did for
+  Foreman's brain.
+
 ## [2.3.0] - 2026-09-29
 
 ### Security
