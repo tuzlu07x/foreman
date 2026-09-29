@@ -106,6 +106,8 @@ An approval goes out on the level that matches its risk: `critical` for high and
 
 `timeout_seconds` and `default_action` are shown by `foreman notify status` but don't change how long an approval waits. That deadline belongs to the process that asked, and an approval nobody answers is always denied (see [How approvals work](tui.md#how-approvals-work)).
 
+**What the messages say.** An approval message starts with who wants to do what, in plain words (*manager wants to run a shell command*, *claude-code wants to read a file*; a tool without a plain name reads *wants to use* and the tool's name), then the risk score, the reasons and the arguments. Once it is decided, the message ends with the outcome and where it was made: *✗ Denied (in the TUI) at 20:33:25*, *(on Slack by U0123ABCD)*, *(on Telegram)*, *(relayed from hermes's chat)*, *(timed out: nobody answered in time)* or *(request withdrawn: the agent stopped waiting)*. A task you gave an agent reports back as *manager (Claude Code) finished your task*, or, when the run failed, *manager (Claude Code) couldn't finish your task* with the first line of the error before the task text.
+
 ---
 
 ## 3. Setting up Telegram
@@ -239,7 +241,9 @@ You need the Slack channel set up first (webhook or bot, see
 4. **Slash Commands** → create `/foreman` (any description).
 5. Reinstall the app if Slack asks you to.
 6. Store the token and turn two-way mode on for yourself. Your member id is
-   under your Slack profile → ⋮ → *Copy member ID*.
+   under your Slack profile → ⋮ → *Copy member ID*. (The setup wizard's
+   Services step asks for both after the Slack channel and does this step
+   for you.)
    ```bash
    foreman secrets add slack-app-token          # paste the xapp-… token
    foreman notify slack-interactive --user U0123ABCD
@@ -353,7 +357,7 @@ The URL must be `https://`; plain `http://` is accepted only to this machine (`l
   "level": "critical",
   "requestId": "req-abc",
   "title": "[CRITICAL] hermes → claude-code · read_file",
-  "body": "Risk score: 80/100 (high)\n\nSecret-related (+60 pts):\n  +60  .env-style file …",
+  "body": "hermes wants claude-code to read a file\nRisk score: 80/100 (high)\n\nSecret-related (+60 pts):\n  +60  .env-style file …",
   "actions": [
     { "id": "allow", "label": "Allow once", "style": "primary" },
     { "id": "deny", "label": "Deny", "style": "danger" }
@@ -440,7 +444,7 @@ When `routing.summary.schedule` is set (default `"daily 20:00"`) and the route h
 - High-risk calls flagged
 - Notifications delivered (excluding prior digests)
 
-Footer: *"Smart analysis is off. Enable with `foreman llm enable` for contextual reports."*
+Footer: *"Smart analysis is off. Enable with `foreman llm enable` for contextual reports."* With smart analysis on (`smart_report` in `llm.yaml`), the digest is written by Foreman's LLM instead; when that call fails (a usage limit, the provider down), you get the counts with *"Smart analysis failed this time (…)."* and a short reason in the brackets.
 
 ```bash
 foreman notify summary             # print the digest body to stdout (preview)
@@ -529,8 +533,8 @@ await approval.request(...)   ← mediator blocks here
    │                  → bus.emit('approval:resolved')
    │
    │  First decision wins. Bridge ALSO listens for 'approval:resolved'
-   │  → channel.updateMessage(ref, "… resolved elsewhere") so the
-   │     loser's channel reflects the final state.
+   │  → channel.updateMessage(ref, "✗ Denied (in the TUI) at …") so the
+   │     loser's channel reflects the final state and where it was made.
    │
    ▼
 mediator finalize + return to agent

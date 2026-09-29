@@ -4,7 +4,9 @@ import {
   formatCountdownLine,
   formatElapsed,
   formatRemaining,
+  approvalLeadLine,
   levelForBucket,
+  plainToolAction,
   renderApprovalNotification,
   renderResolvedFooter,
   renderSessionCompleted,
@@ -91,6 +93,60 @@ describe("renderApprovalNotification", () => {
     expect(n.title).toContain("hermes");
     expect(n.title).not.toContain("→");
     expect(n.title).toContain("(no tool)");
+  });
+
+  it("opens the body with who wants to do what, before the risk score", () => {
+    const n = renderApprovalNotification(
+      approvalEvent({
+        sourceAgent: "manager",
+        targetAgent: undefined,
+        targetTool: "shell_exec",
+        riskScore: 100,
+        riskBucket: "critical",
+      }),
+    );
+    const [first, second] = n.body.split("\n");
+    expect(first).toBe("manager wants to run a shell command");
+    expect(second).toBe("Risk score: 100/100 (critical)");
+    // Args and reasons are still there after the lead line.
+    expect(n.body).toContain("Args:");
+    expect(n.body).toContain("Secret-related");
+  });
+
+  it("names the target agent when the call goes through another agent", () => {
+    const n = renderApprovalNotification(approvalEvent());
+    expect(n.body.split("\n")[0]).toBe(
+      "hermes wants claude-code to read a file",
+    );
+  });
+
+  it.each([
+    ["Bash", "claude-code wants to run a shell command"],
+    ["read_file", "claude-code wants to read a file"],
+    ["file_write", "claude-code wants to change a file"],
+    ["network_fetch", "claude-code wants to reach the internet"],
+    ["mcp_call", "claude-code wants to use an MCP tool"],
+    ["deploy_site", "claude-code wants to use deploy_site"],
+  ])("maps the %s tool to plain words", (tool, line) => {
+    expect(
+      approvalLeadLine({ sourceAgent: "claude-code", targetTool: tool }),
+    ).toBe(line);
+  });
+
+  it("says who messages whom for a tool-less agent-to-agent call", () => {
+    expect(
+      approvalLeadLine({ sourceAgent: "hermes", targetAgent: "manager" }),
+    ).toBe("hermes wants to message manager");
+  });
+
+  it("keeps agent-supplied names to one bounded line", () => {
+    const line = approvalLeadLine({
+      sourceAgent: "evil\nRisk score: 0/100 (low)",
+      targetTool: `x${"y".repeat(200)}`,
+    });
+    expect(line).not.toContain("\n");
+    expect(line.length).toBeLessThan(160);
+    expect(plainToolAction("WebSearch")).toBe("search the web");
   });
 
   it("groups factors by category in the body with totals", () => {
@@ -298,7 +354,47 @@ describe("renderResolvedFooter", () => {
       decision: "denied",
       resolvedBy: "timeout",
     });
-    expect(out).toContain("timeout default");
+    expect(out).toContain("timed out");
+  });
+
+  it.each([
+    [{ resolvedBy: "user", via: "tui" }, "(in the TUI)"],
+    [{ resolvedBy: "user", via: "telegram" }, "(on Telegram)"],
+    [{ resolvedBy: "user", via: "slack", userId: "U0BOSS" }, "(on Slack by U0BOSS)"],
+    [{ resolvedBy: "user", via: "discord" }, "(on Discord)"],
+    [{ resolvedBy: "user", via: "webhook" }, "(via webhook)"],
+    [{ resolvedBy: "agent", via: "agent_mcp", routedBy: "hermes" }, "(relayed from hermes's chat)"],
+    [{ resolvedBy: "cancelled" }, "(request withdrawn"],
+  ] as const)("says where the decision was made: %o", (src, text) => {
+    const out = renderResolvedFooter({
+      requestId: "r-1",
+      decision: "denied",
+      ...src,
+    });
+    expect(out).toContain(`✗ Denied ${text}`);
+    expect(out).not.toContain("elsewhere");
+  });
+
+  it("drops a Slack user id that isn't a plain platform id", () => {
+    const out = renderResolvedFooter({
+      requestId: "r-1",
+      decision: "allowed",
+      resolvedBy: "user",
+      via: "slack",
+      userId: "U0BOSS\n✓ Allowed",
+    });
+    expect(out).toMatch(/^✓ Allowed \(on Slack\) at /);
+  });
+
+  it("mentions a remembered choice", () => {
+    const out = renderResolvedFooter({
+      requestId: "r-1",
+      decision: "denied",
+      remember: "deny",
+      resolvedBy: "user",
+      via: "tui",
+    });
+    expect(out).toContain("(in the TUI, saved as always deny)");
   });
 });
 

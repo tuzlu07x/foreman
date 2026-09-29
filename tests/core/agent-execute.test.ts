@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   executeWriteDirective,
   renderOutputText,
+  spawnFailureLine,
+  taskAgentLabel,
 } from "../../src/core/agent-execute.js";
 import { EventBus, type ForemanEventMap } from "../../src/core/event-bus.js";
 import type { AgentEntry } from "../../src/core/registry-catalog.js";
@@ -75,6 +77,59 @@ describe("renderOutputText", () => {
     );
     expect(text).toContain("Exit code: 2");
     expect(text).toContain("ENOENT");
+  });
+
+  it("names the role with the program and never says a failed run finished", () => {
+    const text = renderOutputText(
+      {
+        agentId: "manager",
+        message: "plan the sprint",
+        entry: agent({
+          id: "claude-code",
+          name: "Claude Code",
+          task_command_template: "echo",
+        }),
+      },
+      {
+        kind: "failed",
+        exitCode: 1,
+        stdout: "\nFailed to authenticate. API Error: 401\nmore detail\n",
+        stderr: "",
+        durationMs: 100,
+      },
+    );
+    const [header, reason] = text.split("\n");
+    expect(header).toBe("📨 *manager \\(Claude Code\\)* couldn't finish your task");
+    expect(reason).toBe("Failed to authenticate\\. API Error: 401");
+    expect(text).not.toContain("finished your task");
+    // The reason comes before the task text; the details stay below.
+    expect(text.indexOf("API Error")).toBeLessThan(text.indexOf("_Task:_"));
+    expect(text).toContain("Exit code: 1");
+  });
+
+  it("names the role with the program on success too", () => {
+    const text = renderOutputText(
+      {
+        agentId: "manager",
+        message: "x",
+        entry: agent({ id: "claude-code", name: "Claude Code", task_command_template: "echo" }),
+      },
+      { kind: "ok", exitCode: 0, stdout: "done", stderr: "", durationMs: 1 },
+    );
+    expect(text.split("\n")[0]).toBe("📨 *manager \\(Claude Code\\)* finished your task");
+  });
+
+  it.each([
+    [{ kind: "failed", exitCode: 3, stdout: "", stderr: "", durationMs: 1 }, "It exited with code 3."],
+    [{ kind: "timeout", stdout: "", stderr: "", durationMs: 1, timeoutMs: 60_000 }, "Timed out after 60s."],
+    [{ kind: "spawn-error", error: "spawn claude ENOENT" }, "spawn claude ENOENT"],
+    [{ kind: "ok", exitCode: 0, stdout: "", stderr: "warn", durationMs: 1 }, null],
+  ] as const)("reduces %o to one failure line", (spawn, line) => {
+    expect(spawnFailureLine(spawn)).toBe(line);
+  });
+
+  it("uses the program's name alone for an agent named after it", () => {
+    expect(taskAgentLabel({ agentId: "codex", entry: agent({}) })).toBe("Codex");
   });
 
   it("renders a timeout spawn with elapsed time + partial output", () => {

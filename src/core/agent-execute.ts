@@ -615,8 +615,14 @@ export function renderOutputText(
   spawn: SpawnAgentTaskOutcome,
   maxLength: number = DEFAULT_MAX_OUTPUT,
 ): string {
-  const agentName = input.entry.name || input.agentId;
-  const header = `📨 *${escapeMd(agentName)}* finished your task`;
+  const agentName = taskAgentLabel(input);
+  // A failed run must not read as "finished": say so, and lead with the
+  // reason (e.g. "Failed to authenticate. API Error: 401") before the task.
+  const failure = spawnFailureLine(spawn);
+  const header =
+    failure === null
+      ? `📨 *${escapeMd(agentName)}* finished your task`
+      : `📨 *${escapeMd(agentName)}* couldn't finish your task\n${escapeMd(failure)}`;
   let body: string;
   let tail = "";
   switch (spawn.kind) {
@@ -665,6 +671,53 @@ export function renderOutputText(
   }
   const taskExcerpt = truncateForTelegram(input.message, 200);
   return `${header}\n\n_Task:_ ${escapeMd(taskExcerpt)}\n\n${body}${tail}`;
+}
+
+/** Who ran the task: the agent id (the role instance, e.g. "manager") with
+ *  the program in parentheses — "manager (Claude Code)". An agent whose id
+ *  is the program's own ("codex") is just the program's name. */
+export function taskAgentLabel(
+  input: Pick<ExecuteDirectiveInput, "agentId" | "entry">,
+): string {
+  const program = input.entry.name.trim();
+  if (!program) return input.agentId;
+  if (input.agentId === input.entry.id || input.agentId === program) return program;
+  return `${input.agentId} (${program})`;
+}
+
+/** Longest error line repeated at the top of a failed-task message. */
+const FAILURE_LINE_MAX = 200;
+
+/** The one-line reason a task run failed, or null when it succeeded.
+ *  The first non-empty line of the error output (stdout when the agent
+ *  wrote its error there), so the cause is readable before the details. */
+export function spawnFailureLine(spawn: SpawnAgentTaskOutcome): string | null {
+  const firstLine = (text: string): string | null => {
+    const line = text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => l.length > 0);
+    if (!line) return null;
+    return line.length <= FAILURE_LINE_MAX
+      ? line
+      : `${line.slice(0, FAILURE_LINE_MAX - 1)}…`;
+  };
+  switch (spawn.kind) {
+    case "ok":
+      return null;
+    case "failed":
+      return (
+        firstLine(spawn.stderr) ??
+        firstLine(spawn.stdout) ??
+        `It exited with code ${spawn.exitCode}.`
+      );
+    case "timeout":
+      return `Timed out after ${(spawn.timeoutMs / 1000).toFixed(0)}s.`;
+    case "spawn-error":
+      return firstLine(spawn.error) ?? "It could not be started.";
+    case "unsupported":
+      return firstLine(spawn.reason) ?? "It can't take tasks from Foreman.";
+  }
 }
 
 // QA17 — Wrap arbitrary text in a MarkdownV2 code block. Inside the

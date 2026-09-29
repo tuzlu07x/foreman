@@ -463,6 +463,10 @@ export class DbApprovalService implements ApprovalService {
           decision: decision.decision,
           remember: decision.remember,
           resolvedBy: row.resolvedBy ?? "timeout",
+          // Where it was decided, so listeners (the chat message's outcome
+          // line, the inbox) can say "in the TUI" / "on Slack".
+          ...(decision.via ? { via: decision.via } : {}),
+          ...(decision.userId ? { userId: decision.userId } : {}),
         });
         return decision;
       }
