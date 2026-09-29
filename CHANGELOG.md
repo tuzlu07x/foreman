@@ -74,6 +74,7 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Fixed
 
+- `/foreman activity` no longer says "6s ago ago".
 - **A task given to an ACP agent (Hermes, OpenClaw, ZeroClaw) keeps its
   reply** ([#729](https://github.com/tuzlu07x/foreman/issues/729)). They
   stream the answer as `agent_message_chunk` updates and end the prompt
