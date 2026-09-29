@@ -74,6 +74,10 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Fixed
 
+- Running `foreman setup` again no longer wipes two-way chat settings: a
+  channel it rewrites keeps what the wizard doesn't ask about (Slack's
+  `app_token_ref`, `allowed_user_ids`, `owner_user_ids`, Telegram's
+  approval bot, `listener`).
 - **The setup wizard's Services step no longer saves a wrong paste.** A
   value that fails its format check (a Discord public key pasted as the
   bot token) was stored at once with *Saved anyway*. Now the prompt stays
