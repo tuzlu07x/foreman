@@ -178,8 +178,11 @@ export function renderForemanLlmStep(ctx: WizardContext): JSX.Element {
                   {row.disabled ? "✗ " : "✓ "}
                   {row.label}
                 </Text>
-                <Text color={theme.fg.muted} dimColor={row.disabled}>
-                  {"  "}{row.sub}
+                {/* The cursor skips a ✗ row, so its reason is shown in
+                    place of its description (real-services test: "why
+                    can't I pick OpenAI?"). */}
+                <Text color={row.disabled ? theme.accent.warning : theme.fg.muted}>
+                  {"  "}{row.disabled ? row.disabledReason : row.sub}
                 </Text>
               </Box>
             );

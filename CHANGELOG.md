@@ -65,6 +65,24 @@ All notable changes to Foreman are documented here. The format follows
   a pidfile left from before a reboot, or whose pid now belongs to
   another program, no longer counts as a running Foreman.
 
+### Fixed
+
+- **Setup: an API key is never swapped for a browser sign-in.** For
+  Anthropic and OpenAI, Step 1 asked "Sign in with your subscription
+  instead of pasting a key? (y/n)", and Enter meant yes. A key pasted at
+  that question was dropped, a browser sign-in was queued, and the
+  summary said "0 LLM providers". It is now an explicit choice with
+  **API key** highlighted. A key saved in the run sets `auth_mode:
+  api_key` and cancels a queued sign-in for that provider. Going back
+  (Esc, or `n` on the summary, which used to continue like `y`) keeps
+  your ticks and asks again. The Done screen counts subscriptions as
+  providers ([#720](https://github.com/tuzlu07x/foreman/issues/720)).
+- Setup: Step 2 (Foreman's brain) shows, on each ✗ row, why it can't be
+  picked yet ("needs an OpenAI key or ChatGPT sign-in in Step 1"). A
+  custom OpenAI-compatible provider picked in Step 1 is now written to
+  `llm.yaml`. The Done screen says where to talk to Foreman: `:` in the
+  TUI, your Telegram bot, `/foreman` in Slack or Discord.
+
 ## [2.2.0] - 2026-09-29
 
 Foreman keeps guarding when the TUI is closed, can run its own model locally,

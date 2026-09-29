@@ -2,6 +2,7 @@ import {
   ConfirmInput,
   MultiSelect,
   PasswordInput,
+  Select,
   TextInput,
 } from "@inkjs/ui";
 import { Box, Text } from "ink";
@@ -26,6 +27,7 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
   const { services, advance, providerCatalog } = ctx;
   const {
     providerPrompts,
+    providersSelected,
     providerIdx,
     providersPhase,
     providersSaved,
@@ -74,6 +76,8 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
         </Text>
         <MultiSelect
           options={options}
+          // Coming back (Esc, or n on the summary) keeps what was ticked.
+          defaultValue={providersSelected}
           onSubmit={(values) => {
             const result = applyProvidersPickerSubmit(values);
             setProvidersSelected(result.selected);
@@ -103,11 +107,11 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
       setProvidersPhase("summary");
       return <Text>…</Text>;
     }
-    // Faz 4b-3 — for OAuth-capable providers (anthropic, openai), offer
-    // subscription sign-in ahead of the key paste. Asked once per provider
-    // per wizard run (`authModeAsked` debounces); on Y we mark the provider
-    // for OAuth + skip the key prompt, on N we fall through to the normal
-    // PasswordInput render below.
+    // Faz 4b-3 — for OAuth-capable providers (anthropic, openai), ask how
+    // to connect before the key paste: an explicit choice, API key first.
+    // (It was a y/n question whose Enter meant "subscription": a key pasted
+    // there was dropped and the browser sign-in queued instead.) Asked once
+    // per provider per pass through the picker (`authModeAsked`).
     if (
       prompt.kind === "key" &&
       isOAuthCapableProvider(prompt.providerId) &&
@@ -125,46 +129,48 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
             phase={`auth mode ${theme.symbols.bullet} ${providerLabel}`}
           />
           <Text>
-            {theme.symbols.bullet} How do you want to authenticate to{" "}
+            {theme.symbols.bullet} How do you want to connect{" "}
             <Text bold color={theme.accent.primary}>
               {providerLabel}
             </Text>
             ?
           </Text>
           <Text color={theme.fg.muted}>
-            If you have a {subscriptionLabel} subscription, signing in skips
-            the API-key paste — Foreman draws from your plan's rate limits,
-            no separate API budget needed.
+            An API key is billed per use. With a {subscriptionLabel} subscription
+            you sign in through your browser once setup ends, and Foreman uses
+            your plan instead.
           </Text>
-          <Text>
-            Sign in with your {subscriptionLabel} subscription instead of
-            pasting a key? (y/n)
-          </Text>
-          <ConfirmInput
-            onConfirm={() => {
-              setProvidersSignedIn((prev) =>
-                prev.includes(oauthProviderId) ? prev : [...prev, oauthProviderId],
-              );
+          <Select
+            key={`auth:${oauthProviderId}`}
+            options={[
+              { label: "API key — paste it on the next screen", value: "key" },
+              {
+                label: `${subscriptionLabel} subscription — sign in in the browser after setup`,
+                value: "subscription",
+              },
+            ]}
+            onChange={(value) => {
               setAuthModeAsked((prev) =>
                 prev.includes(oauthProviderId) ? prev : [...prev, oauthProviderId],
               );
-              // Skip the key prompt for this provider; advance.
+              if (value === "key") {
+                // Falls through to the key prompt on the next render.
+                setProvidersSignedIn((prev) => prev.filter((id) => id !== oauthProviderId));
+                return;
+              }
+              setProvidersSignedIn((prev) =>
+                prev.includes(oauthProviderId) ? prev : [...prev, oauthProviderId],
+              );
+              // No key to paste for this provider; advance.
               if (providerIdx + 1 >= providerPrompts.length) {
                 setProvidersPhase("summary");
               } else {
                 setProviderIdx(providerIdx + 1);
               }
             }}
-            onCancel={() => {
-              // Falls through to PasswordInput on next render.
-              setAuthModeAsked((prev) =>
-                prev.includes(oauthProviderId) ? prev : [...prev, oauthProviderId],
-              );
-            }}
           />
           <Text color={theme.fg.muted}>
-            [y] sign in via `foreman llm login` after wizard
-            {" · "}[n] paste an API key now
+            [↑↓] choose · [Enter] confirm · [Esc] back to selection
           </Text>
         </Box>
       );
@@ -292,12 +298,12 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
               </Text>
             ))}
           </Box>
-        ) : (
+        ) : providersSignedIn.length === 0 ? (
           <Text color={theme.fg.muted}>
             (no providers configured — you can add them later from the LLM
             Providers page)
           </Text>
-        )}
+        ) : null}
         {/* The last prompt's paste warning would otherwise never show. */}
         {providersWarning && (
           <Text color={theme.accent.warning}>⚠ {providersWarning}</Text>
@@ -305,7 +311,7 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
         {providersSignedIn.length > 0 && (
           <Box flexDirection="column">
             <Text color={theme.accent.primary}>
-              ⚿ Will sign in via subscription (post-wizard):
+              ⚿ Will sign in with your subscription when setup ends:
             </Text>
             {providersSignedIn.map((id) => (
               <Text key={`signin:${id}`} color={theme.fg.muted}>
@@ -326,7 +332,7 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
             ))}
           </Box>
         )}
-        <Text>Continue to Foreman's brain? (y/n)</Text>
+        <Text>Continue to Foreman's brain? (Y/n)</Text>
         <ConfirmInput
           onConfirm={() => {
             persistLlmConfigFromWizardState(
@@ -338,17 +344,12 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
             advance("providers");
           }}
           onCancel={() => {
-            persistLlmConfigFromWizardState(
-              services,
-              providerCatalog,
-              providersSaved,
-              providersSignedIn,
-            );
-            advance("providers");
+            // n: change the providers instead (as Esc does).
+            backToProviderPicker(ctx);
           }}
         />
         <Text color={theme.fg.muted}>
-          [y/n] continue · [Esc] back to selection
+          [y] or [Enter] continue · [n] or [Esc] change providers
         </Text>
       </Box>
     );
@@ -356,16 +357,28 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
   return null;
 }
 
+/** Back to the provider picker. The key-or-subscription answers go too,
+ *  so each provider picked again is asked again (a choice made on the way
+ *  out used to stick: a pasted key then went along with a queued browser
+ *  sign-in). Keys already saved stay saved. */
+export function backToProviderPicker(ctx: WizardContext): void {
+  const { setProviderIdx, setProvidersPhase, setProvidersWarning, setAuthModeAsked, setProvidersSignedIn, setProvidersSkipped } =
+    ctx.set;
+  setProvidersPhase("picker");
+  setProviderIdx(0);
+  setProvidersWarning(null);
+  setAuthModeAsked([]);
+  setProvidersSignedIn([]);
+  setProvidersSkipped([]);
+}
+
 // Esc back-navigation for the providers step (#153).
 export function handleProvidersEscape(ctx: WizardContext): boolean {
   const { currentStep, uncomplete } = ctx;
   const { providersPhase } = ctx.state;
-  const { setProviderIdx, setProvidersPhase, setProvidersWarning } = ctx.set;
   if (currentStep === "providers") {
     if (providersPhase === "values" || providersPhase === "summary") {
-      setProvidersPhase("picker");
-      setProviderIdx(0);
-      setProvidersWarning(null);
+      backToProviderPicker(ctx);
       return true;
     }
     uncomplete("welcome");

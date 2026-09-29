@@ -550,10 +550,40 @@ describe('providers step', () => {
     const w = await mount('providers')
     await w.until('pick which to configure')
     await w.pressInList(SPACE)
-    await w.press(ENTER, 'How do you want to authenticate to')
-    await w.until('Sign in with your Claude subscription instead of')
-    await w.press('y', 'Will sign in via subscription')
+    await w.press(ENTER, 'How do you want to connect')
+    await w.until('API key — paste it on the next screen')
+    await w.until('Claude subscription — sign in in the browser after setup')
+    await w.press(DOWN)
+    await w.press(ENTER, 'Will sign in with your subscription')
     await w.until('runs `foreman llm login anthropic`')
+  })
+
+  // Real-services test (2.2.0): the question was a y/n whose Enter meant
+  // "subscription", so a key pasted there was dropped and a browser sign-in
+  // queued. Enter now takes the highlighted choice, an API key.
+  it('takes a key by default: Enter on the question leads to the key prompt, never a sign-in', async () => {
+    const w = await mount('providers')
+    await w.until('pick which to configure')
+    await w.pressInList(SPACE)
+    await w.press(ENTER, 'How do you want to connect')
+    await w.press(ENTER, 'Value for Anthropic')
+    await w.type('sk-ant-fake-key-000')
+    await w.press(ENTER, 'LLM Providers ▸ summary')
+    await w.until('anthropic-key')
+    expect(w.frame()).not.toContain('Will sign in with your subscription')
+    expect(w.secretStore.get('anthropic-key')).toBe('sk-ant-fake-key-000')
+  })
+
+  it('n on the summary goes back to the picker and asks the question again', async () => {
+    const w = await mount('providers')
+    await w.until('pick which to configure')
+    await w.pressInList(SPACE)
+    await w.press(ENTER, 'How do you want to connect')
+    await w.press(DOWN)
+    await w.press(ENTER, 'Will sign in with your subscription')
+    await w.press('n', 'pick which to configure')
+    // The earlier answer is gone: picking again asks again.
+    await w.press(ENTER, 'How do you want to connect')
   })
 })
 
@@ -562,6 +592,8 @@ describe("foreman-llm step (Foreman's brain)", () => {
     const w = await mount('foreman-llm', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
     await w.until("Foreman's brain ▸ pick an LLM")
     await w.until('✗ Anthropic')
+    // Why it can't be picked, on the row itself (the cursor never lands there).
+    await w.until('needs an Anthropic key or Claude sign-in in Step 1')
     await w.until('✓ OpenAI')
     await w.press(ENTER, 'pick a OpenAI model')
     await w.until('openai-fake-large')
@@ -1277,8 +1309,9 @@ describe('foreman-llm step with a subscription sign-in (#575 follow-up)', () => 
     const w = await mount('providers')
     await w.until('pick which to configure')
     await w.pressInList(SPACE)
-    await w.press(ENTER, 'How do you want to authenticate to')
-    await w.press('y', 'Will sign in via subscription')
+    await w.press(ENTER, 'How do you want to connect')
+    await w.press(DOWN)
+    await w.press(ENTER, 'Will sign in with your subscription')
     await w.press('y', "Foreman's brain ▸ pick an LLM")
     await w.until('❯ ✓ Anthropic')
     await w.press(ENTER, 'Anthropic ▸ default model')

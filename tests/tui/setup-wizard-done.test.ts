@@ -8,6 +8,7 @@ import {
   countPolicyRules,
 } from "../../src/tui/setup-wizard.js";
 import type { ProviderEntry } from "../../src/core/registry-catalog.js";
+import { foremanLlmLoginsNeeded } from "../../src/tui/setup-wizard/shared.js";
 
 function provider(overrides: Partial<ProviderEntry>): ProviderEntry {
   return {
@@ -130,5 +131,17 @@ describe("countPolicyRules", () => {
   it("returns 0 when rules is not an array", () => {
     writeFileSync(policyPath, `rules: not-a-list\n`);
     expect(countPolicyRules(policyPath)).toBe(0);
+  });
+});
+
+describe("foremanLlmLoginsNeeded (real-services test)", () => {
+  const providers = [
+    { id: "openai", secret_name: "openai-key" },
+    { id: "anthropic", secret_name: "anthropic-key" },
+  ] as unknown as Parameters<typeof foremanLlmLoginsNeeded>[1];
+
+  it("queues a browser sign-in only for a subscription chosen without a key saved in this run", () => {
+    expect(foremanLlmLoginsNeeded(["openai"], providers, new Set())).toEqual(["openai"]);
+    expect(foremanLlmLoginsNeeded(["openai", "anthropic"], providers, new Set(["openai-key"]))).toEqual(["anthropic"]);
   });
 });
