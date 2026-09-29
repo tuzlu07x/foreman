@@ -62,7 +62,7 @@ it('Claude Code PreToolUse hook: install, allow, approve and deny in the TUI, fa
 
   /** Pipe a PreToolUse payload into the hook the way Claude Code runs it. */
   const hook = (payload: string, opts: { args?: string; env?: Record<string, string>; timeoutMs?: number } = {}) =>
-    runShell(sb, opts.args ? `${hookCommand} ${opts.args}` : hookCommand, payload, opts.env, opts.timeoutMs)
+    runShell(sb, opts.args ? withArgs(hookCommand, opts.args) : hookCommand, payload, opts.env, opts.timeoutMs)
   const payload = (sessionId: string, toolName: string, toolInput: Record<string, unknown>): string =>
     JSON.stringify({
       session_id: sessionId,
@@ -80,7 +80,7 @@ it('Claude Code PreToolUse hook: install, allow, approve and deny in the TUI, fa
     const bin = join(sb.root, 'bin')
     writeExecutable(join(bin, 'foreman'), `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(FOREMAN_BIN)} "$@"\n`)
     writeExecutable(join(bin, 'foreman-hook'), `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(HOOK_BIN)} "$@"\n`)
-    ev('PATH: `foreman` → node dist/cli/index.js, `foreman-hook` → node dist/cli/hook.js (sandbox bin/)')
+    ev('PATH: `foreman` → node dist/cli/index.js, `foreman-hook` → node dist/cli/hook.js (sandbox bin/); the installed hook uses neither')
 
     const out = sb.ok(['agent', 'hook', 'install', 'claude-code'])
     expect(out).toContain('Installed PreToolUse hook for claude-code')
@@ -90,8 +90,13 @@ it('Claude Code PreToolUse hook: install, allow, approve and deny in the TUI, fa
     expect(groups).toHaveLength(1)
     const [group] = groups
     const entry = group?.hooks?.[0]
-    expect(entry).toMatchObject({ type: 'command', command: 'foreman-hook claude-code', timeout: 660, managed_by: 'foreman.pre-tool-use' })
+    // Pinned by absolute path, never looked up on PATH, and wrapped so a
+    // hook that can't run blocks the call (#714).
+    expect(entry).toMatchObject({ type: 'command', timeout: 660, managed_by: 'foreman.pre-tool-use' })
     hookCommand = entry?.command ?? ''
+    expect(hookCommand.indexOf(process.execPath)).toBeLessThan(hookCommand.indexOf(HOOK_BIN))
+    expect(hookCommand).toMatch(/ claude-code; s=\$\?;/)
+    expect(hookCommand).toContain('so this call is blocked')
     const matcher = new RegExp(`^(?:${group?.matcher ?? ''})$`)
     for (const tool of ['Bash', 'Read', 'Write', 'Edit', 'WebFetch', 'mcp__github__create_issue']) {
       expect(matcher.test(tool), tool).toBe(true)
@@ -104,6 +109,21 @@ it('Claude Code PreToolUse hook: install, allow, approve and deny in the TUI, fa
     expect(again).toContain('hook already installed for claude-code')
     expect((JSON.parse(readFileSync(settingsPath, 'utf-8')) as ClaudeSettings).hooks?.PreToolUse).toHaveLength(1)
     ev('a second install reports "hook already installed" and leaves a single entry')
+  })
+
+  await j.step('the pinned hook needs nothing on PATH, and one whose program is gone blocks the call', async (ev) => {
+    // Claude Code's PATH may have no Foreman at all (another nvm default).
+    const bare = await runShell(sb, hookCommand, payload('qa-hook-nopath', 'Bash', { command: 'ls' }), { PATH: '/usr/bin:/bin' })
+    expect(bare.status, bare.stderr).toBe(0)
+    ev(`with PATH=/usr/bin:/bin the hook still runs: exit ${bare.status}`)
+    // Node moved or Foreman uninstalled: the shell can't start it (127). Claude Code would run the call; the wrapper blocks it.
+    const gone = await runShell(sb, hookCommand.replace(HOOK_BIN, join(sb.root, 'gone', 'hook.js')), payload('qa-hook-gone', 'Bash', { command: 'ls' }))
+    expect(gone.status).toBe(2)
+    expect(gone.stderr).toContain("Foreman's hook could not run")
+    ev(`hook.js moved away: exit ${gone.status}, "${gone.stderr.trim().split('\n').at(-1)}"`)
+    const doctor = sb.json<{ checks: Array<{ name: string; status: string; message: string }> }>(['doctor', '--json'], { allowExit: [0, 1, 2] })
+    expect(doctor.checks.find((c) => c.name === 'claude_hook')).toMatchObject({ status: 'ok', message: expect.stringContaining('pinned to this Foreman') })
+    ev('foreman doctor --json: claude_hook ok, pinned to this Foreman')
   })
 
   await j.step('a harmless call (Bash `ls -la`) passes: exit 0, allowed and audited', async (ev) => {
@@ -327,4 +347,10 @@ function writeExecutable(path: string, body: string): void {
 
 function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`
+}
+
+/** The hook command with extra arguments for the hook itself (before the
+ *  wrapper's `; s=$?`). */
+function withArgs(command: string, args: string): string {
+  return command.replace(/ claude-code;/, ` claude-code ${args};`)
 }

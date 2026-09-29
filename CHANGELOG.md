@@ -6,6 +6,20 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- **Claude Code's hook no longer fails open when Foreman isn't on its
+  PATH** ([#714](https://github.com/tuzlu07x/foreman/issues/714)). The hook
+  was written as a bare `foreman-hook claude-code`. When the PATH Claude
+  Code runs with lacked it (another nvm default, Foreman uninstalled, Node
+  moved), the shell exited 127, which Claude Code treats as a non-blocking
+  error: the tool call ran unguarded. The hook now names Node and
+  `hook.js` by absolute path, and a wrapper turns any exit other than 0
+  (allow) or 2 (block) into a block with *Foreman's hook could not run*.
+  `foreman agent hook install claude-code` rewrites an existing entry in
+  place, so run it once after upgrading. `foreman doctor` warns about a
+  hook that relies on PATH (`claude_hook`).
+
 ### Added
 
 - **Approvals reach your chat with no terminal open.** The background
@@ -26,6 +40,8 @@ All notable changes to Foreman are documented here. The format follows
 - `foreman service status` and `foreman doctor` (a new `gateway` row) say
   which process runs the gateway; doctor says where approvals go, and warns
   when the gateway stopped checking in.
+- `foreman agent hook install|uninstall claude-code --project [dir]`: the
+  hook in `<dir>/.claude/settings.json`, for one project only.
 
 ### Changed
 

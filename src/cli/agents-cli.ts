@@ -16,6 +16,7 @@ import {
   DEFAULT_PRETOOLUSE_MATCHER,
   defaultHookCommand,
   installPreToolUseHook,
+  projectSettingsPath,
   uninstallPreToolUseHook,
 } from "../core/agent-hook.js";
 import { buildMcpSnippet, snippetForDisplay } from "../core/agent-mcp-snippet.js";
@@ -883,6 +884,13 @@ agentsCommand
 // Allow / Deny → exit 0 / 2 → call proceeds or aborts. Claude Code only
 // for now; Codex/OpenClaw don't expose an equivalent pre-call hook.
 
+/** The settings file a hook command acts on: the project's with
+ *  `--project [dir]`, else the agent's user settings. */
+function hookSettingsPath(project: string | boolean | undefined, configPaths: string[]): string {
+  if (project === undefined || project === false) return resolveAgentSettingsPath(configPaths);
+  return projectSettingsPath(project === true ? process.cwd() : project);
+}
+
 const hookSub = agentsCommand
   .command("hook")
   .description(
@@ -903,13 +911,17 @@ hookSub
   )
   .option(
     "--command <cmd>",
-    "Override the hook command (default: `foreman-hook <agentId>` when on PATH, else `foreman hook <agentId>`)",
+    "Override the hook command (default: this Foreman's hook by absolute path, blocking the call if it can't run)",
+  )
+  .option(
+    "--project [dir]",
+    "Install into <dir>/.claude/settings.json (default: the current directory), so only that project is covered",
   )
   .option("--dry-run", "Show what would change without writing", false)
   .action(
     (
       agentId: string,
-      opts: { matcher: string; command?: string; dryRun: boolean },
+      opts: { matcher: string; command?: string; project?: string | boolean; dryRun: boolean },
     ) => {
       if (agentId !== "claude-code") {
         console.error(
@@ -939,7 +951,7 @@ hookSub
         closeDb();
         process.exit(1);
       }
-      const settingsPath = resolveAgentSettingsPath(configPaths);
+      const settingsPath = hookSettingsPath(opts.project, configPaths);
       const hookCmd =
         opts.command && opts.command.trim().length > 0
           ? opts.command
@@ -960,7 +972,14 @@ hookSub
         process.exit(1);
       }
       const verb = opts.dryRun ? "Would install" : "Installed";
-      if (result.alreadyInstalled) {
+      if (result.updated) {
+        console.log(
+          `${green("✓")} ${opts.dryRun ? "Would update" : "Updated"} the PreToolUse hook for ${bold(agentId)}` +
+            (opts.dryRun ? dim(" (dry-run)") : ""),
+        );
+        console.log(`  ${dim("settings")}  ${result.settingsPath}`);
+        console.log(`  ${dim("command")}   ${hookCmd}`);
+      } else if (result.alreadyInstalled) {
         console.log(
           `${green("✓")} hook already installed for ${bold(agentId)}`,
         );
@@ -974,7 +993,7 @@ hookSub
         console.log(`  ${dim("matcher")}   ${result.matcher}`);
         console.log(`  ${dim("command")}   ${hookCmd}`);
         console.log(
-          `  ${dim("revoke")}    \`foreman agent hook uninstall ${agentId}\``,
+          `  ${dim("revoke")}    \`foreman agent hook uninstall ${agentId}${opts.project !== undefined && opts.project !== false ? " --project" + (typeof opts.project === "string" ? ` ${opts.project}` : "") : ""}\``,
         );
       }
       closeDb();
@@ -987,8 +1006,12 @@ hookSub
     "Remove Foreman's PreToolUse hook from the agent's settings. " +
       "User-added hook entries are left alone.",
   )
+  .option(
+    "--project [dir]",
+    "Remove it from <dir>/.claude/settings.json (default: the current directory)",
+  )
   .option("--dry-run", "Show what would change without writing", false)
-  .action((agentId: string, opts: { dryRun: boolean }) => {
+  .action((agentId: string, opts: { project?: string | boolean; dryRun: boolean }) => {
     const catalogEntry = safeFindAgent(loadActiveRegistry().doc, agentId);
     if (!catalogEntry) {
       console.error(
@@ -1007,7 +1030,7 @@ hookSub
       closeDb();
       process.exit(1);
     }
-    const settingsPath = resolveAgentSettingsPath(configPaths);
+    const settingsPath = hookSettingsPath(opts.project, configPaths);
     let result;
     try {
       result = uninstallPreToolUseHook(settingsPath, { dryRun: opts.dryRun });

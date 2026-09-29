@@ -53,6 +53,12 @@ An unverified connection that claims a blocked or disabled id is refused too (se
 
 `foreman agents` is an alias for `foreman agent`.
 
+### Claude Code's hook
+
+`foreman agent hook install claude-code` adds a PreToolUse hook to `~/.claude/settings.json`, so Claude Code's own tools (Bash, Read, Write, Edit, WebFetch, other MCP servers) go through Foreman's policy, risk scoring and approvals. With `--project [dir]` it goes into `<dir>/.claude/settings.json` instead and covers only sessions started in that project; `uninstall --project` removes it again.
+
+The hook names Node and Foreman's `hook.js` by absolute path (a standalone binary names itself), so it works whatever `PATH` Claude Code runs with, for example with another nvm default. Claude Code runs a tool when its hook exits with anything but 2. So the command is wrapped: if the hook can't start at all (Node moved, Foreman uninstalled), the call is **blocked** with *Foreman's hook could not run*, never run unguarded. After moving Node or Foreman, run `hook install` again; it rewrites the existing entry in place. That includes one written by 2.2.0 as a bare `foreman-hook claude-code`, which failed open whenever `PATH` lacked it. `foreman doctor` (the `claude_hook` row) warns about a hook that relies on `PATH` and fails when the program it names is gone.
+
 ## TUI flow
 
 Press `a` on the Home page to open the Agents page:

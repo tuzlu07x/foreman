@@ -136,7 +136,7 @@ How long a call waits:
 | --- | --- | --- |
 | MCP agents (`foreman mcp-stdio`), `foreman wrap` | 60 seconds | set `FOREMAN_APPROVAL_TIMEOUT` in that process's environment, e.g. in the `env` of the agent's `foreman` MCP entry |
 | tasks `foreman start` runs itself | 60 seconds | set `FOREMAN_APPROVAL_TIMEOUT` in the environment you start `foreman start` from |
-| Claude Code's hook (`foreman hook claude-code`) | 10 minutes | set `FOREMAN_APPROVAL_TIMEOUT` in the environment Claude Code runs in, or add `--timeout-ms <ms>` (which wins) to the `foreman hook claude-code` command in `~/.claude/settings.json`. Claude Code itself gives the hook 660 seconds, so a longer wait is cut short there. |
+| Claude Code's hook (`foreman hook claude-code`) | 10 minutes | set `FOREMAN_APPROVAL_TIMEOUT` in the environment Claude Code runs in, or add `--timeout-ms <ms>` (which wins) after `claude-code` in the hook command in `~/.claude/settings.json`. Claude Code itself gives the hook 660 seconds, so a longer wait is cut short there. |
 
 `FOREMAN_APPROVAL_TIMEOUT` is a whole number of **seconds** (`FOREMAN_APPROVAL_TIMEOUT=300` waits five minutes). Quitting the TUI doesn't decide anything: calls still waiting are denied when their time runs out.
 
