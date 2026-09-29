@@ -1,8 +1,12 @@
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,8 +17,11 @@ import {
   defaultHookCommand,
   FOREMAN_HOOK_MARKER,
   FOREMAN_HOOK_TIMEOUT_SECONDS,
+  hasForemanHook,
   installPreToolUseHook,
   mergeHook,
+  projectSettingsPath,
+  resolveHookLauncher,
   uninstallPreToolUseHook,
 } from "../../src/core/agent-hook.js";
 
@@ -91,20 +98,45 @@ describe("mergeHook — pure merge logic", () => {
     expect(next.mcpServers).toEqual(existing.mcpServers);
   });
 
-  it("matches by marker, NOT by command string (path-drift resilient)", () => {
+  it("matches by marker, NOT by command string, and rewrites a command that drifted (#714)", () => {
     // First install pretends `foreman` lived in /nvm/v20/bin/foreman.
     const first = mergeHook(
       {},
       { matcher: "Bash", hookCommand: "/Users/fatih/.nvm/v20/bin/foreman hook claude-code" },
     );
     // Second install uses a different path (e.g. brew now in PATH first).
-    // The marker still finds the entry — no duplicate.
+    // The marker still finds the entry: no duplicate, the command is updated.
     const second = mergeHook(first.next, {
       matcher: "Bash",
       hookCommand: "/opt/homebrew/bin/foreman hook claude-code",
     });
-    expect(second.alreadyInstalled).toBe(true);
+    expect(second.alreadyInstalled).toBe(false);
+    expect(second.updated).toBe(true);
     expect(second.next.hooks?.PreToolUse).toHaveLength(1);
+    expect(second.next.hooks?.PreToolUse?.[0]?.hooks?.[0]).toMatchObject({
+      command: "/opt/homebrew/bin/foreman hook claude-code",
+      managed_by: FOREMAN_HOOK_MARKER,
+    });
+    // The same command again: untouched.
+    const third = mergeHook(second.next, { matcher: "Bash", hookCommand: "/opt/homebrew/bin/foreman hook claude-code" });
+    expect(third).toMatchObject({ alreadyInstalled: true, updated: false });
+  });
+
+  it("upgrades a bare 2.2.0 hook in place, keeping the user's own hooks (#714)", () => {
+    const existing = {
+      hooks: {
+        PreToolUse: [
+          { matcher: "Bash", hooks: [{ type: "command", command: "my-linter" }] },
+          { matcher: DEFAULT_PRETOOLUSE_MATCHER, hooks: [{ type: "command", command: "foreman-hook claude-code", timeout: 660, managed_by: FOREMAN_HOOK_MARKER }] },
+        ],
+      },
+    };
+    const pinned = defaultHookCommand("claude-code", { argv: ["/opt/node/bin/node", "/opt/foreman/dist/cli/hook.js"] }, "darwin");
+    const { next, updated } = mergeHook(existing, { matcher: DEFAULT_PRETOOLUSE_MATCHER, hookCommand: pinned });
+    expect(updated).toBe(true);
+    expect(next.hooks?.PreToolUse?.[0]).toEqual(existing.hooks.PreToolUse[0]);
+    expect(next.hooks?.PreToolUse?.[1]?.hooks?.[0]?.command).toBe(pinned);
+    expect(hasForemanHook(next, "claude-code")).toBe(true);
   });
 });
 
@@ -362,7 +394,7 @@ describe("hook entry hardening", () => {
   });
 });
 
-describe("defaultHookCommand", () => {
+describe("defaultHookCommand (#714)", () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "foreman-hook-path-"));
@@ -371,16 +403,70 @@ describe("defaultHookCommand", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("prefers the lightweight foreman-hook binary when it is on PATH", () => {
-    writeFileSync(join(dir, "foreman-hook"), "#!/bin/sh\n");
-    expect(defaultHookCommand("claude-code", { PATH: dir })).toBe(
-      "foreman-hook claude-code",
+  it("pins node and hook.js next to the CLI by absolute path", () => {
+    mkdirSync(join(dir, "dist", "cli"), { recursive: true });
+    writeFileSync(join(dir, "dist", "cli", "index.js"), "");
+    writeFileSync(join(dir, "dist", "cli", "hook.js"), "");
+    symlinkSync(join(dir, "dist", "cli", "index.js"), join(dir, "foreman"));
+    const launcher = resolveHookLauncher({ execPath: "/opt/node/bin/node", cliEntry: join(dir, "foreman"), isSea: false });
+    expect(launcher.argv).toEqual(["/opt/node/bin/node", join(realpathSync(dir), "dist", "cli", "hook.js")]);
+  });
+
+  it("runs the CLI's own `hook` command when hook.js isn't there, and the binary itself when standalone", () => {
+    writeFileSync(join(dir, "index.js"), "");
+    expect(resolveHookLauncher({ execPath: "/n/node", cliEntry: join(dir, "index.js"), isSea: false }).argv).toEqual([
+      "/n/node",
+      join(realpathSync(dir), "index.js"),
+      "hook",
+    ]);
+    expect(resolveHookLauncher({ execPath: "/usr/local/bin/foreman", isSea: true }).argv).toEqual(["/usr/local/bin/foreman", "hook"]);
+  });
+
+  it("quotes paths with spaces and never relies on PATH", () => {
+    const cmd = defaultHookCommand(
+      "claude-code",
+      { argv: ["/Users/a b/.nvm/versions/node/v22/bin/node", "/Users/a b/lib/node_modules/foreman-agent/dist/cli/hook.js"] },
+      "darwin",
+    );
+    expect(cmd.startsWith("'/Users/a b/.nvm/versions/node/v22/bin/node' '/Users/a b/lib/node_modules/foreman-agent/dist/cli/hook.js' claude-code;")).toBe(true);
+    expect(hasForemanHook({ hooks: { PreToolUse: [{ hooks: [{ command: cmd, managed_by: FOREMAN_HOOK_MARKER }] }] } }, "claude-code")).toBe(true);
+    expect(hasForemanHook({ hooks: { PreToolUse: [{ hooks: [{ command: cmd, managed_by: FOREMAN_HOOK_MARKER }] }] } }, "codex")).toBe(false);
+    expect(defaultHookCommand("claude-code", { argv: ["C:\\Program Files\\nodejs\\node.exe", "C:\\f\\hook.js"] }, "win32")).toBe(
+      '"C:\\Program Files\\nodejs\\node.exe" C:\\f\\hook.js claude-code',
     );
   });
 
-  it("falls back to `foreman hook` (standalone binaries ship only foreman)", () => {
-    expect(defaultHookCommand("claude-code", { PATH: dir })).toBe(
-      "foreman hook claude-code",
-    );
+  it("still recognises the bare 2.2.0 shapes", () => {
+    for (const command of ["foreman-hook claude-code", "foreman hook claude-code", "/opt/homebrew/bin/foreman-hook claude-code"]) {
+      expect(hasForemanHook({ hooks: { PreToolUse: [{ hooks: [{ command, managed_by: FOREMAN_HOOK_MARKER }] }] } }, "claude-code")).toBe(true);
+    }
+  });
+
+  // What Claude Code sees: 0 runs the call, 2 blocks it, anything else is a
+  // non-blocking error that also runs it. The wrapper keeps 0 and 2 and
+  // turns everything else into 2.
+  it.skipIf(process.platform === "win32")("blocks (exit 2) when the hook can't start or fails, and passes 0 and 2 through", () => {
+    const stub = (code: number): string => {
+      const file = join(dir, `hook-${code}.sh`);
+      writeFileSync(file, `cat >/dev/null; exit ${code}\n`);
+      return file;
+    };
+    const run = (argv: string[]) =>
+      spawnSync("/bin/sh", ["-c", defaultHookCommand("claude-code", { argv }, "darwin")], { input: "{}", encoding: "utf-8" });
+    expect(run(["/bin/sh", stub(0)]).status).toBe(0);
+    expect(run(["/bin/sh", stub(2)]).status).toBe(2);
+    const failed = run(["/bin/sh", stub(1)]);
+    expect(failed.status).toBe(2);
+    expect(failed.stderr).toContain("Foreman's hook could not run (exit 1), so this call is blocked");
+    // The program is gone: 127 from the shell, blocked all the same.
+    const missing = run([join(dir, "no-such-node"), join(dir, "no-such-hook.js")]);
+    expect(missing.status).toBe(2);
+    expect(missing.stderr).toContain("so this call is blocked");
+  });
+
+  it("puts a project hook in <dir>/.claude/settings.json", () => {
+    expect(projectSettingsPath(dir)).toBe(join(dir, ".claude", "settings.json"));
+    installPreToolUseHook({ settingsPath: projectSettingsPath(dir), hookCommand: "foreman hook claude-code" });
+    expect(JSON.parse(readFileSync(join(dir, ".claude", "settings.json"), "utf-8")).hooks.PreToolUse).toHaveLength(1);
   });
 });

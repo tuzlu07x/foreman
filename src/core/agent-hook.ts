@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
 
 // =============================================================================
 // PreToolUse hook installer (#517 Faz 4)
@@ -41,22 +42,100 @@ export const DEFAULT_PRETOOLUSE_MATCHER =
  *  or denied by Foreman — rather than abandoned by a runner timeout. */
 export const FOREMAN_HOOK_TIMEOUT_SECONDS = 660;
 
-/** The command written into the agent's settings. Prefers the lightweight
- *  `foreman-hook` binary (faster cold start on every tool call) when it is on
- *  PATH; standalone binaries only ship `foreman`, so fall back to it. */
 /** Agents with a pre-call hook Foreman can install: Claude Code's
  *  PreToolUse. Others (Codex, OpenClaw, Hermes) don't expose one. */
 export function supportsPreToolUseHook(agentId: string): boolean {
   return agentId === "claude-code";
 }
 
+// -----------------------------------------------------------------------------
+// The hook command (#714)
+// -----------------------------------------------------------------------------
+//
+// Claude Code runs the hook through a shell and treats every exit code other
+// than 2 as a non-blocking error: the tool call then runs. A bare
+// `foreman-hook claude-code` that isn't on the PATH Claude Code sees (another
+// nvm default, Foreman uninstalled, a moved Node) exits 127 and the call runs
+// unguarded. So the command names its programs by absolute path, and a
+// wrapper turns any exit other than 0 (allow) or 2 (block) into a block.
+
+/** The programs that run the hook: `[node, …/dist/cli/hook.js]` for an npm
+ *  or Homebrew install, `[node, …/cli/index.js, "hook"]` when hook.js isn't
+ *  next to the CLI, `[foreman, "hook"]` for a standalone binary. */
+export interface HookLauncher {
+  argv: string[];
+}
+
+export interface HookLauncherProbe {
+  execPath?: string;
+  /** The CLI entry this process runs (process.argv[1]). */
+  cliEntry?: string;
+  isSea?: boolean;
+  exists?: (path: string) => boolean;
+  realpath?: (path: string) => string;
+}
+
+export function resolveHookLauncher(probe: HookLauncherProbe = {}): HookLauncher {
+  const execPath = probe.execPath ?? process.execPath;
+  if (probe.isSea ?? runningAsSea()) return { argv: [execPath, "hook"] };
+  const exists = probe.exists ?? existsSync;
+  const realpath = probe.realpath ?? realpathSync;
+  const entry = probe.cliEntry ?? process.argv[1];
+  if (entry) {
+    let cli: string;
+    try {
+      cli = realpath(entry);
+    } catch {
+      cli = entry;
+    }
+    const hook = join(dirname(cli), "hook.js");
+    if (exists(hook)) return { argv: [execPath, hook] };
+    if (exists(cli)) return { argv: [execPath, cli, "hook"] };
+  }
+  // Nothing to pin (an unusual embedding): the CLI by name, still wrapped.
+  return { argv: ["foreman", "hook"] };
+}
+
+function runningAsSea(): boolean {
+  try {
+    const sea = createRequire(import.meta.url)("node:sea") as { isSea?: () => boolean };
+    return sea.isSea?.() === true;
+  } catch {
+    return false;
+  }
+}
+
+/** The command written into the agent's settings (see above). */
 export function defaultHookCommand(
   agentId: string,
-  env: NodeJS.ProcessEnv = process.env,
+  launcher: HookLauncher = resolveHookLauncher(),
+  platform: NodeJS.Platform = process.platform,
 ): string {
-  const dirs = (env.PATH ?? "").split(delimiter).filter((d) => d.length > 0);
-  const hasFastHook = dirs.some((d) => existsSync(join(d, "foreman-hook")));
-  return hasFastHook ? `foreman-hook ${agentId}` : `foreman hook ${agentId}`;
+  if (platform === "win32") {
+    // cmd.exe: no wrapper; absolute, quoted paths still avoid the PATH.
+    return [...launcher.argv.map(winQuote), agentId].join(" ");
+  }
+  const run = [...launcher.argv.map(shQuote), agentId].join(" ");
+  return (
+    `${run}; s=$?; [ "$s" -eq 0 ] || [ "$s" -eq 2 ] || { ` +
+    `echo "Foreman's hook could not run (exit $s), so this call is blocked. ` +
+    `Run: foreman doctor" >&2; s=2; }; exit "$s"`
+  );
+}
+
+/** An argument for sh: bare when it's safe as is, else single-quoted. */
+function shQuote(arg: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`;
+}
+
+function winQuote(arg: string): string {
+  return /^[A-Za-z0-9_:.\\/-]+$/.test(arg) ? arg : `"${arg}"`;
+}
+
+/** Claude Code's project settings in `dir`: a hook there covers only
+ *  sessions started in that project (`--project`). */
+export function projectSettingsPath(dir: string): string {
+  return join(resolve(dir), ".claude", "settings.json");
 }
 
 export interface InstallHookInput {
@@ -78,6 +157,9 @@ export interface InstallHookResult {
   settingsPath: string;
   /** True when an existing Foreman hook entry was found + left intact. */
   alreadyInstalled: boolean;
+  /** True when an existing Foreman hook entry ran another command (e.g. a
+   *  bare `foreman-hook claude-code` from 2.2.0) and was rewritten. */
+  updated: boolean;
   /** True when nothing changed (alreadyInstalled OR dryRun no-op). */
   unchanged: boolean;
   /** Matcher value the hook entry was written with. Surfaces in the CLI
@@ -116,7 +198,7 @@ export function installPreToolUseHook(
 ): InstallHookResult {
   const matcher = input.matcher ?? DEFAULT_PRETOOLUSE_MATCHER;
   const existing = readSettings(input.settingsPath);
-  const { next, alreadyInstalled } = mergeHook(existing, {
+  const { next, alreadyInstalled, updated } = mergeHook(existing, {
     matcher,
     hookCommand: input.hookCommand,
   });
@@ -132,6 +214,7 @@ export function installPreToolUseHook(
   return {
     settingsPath: input.settingsPath,
     alreadyInstalled,
+    updated,
     unchanged,
     matcher,
   };
@@ -202,27 +285,55 @@ export function hasForemanHook(settings: ClaudeSettings, agentId: string): boole
   return stripForemanHooks(settings, agentId) !== null;
 }
 
-/** The hook command's last argument names the agent it runs for. */
+/** Whether a Foreman hook command runs the hook for `agentId`: the
+ *  argument after `foreman-hook`, `… hook` or `…/hook.js`, in the bare
+ *  2.2.0 shape and the pinned, wrapped one (#714). */
 function hookRunsFor(hook: HookEntry, agentId: string): boolean {
-  return typeof hook.command === "string" && hook.command.trim().split(/\s+/).at(-1) === agentId;
+  if (typeof hook.command !== "string") return false;
+  const id = agentId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[\\s'"/\\\\])(?:foreman-hook|hook(?:\\.js)?)['"]?\\s+${id}(?=[\\s;"']|$)`).test(hook.command);
+}
+
+/** The Foreman hook entries in these settings (any agent). */
+export function foremanHookCommands(settings: ClaudeSettings): string[] {
+  return (settings.hooks?.PreToolUse ?? []).flatMap((g) =>
+    (g.hooks ?? []).filter((h) => h.managed_by === FOREMAN_HOOK_MARKER && typeof h.command === "string").map((h) => h.command as string),
+  );
 }
 
 /** Pure merge helper. Exposed for tests so they can poke the logic
- *  without going to disk. */
+ *  without going to disk. An existing Foreman entry is kept when it runs
+ *  the same command, and rewritten when it doesn't: installing again is how
+ *  a hook that relied on PATH (#714) gets pinned. */
 export function mergeHook(
   existing: ClaudeSettings,
   input: { matcher: string; hookCommand: string },
-): { next: ClaudeSettings; alreadyInstalled: boolean } {
+): { next: ClaudeSettings; alreadyInstalled: boolean; updated: boolean } {
   const groups = existing.hooks?.PreToolUse ?? [];
   // Look for an existing Foreman-managed entry — match by marker, NOT by
   // command string (paths drift across npm prefixes, brew bins, dev
   // checkouts).
-  for (const group of groups) {
-    for (const hook of group.hooks ?? []) {
-      if (hook.managed_by === FOREMAN_HOOK_MARKER) {
-        // Already installed. Idempotent return.
-        return { next: existing, alreadyInstalled: true };
+  for (const [gi, group] of groups.entries()) {
+    for (const [hi, hook] of (group.hooks ?? []).entries()) {
+      if (hook.managed_by !== FOREMAN_HOOK_MARKER) continue;
+      if (hook.command === input.hookCommand) {
+        return { next: existing, alreadyInstalled: true, updated: false };
       }
+      const nextGroups = groups.map((g, i) =>
+        i !== gi
+          ? g
+          : {
+              ...g,
+              hooks: (g.hooks ?? []).map((h, j) =>
+                j !== hi ? h : { ...h, command: input.hookCommand, timeout: FOREMAN_HOOK_TIMEOUT_SECONDS },
+              ),
+            },
+      );
+      return {
+        next: { ...existing, hooks: { ...(existing.hooks ?? {}), PreToolUse: nextGroups } },
+        alreadyInstalled: false,
+        updated: true,
+      };
     }
   }
   const newGroup: HookGroup = {
@@ -243,7 +354,7 @@ export function mergeHook(
       PreToolUse: [...groups, newGroup],
     },
   };
-  return { next, alreadyInstalled: false };
+  return { next, alreadyInstalled: false, updated: false };
 }
 
 function readSettings(settingsPath: string): ClaudeSettings {

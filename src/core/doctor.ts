@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 import { FOREMAN_VERSION } from "../version.js";
 import { parse as parseYaml } from "yaml";
 import { sql } from "drizzle-orm";
@@ -53,6 +53,7 @@ import {
 import { getUpdateCachePath, isNewer } from "./update-check.js";
 import { trustedDaemonFiles } from "./daemon/client.js";
 import { installedServiceFile, serviceManagerFor } from "./service.js";
+import { foremanHookCommands, type ClaudeSettings } from "./agent-hook.js";
 import { PIDFILE_STALE_MS } from "./foreman-pidfile.js";
 import { approvalReach, gatewayHolder, probeGateway, type ApprovalReach } from "./gateway.js";
 import { daemonDisabled, daemonFiles, daemonSupported, MAX_SOCKET_PATH, NO_DAEMON_ENV } from "./daemon/protocol.js";
@@ -1786,6 +1787,55 @@ export function checkGateway(): CheckResult {
   return { name: "gateway", status: "ok", message: `${gatewayHolder(gateway)} — ${chat}` };
 }
 
+// Claude Code's PreToolUse hook (#714). One that runs `foreman-hook` from
+// PATH (2.2.0) lets tool calls through unguarded whenever Claude Code's PATH
+// lacks it; one whose pinned program is gone blocks every call.
+export function checkClaudeHook(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): CheckResult {
+  const settingsPath = join(env.CLAUDE_CONFIG_DIR || join(home, ".claude"), "settings.json");
+  let settings: ClaudeSettings;
+  try {
+    if (!existsSync(settingsPath)) return { name: "claude_hook", status: "ok", message: "no Claude Code settings" };
+    settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as ClaudeSettings;
+  } catch {
+    return { name: "claude_hook", status: "ok", message: `skipped — ${settingsPath} isn't valid JSON` };
+  }
+  const commands = foremanHookCommands(settings);
+  if (commands.length === 0) {
+    return { name: "claude_hook", status: "ok", message: "not installed (`foreman agent hook install claude-code` checks Claude Code's own tools too)" };
+  }
+  for (const command of commands) {
+    if (!command.includes('s=$?')) {
+      return {
+        name: "claude_hook",
+        status: "warn",
+        message: `runs \`${command}\` from PATH — when Claude Code's PATH doesn't have it, its tool calls run unguarded`,
+        remediation: "Run `foreman agent hook install claude-code` to pin it to this Foreman.",
+      };
+    }
+    const gone = leadingArgs(command).filter((a) => isAbsolute(a) && !existsSync(a));
+    if (gone.length > 0) {
+      return {
+        name: "claude_hook",
+        status: "fail",
+        message: `${gone.join(", ")} no longer exists — every Claude Code tool call is blocked`,
+        remediation:
+          "Run `foreman agent hook install claude-code` again (after moving Node or Foreman), or `foreman agent hook uninstall claude-code`.",
+      };
+    }
+  }
+  return { name: "claude_hook", status: "ok", message: `installed in ${settingsPath}, pinned to this Foreman` };
+}
+
+/** The arguments before the first `;` of a hook command, unquoted. */
+function leadingArgs(command: string): string[] {
+  const args: string[] = [];
+  const re = /\s*(?:'((?:[^']|'\\'')*)'|([^\s;']+))/y;
+  for (let m = re.exec(command); m !== null; m = re.exec(command)) {
+    args.push(m[1] !== undefined ? m[1].replace(/'\\''/g, "'") : (m[2] ?? ""));
+  }
+  return args;
+}
+
 // Integrations (`foreman integrations`): an enabled one that needs a
 // credential, a sign-in or a review can't work; a disabled one is only noted.
 export function checkIntegrations(): CheckResult {
@@ -1966,6 +2016,7 @@ const CHECKS: (() => CheckResult | CheckResult[])[] = [
   checkIntegrations,
   checkDaemon,
   checkGateway,
+  () => checkClaudeHook(),
   checkOrg,
   checkLegacyHome,
   checkUpdate,
