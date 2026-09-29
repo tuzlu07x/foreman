@@ -28,6 +28,8 @@ with its result, duration, steps and the evidence each step checked.
 | 7 | Spend: OTLP telemetry, `usage`, `org report`, a `--pause` budget that blocks delegation and raises an inbox alert | yes |
 | 8 | Claude Code PreToolUse hook: `agent hook install claude-code`, an allowed call, ask then approve (`a`) and deny (`d`) in the TUI, fail-closed exits, a `policy.yaml` deny | partly |
 | 9 | A company on Slack: Finance, Marketing and IT mirrored to their own channels; approval buttons (allow, deny, a stranger refused); a budget overrun alert that pauses Marketing; `/foreman report` and `/foreman integration disable` from Slack (owner vs. non-owner); an agent refused a cross-department hand-off and an integration change; the audit trail | partly |
+| 10 | Approvals with no terminal open: the background service's gateway sends a risky call to (fake) Slack and a tap decides it; `foreman start` then attaches (TUI only), decides a call, and the Slack message is edited once; SIGTERM stops the service | partly |
+| 11 | A company of agents, simulated: the startup chart run by six stand-ins (three speak ACP like Hermes, OpenClaw and ZeroClaw) under the background service. A goal from you flows CEO → CTO → engineer and CEO → CMO → CTO, and every hop runs and answers into your inbox. Agents talk in department channels, report to managers, read an all-hands. Finance reaching past the engineering head is blocked, from inside an ACP task and over MCP. An engineer's approval is reviewed by its manager (`org_recommend`) and decided by you in the attached TUI. The day's `org report` | partly |
 
 ## Isolation
 
@@ -36,7 +38,9 @@ Every scenario gets its own temporary directory with its own
 (`FOREMAN_OTLP_PORT`). Nothing reads or writes your real Foreman state.
 
 - `PATH` starts with stub agent CLIs (`claude`, `codex`, `hermes`,
-  `openclaw`, `zeroclaw`) that print canned output and never touch files;
+  `openclaw`, `zeroclaw`) that print canned output and never touch files
+  (scenario 11 replaces them with `qa/support/company-agent.cjs`, which
+  follows a playbook and hands work on with `foreman write`);
   `npm`, `npx` and `uvx` refuse to run. Real agent CLIs are never on `PATH`.
 - Every Node process preloads `qa/support/no-network.cjs`, which refuses
   any connection other than to 127.0.0.1. Each scenario asserts that

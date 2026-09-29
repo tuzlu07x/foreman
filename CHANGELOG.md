@@ -8,6 +8,10 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Security
 
+- `foreman agent add` no longer prints the agent's private key. Nothing in
+  Foreman uses it (agents authenticate with their identity token), and a
+  key on screen ends up in scrollback and pasted chats. `--key-out <file>`
+  still writes it (0600) ([#726](https://github.com/tuzlu07x/foreman/issues/726)).
 - **Claude Code's hook no longer fails open when Foreman isn't on its
   PATH** ([#714](https://github.com/tuzlu07x/foreman/issues/714)). The hook
   was written as a bare `foreman-hook claude-code`. When the PATH Claude
@@ -78,6 +82,16 @@ All notable changes to Foreman are documented here. The format follows
   channel it rewrites keeps what the wizard doesn't ask about (Slack's
   `app_token_ref`, `allowed_user_ids`, `owner_user_ids`, Telegram's
   approval bot, `listener`).
+- `/foreman activity` no longer says "6s ago ago".
+- **A task given to an ACP agent (Hermes, OpenClaw, ZeroClaw) keeps its
+  reply** ([#729](https://github.com/tuzlu07x/foreman/issues/729)). They
+  stream the answer as `agent_message_chunk` updates and end the prompt
+  with only `{ stopReason }`, so the inbox showed `{"stopReason":
+  "end_turn"}`. The streamed text is now the task's output. The agent
+  also runs as itself, like any spawned task: `FOREMAN_SPAWNED_BY`,
+  `FOREMAN_SPAWN_DEPTH` and the telemetry env are set. Before, a
+  `foreman write` from inside it counted as you, so it skipped the org
+  chart and budget checks.
 - **The setup wizard's Services step no longer saves a wrong paste.** A
   value that fails its format check (a Discord public key pasted as the
   bot token) was stored at once with *Saved anyway*. Now the prompt stays

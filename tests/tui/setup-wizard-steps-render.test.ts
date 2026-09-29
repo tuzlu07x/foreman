@@ -604,6 +604,9 @@ describe('providers step', () => {
     await w.press(ENTER, 'How do you want to connect')
     await w.press(DOWN)
     await w.press(ENTER, 'Will sign in with your subscription')
+    // The confirm prompt subscribes to keys in an effect after the frame
+    // that shows it: a key sent at once was lost on a loaded machine.
+    await sleep(150)
     await w.press('n', 'pick which to configure')
     // The earlier answer is gone: picking again asks again.
     await w.press(ENTER, 'How do you want to connect')

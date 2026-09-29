@@ -789,6 +789,9 @@ describe("ForemanCommandRouter (#431)", () => {
       // Applied row uses ✓, pending uses … — both must appear.
       expect(result.text).toContain("✓");
       expect(result.text).toContain("…");
+      // Company-simulation QA: the age read "6s ago ago".
+      expect(result.text).toMatch(/— \d+s ago \(id=\d+\)/);
+      expect(result.text).not.toContain("ago ago");
     });
 
     it("clamps an out-of-range limit arg to the default", async () => {

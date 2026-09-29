@@ -775,7 +775,7 @@ function activityHandler(
             : "…";
     const parsedArgs = parseArgsJson(row.args);
     const summary = summarizeCommand(row.command, parsedArgs);
-    lines.push(`  ${status} ${summary} — ${describeAgo(ageMs)} ago (id=${row.id})`);
+    lines.push(`  ${status} ${summary} — ${describeAgo(ageMs)} (id=${row.id})`);
   }
   return { ok: true, text: lines.join("\n") };
 }
