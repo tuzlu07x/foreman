@@ -482,6 +482,10 @@ async function executeAcpDirective(
   }
 
   const startMs = Date.now();
+  // The agent's reply streams as `session/update` agent_message_chunk
+  // notifications; the prompt's result is only `{ stopReason }`.
+  const reply = new AcpReplyCollector();
+  const currentDepth = Number(process.env.FOREMAN_SPAWN_DEPTH ?? "0") || 0;
   const acpOutcome = await runAcpMediatedTask({
     mediator: deps.mediator,
     sourceAgent: input.agentId,
@@ -492,9 +496,18 @@ async function executeAcpDirective(
       command: input.entry.acp_command.command,
       args: input.entry.acp_command.args ?? [],
     },
+    // The same environment a task spawn gets (agent-spawn.ts): who
+    // delegates when this agent runs `foreman write`, the nesting depth
+    // that keeps a recursive Foreman from draining the queue, telemetry.
+    env: {
+      ...(input.extraEnv ?? {}),
+      FOREMAN_SPAWN_DEPTH: String(currentDepth + 1),
+      FOREMAN_SPAWNED_BY: input.entry.id,
+    },
+    hooks: { onNotification: (method, params) => reply.onNotification(method, params) },
   });
   const durationMs = Date.now() - startMs;
-  const spawn = acpOutcomeToSpawn(acpOutcome, durationMs);
+  const spawn = acpOutcomeToSpawn(acpOutcome, durationMs, reply.text());
 
   // Close the session on outcome — matches the spawnAgentTask branch
   // exactly so the lifecycle bridge (#523) treats both transports
@@ -529,15 +542,18 @@ async function executeAcpDirective(
 export function acpOutcomeToSpawn(
   outcome: Awaited<ReturnType<typeof runAcpMediatedTask>>,
   durationMs: number,
+  streamedReply = "",
 ): SpawnAgentTaskOutcome {
   if (outcome.ok) {
-    // ACP returns the agent's reply as `result` — shape varies per
-    // agent. Stringify with a 2-space indent so multi-line replies
-    // render reasonably in the Telegram code block.
+    // The agent's reply is what it streamed (agent_message_chunk). An
+    // agent that streamed nothing: its `result` (shape varies per agent),
+    // stringified so multi-line replies render in a code block.
     const stdout =
-      typeof outcome.result === "string"
-        ? outcome.result
-        : JSON.stringify(outcome.result, null, 2);
+      streamedReply.length > 0
+        ? streamedReply
+        : typeof outcome.result === "string"
+          ? outcome.result
+          : JSON.stringify(outcome.result, null, 2);
     return {
       kind: "ok",
       stdout,
@@ -713,3 +729,24 @@ const MD_ESCAPE = /[_*[\]()~`>#+\-=|{}.!\\]/g;
 function escapeMd(s: string): string {
   return s.replace(MD_ESCAPE, "\\$&");
 }
+
+/** Collects an ACP agent's reply from `session/update` notifications:
+ *  the text of its `agent_message_chunk` updates, in order. */
+export class AcpReplyCollector {
+  private readonly parts: string[] = [];
+
+  onNotification(method: string, params: unknown): void {
+    if (method !== "session/update" || typeof params !== "object" || params === null) return;
+    const update = (params as { update?: unknown }).update;
+    if (typeof update !== "object" || update === null) return;
+    const { sessionUpdate, content } = update as { sessionUpdate?: unknown; content?: unknown };
+    if (sessionUpdate !== "agent_message_chunk" || typeof content !== "object" || content === null) return;
+    const { type, text } = content as { type?: unknown; text?: unknown };
+    if (type === "text" && typeof text === "string") this.parts.push(text);
+  }
+
+  text(): string {
+    return this.parts.join("");
+  }
+}
+

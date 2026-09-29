@@ -188,6 +188,40 @@ describe('executeWriteDirective — ACP routing branch', () => {
     expect(h.child.kill).toHaveBeenCalledWith('SIGTERM')
   })
 
+  // Real ACP agents (Hermes, OpenClaw) stream their reply as session/update
+  // agent_message_chunk notifications and answer the prompt with only
+  // { stopReason }. The reply used to be dropped: the inbox showed
+  // {"stopReason": "end_turn"}.
+  it('takes the reply from streamed agent_message_chunk updates, and runs the agent as itself', async () => {
+    const h = makeFakeChild()
+    const promise = executeWriteDirective(
+      { agentId: 'hermes', message: 'plan the launch', entry: acpEntry('hermes'), extraEnv: { OTEL_RESOURCE_ATTRIBUTES: 'task=1' } },
+      { mediator: mediatorReturning('allowed'), acpSpawnImpl: h.spawn, telegramBotToken: undefined, telegramChatId: undefined },
+    )
+    await tick()
+    h.emit({ jsonrpc: '2.0', id: JSON.parse(h.lines[0]!).id, result: { protocolVersion: 1 } })
+    await tick()
+    h.emit({ jsonrpc: '2.0', id: JSON.parse(h.lines[1]!).id, result: { sessionId: 's1' } })
+    await tick()
+    const prompt = JSON.parse(h.lines[2]!)
+    const chunk = (text: string) => ({
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } },
+    })
+    h.emit(chunk('Plan: '))
+    h.emit({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: '(thinking)' } } } })
+    h.emit(chunk('ship Friday.'))
+    await tick(3)
+    h.emit({ jsonrpc: '2.0', id: prompt.id, result: { stopReason: 'end_turn' } })
+    const outcome = await promise
+    expect(outcome.spawn).toMatchObject({ kind: 'ok', stdout: 'Plan: ship Friday.' })
+    // Same environment as a task spawn: who delegates from inside it, the
+    // nesting depth, and telemetry.
+    const env = (vi.mocked(h.spawn).mock.calls[0]![2] as { env?: NodeJS.ProcessEnv }).env ?? {}
+    expect(env).toMatchObject({ FOREMAN_SPAWNED_BY: 'hermes', FOREMAN_SPAWN_DEPTH: '1', OTEL_RESOURCE_ATTRIBUTES: 'task=1' })
+  })
+
   it('does NOT route through ACP when entry lacks approval_adapter', async () => {
     // Legacy entry without ACP fields — falls through to the
     // task_command_template branch. Missing template → unsupported.
@@ -229,6 +263,11 @@ describe('executeWriteDirective — ACP routing branch', () => {
 // =============================================================================
 
 describe('acpOutcomeToSpawn', () => {
+  it('prefers the streamed reply over the result', () => {
+    const out = acpOutcomeToSpawn({ ok: true, result: { stopReason: 'end_turn' }, sessionId: 's' }, 5, 'hello')
+    expect(out).toMatchObject({ kind: 'ok', stdout: 'hello' })
+  })
+
   it('ok with string result → SpawnAgentTaskOutcome kind=ok with stdout=result', () => {
     const out = acpOutcomeToSpawn(
       { ok: true, result: 'agent reply', sessionId: 's' },
