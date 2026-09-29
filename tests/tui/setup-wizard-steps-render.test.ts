@@ -1,5 +1,5 @@
 import React from 'react'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { render } from 'ink-testing-library'
@@ -151,6 +151,8 @@ import { discoverModels } from '../../src/core/llm/models-discovery.js'
 import { saveOAuthTokens } from '../../src/core/llm/oauth/token-store.js'
 import { createIntegrationWiring, loadIntegrationCatalogs } from '../../src/core/integrations/wiring.js'
 import { loadHubConfig } from '../../src/core/mcp-hub/config.js'
+import { loadNotifyConfig } from '../../src/core/notification/notify-config.js'
+import { buildChannel } from '../../src/core/notification/channel-factory.js'
 
 const integrationCatalogs = loadIntegrationCatalogs()
 
@@ -158,6 +160,14 @@ const ENTER = '\r'
 const ESC = '\u001B'
 const DOWN = '\u001B[B'
 const SPACE = ' '
+const BACKSPACE = '\u007F'
+
+// Obvious fakes in the shapes the Services step's paste checks accept.
+const FAKE_TELEGRAM_TOKEN = '123456789:AAHfake_telegram_token_0000000000000'
+const FAKE_SLACK_TOKEN = 'xoxb-000-fake-slack-token'
+const FAKE_DISCORD_TOKEN = `${'F'.repeat(24)}.fake00.${'F'.repeat(27)}`
+// A Discord application's public key (64 hex chars), not a bot token.
+const FAKE_DISCORD_PUBLIC_KEY = 'f'.repeat(64)
 
 const ALL_BEFORE: Record<Step, Step[]> = {
   welcome: [],
@@ -187,6 +197,8 @@ function stripAnsi(s: string): string {
 }
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/** Matches `text` even where the frame wrapped it across lines. */
+const loose = (text: string): RegExp => new RegExp(text.split(' ').map(escapeRegExp).join('\\s+'))
 /** Polls a mock assertion (onQuit, launchEditor): a key's effect is never
  *  assumed to have landed after a fixed sleep. */
 const eventually = (check: () => void): Promise<void> => vi.waitFor(check, { timeout: 5_000, interval: 10 })
@@ -227,6 +239,8 @@ interface Mounted {
   /** Enter, one rendered screen at a time, until `text` shows. */
   enterUntil: (text: string) => Promise<void>
   type: (text: string) => Promise<void>
+  /** Backspace `count` times in the focused field. */
+  erase: (count: number) => Promise<void>
   until: (target: string | RegExp) => Promise<void>
   secretStore: SecretStore
   services: WizardServices
@@ -363,6 +377,14 @@ async function mount(
     const shown = [text, '•'.repeat(Math.min(text.length, 32)), '*'.repeat(text.length)]
     await until(new RegExp(shown.map(escapeRegExp).join('|')))
   }
+  const erase = async (count: number): Promise<void> => {
+    await sleep(100)
+    for (let i = 0; i < count; i++) {
+      inst.stdin.write(BACKSPACE)
+      await sleep(5)
+    }
+    await sleep(60)
+  }
   await sleep(60)
   const startInstall = async (): Promise<void> => {
     await until('Ready to install')
@@ -382,6 +404,7 @@ async function mount(
     pressInList,
     enterUntil,
     type,
+    erase,
     until,
     secretStore,
     services,
@@ -830,13 +853,17 @@ describe('services step', () => {
     await w.pressInList(SPACE)
     await w.press(ENTER, 'prompt 1 of 2')
     await w.until('Setting up')
-    await w.type('fake-telegram-token-000')
+    await w.type(FAKE_TELEGRAM_TOKEN)
     await w.press(ENTER, 'telegram-chat-id')
     await w.press(ENTER, 'Services ▸ summary')
     await w.until('✓ Wired 1 service')
     await w.until('⚠ Skipped 1 (empty value)')
-    expect(w.secretStore.get('telegram-bot-token')).toBe('fake-telegram-token-000')
-    expect(w.frame()).not.toContain('fake-telegram-token-000')
+    expect(w.secretStore.get('telegram-bot-token')).toBe(FAKE_TELEGRAM_TOKEN)
+    expect(w.frame()).not.toContain(FAKE_TELEGRAM_TOKEN)
+    // No chat id: Telegram is not turned on half-configured.
+    await w.until(loose('telegram (no chat id): foreman notify enable telegram --chat-id <id>'))
+    await w.press('y', 'Integrations ▸ optional')
+    expect(loadNotifyConfig(w.services.notifyConfigPath).channels.telegram?.enabled).toBe(false)
   })
 
   // QA #657 L8 — on a resumed setup the services step showed stored
@@ -859,19 +886,104 @@ describe('services step', () => {
   })
 
   // QA #657 L7 — `notatoken` was taken as a Telegram token without a word.
-  it('warns (and still saves) when a token or chat id has the wrong shape', async () => {
+  // Real-user test: a Discord public key pasted as the bot token was saved
+  // at once; a value with the wrong shape now needs a second Enter.
+  it('holds back a token or chat id with the wrong shape until Enter again', async () => {
     const w = await mount('services')
     await w.until('Services ▸ pick which to configure')
     await w.pressInList(SPACE)
     await w.press(ENTER, 'prompt 1 of 2')
     await w.type('notatoken')
+    await w.press(ENTER, loose('Press Enter again to save it anyway, or paste the right value'))
+    expect(w.frame()).toMatch(loose("doesn't look like a Telegram bot token"))
+    expect(w.frame()).toContain('prompt 1 of 2')
+    expect(w.secretStore.exists('telegram-bot-token')).toBe(false)
     await w.press(ENTER, 'telegram-chat-id')
-    await w.until("doesn't look like a Telegram bot token")
-    await w.type('my chat')
-    await w.press(ENTER, 'Services ▸ summary')
-    await w.until("doesn't look like a Telegram chat id")
+    await w.until(loose('Saved anyway — fix it with `foreman secrets rotate telegram-bot-token`'))
     expect(w.secretStore.get('telegram-bot-token')).toBe('notatoken')
+    await w.type('my chat')
+    await w.press(ENTER, loose("doesn't look like a Telegram chat id"))
+    expect(w.secretStore.exists('telegram-chat-id')).toBe(false)
+    await w.press(ENTER, 'Services ▸ summary')
     expect(w.secretStore.get('telegram-chat-id')).toBe('my chat')
+  })
+
+  it('does not save a Discord public key pasted as the bot token on the first Enter', async () => {
+    const w = await mount('services')
+    await w.until('Services ▸ pick which to configure')
+    await w.pressInList(DOWN)
+    await w.pressInList(SPACE)
+    await w.press(ENTER, 'prompt 1 of 2')
+    await w.type(FAKE_DISCORD_PUBLIC_KEY)
+    await w.press(ENTER, loose("doesn't look like a Discord bot token (three dot-separated parts)"))
+    await w.until(loose('Press Enter again to save it anyway, or paste the right value'))
+    expect(w.frame()).not.toContain('Saved anyway')
+    expect(w.secretStore.exists('discord-bot-token')).toBe(false)
+    // Empty input still skips — and with no token there is no channel to ask for.
+    await w.erase(FAKE_DISCORD_PUBLIC_KEY.length)
+    await w.press(ENTER, 'Services ▸ summary')
+    await w.until('• discord-bot-token')
+    expect(w.secretStore.exists('discord-bot-token')).toBe(false)
+    await w.press('y', 'Integrations ▸ optional')
+    expect(existsSync(w.services.notifyConfigPath)).toBe(false)
+  })
+
+  it('asks for the Slack channel after the bot token and writes it to notify.yaml', async () => {
+    const w = await mount('services')
+    await w.until('Services ▸ pick which to configure')
+    await w.pressInList(DOWN)
+    await w.pressInList(DOWN)
+    await w.pressInList(SPACE)
+    await w.press(ENTER, 'prompt 1 of 2')
+    await w.type(FAKE_SLACK_TOKEN)
+    await w.press(ENTER, 'Slack — channel')
+    await w.until('/invite @yourapp')
+    await w.until('#foreman')
+    await w.press(ENTER, 'Services ▸ summary')
+    expect(w.frame()).not.toContain('Not turned on yet')
+    await w.press('y', 'Integrations ▸ optional')
+    const slack = loadNotifyConfig(w.services.notifyConfigPath).channels.slack!
+    expect(slack).toEqual({ enabled: true, bot_token_ref: 'slack-bot-token', channel: '#foreman' })
+    // What `foreman doctor` builds: the channel is complete.
+    expect(buildChannel('slack', slack, { secrets: w.secretStore })).not.toHaveProperty('problem')
+  })
+
+  it('asks for the Discord channel id, refuses one that is not 17–20 digits', async () => {
+    const w = await mount('services')
+    await w.until('Services ▸ pick which to configure')
+    await w.pressInList(DOWN)
+    await w.pressInList(SPACE)
+    await w.press(ENTER, 'prompt 1 of 2')
+    await w.type(FAKE_DISCORD_TOKEN)
+    await w.press(ENTER, 'Discord — channel id')
+    await w.until('Copy Channel ID')
+    await w.type('general')
+    await w.press(ENTER, loose('a Discord channel id is 17–20 digits'))
+    expect(w.frame()).toContain('Discord — channel id')
+    await w.erase('general'.length)
+    await w.type('123456789012345678')
+    await w.press(ENTER, 'Services ▸ summary')
+    await w.press('y', 'Integrations ▸ optional')
+    const discord = loadNotifyConfig(w.services.notifyConfigPath).channels.discord!
+    expect(discord).toEqual({ enabled: true, bot_token_ref: 'discord-bot-token', channel: '123456789012345678' })
+    expect(buildChannel('discord', discord, { secrets: w.secretStore })).not.toHaveProperty('problem')
+  })
+
+  it('leaves Slack off when its channel is skipped, and says how to finish', async () => {
+    const w = await mount('services')
+    await w.until('Services ▸ pick which to configure')
+    await w.pressInList(DOWN)
+    await w.pressInList(DOWN)
+    await w.pressInList(SPACE)
+    await w.press(ENTER, 'prompt 1 of 2')
+    await w.type(FAKE_SLACK_TOKEN)
+    await w.press(ENTER, 'Slack — channel')
+    await w.erase('#foreman'.length)
+    await w.press(ENTER, 'Services ▸ summary')
+    await w.until(loose("slack (no channel): foreman notify enable slack --channel '#foreman'"))
+    expect(w.secretStore.get('slack-bot-token')).toBe(FAKE_SLACK_TOKEN)
+    await w.press('y', 'Integrations ▸ optional')
+    expect(existsSync(w.services.notifyConfigPath)).toBe(false)
   })
 })
 
@@ -1151,7 +1263,7 @@ describe('resume keeps session-only choices', () => {
     // Secrets typed through the wizard's own inputs (all fakes): a service
     // token, then a key pasted on the required-setup screen.
     const typedSecrets = {
-      'telegram-bot-token': 'fake-resume-telegram-token-000',
+      'telegram-bot-token': '123456789:AAHfake_resume_telegram_token_0000000',
       'openrouter-key': 'sk-or-fake-resume-000',
     }
     await first.pressInList(SPACE)

@@ -110,7 +110,7 @@ An approval goes out on the level that matches its risk: `critical` for high and
 
 ## 3. Setting up Telegram
 
-Shortcut: the setup wizard does the steps below for you. In Step 4 (Services) pick Telegram, paste the bot token and your chat id, and it writes the `telegram` channel into `notify.yaml`.
+Shortcut: the setup wizard does the steps below for you. In Step 4 (Services) pick Telegram, paste the bot token and your chat id, and it writes the `telegram` channel into `notify.yaml`. It does the same for a Slack bot (token, then the channel, `#foreman` by default) and a Discord bot (token, then the channel id). A chat app whose chat id or channel you skip stays off; the wizard's summary names the `foreman notify enable …` command that turns it on.
 
 ### Bot creation
 1. Open Telegram, message [@BotFather](https://t.me/BotFather).

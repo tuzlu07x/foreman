@@ -4,9 +4,11 @@
 //
 // The wizard took `notatoken` as a Telegram bot token and `not a url` as a
 // custom endpoint without a word; the mistake only surfaced later as a
-// failed delivery. Like the provider key check (setup-wizard-key-
-// validation.ts) these only warn: the value is saved either way, since a
-// self-hosted or unusual setup may legitimately differ.
+// failed delivery. These never refuse a value outright, since a self-hosted
+// or unusual setup may legitimately differ: an endpoint is saved with a
+// warning (like the provider key check, setup-wizard-key-validation.ts); a
+// service secret is held back until it is submitted a second time
+// (applyServiceValueSubmit), so a wrong paste is caught before it is stored.
 
 /** A warning for an endpoint that isn't an http(s) URL, else null. */
 export function endpointPasteWarning(value: string): string | null {
@@ -60,9 +62,10 @@ const SERVICE_FORMATS: Record<string, ServiceFormat> = {
 };
 
 /** A warning when a pasted service secret doesn't have its usual shape,
- *  else null (also for secrets with no known shape). */
+ *  else null (also for secrets with no known shape). The caller says what
+ *  happens next (held back, or saved anyway). */
 export function servicePasteWarning(secretName: string, value: string): string | null {
   const format = SERVICE_FORMATS[secretName];
   if (!format || format.test.test(value.trim())) return null;
-  return `that doesn't look like ${format.what} (${format.example}). Saved anyway — fix it with \`foreman secrets rotate ${secretName}\` if it was a paste error.`;
+  return `that doesn't look like ${format.what} (${format.example}).`;
 }

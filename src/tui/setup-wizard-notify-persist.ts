@@ -50,6 +50,29 @@ export interface BuildNotifyConfigInput {
    *  override of routing (timeouts, default actions) survives a wizard
    *  re-run. */
   existing: NotifyConfig;
+  /** The Slack channel / Discord channel id the wizard asked for. A bot
+   *  can't post without one (channel-factory.ts buildChannel). */
+  channelTargets?: ChannelTargets;
+}
+
+/** Where a Slack or Discord bot posts: `channel` in notify.yaml. */
+export type ChannelTargets = Partial<Record<"slack" | "discord", string>>;
+
+/** The command that turns a chat app on after setup once its bot token is
+ *  stored: it names the chat id / channel the wizard didn't get. */
+export function channelFinishCommand(channel: string): string {
+  if (channel === "telegram") return "foreman notify enable telegram --chat-id <id>";
+  if (channel === "slack") return "foreman notify enable slack --channel '#foreman'";
+  return `foreman notify enable ${channel} --channel <channel-id>`;
+}
+
+/** A chat app whose bot token is in place but that can't be turned on yet. */
+export interface UnwiredChannel {
+  channel: ChannelId;
+  /** What notify.yaml still lacks, e.g. "chat id". */
+  missing: string;
+  /** The command that finishes it after setup. */
+  finish: string;
 }
 
 export interface BuildNotifyConfigResult {
@@ -59,21 +82,30 @@ export interface BuildNotifyConfigResult {
   /** Which channels got enabled (dedup'd). Empty when the wizard saved no
    *  channel-relevant secrets. */
   wiredChannels: ChannelId[];
+  /** Channels left as they were because their chat id / channel is
+   *  missing; each names how to finish it. */
+  unwiredChannels: UnwiredChannel[];
 }
 
 /**
  * Build notify.yaml from wizard state. For each catalog service that maps
- * to a notification channel:
- *   - if the service's primary secret (e.g. telegram-bot-token) was saved,
- *     enable the channel with `bot_token_ref` pointing at that secret;
- *   - for Telegram specifically, pull chat_id INLINE from the vault (the
- *     notify schema stores chat_id literally, not as a secret ref — see
- *     ChannelToggleSchema in notify-config.ts).
+ * to a notification channel, the channel is enabled only when everything
+ * its bot needs is in place, so `foreman doctor` can build it:
+ *   - the service's primary secret (e.g. telegram-bot-token) was saved (or
+ *     is already in the vault) → `bot_token_ref` points at it;
+ *   - Telegram also needs chat_id, pulled INLINE from the vault (the notify
+ *     schema stores chat_id literally, not as a secret ref — see
+ *     ChannelToggleSchema in notify-config.ts);
+ *   - Slack and Discord also need `channel` (a channel name / channel id).
+ * A missing chat id or channel falls back to the one notify.yaml already
+ * has; with neither, the channel is left untouched (never enabled half-set)
+ * and reported in `unwiredChannels`.
  */
 export function buildNotifyConfigFromWizard(
   input: BuildNotifyConfigInput,
 ): BuildNotifyConfigResult {
   const wired: ChannelId[] = [];
+  const unwired: UnwiredChannel[] = [];
   const channelUpdates: Partial<Record<ChannelId, ChannelToggle>> = {};
 
   for (const service of input.serviceCatalog) {
@@ -85,13 +117,11 @@ export function buildNotifyConfigFromWizard(
       enabled: true,
       bot_token_ref: service.secret_name,
     };
+    const existing = input.existing.channels[channel];
 
     if (channel === "telegram") {
       // chat_id lives inline in notify.yaml (not as a secret ref), so we
-      // resolve it now. If the user skipped the chat_id prompt the wizard
-      // still wired the bot token — channel goes enabled=true with chat_id
-      // undefined; runtime will surface "missing credentials" until the
-      // user adds it via `foreman notify` or by editing the YAML.
+      // resolve it now.
       const chatIdExtra = service.extra_secrets?.find(
         (e) => e.name === "telegram-chat-id",
       );
@@ -102,10 +132,26 @@ export function buildNotifyConfigFromWizard(
         try {
           update.chat_id = input.secretStore.get(chatIdExtra.name);
         } catch {
-          // chat_id was nominally saved but couldn't be read — leave the
-          // field unset rather than crashing the wizard.
+          // chat_id was nominally saved but couldn't be read — treat it as
+          // missing rather than crashing the wizard.
         }
       }
+      update.chat_id ??= existing?.chat_id;
+      if (!update.chat_id) {
+        unwired.push({ channel, missing: "chat id", finish: channelFinishCommand(channel) });
+        continue;
+      }
+    } else {
+      const target = input.channelTargets?.[channel]?.trim() || existing?.channel;
+      if (!target) {
+        unwired.push({
+          channel,
+          missing: channel === "slack" ? "channel" : "channel id",
+          finish: channelFinishCommand(channel),
+        });
+        continue;
+      }
+      update.channel = target;
     }
 
     if (!wired.includes(channel)) wired.push(channel);
@@ -113,7 +159,7 @@ export function buildNotifyConfigFromWizard(
   }
 
   if (wired.length === 0) {
-    return { next: input.existing, wiredChannels: [] };
+    return { next: input.existing, wiredChannels: [], unwiredChannels: unwired };
   }
 
   return {
@@ -125,5 +171,6 @@ export function buildNotifyConfigFromWizard(
       },
     },
     wiredChannels: wired,
+    unwiredChannels: unwired,
   };
 }

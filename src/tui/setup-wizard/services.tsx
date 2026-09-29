@@ -1,18 +1,23 @@
-import { ConfirmInput, MultiSelect, PasswordInput } from "@inkjs/ui";
+import { ConfirmInput, MultiSelect, PasswordInput, TextInput } from "@inkjs/ui";
 import { Box, Text } from "ink";
 import type { JSX } from "react";
 import { WizardProgress } from "../components/wizard-progress.js";
 import { osc8 } from "../osc8.js";
+import type { ChannelTargets } from "../setup-wizard-notify-persist.js";
 import { persistVoiceConfig } from "../setup-wizard-voice-persist.js";
 import { theme } from "../theme.js";
 import type { WizardContext } from "./context.js";
 import { servicePasteWarning } from "./paste-checks.js";
 import { stepProgress } from "./progress.js";
 import {
+  applyServiceChannelSubmit,
   applyServicesPickerSubmit,
   applyServiceValueSubmit,
   buildServicePromptList,
+  channelPromptDefault,
   consumingAgentsFor,
+  nextIdxAfterSkippedToken,
+  notifyChannelsToFinish,
   notifyWiringNames,
   persistNotifyConfigFromWizardState,
   servicesPreChecked,
@@ -31,6 +36,8 @@ export function renderServicesStep(ctx: WizardContext): JSX.Element | null {
     servicesSaved,
     servicesSkipped,
     servicesWarning,
+    servicesPendingPaste,
+    servicesChannelTargets,
   } = ctx.state;
   const {
     setServicesSelected,
@@ -39,7 +46,14 @@ export function renderServicesStep(ctx: WizardContext): JSX.Element | null {
     setServicesSaved,
     setServicesSkipped,
     setServicesWarning,
+    setServicesPendingPaste,
+    setServicesChannelTargets,
   } = ctx.set;
+  // Only Slack and Discord bots take a channel.
+  const channelTargets: ChannelTargets = {
+    ...(servicesChannelTargets.slack ? { slack: servicesChannelTargets.slack } : {}),
+    ...(servicesChannelTargets.discord ? { discord: servicesChannelTargets.discord } : {}),
+  };
 // ---------------- Services — picker ----------------
 if (servicesPhase === "picker") {
   const choices = wizardServiceChoices(serviceCatalog);
@@ -100,11 +114,15 @@ if (servicesPhase === "values") {
     return <Text>…</Text>;
   }
   const progress = `(${serviceIdx + 1}/${servicePrompts.length})`;
-  const alreadyStored = services.secretStore.exists(prompt.secretName);
+  const isChannel = prompt.kind === "channel";
+  const alreadyStored = !isChannel && services.secretStore.exists(prompt.secretName);
   const headerLabel =
     prompt.kind === "extra"
       ? `${service.name} — ${prompt.secretName}`
-      : service.name;
+      : isChannel
+        ? `${service.name} — ${prompt.label}`
+        : service.name;
+  const channelDefault = channelPromptDefault(prompt.serviceId);
   return (
     <Box flexDirection="column" gap={1} paddingY={1}>
       <WizardProgress
@@ -144,64 +162,114 @@ if (servicesPhase === "values") {
         </Box>
       )}
       <Text color={theme.fg.muted}>
-        {alreadyStored
-          ? "(already stored — Enter on empty input keeps it · type a new value to replace it)"
-          : "(Enter to save · Enter on empty input to skip)"}
+        {isChannel
+          ? channelDefault
+            ? `(Enter keeps ${channelDefault} · clear it and press Enter to skip; ${service.name} then stays off)`
+            : `(Enter to save · Enter on empty input to skip; ${service.name} then stays off)`
+          : alreadyStored
+            ? "(already stored — Enter on empty input keeps it · type a new value to replace it)"
+            : "(Enter to save · Enter on empty input to skip)"}
       </Text>
       {servicesWarning && (
         <Text color={theme.accent.warning}>⚠ {servicesWarning}</Text>
       )}
-      <PasswordInput
-        // Remount per secret so the previous token doesn't bleed into the next prompt (#219).
-        key={`service:${prompt.secretName}`}
-        placeholder="…"
-        onSubmit={(value) => {
-          const result = applyServiceValueSubmit({
-            serviceId: prompt.secretName,
-            value,
-            currentIdx: serviceIdx,
-            totalSelected: servicePrompts.length,
-            alreadyStored,
-          });
-          if (result.keepStored) {
-            setServicesSaved((prev) =>
-              prev.includes(prompt.secretName) ? prev : [...prev, prompt.secretName],
-            );
-          } else if (result.shouldSave) {
-            try {
-              if (!services.secretStore.exists(prompt.secretName)) {
-                services.secretStore.add(prompt.secretName, value);
-              } else {
-                services.secretStore.rotate(prompt.secretName, value);
-              }
-              // #341 — dedupe so re-save doesn't double the entry +
-              // collide as a React key in the services summary render.
+      {isChannel ? (
+        <TextInput
+          key={`service:${prompt.secretName}`}
+          defaultValue={channelDefault}
+          onSubmit={(value) => {
+            const result = applyServiceChannelSubmit({
+              serviceId: prompt.serviceId,
+              value,
+              currentIdx: serviceIdx,
+              totalSelected: servicePrompts.length,
+            });
+            if (result.error) {
+              setServicesWarning(result.error);
+              return;
+            }
+            const target = result.target;
+            setServicesChannelTargets((prev) => {
+              const next = { ...prev };
+              if (target) next[prompt.serviceId] = target;
+              else delete next[prompt.serviceId];
+              return next;
+            });
+            if (!target) {
+              setServicesSkipped((prev) =>
+                prev.includes(prompt.secretName) ? prev : [...prev, prompt.secretName],
+              );
+            }
+            setServicesWarning(result.warning);
+            setServiceIdx(result.nextIdx);
+            setServicesPhase(result.nextPhase);
+          }}
+        />
+      ) : (
+        <PasswordInput
+          // Remount per secret so the previous token doesn't bleed into the next prompt (#219).
+          key={`service:${prompt.secretName}`}
+          placeholder="…"
+          onSubmit={(value) => {
+            const result = applyServiceValueSubmit({
+              serviceId: prompt.secretName,
+              value,
+              currentIdx: serviceIdx,
+              totalSelected: servicePrompts.length,
+              alreadyStored,
+              pasteWarning: servicePasteWarning(prompt.secretName, value),
+              pendingValue:
+                servicesPendingPaste?.secretName === prompt.secretName
+                  ? servicesPendingPaste.value
+                  : null,
+            });
+            if (result.confirm) {
+              // Held back: nothing stored until the same value comes again.
+              setServicesPendingPaste({ secretName: prompt.secretName, value });
+              setServicesWarning(result.warning);
+              return;
+            }
+            setServicesPendingPaste(null);
+            let nextIdx = result.nextIdx;
+            if (result.keepStored) {
               setServicesSaved((prev) =>
+                prev.includes(prompt.secretName) ? prev : [...prev, prompt.secretName],
+              );
+            } else if (result.shouldSave) {
+              try {
+                if (!services.secretStore.exists(prompt.secretName)) {
+                  services.secretStore.add(prompt.secretName, value);
+                } else {
+                  services.secretStore.rotate(prompt.secretName, value);
+                }
+                // #341 — dedupe so re-save doesn't double the entry +
+                // collide as a React key in the services summary render.
+                setServicesSaved((prev) =>
+                  prev.includes(prompt.secretName)
+                    ? prev
+                    : [...prev, prompt.secretName],
+                );
+              } catch (err) {
+                setServicesWarning(
+                  `failed to store ${prompt.secretName}: ${err instanceof Error ? err.message : String(err)}`,
+                );
+                return;
+              }
+            } else {
+              setServicesSkipped((prev) =>
                 prev.includes(prompt.secretName)
                   ? prev
                   : [...prev, prompt.secretName],
               );
-            } catch (err) {
-              setServicesWarning(
-                `failed to store ${prompt.secretName}: ${err instanceof Error ? err.message : String(err)}`,
-              );
-              return;
+              // No bot token, so no channel to ask for.
+              nextIdx = nextIdxAfterSkippedToken(servicePrompts, nextIdx, prompt.serviceId);
             }
-          } else {
-            setServicesSkipped((prev) =>
-              prev.includes(prompt.secretName)
-                ? prev
-                : [...prev, prompt.secretName],
-            );
-          }
-          setServicesWarning(
-            (result.shouldSave ? servicePasteWarning(prompt.secretName, value) : null) ??
-              result.warning,
-          );
-          setServiceIdx(result.nextIdx);
-          setServicesPhase(result.nextPhase);
-        }}
-      />
+            setServicesWarning(result.warning);
+            setServiceIdx(nextIdx);
+            setServicesPhase(nextIdx >= servicePrompts.length ? "summary" : result.nextPhase);
+          }}
+        />
+      )}
       <Text color={theme.fg.muted}>
         [Enter] save · [Esc] back to selection
       </Text>
@@ -226,6 +294,16 @@ if (servicesPhase === "summary") {
     serviceCatalog,
     services.secretStore,
   );
+  // Chat apps with a token but no chat id / channel stay off in notify.yaml
+  // (doctor would flag them half-configured): say how to finish each one.
+  const toFinish = notifyChannelsToFinish(services, serviceCatalog, wiringNames, channelTargets);
+  const persist = (): void => {
+    persistNotifyConfigFromWizardState(services, serviceCatalog, wiringNames, channelTargets);
+    // #305 — seed voice.yaml alongside notify.yaml so ForemanVoice
+    // + pattern detection have a config to read on first boot.
+    persistVoiceConfig(services.voiceConfigPath, servicesSaved);
+    advance("services");
+  };
   return (
     <Box flexDirection="column" gap={1} paddingY={1}>
       <WizardProgress {...stepProgress("services")} label="Services" phase="summary" />
@@ -275,21 +353,20 @@ if (servicesPhase === "summary") {
           </Text>
         </Box>
       ) : null}
+      {toFinish.length > 0 ? (
+        <Box flexDirection="column">
+          <Text color={theme.accent.warning}>
+            ⚠ Not turned on yet — finish after setup:
+          </Text>
+          {toFinish.map((c) => (
+            <Text key={c.channel} color={theme.fg.muted}>
+              {"  "}• {c.channel} (no {c.missing}): <Text bold>{c.finish}</Text>
+            </Text>
+          ))}
+        </Box>
+      ) : null}
       <Text>Continue to integrations? (y/n)</Text>
-      <ConfirmInput
-        onConfirm={() => {
-          persistNotifyConfigFromWizardState(services, serviceCatalog, wiringNames);
-          // #305 — seed voice.yaml alongside notify.yaml so ForemanVoice
-          // + pattern detection have a config to read on first boot.
-          persistVoiceConfig(services.voiceConfigPath, servicesSaved);
-          advance("services");
-        }}
-        onCancel={() => {
-          persistNotifyConfigFromWizardState(services, serviceCatalog, wiringNames);
-          persistVoiceConfig(services.voiceConfigPath, servicesSaved);
-          advance("services");
-        }}
-      />
+      <ConfirmInput onConfirm={persist} onCancel={persist} />
       <Text color={theme.fg.muted}>
         [y/n] continue · [Esc] back to selection
       </Text>
@@ -308,12 +385,14 @@ export function handleServicesEscape(ctx: WizardContext): boolean {
     setServiceIdx,
     setServicesPhase,
     setServicesWarning,
+    setServicesPendingPaste,
   } = ctx.set;
   if (currentStep === "services") {
     if (servicesPhase === "values" || servicesPhase === "summary") {
       setServicesPhase("picker");
       setServiceIdx(0);
       setServicesWarning(null);
+      setServicesPendingPaste(null);
       return true;
     }
     // picker → agents confirm (the most recent agents phase)

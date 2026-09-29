@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { buildChannel } from '../../src/core/notification/channel-factory.js'
 import { defaultNotifyConfig } from '../../src/core/notification/notify-config.js'
 import type { ServiceEntry } from '../../src/core/registry-catalog.js'
 import {
@@ -99,18 +100,36 @@ describe('buildNotifyConfigFromWizard — happy path', () => {
     expect(result.next.channels.telegram?.chat_id).toBe('8263464163')
   })
 
-  it('enables discord when only the bot token was saved', () => {
+  it('enables discord with the bot token and the channel id the wizard asked for', () => {
     const result = buildNotifyConfigFromWizard({
       savedStorageNames: ['discord-bot-token'],
       serviceCatalog: CATALOG,
       secretStore: makeReader({}),
       existing: defaultNotifyConfig(),
+      channelTargets: { discord: '123456789012345678' },
     })
     expect(result.wiredChannels).toEqual(['discord'])
-    expect(result.next.channels.discord?.enabled).toBe(true)
-    expect(result.next.channels.discord?.bot_token_ref).toBe(
-      'discord-bot-token',
-    )
+    expect(result.unwiredChannels).toEqual([])
+    expect(result.next.channels.discord).toEqual({
+      enabled: true,
+      bot_token_ref: 'discord-bot-token',
+      channel: '123456789012345678',
+    })
+  })
+
+  it('enables slack in bot mode with its channel (what `notify enable slack --channel` writes)', () => {
+    const result = buildNotifyConfigFromWizard({
+      savedStorageNames: ['slack-bot-token'],
+      serviceCatalog: CATALOG,
+      secretStore: makeReader({}),
+      existing: defaultNotifyConfig(),
+      channelTargets: { slack: '#foreman' },
+    })
+    expect(result.next.channels.slack).toEqual({
+      enabled: true,
+      bot_token_ref: 'slack-bot-token',
+      channel: '#foreman',
+    })
   })
 
   it('enables multiple channels when multiple services saved', () => {
@@ -124,6 +143,7 @@ describe('buildNotifyConfigFromWizard — happy path', () => {
       serviceCatalog: CATALOG,
       secretStore: makeReader({ 'telegram-chat-id': '12345' }),
       existing: defaultNotifyConfig(),
+      channelTargets: { slack: '#foreman', discord: '123456789012345678' },
     })
     expect(result.wiredChannels.sort()).toEqual(
       ['discord', 'slack', 'telegram'].sort(),
@@ -133,22 +153,7 @@ describe('buildNotifyConfigFromWizard — happy path', () => {
     expect(result.next.channels.slack?.enabled).toBe(true)
   })
 
-  it('telegram without chat_id still enables with bot_token_ref (chat_id undefined)', () => {
-    const result = buildNotifyConfigFromWizard({
-      savedStorageNames: ['telegram-bot-token'],
-      serviceCatalog: CATALOG,
-      secretStore: makeReader({}),
-      existing: defaultNotifyConfig(),
-    })
-    expect(result.wiredChannels).toEqual(['telegram'])
-    expect(result.next.channels.telegram?.enabled).toBe(true)
-    expect(result.next.channels.telegram?.bot_token_ref).toBe(
-      'telegram-bot-token',
-    )
-    expect(result.next.channels.telegram?.chat_id).toBeUndefined()
-  })
-
-  it('tolerates secretStore.get throwing for chat_id — leaves chat_id unset', () => {
+  it('tolerates secretStore.get throwing for chat_id — leaves telegram off', () => {
     const result = buildNotifyConfigFromWizard({
       savedStorageNames: ['telegram-bot-token', 'telegram-chat-id'],
       serviceCatalog: CATALOG,
@@ -159,9 +164,91 @@ describe('buildNotifyConfigFromWizard — happy path', () => {
       },
       existing: defaultNotifyConfig(),
     })
+    expect(result.wiredChannels).toEqual([])
+    expect(result.next.channels.telegram?.enabled).toBe(false)
+    expect(result.unwiredChannels.map((c) => c.channel)).toEqual(['telegram'])
+  })
+})
+
+// Real-user test: a skipped chat id / channel still left the chat app
+// `enabled: true` with only bot_token_ref, and `foreman doctor` warned
+// ("slack needs webhook_url_ref … or bot_token_ref + channel").
+describe('buildNotifyConfigFromWizard — never enables a half-configured channel', () => {
+  it('leaves telegram off without a chat id and says how to finish', () => {
+    const result = buildNotifyConfigFromWizard({
+      savedStorageNames: ['telegram-bot-token'],
+      serviceCatalog: CATALOG,
+      secretStore: makeReader({}),
+      existing: defaultNotifyConfig(),
+    })
+    expect(result.wiredChannels).toEqual([])
+    expect(result.next.channels.telegram?.enabled).toBe(false)
+    expect(result.unwiredChannels).toEqual([
+      { channel: 'telegram', missing: 'chat id', finish: 'foreman notify enable telegram --chat-id <id>' },
+    ])
+  })
+
+  it('leaves slack and discord off without a channel, keeping the others', () => {
+    const result = buildNotifyConfigFromWizard({
+      savedStorageNames: ['telegram-bot-token', 'telegram-chat-id', 'slack-bot-token', 'discord-bot-token'],
+      serviceCatalog: CATALOG,
+      secretStore: makeReader({ 'telegram-chat-id': '12345' }),
+      existing: defaultNotifyConfig(),
+      channelTargets: { slack: '  ' },
+    })
     expect(result.wiredChannels).toEqual(['telegram'])
-    expect(result.next.channels.telegram?.enabled).toBe(true)
-    expect(result.next.channels.telegram?.chat_id).toBeUndefined()
+    expect(result.next.channels.slack).toBeUndefined()
+    expect(result.next.channels.discord).toBeUndefined()
+    expect(result.unwiredChannels).toEqual([
+      { channel: 'discord', missing: 'channel id', finish: 'foreman notify enable discord --channel <channel-id>' },
+      { channel: 'slack', missing: 'channel', finish: "foreman notify enable slack --channel '#foreman'" },
+    ])
+  })
+
+  it('does not enable a service whose token was skipped', () => {
+    const result = buildNotifyConfigFromWizard({
+      savedStorageNames: ['telegram-chat-id'],
+      serviceCatalog: CATALOG,
+      secretStore: makeReader({ 'telegram-chat-id': '12345' }),
+      existing: defaultNotifyConfig(),
+      channelTargets: { slack: '#foreman' },
+    })
+    expect(result.wiredChannels).toEqual([])
+    expect(result.unwiredChannels).toEqual([])
+    expect(result.next.channels.slack).toBeUndefined()
+  })
+
+  it('keeps the chat id / channel notify.yaml already has when the prompt was skipped', () => {
+    const existing = defaultNotifyConfig()
+    existing.channels.telegram = { enabled: true, bot_token_ref: 'telegram-bot-token', chat_id: '777' }
+    existing.channels.discord = { enabled: false, bot_token_ref: 'discord-bot-token', channel: '123456789012345678' }
+    const result = buildNotifyConfigFromWizard({
+      savedStorageNames: ['telegram-bot-token', 'discord-bot-token'],
+      serviceCatalog: CATALOG,
+      secretStore: makeReader({}),
+      existing,
+    })
+    expect(result.wiredChannels.sort()).toEqual(['discord', 'telegram'])
+    expect(result.next.channels.telegram?.chat_id).toBe('777')
+    expect(result.next.channels.discord).toEqual({
+      enabled: true,
+      bot_token_ref: 'discord-bot-token',
+      channel: '123456789012345678',
+    })
+  })
+
+  it('produces channels that the channel factory (doctor) can build', () => {
+    const result = buildNotifyConfigFromWizard({
+      savedStorageNames: ['telegram-bot-token', 'telegram-chat-id', 'slack-bot-token', 'discord-bot-token'],
+      serviceCatalog: CATALOG,
+      secretStore: makeReader({ 'telegram-chat-id': '12345' }),
+      existing: defaultNotifyConfig(),
+      channelTargets: { slack: '#foreman', discord: '123456789012345678' },
+    })
+    const secrets = { exists: () => true, get: () => 'fake-secret-value' }
+    for (const id of ['telegram', 'slack', 'discord'] as const) {
+      expect(buildChannel(id, result.next.channels[id]!, { secrets })).not.toHaveProperty('problem')
+    }
   })
 })
 
@@ -222,11 +309,12 @@ describe('buildNotifyConfigFromWizard — no-op + merge semantics', () => {
       default_action: 'allow',
     }
     const result = buildNotifyConfigFromWizard({
-      savedStorageNames: ['telegram-bot-token'],
+      savedStorageNames: ['telegram-bot-token', 'telegram-chat-id'],
       serviceCatalog: CATALOG,
-      secretStore: makeReader({}),
+      secretStore: makeReader({ 'telegram-chat-id': '12345' }),
       existing,
     })
+    expect(result.wiredChannels).toEqual(['telegram'])
     expect(result.next.routing.critical?.channels).toEqual(['discord'])
     expect(result.next.routing.critical?.timeout_seconds).toBe(600)
     expect(result.next.routing.critical?.default_action).toBe('allow')
@@ -240,9 +328,9 @@ describe('buildNotifyConfigFromWizard — no-op + merge semantics', () => {
       channel: 'C012345',
     }
     const result = buildNotifyConfigFromWizard({
-      savedStorageNames: ['telegram-bot-token'],
+      savedStorageNames: ['telegram-bot-token', 'telegram-chat-id'],
       serviceCatalog: CATALOG,
-      secretStore: makeReader({}),
+      secretStore: makeReader({ 'telegram-chat-id': '12345' }),
       existing,
     })
     expect(result.next.channels.slack?.bot_token_ref).toBe(
