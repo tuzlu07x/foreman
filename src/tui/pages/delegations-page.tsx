@@ -13,8 +13,13 @@
 import { Box, Text } from "ink";
 import { type JSX, useEffect, useState } from "react";
 import type { Delegation } from "../../db/schema.js";
-import { DelegationTracker } from "../../core/delegation-tracker.js";
+import {
+  DelegationTracker,
+  delegationStatusLabel,
+  type DelegationStatusLabel,
+} from "../../core/delegation-tracker.js";
 import { useDashboardServices } from "../dashboard-context.js";
+import { safe } from "../format.js";
 import { roundBorder, theme } from "../theme.js";
 import { EmptyState } from "../components/empty-state.js";
 import { PageHeader } from "../components/typography.js";
@@ -65,9 +70,11 @@ export function DelegationsPage({
     );
   }
 
-  const awaiting = rows.filter((r) => r.status === "awaiting").length;
-  const nudged = rows.filter((r) => r.status === "nudged").length;
-  const escalated = rows.filter((r) => r.status === "escalated").length;
+  const labels = rows.map(delegationStatusLabel);
+  const awaiting = labels.filter((l) => l === "awaiting").length;
+  const nudged = labels.filter((l) => l === "nudged").length;
+  const failed = labels.filter((l) => l === "failed").length;
+  const escalated = labels.filter((l) => l === "escalated").length;
   const safeSelected = Math.max(0, Math.min(selectedIdx, rows.length - 1));
 
   return (
@@ -80,7 +87,7 @@ export function DelegationsPage({
     >
       <PageHeader
         title="Delegations"
-        right={`${awaiting} awaiting · ${nudged} nudged · ${escalated} escalated`}
+        right={`${awaiting} awaiting · ${nudged} nudged · ${failed} failed · ${escalated} escalated`}
       />
 
       {rows.length === 0 ? (
@@ -121,29 +128,48 @@ export function DelegationsPage({
   );
 }
 
+// Fixed column widths (each includes a one-column gap) so a row is one line
+// at 80 and 120 columns: a cell's text is cut to fit, never wrapped.
+const COLS = {
+  status: 12, // "› " + "escalated"
+  age: 6,
+  initiator: 13,
+  target: 13,
+  output: 13, // "spawn-error"
+  nudges: 7,
+} as const;
+
+function Cell({
+  width,
+  color,
+  dim,
+  children,
+}: {
+  width: number;
+  color?: string;
+  dim?: boolean;
+  children: string;
+}): JSX.Element {
+  return (
+    <Box width={width} flexShrink={0} paddingRight={1}>
+      <Text wrap="truncate-end" {...(color ? { color } : {})} dimColor={dim === true}>
+        {children}
+      </Text>
+    </Box>
+  );
+}
+
 function HeaderRow(): JSX.Element {
   return (
     <Box>
-      <Box width={10}>
-        <Text dimColor>STATUS</Text>
-      </Box>
-      <Box width={8}>
-        <Text dimColor>AGE</Text>
-      </Box>
-      <Box width={14}>
-        <Text dimColor>INITIATOR</Text>
-      </Box>
-      <Box width={14}>
-        <Text dimColor>TARGET</Text>
-      </Box>
-      <Box width={9}>
-        <Text dimColor>OUTPUT</Text>
-      </Box>
-      <Box width={7}>
-        <Text dimColor>NUDGES</Text>
-      </Box>
-      <Box flexGrow={1}>
-        <Text dimColor>PROMPT</Text>
+      <Cell width={COLS.status} dim>{"  STATUS"}</Cell>
+      <Cell width={COLS.age} dim>AGE</Cell>
+      <Cell width={COLS.initiator} dim>INITIATOR</Cell>
+      <Cell width={COLS.target} dim>TARGET</Cell>
+      <Cell width={COLS.output} dim>OUTPUT</Cell>
+      <Cell width={COLS.nudges} dim>NUDGES</Cell>
+      <Box flexGrow={1} flexShrink={1}>
+        <Text dimColor wrap="truncate-end">PROMPT</Text>
       </Box>
     </Box>
   );
@@ -160,34 +186,24 @@ function DelegationRow({
   selected,
   expanded,
 }: DelegationRowProps): JSX.Element {
-  const statusColor = statusColorFor(row.status);
+  const label = delegationStatusLabel(row);
   return (
     <Box flexDirection="column">
       <Box>
-        <Box width={10}>
-          <Text color={statusColor}>{selected ? "› " : "  "}{row.status}</Text>
-        </Box>
-        <Box width={8}>
-          <Text>{humanAge(Date.now() - row.startedAt)}</Text>
-        </Box>
-        <Box width={14}>
-          <Text>{truncate(row.initiatorAgent, 13)}</Text>
-        </Box>
-        <Box width={14}>
-          <Text>{truncate(row.targetAgent, 13)}</Text>
-        </Box>
-        <Box width={9}>
-          <Text dimColor={row.outputReceivedAt === null}>
-            {row.outputReceivedAt === null
-              ? "waiting"
-              : row.spawnOutcome ?? "?"}
-          </Text>
-        </Box>
-        <Box width={7}>
-          <Text>{String(row.nudgeCount)}</Text>
-        </Box>
-        <Box flexGrow={1}>
-          <Text>{truncate(row.promptSummary, 60)}</Text>
+        <Cell width={COLS.status} color={statusColorFor(label)}>
+          {`${selected ? "› " : "  "}${label}`}
+        </Cell>
+        <Cell width={COLS.age}>{humanAge(Date.now() - row.startedAt)}</Cell>
+        <Cell width={COLS.initiator}>{safe(row.initiatorAgent)}</Cell>
+        <Cell width={COLS.target}>{safe(row.targetAgent)}</Cell>
+        <Cell width={COLS.output} dim={row.outputReceivedAt === null}>
+          {row.outputReceivedAt === null
+            ? "waiting"
+            : safe(row.spawnOutcome ?? "?")}
+        </Cell>
+        <Cell width={COLS.nudges}>{String(row.nudgeCount)}</Cell>
+        <Box flexGrow={1} flexShrink={1}>
+          <Text wrap="truncate-end">{safe(row.promptSummary)}</Text>
         </Box>
       </Box>
       {expanded && (
@@ -213,7 +229,7 @@ function DelegationRow({
   );
 }
 
-function statusColorFor(status: Delegation["status"]): string {
+function statusColorFor(status: DelegationStatusLabel): string {
   switch (status) {
     case "open":
       return theme.fg.muted;
@@ -221,6 +237,7 @@ function statusColorFor(status: Delegation["status"]): string {
     case "nudged":
       return theme.accent.warning;
     case "escalated":
+    case "failed":
       return theme.accent.danger;
     case "closed":
       return theme.accent.success;
@@ -245,9 +262,4 @@ function humanAge(ms: number): string {
 function formatTime(ms: number): string {
   const d = new Date(ms);
   return d.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "Z");
-}
-
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1) + "…";
 }

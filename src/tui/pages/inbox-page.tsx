@@ -38,6 +38,36 @@ export function filterInbox(items: InboxItem[], filter: Filter): InboxItem[] {
   return items;
 }
 
+/** Identical notices shown as one row (e.g. the same crash on every start). */
+export interface InboxGroup {
+  /** The newest item: the row shows its time, level and details. */
+  latest: InboxItem;
+  /** Every item in the group, newest first. */
+  items: InboxItem[];
+  unread: number;
+}
+
+/** Groups notices with the same agent, kind, level and text into one row,
+ *  keeping the count and the newest time. `items` is newest first; so is
+ *  the result, with each group placed where its newest item was. */
+export function groupInbox(items: InboxItem[]): InboxGroup[] {
+  const groups = new Map<string, InboxGroup>();
+  const out: InboxGroup[] = [];
+  for (const item of items) {
+    const key = JSON.stringify([item.agentId, item.kind, item.level, item.title, item.body]);
+    const group = groups.get(key);
+    if (group) {
+      group.items.push(item);
+      if (item.readAt === null) group.unread++;
+      continue;
+    }
+    const fresh: InboxGroup = { latest: item, items: [item], unread: item.readAt === null ? 1 : 0 };
+    groups.set(key, fresh);
+    out.push(fresh);
+  }
+  return out;
+}
+
 export function InboxPage({
   items,
   unread,
@@ -50,9 +80,12 @@ export function InboxPage({
   const [filter, setFilter] = useState<Filter>("all");
   const [selected, setSelected] = useState(0);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const visible = useMemo(() => filterInbox(items, filter), [items, filter]);
+  const visible = useMemo(() => groupInbox(filterInbox(items, filter)), [items, filter]);
   const index = Math.min(selected, Math.max(0, visible.length - 1));
   const current = visible[index];
+  const markGroupRead = (group: InboxGroup): void => {
+    for (const item of group.items) if (item.readAt === null) onMarkRead(item.id);
+  };
 
   useInput(
     (input, key) => {
@@ -61,9 +94,9 @@ export function InboxPage({
       else if (key.pageDown) setSelected(Math.min(visible.length - 1, index + 10));
       else if (key.pageUp) setSelected(Math.max(0, index - 10));
       else if (key.return && current) {
-        setExpanded(expanded === current.id ? null : current.id);
-        if (current.readAt === null) onMarkRead(current.id);
-      } else if (input === "r" && current) onMarkRead(current.id);
+        setExpanded(expanded === current.latest.id ? null : current.latest.id);
+        markGroupRead(current);
+      } else if (input === "r" && current) markGroupRead(current);
       else if (input === "R") onMarkAllRead();
       else if (input === "f") {
         setFilter(FILTERS[(FILTERS.indexOf(filter) + 1) % FILTERS.length]!);
@@ -106,10 +139,11 @@ export function InboxPage({
             </Text>
           </Box>
         ) : (
-          window.map((item) => {
-            const isSelected = item.id === current?.id;
+          window.map((group) => {
+            const item = group.latest;
+            const isSelected = item.id === current?.latest.id;
             const { glyph, color } = levelGlyph(item.level);
-            const isUnread = item.readAt === null;
+            const isUnread = group.unread > 0;
             return (
               <Box key={item.id} flexDirection="column">
                 <Text wrap="truncate-end">
@@ -125,6 +159,9 @@ export function InboxPage({
                   <Text color={isUnread ? theme.fg.emphasis : theme.fg.default} bold={isUnread}>
                     {item.title}
                   </Text>
+                  {group.items.length > 1 ? (
+                    <Text color={theme.fg.muted}>{` ×${group.items.length}`}</Text>
+                  ) : null}
                   <Text color={theme.fg.muted}>{`  ${relativeTime(item.createdAt, now)}`}</Text>
                 </Text>
                 {expanded === item.id || (isSelected && item.body.length > 0) ? (

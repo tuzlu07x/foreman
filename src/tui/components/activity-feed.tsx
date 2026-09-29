@@ -10,6 +10,7 @@ import {
   summariseTool,
   targetLabel,
 } from "../format.js";
+import { useTerminalSize } from "../hooks.js";
 import { roundBorder, theme } from "../theme.js";
 import { useDashboardState } from "../use-dashboard-state.js";
 
@@ -45,6 +46,8 @@ export function ActivityFeed({
     ),
   ].sort((a, b) => b.createdAt - a.createdAt);
   const visible = minimal ? merged.slice(0, 5) : merged.slice(0, 20);
+  const { cols } = useTerminalSize();
+  const rowWidth = feedRowWidth(cols, width, minimal === true);
 
   const inner = (
     <Box flexDirection="column">
@@ -62,7 +65,7 @@ export function ActivityFeed({
       ) : (
         visible.map((item) =>
           item.kind === "request" ? (
-            <ActivityRow key={`r${item.row.id}`} request={item.row} />
+            <ActivityRow key={`r${item.row.id}`} request={item.row} rowWidth={rowWidth} />
           ) : (
             <ControlRow key={`c${item.row.id}`} command={item.row} />
           ),
@@ -95,7 +98,25 @@ export function ActivityFeed({
   );
 }
 
-function ActivityRow({ request }: { request: Request }): JSX.Element {
+/** Columns a row may use: the feed's share of the terminal, less its
+ *  frame (border + padding), less one column of slack for rounding. */
+export function feedRowWidth(
+  cols: number,
+  width: string | undefined,
+  minimal: boolean,
+): number {
+  const pct = width?.endsWith("%") ? Number.parseFloat(width) : Number.NaN;
+  const outer = Number.isFinite(pct) ? Math.floor((cols * pct) / 100) : cols;
+  return Math.max(20, outer - (minimal ? 2 : 4) - 1);
+}
+
+function ActivityRow({
+  request,
+  rowWidth,
+}: {
+  request: Request;
+  rowWidth: number;
+}): JSX.Element {
   const status = statusIconFor(request.decision);
   const toneColor =
     status.tone === "success"
@@ -111,19 +132,24 @@ function ActivityRow({ request }: { request: Request }): JSX.Element {
     return () => clearTimeout(t);
   }, []);
   const headerColor = faded ? theme.fg.default : theme.fg.muted;
+  const when = relativeTime(request.createdAt);
+  const who = targetLabel(request.sourceAgent, request.targetAgent);
+  // One line per row: the call gets what the time and agent leave, and a
+  // long path gives up its middle, not its file name.
+  const callWidth = Math.max(8, rowWidth - when.length - 3 - who.length - 1);
   return (
     <Box flexDirection="column" marginBottom={0}>
-      <Text color={headerColor}>
-        <Text color={theme.fg.muted}>{relativeTime(request.createdAt)}</Text>
+      <Text color={headerColor} wrap="truncate-end">
+        <Text color={theme.fg.muted}>{when}</Text>
         <Text color={theme.fg.muted}> · </Text>
         <Text color={faded ? theme.accent.primary : theme.fg.muted}>
-          {targetLabel(request.sourceAgent, request.targetAgent)}
+          {who}
         </Text>{" "}
         <Text bold={faded}>
-          {summariseTool(request.targetTool, request.args)}
+          {summariseTool(request.targetTool, request.args, callWidth)}
         </Text>
       </Text>
-      <Text>
+      <Text wrap="truncate-end">
         {"  "}
         <Text color={faded ? toneColor : theme.fg.muted}>{status.icon}</Text>{" "}
         <Text color={theme.fg.muted}>
@@ -160,7 +186,7 @@ function ControlRow({ command }: { command: ControlCommand }): JSX.Element {
   const summary = summariseControlCommand(command);
   return (
     <Box flexDirection="column" marginBottom={0}>
-      <Text color={headerColor}>
+      <Text color={headerColor} wrap="truncate-end">
         <Text color={theme.fg.muted}>{relativeTime(command.createdAt)}</Text>
         <Text color={theme.fg.muted}> · </Text>
         <Text color={faded ? theme.accent.primary : theme.fg.muted}>
@@ -168,7 +194,7 @@ function ControlRow({ command }: { command: ControlCommand }): JSX.Element {
         </Text>{" "}
         <Text bold={faded}>{safe(summary)}</Text>
       </Text>
-      <Text>
+      <Text wrap="truncate-end">
         {"  "}
         <Text color={faded ? toneColor : theme.fg.muted}>{icon}</Text>{" "}
         <Text color={theme.fg.muted}>

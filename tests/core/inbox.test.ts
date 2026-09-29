@@ -248,6 +248,32 @@ describe('InboxRecorder', () => {
     expect(body('r16')).toBe('by you via Slack')
   })
 
+  it('does not repeat an unread crash notice that says the same thing', () => {
+    // A registered agent whose program is missing fails the same way on
+    // every `foreman start`.
+    const missing = (crashedAt: number): ForemanEventMap['agent:daemon-crashed'] => ({
+      agentId: 'hermes',
+      pid: 0,
+      exitCode: 127,
+      stderr: 'hermes: command not found. Install it, or run `foreman agent disable hermes`.',
+      crashedAt,
+    })
+    bus.emit('agent:daemon-crashed', missing(1_000))
+    bus.emit('agent:daemon-crashed', missing(2_000))
+    bus.emit('agent:daemon-crashed', missing(3_000))
+    expect(inbox.list().map((i) => i.title)).toEqual(['hermes crashed (exit 127)'])
+    // A different crash is news.
+    bus.emit('agent:daemon-crashed', { ...missing(4_000), exitCode: 1, stderr: 'config invalid' })
+    // So is the same one again after you read the first.
+    inbox.markAllRead()
+    bus.emit('agent:daemon-crashed', missing(5_000))
+    expect(inbox.list().map((i) => [i.title, i.readAt === null])).toEqual([
+      ['hermes crashed (exit 127)', true],
+      ['hermes crashed (exit 1)', false],
+      ['hermes crashed (exit 127)', false],
+    ])
+  })
+
   it('files a withdrawn request quietly', () => {
     bus.emit('approval:requested', approvalRequested('r11'))
     bus.emit('approval:resolved', { requestId: 'r11', decision: 'denied', resolvedBy: 'cancelled' })

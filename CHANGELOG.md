@@ -118,6 +118,22 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Fixed
 
+- **The TUI's Delegations table lines up.** Status and age no longer run
+  together (`awaiting2m`) and `spawn-error` no longer wraps: every column
+  has a fixed width and cuts its text, so a row is one line at 80 and 120
+  columns. A hand-off whose agent could not run (spawn error, non-zero
+  exit, timeout) now shows as `failed` instead of `awaiting`, in the TUI
+  and in `foreman delegations list`.
+- **Long file paths no longer break TUI rows.** In Activity, Logs and the
+  approval prompt a long path is shortened in the middle, with your home
+  folder as `~` (`~/…/tuitour/.env`), so each row stays one line and the
+  file name stays in view. The full path is still in the inspect view
+  (`i`).
+- **The inbox no longer fills up with the same crash.** An agent whose
+  program isn't installed (exit 127) added "hermes crashed" again on
+  every start. The same crash notice isn't added again while the last
+  one is unread (every crash is still in the audit log), and identical
+  notices show as one row with a count (`×4`) and the latest time.
 - Running `foreman setup` again no longer wipes two-way chat settings: a
   channel it rewrites keeps what the wizard doesn't ask about (Slack's
   `app_token_ref`, `allowed_user_ids`, `owner_user_ids`, Telegram's

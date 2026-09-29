@@ -7,10 +7,12 @@ import { useDashboardServices } from "../dashboard-context.js";
 import {
   formatTime,
   formatDuration,
+  safe,
   statusIconFor,
   summariseTool,
   targetLabel,
 } from "../format.js";
+import { useTerminalSize } from "../hooks.js";
 import { roundBorder, theme } from "../theme.js";
 import { EmptyState } from "../components/empty-state.js";
 import { PageHeader } from "../components/typography.js";
@@ -45,6 +47,9 @@ export function LogsPage(props: LogsPageProps): JSX.Element {
   } = props;
   const { sqlite } = useDashboardServices();
   const [refreshKey, setRefreshKey] = useState(0);
+  const { cols } = useTerminalSize();
+  // The page frame (border + padding) takes 4 columns; one more is slack.
+  const rowWidth = Math.max(20, cols - 5);
 
   useEffect(() => {
     const t = setInterval(() => setRefreshKey((k) => k + 1), 2000);
@@ -108,6 +113,7 @@ export function LogsPage(props: LogsPageProps): JSX.Element {
                 row={row}
                 selected={isSelected}
                 expanded={expanded && isSelected}
+                rowWidth={rowWidth}
               />
             );
           })
@@ -195,10 +201,12 @@ function ResultRow({
   row,
   selected,
   expanded,
+  rowWidth,
 }: {
   row: Request;
   selected: boolean;
   expanded: boolean;
+  rowWidth: number;
 }): JSX.Element {
   const status = statusIconFor(row.decision);
   const toneColor =
@@ -207,25 +215,31 @@ function ResultRow({
       : status.tone === "danger"
         ? theme.accent.danger
         : theme.accent.warning;
+  const time = `[${formatTime(row.createdAt)}]`;
+  const who = targetLabel(row.sourceAgent, row.targetAgent);
+  const outcome =
+    row.decision +
+    (row.decidedBy ? ` · ${safe(row.decidedBy)}` : "") +
+    (row.durationMs !== null ? ` · ${formatDuration(row.durationMs)}` : "");
+  // One line per row: the call gets what the rest leaves, and a long path
+  // gives up its middle, not its file name.
+  const callWidth = Math.max(
+    8,
+    rowWidth - 2 - time.length - 1 - who.length - 1 - 1 - status.icon.length - 1 - outcome.length,
+  );
   return (
     <Box flexDirection="column">
-      <Text>
+      <Text wrap="truncate-end">
         <Text color={selected ? theme.accent.primary : theme.fg.muted}>
           {selected ? "▸ " : "  "}
         </Text>
-        <Text color={theme.fg.muted}>[{formatTime(row.createdAt)}]</Text>{" "}
-        <Text color={theme.accent.primary}>
-          {targetLabel(row.sourceAgent, row.targetAgent)}
+        <Text color={theme.fg.muted}>{time}</Text>{" "}
+        <Text color={theme.accent.primary}>{who}</Text>{" "}
+        <Text bold={selected}>
+          {summariseTool(row.targetTool, row.args, callWidth)}
         </Text>{" "}
-        <Text bold={selected}>{summariseTool(row.targetTool, row.args)}</Text>{" "}
         <Text color={toneColor}>{status.icon}</Text>{" "}
-        <Text color={theme.fg.muted}>
-          {row.decision}
-          {row.decidedBy ? ` · ${row.decidedBy}` : ""}
-          {row.durationMs !== null
-            ? ` · ${formatDuration(row.durationMs)}`
-            : ""}
-        </Text>
+        <Text color={theme.fg.muted}>{outcome}</Text>
       </Text>
       {expanded && (
         <Box

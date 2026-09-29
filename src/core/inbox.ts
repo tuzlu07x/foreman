@@ -72,6 +72,31 @@ export class InboxService {
     };
   }
 
+  /** True when an unread item already says exactly this (same agent,
+   *  kind, level, title and details). */
+  hasUnreadSame(entry: NewInboxEntry): boolean {
+    // Compared as stored: redacted and clipped like `row()` does.
+    const title = clip(redactSecretShapes(entry.title).text, MAX_TITLE);
+    const body = clip(redactSecretShapes(entry.body ?? "").text, MAX_BODY);
+    const agentId = entry.agentId ?? null;
+    const found = this.db
+      .select({ id: inboxItems.id })
+      .from(inboxItems)
+      .where(
+        and(
+          isNull(inboxItems.readAt),
+          agentId === null ? isNull(inboxItems.agentId) : eq(inboxItems.agentId, agentId),
+          eq(inboxItems.kind, entry.kind),
+          eq(inboxItems.level, entry.level),
+          eq(inboxItems.title, title),
+          eq(inboxItems.body, body),
+        ),
+      )
+      .limit(1)
+      .get();
+    return found !== undefined;
+  }
+
   /** Insert, or replace the item with the same dedupe key. */
   upsert(entry: NewInboxEntry & { dedupeKey: string }): InboxItem {
     const now = entry.createdAt ?? Date.now();
@@ -285,14 +310,21 @@ export class InboxRecorder {
       }),
       bus.on("agent:daemon-crashed", (e) => {
         const hint = e.stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0) ?? "";
-        this.inbox.add({
+        const entry = {
           level: "critical",
           kind: "agent",
           title: `${e.agentId} crashed (exit ${e.exitCode})`,
           body: hint,
           agentId: e.agentId,
           dedupeKey: `crash:${e.agentId}:${e.crashedAt}`,
-        });
+        } as const;
+        // An agent whose program is missing (exit 127) fails the same way
+        // on every `foreman start`. While the last notice about it is still
+        // unread, the same news again is noise; the audit log still records
+        // every crash, and a different crash, or the same one after you
+        // read it, is added as usual.
+        if (this.inbox.hasUnreadSame(entry)) return;
+        this.inbox.add(entry);
       }),
       bus.on("session:halted", (e) => {
         // Only protective halts are news; "manual" is also how a finished
