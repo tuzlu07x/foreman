@@ -48,7 +48,7 @@ Pick one. All of them put the same `foreman` command on your PATH.
 curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash
 ```
 
-The script reuses the `node` on your PATH when it is Node 22 or 24. Otherwise it installs nvm and Node 22 LTS through it (no compiler or Python needed), then runs `npm install -g foreman-agent`. Options:
+The script reuses the `node` on your PATH when it is Node 22 or 24. Otherwise it installs nvm and Node 22 LTS through it (no compiler or Python needed), then runs `npm install -g foreman-agent`. When nvm already has a Node 22 that just isn't the active one, it says so (*Node 22 LTS is installed through nvm but not active … switching to it*) and switches to it without installing another. Options:
 
 | Variable / flag | Effect |
 | --- | --- |
@@ -62,7 +62,7 @@ The script reuses the `node` on your PATH when it is Node 22 or 24. Otherwise it
 
 Flags go after `bash -s --`, for example `curl -fsSL …/install.sh | bash -s -- --uninstall`.
 
-If the script installed Node through nvm, open a new shell (or run `. "$HOME/.nvm/nvm.sh"`) before running `foreman`. If your nvm default is an older Node (for example 20), new shells start with that one and don't have `foreman`. The script says so and, in a terminal, asks whether to make Node 22 your default (`nvm alias default 22`). Say no to keep your default and run `nvm use 22` in each shell where you use Foreman. Without a terminal it changes nothing unless `FOREMAN_NVM_DEFAULT=1` is set.
+If the script switched Node through nvm, the terminal you ran it in still has your old Node, so its *Next* list starts with `0. nvm use 22`: run that first (or open a new terminal) before running `foreman`. If your nvm default is an older Node (for example 20), new shells start with that one and don't have `foreman`. The script says so and, in a terminal, asks whether to make Node 22 your default (`nvm alias default 22`; Enter or `y` says yes). Say no to keep your default and run `nvm use 22` in each shell where you use Foreman. If nvm can't change the default, the script says so, prints the command to run yourself and carries on. Without a terminal it changes nothing unless `FOREMAN_NVM_DEFAULT=1` is set.
 
 ### npm
 
@@ -215,6 +215,8 @@ Enter creates Foreman's home (identity key, secret store key, default `policy.ya
 7. **Step 6 of 7: Install + Verify.** If two chat agents share a channel, you pick which one is primary. Then the keys the chosen routes still need (paste or skip), then Foreman installs, configures and registers each agent.
 8. **Step 7 of 7: Your team** (optional, shown when Claude Code or Codex is registered). Give your agents jobs: Space picks ready-made roles (manager, developer, code reviewer, researcher, writer, analyst, support, assistant), `r` switches a role between Claude Code and Codex, and **+ Your own role…** asks for a title, what it does in your own words, and what it may do (read files, write files, run commands, use the web). Enter creates each role as its own Claude Code or Codex instance, named after the role, and writes the roles to `org.yaml` (asking your company's name when there is none). With a manager among them, everyone reports to the manager. Enter with nothing picked, or `s`, skips. See [org.md](org.md#roles-ready-made-your-own-and-what-each-may-do).
 9. **Done.** A summary (a role the Your team step couldn't create is listed with its reason, e.g. *✗ Code Reviewer — … · add it later with `foreman org add-role`*), then:
+8. **Step 7 of 7: Your team** (optional, shown when Claude Code or Codex is registered). Give your agents jobs: Space picks ready-made roles (manager, developer, code reviewer, researcher, writer, analyst, support, assistant), `r` switches the role under the cursor between Claude Code and Codex (the column after each title shows which; the footer shows `[r] Claude Code ⇄ Codex` whenever both are registered), and **+ Your own role…** asks for a title, what it does in your own words, what it may do (read files, write files, run commands, use the web) and, once you have departments, which one it joins. **+ Add a department…** adds a ready-made department (IT: backend, frontend and devops developers; Marketing: a marketing manager, a content creator and social media; Customer Support: a support lead and a support agent) or your own (a name, then its first role), and asks which agent runs it. On a department's row, Space picks all its roles, `r` switches all of them between Claude Code and Codex, and `x` removes it. Enter creates each role as its own Claude Code or Codex instance, named after the role, and writes the roles and departments to `org.yaml` (asking your company's name when there is none). With a manager among them, everyone reports to the manager; a department's first role leads it and reports to the manager (or you), and the rest of the department reports to its lead. The result lists each role with what it runs on. Enter with nothing picked, or `s`, skips. See [org.md](org.md#ready-made-departments).
+9. **Done.** A summary, then:
 
    | Key | |
    | --- | --- |
@@ -314,7 +316,7 @@ The install script does steps 1, 4, 5 and 6 below for you, whichever Node Forema
 curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash -s -- --uninstall
 ```
 
-It asks before deleting Foreman's data; add `--purge` to delete it without asking. It doesn't restore SOUL files (step 3) or remove a hook added to one project with `--project`. By hand, do it in this order: the first steps need the `foreman` command, which step 5 removes.
+It removes Claude Code's hook before the package even when Claude Code isn't a registered agent: a hook left behind would block every Claude Code tool call once Foreman is gone. It asks before deleting Foreman's data; add `--purge` to delete it without asking. It doesn't restore SOUL files (step 3) or remove a hook added to one project with `--project`. By hand, do it in this order: the first steps need the `foreman` command, which step 5 removes.
 
 ```bash
 # 1. Remove the PreToolUse hook Foreman added to Claude Code (if you installed it),
@@ -361,6 +363,7 @@ Keys Foreman projected into an agent's own files (for example `~/.hermes/.env`, 
 | Symptom | What to try |
 | --- | --- |
 | `foreman: command not found` after install | Open a new terminal (or `hash -r`). If you installed through nvm, run `. "$HOME/.nvm/nvm.sh"`. Otherwise check that `$(npm prefix -g)/bin` is on your PATH. |
+| Claude Code blocks every tool call with *Foreman's hook could not run* | Foreman's package (or the Node it was installed under) is gone while its hook is still in Claude Code's settings. Reinstall Foreman (`npm install -g foreman-agent`), or remove Foreman's entry (`"managed_by": "foreman.pre-tool-use"`) under `hooks.PreToolUse` in `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`). |
 | npm warns `EBADENGINE`, or `foreman doctor` fails `node_version` | Your Node is older than Foreman needs (22.12+). Install Node 22 LTS (`nvm install 22`) and reinstall Foreman. |
 | `foreman start` skips the wizard | Foreman's home already exists with registered agents, or you skipped setup before. Run the wizard with `foreman setup --resume` or `foreman setup --reset`, or wipe the home (see [Uninstall](#uninstall)). |
 | Wizard's Step 1 doesn't ask for any key | Nothing was selected when you pressed Enter. Press Esc to go back to the selection, Space on each provider, then Enter. |

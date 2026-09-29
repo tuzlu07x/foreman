@@ -116,12 +116,19 @@ export function defaultHookCommand(
     return [...launcher.argv.map(winQuote), agentId].join(" ");
   }
   const run = [...launcher.argv.map(shQuote), agentId].join(" ");
-  return (
-    `${run}; s=$?; [ "$s" -eq 0 ] || [ "$s" -eq 2 ] || { ` +
-    `echo "Foreman's hook could not run (exit $s), so this call is blocked. ` +
-    `Run: foreman doctor" >&2; s=2; }; exit "$s"`
-  );
+  return `${run}; s=$?; [ "$s" -eq 0 ] || [ "$s" -eq 2 ] || { echo "${HOOK_FAILED_TEXT}" >&2; s=2; }; exit "$s"`;
 }
+
+/** What the wrapper prints when it blocks. The usual cause is Foreman's
+ *  package (or its Node) being gone, so `foreman doctor` alone can't help:
+ *  it names both ways out, reinstalling or removing this hook entry. Goes
+ *  in a double-quoted sh string: `$s` is the exit status, and it must hold
+ *  no other `$`, `"`, backquote or `\`. */
+export const HOOK_FAILED_TEXT =
+  "Foreman's hook could not run (exit $s), so this call is blocked. " +
+  "If Foreman was uninstalled or its Node removed, reinstall it (npm install -g foreman-agent), " +
+  "or remove Foreman's entry (managed_by: foreman.pre-tool-use) under hooks.PreToolUse in Claude Code's settings.json. " +
+  "Otherwise run: foreman doctor";
 
 /** An argument for sh: bare when it's safe as is, else single-quoted. */
 function shQuote(arg: string): string {

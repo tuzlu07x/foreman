@@ -135,7 +135,7 @@ about roles filled by agents you haven't registered yet.
 | `foreman org sync`                                                                                                                                    | Push titles / responsibilities / model overrides into the agent registry               |
 | `foreman org upgrade`                                                                                                                                 | Upgrade every agent runtime the org uses                                               |
 | `foreman org add-department <id> --head <role> [--agent a] [--name n]`                                                                                | Add a department and its head                                                          |
-| `foreman org roles`                                                                                                                                   | Ready-made roles for `add-role --preset`                                               |
+| `foreman org roles`                                                                                                                                   | Ready-made roles for `add-role --preset`, grouped by department                        |
 | `foreman org add-role <id> (--agent a \| --runs-on claude-code\|codex) [--preset p] [--describe text] [--can list] [--department d] [--reports-to r]` | Add a role (defaults to reporting to the department head)                              |
 | `foreman org report [target] [period]`                                                                                                                | What a department, role or agent did, and what it cost                                 |
 | `foreman org budget <department> [usd\|off] [--daily] [--pause]`                                                                                      | Set or remove a spend limit                                                            |
@@ -177,7 +177,64 @@ foreman org add-role research --preset researcher --runs-on claude-code
 
 The setup wizard's **Your team** step (`foreman setup`) does the same with
 a picker: tick ready-made roles or add your own, and pick Claude Code or
-Codex for each.
+Codex for each (`r` on its row; the column next to the title says which).
+
+### Ready-made departments
+
+`foreman org roles` also lists ready-made departments, each a group of
+roles led by its first one:
+
+| Department (id)                       | Roles, the lead first                                    | Runs on     |
+| ------------------------------------- | -------------------------------------------------------- | ----------- |
+| IT (`it`)                             | backend-developer, frontend-developer, devops-engineer   | Codex       |
+| Marketing (`marketing`)               | marketing-manager, content-creator, social-media         | Claude Code |
+| Customer Support (`customer-support`) | support-lead, support-agent                              | Claude Code |
+
+In the wizard's **Your team** step, **+ Add a department…** adds one of
+them (or your own: a name, then its roles) and asks which agent runs it,
+Claude Code or Codex. On the department's row, Space picks or drops all
+its roles, `r` switches all of them between Claude Code and Codex, and `x`
+removes the department; `r` on one role's row switches just that role. Your
+own role can join a department too. The Team page (`t` in the TUI) does the
+same with `d`, adding all of a department's roles at once.
+
+Reporting lines follow the department: its lead (org.yaml `head`) reports
+to the Manager when there is one (else to you), and the rest of the
+department reports to its lead. If the lead's agent can't be added, the
+first role that was added leads instead; a department with no role added is
+left out, and anyone who would have reported to a role that wasn't added
+reports to that role's manager. The whole team is written to `org.yaml` in
+one validated write, `departments:` before `roles:`:
+
+```yaml
+departments:
+  it:
+    name: IT
+    head: backend-developer
+roles:
+  manager:
+    title: Manager
+    agent: manager
+    reports_to: human
+  backend-developer:
+    title: Backend Developer
+    agent: backend-developer
+    department: it
+    reports_to: manager
+  frontend-developer:
+    title: Frontend Developer
+    agent: frontend-developer
+    department: it
+    reports_to: backend-developer
+```
+
+From the command line, the same department is:
+
+```bash
+foreman org add-role backend-developer --preset backend-developer --runs-on codex
+foreman org add-department it --name IT --head backend-developer
+foreman org add-role frontend-developer --preset frontend-developer --runs-on codex --department it
+```
 
 Or describe your own, in your own words:
 

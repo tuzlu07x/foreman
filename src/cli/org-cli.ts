@@ -27,7 +27,13 @@ import {
   type OrgTreeNode,
   type RoleCapability,
 } from "../core/org/org.js";
-import { findRolePreset, ROLE_PRESETS } from "../core/org/role-library.js";
+import {
+  DEPARTMENT_PRESETS,
+  departmentRolePresets,
+  findRolePreset,
+  generalRolePresets,
+  ROLE_PRESETS,
+} from "../core/org/role-library.js";
 import { printPolicyLoadError } from "./policy-error.js";
 import { findOrgTemplate, ORG_TEMPLATES } from "../core/org/templates.js";
 import { buildOrgReport, parsePeriod, renderOrgReport, resolveReportTarget } from "../core/usage/report.js";
@@ -427,9 +433,16 @@ orgCommand
   .command("roles")
   .description("Ready-made roles for `org add-role --preset` (any agent can fill any role)")
   .action(() => {
-    for (const p of ROLE_PRESETS) {
-      console.log(`${bold(p.id.padEnd(14))} ${p.title} — ${p.summary}`);
-      console.log(dim(`${" ".repeat(15)}may: ${p.can.join(", ")} · runs on ${p.runsOn} by default`));
+    const width = Math.max(...ROLE_PRESETS.map((p) => p.id.length)) + 1;
+    const print = (p: (typeof ROLE_PRESETS)[number]): void => {
+      console.log(`  ${bold(p.id.padEnd(width))} ${p.title} — ${p.summary}`);
+      console.log(dim(`  ${" ".repeat(width + 1)}may: ${p.can.join(", ")} · runs on ${p.runsOn} by default`));
+    };
+    console.log(bold("General"));
+    for (const p of generalRolePresets()) print(p);
+    for (const d of DEPARTMENT_PRESETS) {
+      console.log(`\n${bold(d.name)} ${dim(`(department ${d.id}: ${d.summary}; the first role leads it)`)}`);
+      for (const p of departmentRolePresets(d)) print(p);
     }
     console.log(dim("\nYour own role: foreman org add-role <id> --runs-on claude-code --describe \"what it does, in your words\""));
   });

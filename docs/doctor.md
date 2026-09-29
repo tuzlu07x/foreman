@@ -43,6 +43,7 @@ Foreman doctor
   ✓ agent_tokens         no agents registered
   ✓ acp-agents           no ACP-mediated agents registered
   ✓ provider_mapping     no agents with provider_mapping registered
+  ✓ claude_subscription  skipped — claude-code isn't on the Claude subscription route
   ✓ mcp_gateway          gateway instantiates cleanly (stdio transport ready)
   ✓ mcp_hub              no mcp.yaml — MCP hub not configured (try `foreman mcp catalog`)
   ✓ integrations         none configured (try `foreman integrations catalog`)
@@ -51,7 +52,7 @@ Foreman doctor
   ✓ legacy_home          no legacy ~/.foreman/ files detected
   ✓ update               no cached check yet — 'foreman start' will refresh on next run
 
-27 ok  ·  1 warning  (exit 1 — warnings only)
+28 ok  ·  1 warning  (exit 1 — warnings only)
 ```
 
 A few checks add a row per agent once agents are registered: `acp:<id>` for each registered Hermes, OpenClaw or ZeroClaw (it warns while that agent's CLI isn't on your PATH), `agent_tokens:<id>` for an agent whose wiring doctor can't see, and `node_engines:<id>` when an agent needs a newer Node. `daemon` warns when agents can't use the daemon `foreman start` hosts: its socket path is too long (use a shorter `FOREMAN_HOME`), or the socket or token file isn't one agents trust. It also warns when the background service (`foreman service install`) is installed but the daemon isn't running; `foreman service status` says why. Everything still works then, only slower. The footer always names the exit code so you can match what you see to what your shell scripts will read.
@@ -156,6 +157,21 @@ fts5                 fail   requests_fts virtual table not present after migrati
 The loaded `better-sqlite3` has no FTS5. Since better-sqlite3 13 the npm package ships prebuilt binaries that include FTS5 (there is no install-time build any more), so this usually means an unsupported platform or a hand-built copy. Reinstall Foreman with `npm install -g foreman-agent` on a [supported platform](install.md#supported-platforms).
 
 Before `foreman init` there is no `foreman.db`, so the row reads ``FTS5 available (no database yet — run `foreman init`)`` and stays ok. `requests_fts ready` is only shown once the real database exists and has the table.
+
+**Agents signed in with a subscription** (Claude Code or Codex on the OAuth route):
+```
+provider_mapping     ok     ✓ claude-code — anthropic/oauth · model=(variant default) signed in (`claude auth status` passed)
+                            ✓ codex — openai/oauth · model=(variant default) signed in (`codex login status` passed)
+```
+There's no stored key to look for, so doctor runs the route's verify command from the registry (the one the wizard's Done screen shows) with a 5-second limit, and never prints its output. The row warns only when that command fails (*⚠ codex … not signed in*, with the sign-in command to run). When it can't run at all (the agent's CLI isn't on your PATH, or it timed out), the line starts with `·` and says to run the sign-in if not done, without a warning.
+
+**An API key overrides your Claude subscription:**
+```
+claude_subscription  warn   Claude Code uses the API key from ~/.claude/settings.json instead of your Claude subscription
+                            → Remove env.ANTHROPIC_API_KEY from ~/.claude/settings.json to use the subscription.
+(exit 1 — warnings only)
+```
+Claude Code applies the `env` block of its `settings.json` (`$CLAUDE_CONFIG_DIR/settings.json` when that is set) to itself, and an `ANTHROPIC_API_KEY` there wins over the subscription sign-in. With claude-code on the subscription route, its tasks then run on that key, and fail with *401 API key is invalid* once it's revoked. Doctor only reads the file and never shows the key. The check is skipped when claude-code uses the API-key route, where the key is expected.
 
 **Agent needs a newer Node:**
 ```

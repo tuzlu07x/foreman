@@ -28,6 +28,7 @@ import type {
 import type { ServicesPhase } from "./services-logic.js";
 import type {
   TeamCustomRole,
+  TeamDepartment,
   TeamPhase,
   TeamResult,
   TeamRuntime,
@@ -195,6 +196,12 @@ export interface WizardState {
   teamCustom: TeamCustomRole[];
   teamDraft: TeamCustomRole | null;
   teamCanCursor: number;
+  /** Departments added ([Enter] on "+ Add a department…"). */
+  teamDepartments: TeamDepartment[];
+  /** The department being added: a ready-made one or yours. */
+  teamDeptDraft: Omit<TeamDepartment, "key"> | null;
+  /** Cursor of the department lists (dept-pick, dept-runtime, custom-dept). */
+  teamDeptCursor: number;
   teamResult: TeamResult | null;
 
   donePhase: "main" | "doctor" | "log";
@@ -300,6 +307,9 @@ export function createInitialWizardState(
     teamCustom: [],
     teamDraft: null,
     teamCanCursor: 0,
+    teamDepartments: [],
+    teamDeptDraft: null,
+    teamDeptCursor: 0,
     teamResult: null,
 
     donePhase: "main",

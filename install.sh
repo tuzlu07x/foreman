@@ -63,15 +63,19 @@ EOF
 # A yes/no question on the terminal, even under `curl | bash` (stdin is
 # the script). $2 (y or n) is what Enter means. Without a terminal the
 # answer is no: nothing of yours changes unasked.
+# ASK_TTY is the terminal; tests point it at a file holding the answer.
+ASK_TTY=/dev/tty
 ask() {
   local question="$1" default="${2:-n}" reply=""
-  if ! ( : </dev/tty ) 2>/dev/null; then
+  if ! ( : <"${ASK_TTY}" ) 2>/dev/null; then
     return 1
   fi
   local hint="[y/N]"
   [ "${default}" = "y" ] && hint="[Y/n]"
-  printf "  %s?%s %s %s " "${c_orange}" "${c_reset}" "${question}" "${hint}" >/dev/tty
-  read -r reply </dev/tty || reply=""
+  printf "  %s?%s %s %s " "${c_orange}" "${c_reset}" "${question}" "${hint}" >>"${ASK_TTY}"
+  read -r reply <"${ASK_TTY}" || reply=""
+  # Drop spaces and a stray carriage return around the answer.
+  reply=$(printf "%s" "${reply}" | tr -d ' \t\r')
   case "${reply}" in
     [Yy]*) return 0 ;;
     [Nn]*) return 1 ;;
@@ -115,8 +119,17 @@ ensure_node() {
     exit 1
   fi
 
-  if [ "${major:-0}" -ge "${MIN_NODE_MAJOR}" ]; then
-    warn "Node $(node --version) has no prebuilt native binaries — installing Node ${NODE_LTS_MAJOR} LTS via nvm so you don't need a compiler"
+  # Node 22 may already be installed through nvm, just not the active one:
+  # then the installer only switches to it.
+  local installed=0 found="none"
+  if nvm_has_lts; then installed=1; fi
+  if command -v node >/dev/null 2>&1; then found=$(node --version 2>/dev/null || echo none); fi
+  if [ "${installed}" = "1" ] && [ "${major:-0}" -ge "${MIN_NODE_MAJOR}" ]; then
+    warn "Node ${found} has no prebuilt native binaries — switching to the Node ${NODE_LTS_MAJOR} LTS you already have through nvm"
+  elif [ "${installed}" = "1" ]; then
+    warn "Node ${NODE_LTS_MAJOR} LTS is installed through nvm but not active (this shell has: ${found}) — switching to it"
+  elif [ "${major:-0}" -ge "${MIN_NODE_MAJOR}" ]; then
+    warn "Node ${found} has no prebuilt native binaries — installing Node ${NODE_LTS_MAJOR} LTS via nvm so you don't need a compiler"
   else
     warn "Node ${NODE_LTS_MAJOR} LTS not detected — installing it via nvm (no Python / build tools required)"
   fi
@@ -131,11 +144,22 @@ ensure_node() {
   set +u
   # shellcheck disable=SC1091
   . "${NVM_DIR}/nvm.sh"
-  nvm install "${NODE_LTS_MAJOR}" >&2
+  if [ "${installed}" != "1" ]; then
+    nvm install "${NODE_LTS_MAJOR}" >&2
+  fi
   nvm use "${NODE_LTS_MAJOR}" >&2
   set -u
   ok "Node $(node --version) ready via nvm"
   SWITCHED_NODE=1
+}
+
+# Whether nvm already holds a Node ${NODE_LTS_MAJOR} (under $NVM_DIR/versions/node).
+nvm_has_lts() {
+  local dir
+  for dir in "${NVM_DIR:-$HOME/.nvm}"/versions/node/v"${NODE_LTS_MAJOR}".*; do
+    if [ -x "${dir}/bin/node" ]; then return 0; fi
+  done
+  return 1
 }
 
 # After switching Node through nvm: new terminals start with nvm's default
@@ -146,6 +170,7 @@ check_default_node() {
   local default_major
   default_major=$(set +u; nvm version default 2>/dev/null | sed -e 's/^v//' -e 's/\..*$//' || true)
   if is_supported_node_major "${default_major}"; then
+    DEFAULT_NODE_OK=1
     return 0
   fi
   local current="${default_major:-none}"
@@ -153,8 +178,14 @@ check_default_node() {
   warn "Your nvm default is Node ${current}, so new terminals won't find 'foreman' (it is installed for Node ${NODE_LTS_MAJOR})."
   local decide="${FOREMAN_NVM_DEFAULT:-}"
   if [ "${decide}" = "1" ] || { [ -z "${decide}" ] && ask "Make Node ${NODE_LTS_MAJOR} your nvm default (nvm alias default ${NODE_LTS_MAJOR})" y; }; then
-    (set +u; nvm alias default "${NODE_LTS_MAJOR}" >/dev/null)
-    ok "Node ${NODE_LTS_MAJOR} is now your nvm default: open a new terminal and 'foreman' is there"
+    # nvm's functions don't expect errexit/nounset: run it without them
+    # and check the result, so a hiccup can't end the installer silently.
+    if (set +eu; nvm alias default "${NODE_LTS_MAJOR}" >/dev/null 2>&1); then
+      ok "Node ${NODE_LTS_MAJOR} is now your nvm default: new terminals will find 'foreman'"
+      DEFAULT_NODE_OK=1
+      return 0
+    fi
+    warn "Couldn't change your nvm default. Run it yourself: nvm alias default ${NODE_LTS_MAJOR}"
     return 0
   fi
   warn "Left your default alone. In each new terminal run: nvm use ${NODE_LTS_MAJOR}"
@@ -212,6 +243,15 @@ verify_install() {
 
 next_steps() {
   printf "\n%sNext:%s\n" "${c_bold}" "${c_reset}"
+  # The installer switched Node for itself only: the terminal that ran it
+  # still has the old Node on PATH, where 'foreman' isn't installed.
+  if [ "${SWITCHED_NODE:-0}" = "1" ]; then
+    if [ "${DEFAULT_NODE_OK:-0}" = "1" ]; then
+      printf "  0. %snvm use %s%s          first (or open a new terminal): this terminal still runs your old Node\n" "${c_orange}" "${NODE_LTS_MAJOR}" "${c_reset}"
+    else
+      printf "  0. %snvm use %s%s          first, here and in each new terminal: 'foreman' is installed for Node %s\n" "${c_orange}" "${NODE_LTS_MAJOR}" "${c_reset}" "${NODE_LTS_MAJOR}"
+    fi
+  fi
   printf "  1. %sforeman init%s        one-time setup of Foreman's home (identity, policy, db)\n" "${c_orange}" "${c_reset}"
   printf "  2. %sforeman setup%s       5-minute wizard: API keys, agents, MCP config, policy\n" "${c_orange}" "${c_reset}"
   printf "  3. %sforeman start%s       boot the TUI\n" "${c_orange}" "${c_reset}"
@@ -282,9 +322,17 @@ uninstall_foreman() {
         warn "${id}: couldn't remove it; run 'foreman agent remove ${id} --yes' yourself"
       fi
     done
+    # Claude Code's hook even when claude-code isn't a registered agent:
+    # once the package is gone, a hook left behind blocks every tool call.
+    if foreman agent hook uninstall claude-code >/dev/null 2>&1; then
+      ok "Claude Code: Foreman's hook removed from its settings (if it was there)"
+    else
+      warn "Claude Code: couldn't remove Foreman's hook. Delete the \"foreman.pre-tool-use\" entry under hooks.PreToolUse in ~/.claude/settings.json, or Claude Code blocks every tool call"
+    fi
     log "  ${c_dim}A hook added to one project (--project) stays: 'foreman agent hook uninstall claude-code --project <dir>' removes it.${c_reset}"
   else
     warn "foreman isn't installed here (not on PATH, not under nvm): nothing to take out of your agents"
+    warn "If Claude Code blocks every tool call with \"Foreman's hook could not run\", delete Foreman's entry under hooks.PreToolUse in ~/.claude/settings.json"
   fi
 
   step "Removing ${PACKAGE}"

@@ -140,6 +140,7 @@ import { EventBus, type ForemanEventMap } from '../../src/core/event-bus.js'
 import { RegistryService } from '../../src/core/registry.js'
 import { SecretStore } from '../../src/core/secret-store.js'
 import { createInMemoryDb } from '../../src/db/client.js'
+import { parseOrgText } from '../../src/core/org/org.js'
 import {
   getSetupStatePath,
   loadSetupState,
@@ -1550,7 +1551,149 @@ describe('team step', () => {
     expect(org).toMatch(/code-reviewer:\n\s+title: Code Reviewer\n\s+agent: code-reviewer\n\s+reports_to: manager/)
     expect(org).toMatch(/chores:\n\s+title: Chores\n\s+agent: chores\n\s+reports_to: manager\n\s+instructions: Tidy the issue tracker.\n\s+can:\n\s+- read\n\s+- network/)
     await w.press(ENTER, 'Setup complete')
-    await w.until('3 roles         Manager, Code Reviewer, Chores')
+    // Done lists each role with what it runs on.
+    await w.until(loose('3 roles Manager (Claude Code), Code Reviewer (Codex), Chores (Claude Code)'))
+  }, 30_000)
+
+  const UP = '\u001B[A'
+
+  it('adds a ready-made department; [r] on its row switches all its roles, [r] on a role just that one', async () => {
+    const w = await mount('team', { registered: ['claude-code', 'codex'] })
+    await w.until('Step 7 of 7 ▸ Your team')
+    // Both are registered: the footer always says how to switch.
+    await w.until('[r] Claude Code ⇄ Codex')
+    await w.press(SPACE, '1 picked.')
+    await w.press(UP, '❯ + Add a department…')
+    await w.press(ENTER, 'Add a department')
+    await w.until('❯ IT')
+    await w.press(ENTER, 'Which agent runs IT?')
+    await w.until('❯ Codex')
+    await w.press(ENTER, /❯ \[✓\] IT department\s+Codex/)
+    expect(w.frame()).toMatch(/Backend Developer \(lead\)\s+Codex/)
+    expect(w.frame()).toMatch(/Frontend Developer\s+Codex/)
+    expect(w.frame()).toMatch(/DevOps Engineer\s+Codex/)
+    await w.until(loose("4 picked. IT's lead reports to the Manager; the rest of IT reports to its lead. The Manager reports to you."))
+    await w.until(loose('[r] all of IT: Claude Code ⇄ Codex'))
+    await w.until(loose('[x] remove IT'))
+    // [r] on the department: all three, and back.
+    await w.press('r', /IT department\s+Claude Code/)
+    expect(w.frame()).toMatch(/Backend Developer \(lead\)\s+Claude Code/)
+    expect(w.frame()).toMatch(/Frontend Developer\s+Claude Code/)
+    expect(w.frame()).toMatch(/DevOps Engineer\s+Claude Code/)
+    await w.press('r', /IT department\s+Codex/)
+    expect(w.frame()).toMatch(/Frontend Developer\s+Codex/)
+    expect(w.frame()).toMatch(/DevOps Engineer\s+Codex/)
+    // [r] on one role: just that one.
+    await w.press(DOWN, /❯ {3}\[✓\] Backend Developer/)
+    await w.press(DOWN, /❯ {3}\[✓\] Frontend Developer/)
+    await w.press('r', /Frontend Developer\s+Claude Code/)
+    expect(w.frame()).toMatch(/IT department\s+mixed/)
+    expect(w.frame()).toMatch(/DevOps Engineer\s+Codex/)
+    await w.press(ENTER, "Your company or team's name")
+    await w.type('Acme')
+    await w.press(ENTER, '✓ DevOps Engineer')
+    expect(w.frame()).toMatch(/✓ Backend Developer\s+Codex\s+IT lead · reports to manager/)
+    expect(w.frame()).toMatch(/✓ Frontend Developer\s+Claude Code\s+IT · reports to backend-developer/)
+    expect(vi.mocked(w.services.addTeamAgent!).mock.calls).toEqual([
+      ['manager', 'claude-code'],
+      ['backend-developer', 'codex'],
+      ['frontend-developer', 'claude-code'],
+      ['devops-engineer', 'codex'],
+    ])
+    const org = readFileSync(w.services.orgConfigPath!, 'utf-8')
+    expect(org).toMatch(/departments:\n\s+it:\n\s+name: IT\n\s+head: backend-developer\nroles:/)
+    expect(org).toMatch(/backend-developer:\n\s+title: Backend Developer\n\s+agent: backend-developer\n\s+department: it\n\s+reports_to: manager/)
+    expect(org).toMatch(/frontend-developer:\n\s+title: Frontend Developer\n\s+agent: frontend-developer\n\s+department: it\n\s+reports_to: backend-developer/)
+    expect(org).toMatch(/devops-engineer:[\s\S]*reports_to: backend-developer[\s\S]*can:\n\s+- read\n\s+- write\n\s+- shell\n\s+- network/)
+    expect(() => parseOrgText(org)).not.toThrow()
+    await w.press(ENTER, 'Setup complete')
+    await w.until(loose('4 roles Manager (Claude Code), Backend Developer (Codex), Frontend Developer (Claude Code), DevOps Engineer (Codex)'))
+  }, 30_000)
+
+  it('adds your own department with your own roles in it, and [x] removes a department', async () => {
+    const w = await mount('team', { registered: ['claude-code', 'codex'] })
+    await w.until('Step 7 of 7 ▸ Your team')
+    // [x] on a department row takes it out, roles and all.
+    await w.press(UP, '❯ + Add a department…')
+    await w.press(ENTER, 'Add a department')
+    await w.press(DOWN, '❯ Marketing')
+    await w.press(ENTER, 'Which agent runs Marketing?')
+    await w.press(ENTER, /❯ \[✓\] Marketing department/)
+    await w.until('3 picked.')
+    await w.press('x', 'Nothing picked: Enter skips this step.')
+    expect(w.frame()).not.toContain('Marketing department')
+    expect(w.frame()).not.toContain('Content Creator')
+    // The cursor stays put: on the row after the department.
+    await w.until('❯ + Your own role…')
+    // Your own department: a name, the agent that runs it, then its first role.
+    await w.press(DOWN, '❯ + Add a department…')
+    await w.press(ENTER, 'Add a department')
+    await w.press(UP, '❯ Your own department…')
+    await w.press(ENTER, 'Your own department')
+    await w.type('Sales')
+    await w.press(ENTER, 'Which agent runs Sales?')
+    await w.press(DOWN, '❯ Codex')
+    await w.press(ENTER, 'Your own role in Sales')
+    await w.type('Closer')
+    await w.press(ENTER, 'What should Closer do?')
+    await w.type('Close deals.')
+    await w.press(ENTER, 'What may Closer do?')
+    await w.press(ENTER, /❯ {3}\[✓\] Closer \(lead\)\s+Codex/)
+    await w.until(loose("1 picked. Sales's lead reports to you; the rest of Sales reports to its lead."))
+    // Your own role elsewhere asks which department it joins.
+    await w.press(DOWN, '❯ + Your own role…')
+    await w.press(ENTER, 'Your own role')
+    await w.type('Chores')
+    await w.press(ENTER, 'What should Chores do?')
+    await w.type('Tidy the CRM.')
+    await w.press(ENTER, 'What may Chores do?')
+    await w.press(ENTER, 'Which department does Chores join?')
+    await w.until('❯ None')
+    await w.press(DOWN, '❯ Sales')
+    await w.press(ENTER, /❯ {3}\[✓\] Chores\s+Codex/)
+    await w.until('2 picked.')
+    await w.press('r', /❯ {3}\[✓\] Chores\s+Claude Code/)
+    await w.press(ENTER, "Your company or team's name")
+    await w.type('Acme')
+    await w.press(ENTER, '✓ Chores')
+    expect(vi.mocked(w.services.addTeamAgent!).mock.calls).toEqual([
+      ['closer', 'codex'],
+      ['chores', 'claude-code'],
+    ])
+    const org = readFileSync(w.services.orgConfigPath!, 'utf-8')
+    expect(org).toMatch(/departments:\n\s+sales:\n\s+name: Sales\n\s+head: closer\n/)
+    expect(org).toMatch(/closer:\n\s+title: Closer\n\s+agent: closer\n\s+department: sales\n\s+reports_to: human\n\s+instructions: Close deals\./)
+    expect(org).toMatch(/chores:\n\s+title: Chores\n\s+agent: chores\n\s+department: sales\n\s+reports_to: closer\n\s+instructions: Tidy the CRM\./)
+    expect(() => parseOrgText(org)).not.toThrow()
+  }, 30_000)
+
+  it('scrolls a long list and keeps the cursor on screen', async () => {
+    const w = await mount('team', { registered: ['claude-code', 'codex'] })
+    await w.until('Step 7 of 7 ▸ Your team')
+    await w.press(UP, '❯ + Add a department…')
+    await w.press(ENTER, 'Add a department')
+    await w.press(ENTER, 'Which agent runs IT?')
+    await w.press(ENTER, /❯ \[✓\] IT department/)
+    await w.press(DOWN, /❯ {3}\[✓\] Backend Developer/)
+    await w.press(DOWN, /❯ {3}\[✓\] Frontend Developer/)
+    await w.press(DOWN, /❯ {3}\[✓\] DevOps Engineer/)
+    await w.press(DOWN, '❯ + Your own role…')
+    await w.press(DOWN, '❯ + Add a department…')
+    await w.press(ENTER, 'Add a department')
+    await w.press(DOWN, '❯ Marketing')
+    await w.press(ENTER, 'Which agent runs Marketing?')
+    await w.press(ENTER, /❯ \[✓\] Marketing department/)
+    // 8 roles, 2 departments with 6 roles, 2 add rows: more than 24 lines hold.
+    expect(w.frame()).toMatch(/↑ \d+ more/)
+    expect(w.frame().split('\n').length).toBeLessThan(24)
+    await w.press(DOWN, /❯ {3}\[✓\] Marketing Manager \(lead\)/)
+    await w.press(DOWN, /❯ {3}\[✓\] Content Creator/)
+    await w.press(DOWN, /❯ {3}\[✓\] Social Media/)
+    await w.press(DOWN, '❯ + Your own role…')
+    await w.press(DOWN, '❯ + Add a department…')
+    await w.press(DOWN, /❯ \[ \] Manager/)
+    expect(w.frame()).toMatch(/↓ \d+ more/)
+    expect(w.frame().split('\n').length).toBeLessThan(24)
   }, 30_000)
 })
 

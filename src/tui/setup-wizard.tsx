@@ -12,7 +12,7 @@ import {
   loadActiveRegistry,
   loadActiveServices,
 } from "../core/registry-catalog.js";
-import { useLayout } from "./hooks.js";
+import { useLayout, useTerminalSize } from "./hooks.js";
 import {
   markCompleted,
   markUncompleted,
@@ -147,6 +147,7 @@ export function SetupWizard({
     resumePlan.agentsPhase ?? undefined,
   );
   const welcomeLayout = useLayout();
+  const terminal = useTerminalSize();
   const currentStep: Step = useMemo(() => {
     for (const s of STEPS) {
       if (!state.setup.completed.includes(s)) return s;
@@ -249,6 +250,7 @@ export function SetupWizard({
     requiredSetupResolution,
     chatPrimaryChannelsNeeded,
     teamRuntimes,
+    terminal,
     failureResolverRef,
   };
 

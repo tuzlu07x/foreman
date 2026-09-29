@@ -6,6 +6,27 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Departments in the setup wizard's Your team step and on the Team
+  page.** **+ Add a department…** (or `d` on the Team page) adds a
+  ready-made department (IT: backend, frontend and devops developers;
+  Marketing: a marketing manager, a content creator and social media;
+  Customer Support: a support lead and a support agent) or your own, and
+  asks whether Claude Code or Codex runs it. On a department's row, Space
+  picks all its roles, `r` switches all of them between Claude Code and
+  Codex, and `x` removes it; your own roles can join a department. The
+  department's first role leads it and reports to the Manager (or you);
+  the rest report to the lead. If the lead's agent can't be added, the
+  next role leads instead, and no one is left reporting to a role that
+  wasn't added. `foreman org roles` lists the new roles grouped by
+  department.
+- **Which agent runs each role is easier to see and change.** The team
+  picker shows Claude Code or Codex in its own column, highlighted on the
+  row under the cursor, and the footer always shows `[r] Claude Code ⇄
+  Codex` when both are registered. The step's result and the Done screen
+  list each role with what it runs on.
+
 ### Changed
 
 - **The setup wizard says which value you pasted.** Slack and Discord
@@ -50,6 +71,42 @@ All notable changes to Foreman are documented here. The format follows
   the Your team step couldn't create a role (10 of 11 created), the reason
   was only on that step's result screen. Done now lists each one, e.g.
   *✗ Code Reviewer — (the reason) · add it later with `foreman org add-role`*.
+- **`foreman doctor` checks a subscription sign-in instead of guessing.**
+  `provider_mapping` warned *uses OAuth (run `claude auth login` if not
+  done)* for Claude Code and Codex even right after a sign-in. It now runs
+  the route's verify command from the registry (`claude auth status`,
+  `codex login status`) with a 5-second limit and never prints its output:
+  ✓ when it passes, a warning only when it fails, a plain note when it
+  can't run ([docs/doctor.md](docs/doctor.md)).
+- **Claude Code's hook says how to get out when Foreman is gone.** With
+  Foreman's package removed, the hook blocks every Claude Code tool call
+  (it never lets one through unguarded) and said *Run: foreman doctor*,
+  which is gone too. It now says to reinstall Foreman (`npm install -g
+  foreman-agent`) or remove Foreman's entry under `hooks.PreToolUse` in
+  Claude Code's `settings.json`. Run the hook install again to get the new
+  text into an existing hook.
+
+### Fixed
+
+- **An API key in Claude Code's settings no longer hides behind your
+  subscription.** An `env.ANTHROPIC_API_KEY` in Claude Code's
+  `settings.json` wins over the Claude subscription you chose for it, so a
+  revoked key failed its tasks with *401 API key is invalid*. `foreman
+  doctor` now warns (`claude_subscription`) when claude-code is on the
+  subscription route and that key is set, and says to remove it. It only
+  reads the file and never shows the key.
+- **`install.sh --uninstall` never leaves Claude Code blocked.** It now
+  removes Foreman's Claude Code hook before the package, even when Claude
+  Code wasn't a registered agent, and says what to delete by hand when it
+  can't.
+- **`install.sh` switches to the Node 22 nvm already has.** It said *Node
+  22 LTS not detected — installing* when nvm had Node 22 that just wasn't
+  active; it now says so and switches to it without reinstalling. Its
+  *Next* list starts with `nvm use 22` when it switched Node (the terminal
+  that ran it keeps the old one). The `[Y/n]` question for the nvm default
+  takes an answer with spaces or a Windows line ending, and a failing
+  `nvm alias default` prints the command to run instead of ending the
+  installer.
 
 - **The setup wizard shows Claude Code and Codex after a subscription
   sign-in.** Choosing your Claude or ChatGPT subscription in Step 1 (sign
