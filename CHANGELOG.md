@@ -78,6 +78,10 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Fixed
 
+- Running `foreman setup` again no longer wipes two-way chat settings: a
+  channel it rewrites keeps what the wizard doesn't ask about (Slack's
+  `app_token_ref`, `allowed_user_ids`, `owner_user_ids`, Telegram's
+  approval bot, `listener`).
 - `/foreman activity` no longer says "6s ago ago".
 - **A task given to an ACP agent (Hermes, OpenClaw, ZeroClaw) keeps its
   reply** ([#729](https://github.com/tuzlu07x/foreman/issues/729)). They

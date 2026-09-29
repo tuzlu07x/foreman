@@ -418,3 +418,37 @@ describe("routing for chat apps set up in the wizard", () => {
   });
 });
 
+describe("a wizard re-run keeps what it doesn't ask about", () => {
+  it("keeps two-way Slack and Telegram's approval bot", () => {
+    const existing = defaultNotifyConfig()
+    existing.channels.slack = {
+      enabled: true,
+      bot_token_ref: 'slack-bot-token',
+      channel: '#ops',
+      app_token_ref: 'slack-app-token',
+      allowed_user_ids: ['U0BOSS'],
+      owner_user_ids: ['U0BOSS'],
+    }
+    existing.channels.telegram = { enabled: true, bot_token_ref: 'telegram-bot-token', chat_id: '1', approval_bot_token_ref: 'telegram-approval-bot-token', listener: 'agent' }
+    const { next } = buildNotifyConfigFromWizard({
+      savedStorageNames: ['slack-bot-token', 'telegram-bot-token', 'telegram-chat-id'],
+      serviceCatalog: [
+        { id: 'slack', secret_name: 'slack-bot-token' },
+        { id: 'telegram', secret_name: 'telegram-bot-token', extra_secrets: [{ name: 'telegram-chat-id' }] },
+      ] as unknown as ServiceEntry[],
+      secretStore: makeReader({ 'telegram-chat-id': '2' }),
+      existing,
+      channelTargets: { slack: '#foreman' },
+    })
+    expect(next.channels.slack).toEqual({
+      enabled: true,
+      bot_token_ref: 'slack-bot-token',
+      channel: '#foreman',
+      app_token_ref: 'slack-app-token',
+      allowed_user_ids: ['U0BOSS'],
+      owner_user_ids: ['U0BOSS'],
+    })
+    expect(next.channels.telegram).toMatchObject({ chat_id: '2', approval_bot_token_ref: 'telegram-approval-bot-token', listener: 'agent' })
+  })
+})
+

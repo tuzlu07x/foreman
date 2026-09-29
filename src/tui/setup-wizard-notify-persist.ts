@@ -157,7 +157,10 @@ export function buildNotifyConfigFromWizard(
     }
 
     if (!wired.includes(channel)) wired.push(channel);
-    channelUpdates[channel] = update;
+    // Merged into what is there: a re-run must not drop settings the wizard
+    // doesn't ask about (two-way Slack's app_token_ref and allowed users,
+    // Telegram's approval bot, `listener`).
+    channelUpdates[channel] = { ...(existing ?? {}), ...update };
   }
 
   if (wired.length === 0) {
