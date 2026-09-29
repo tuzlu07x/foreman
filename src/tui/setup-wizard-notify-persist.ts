@@ -55,10 +55,36 @@ export interface BuildNotifyConfigInput {
   /** The Slack channel / Discord channel id the wizard asked for. A bot
    *  can't post without one (channel-factory.ts buildChannel). */
   channelTargets?: ChannelTargets;
+  /** Two-way Slack from the wizard's optional prompts; only applied when
+   *  Slack itself is wired. */
+  slackTwoWay?: SlackTwoWay;
 }
 
 /** Where a Slack or Discord bot posts: `channel` in notify.yaml. */
 export type ChannelTargets = Partial<Record<"slack" | "discord", string>>;
+
+/** Two-way Slack (Socket Mode): the vault name of the app-level token and
+ *  the owner's Slack member id — what `foreman notify slack-interactive`
+ *  writes as `app_token_ref` and `allowed_user_ids`. */
+export interface SlackTwoWay {
+  appTokenRef: string;
+  memberId: string;
+}
+
+/** The two-way Slack fields merged into the Slack block: the member id
+ *  joins the users already allowed (a re-run never drops one), and the
+ *  owner list when there is one (unset means every allowed id is an owner). */
+function withSlackTwoWay(block: ChannelToggle, twoWay: SlackTwoWay): ChannelToggle {
+  const union = (ids: readonly string[] | undefined): string[] => [
+    ...new Set([twoWay.memberId, ...(ids ?? [])]),
+  ];
+  return {
+    ...block,
+    app_token_ref: twoWay.appTokenRef,
+    allowed_user_ids: union(block.allowed_user_ids),
+    ...(block.owner_user_ids ? { owner_user_ids: union(block.owner_user_ids) } : {}),
+  };
+}
 
 /** The command that turns a chat app on after setup once its bot token is
  *  stored: it names the chat id / channel the wizard didn't get. */
@@ -160,7 +186,9 @@ export function buildNotifyConfigFromWizard(
     // Merged into what is there: a re-run must not drop settings the wizard
     // doesn't ask about (two-way Slack's app_token_ref and allowed users,
     // Telegram's approval bot, `listener`).
-    channelUpdates[channel] = { ...(existing ?? {}), ...update };
+    const merged: ChannelToggle = { ...(existing ?? {}), ...update };
+    channelUpdates[channel] =
+      channel === "slack" && input.slackTwoWay ? withSlackTwoWay(merged, input.slackTwoWay) : merged;
   }
 
   if (wired.length === 0) {

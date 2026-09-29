@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type Database from 'better-sqlite3'
 import { createInMemoryDb, type ForemanDb } from '../../../src/db/client.js'
 import { requests } from '../../../src/db/schema.js'
-import { generateSmartSummaryPayload } from '../../../src/core/notification/summary-generator.js'
+import {
+  generateSmartSummaryPayload,
+  smartFailedFooter,
+} from '../../../src/core/notification/summary-generator.js'
 import type { LlmClient, LlmResponse } from '../../../src/core/llm/client.js'
 
 // =============================================================================
@@ -110,7 +113,24 @@ describe('generateSmartSummaryPayload', () => {
     const payload = await generateSmartSummaryPayload(db, {
       llmClient: throwing,
     })
-    expect(payload.body).toMatch(/Smart analysis is off/)
+    // The counts are still there, but the footer says the LLM (which is
+    // on) failed this time: no "enable" hint for something already enabled.
+    expect(payload.body).toMatch(/1 tool calls/)
+    expect(payload.body).toContain('Smart analysis failed this time (rate limit).')
+    expect(payload.body).not.toMatch(/Smart analysis is off|llm enable/)
+  })
+
+  it('keeps the failure reason to one short line with secrets masked', () => {
+    const footer = smartFailedFooter(
+      `\nusage limit reached for key sk-ant-api03-${'A'.repeat(90)}\n{"type":"error"}`,
+    )
+    expect(footer).not.toContain('\n')
+    expect(footer).not.toContain('A'.repeat(40))
+    expect(footer).toMatch(/^Smart analysis failed this time \(usage limit reached for key /)
+    expect(footer.length).toBeLessThan(180)
+    expect(smartFailedFooter('')).toBe(
+      'Smart analysis failed this time. The counts above are still accurate.',
+    )
   })
 
   it('preserves the template title (only body is replaced on smart path)', async () => {

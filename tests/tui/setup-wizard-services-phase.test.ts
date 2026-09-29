@@ -8,10 +8,13 @@ import {
 import type { ServiceEntry } from "../../src/core/registry-catalog.js";
 import {
   applyServiceChannelSubmit,
+  applyServiceMemberSubmit,
   channelPromptDefault,
   nextIdxAfterSkippedToken,
   servicesPreChecked,
+  slackTwoWayFromWizard,
 } from "../../src/tui/setup-wizard/services-logic.js";
+import { servicePasteWarning } from "../../src/tui/setup-wizard/paste-checks.js";
 
 function service(overrides: Partial<ServiceEntry>): ServiceEntry {
   return {
@@ -295,19 +298,28 @@ describe('channel prompts for Slack and Discord', () => {
       'telegram:extra:telegram-chat-id',
       'slack:primary:slack-bot-token',
       'slack:channel:slack-channel',
+      'slack:app-token:slack-app-token',
+      'slack:member:slack-member-id',
       'discord:primary:discord-bot-token',
       'discord:channel:discord-channel-id',
     ])
     expect(list[3]!.setupSteps.join(' ')).toContain('/invite @yourapp')
-    expect(list[5]!.setupSteps.join(' ')).toContain('Copy Channel ID')
+    expect(list[4]!.setupSteps.join(' ')).toContain('connections:write')
+    expect(list[5]!.setupSteps.join(' ')).toContain('Copy member ID')
+    expect(list[7]!.setupSteps.join(' ')).toContain('Copy Channel ID')
     expect(channelPromptDefault('slack')).toBe('#foreman')
     expect(channelPromptDefault('discord')).toBe('')
   })
 
-  it('skips the channel prompt when the bot token was skipped', () => {
+  it('skips the channel and two-way prompts when the bot token was skipped', () => {
     const list = buildServicePromptList(['slack', 'discord'], [slack, discord])
-    expect(nextIdxAfterSkippedToken(list, 1, 'slack')).toBe(2)
-    expect(nextIdxAfterSkippedToken(list, 3, 'discord')).toBe(4)
+    // Bot token skipped: channel, app token and member id go too.
+    expect(nextIdxAfterSkippedToken(list, 1, 'slack')).toBe(4)
+    // Channel skipped (Slack stays off): no two-way prompts.
+    expect(nextIdxAfterSkippedToken(list, 2, 'slack')).toBe(4)
+    // App token skipped: no member id.
+    expect(nextIdxAfterSkippedToken(list, 3, 'slack')).toBe(4)
+    expect(nextIdxAfterSkippedToken(list, 5, 'discord')).toBe(6)
     // Nothing to skip after a Telegram token (its chat id prompt stays).
     const tg = buildServicePromptList(['telegram'], [telegram])
     expect(nextIdxAfterSkippedToken(tg, 1, 'telegram')).toBe(1)
@@ -329,6 +341,39 @@ describe('channel prompts for Slack and Discord', () => {
       expect(r).toMatchObject({ target: null, nextIdx: 1 })
       expect(r.error).toContain('17–20 digits')
     }
+  })
+
+  it('takes a Slack member id in upper case, skips on empty, refuses anything else', () => {
+    const at = { currentIdx: 3, totalSelected: 4 }
+    expect(applyServiceMemberSubmit({ ...at, value: ' u0fakeboss ' })).toEqual({
+      memberId: 'U0FAKEBOSS',
+      error: null,
+      nextPhase: 'summary',
+      nextIdx: 4,
+    })
+    expect(applyServiceMemberSubmit({ ...at, value: '' })).toMatchObject({ memberId: null, error: null, nextIdx: 4 })
+    for (const bad of ['@boss', 'C0123456789', 'U0 BOSS', 'U1']) {
+      const r = applyServiceMemberSubmit({ ...at, value: bad })
+      expect(r).toMatchObject({ memberId: null, nextPhase: 'values', nextIdx: 3 })
+      expect(r.error).toContain('Copy member ID')
+    }
+  })
+
+  it('turns on two-way Slack only with both the app token and a member id', () => {
+    expect(slackTwoWayFromWizard(['slack-bot-token', 'slack-app-token'], 'U0FAKEBOSS')).toEqual({
+      appTokenRef: 'slack-app-token',
+      memberId: 'U0FAKEBOSS',
+    })
+    expect(slackTwoWayFromWizard(['slack-bot-token'], 'U0FAKEBOSS')).toBeUndefined()
+    expect(slackTwoWayFromWizard(['slack-bot-token', 'slack-app-token'], null)).toBeUndefined()
+  })
+
+  it('checks an app-level token paste and names the bot token pasted in its place', () => {
+    expect(servicePasteWarning('slack-app-token', 'xapp-1-A0FAKE-000-fake')).toBeNull()
+    expect(servicePasteWarning('slack-app-token', 'xoxb-000-fake')).toContain(
+      "that's the Slack bot token (xoxb-…), which you already gave above, not a Slack app-level token",
+    )
+    expect(servicePasteWarning('slack-app-token', 'nope')).toContain("doesn't look like a Slack app-level token")
   })
 
   it('skips on empty input and says how to finish later', () => {

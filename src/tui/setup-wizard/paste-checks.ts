@@ -44,6 +44,11 @@ const SERVICE_FORMATS: Record<string, ServiceFormat> = {
     example: "123456789, or -1001234567890 for a group",
   },
   "slack-bot-token": { test: /^xoxb-[A-Za-z0-9-]+$/, what: "a Slack bot token", example: "xoxb-…" },
+  "slack-app-token": {
+    test: /^xapp-[A-Za-z0-9-]+$/,
+    what: "a Slack app-level token",
+    example: "xapp-…",
+  },
   "discord-bot-token": {
     test: /^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{20,}$/,
     what: "a Discord bot token",
@@ -75,6 +80,15 @@ const LOOK_ALIKES: Record<string, { where: string; values: LookAlike[] }> = {
     where: "the bot token (xoxb-…) is under api.slack.com/apps → your app → OAuth & Permissions → Bot User OAuth Token",
     values: [
       { test: /^xapp-/, is: "Slack's app-level token (xapp-…), which two-way Slack uses later" },
+      { test: /^xoxp-/, is: "a Slack user token (xoxp-…)" },
+      { test: /^xoxe/, is: "a Slack refresh or config token" },
+    ],
+  },
+  "slack-app-token": {
+    where:
+      "the app-level token (xapp-…) is under api.slack.com/apps → your app → Basic Information → App-Level Tokens (scope connections:write)",
+    values: [
+      { test: /^xoxb-/, is: "the Slack bot token (xoxb-…), which you already gave above" },
       { test: /^xoxp-/, is: "a Slack user token (xoxp-…)" },
       { test: /^xoxe/, is: "a Slack refresh or config token" },
     ],

@@ -8,6 +8,7 @@ import {
   buildNotifyConfigFromWizard,
   channelFinishCommand,
   type ChannelTargets,
+  type SlackTwoWay,
   type UnwiredChannel,
 } from "../setup-wizard-notify-persist.js";
 import type { WizardServices } from "./types.js";
@@ -38,7 +39,9 @@ export interface ServicePrompt {
   /** The secret's vault name; for a "channel" prompt, the name it is listed
    *  under in the summary (it is never stored as a secret). */
   secretName: string;
-  kind: "primary" | "extra" | "channel";
+  /** `app-token` and `member` are two-way Slack's optional prompts: the
+   *  app-level token (a secret) and the owner's member id (notify.yaml). */
+  kind: "primary" | "extra" | "channel" | "app-token" | "member";
   /** Display label shown in the header / summary lists. */
   label: string;
   whereToGet: string | null;
@@ -83,8 +86,110 @@ export function buildServicePromptList(
     }
     const channel = CHANNEL_PROMPTS[svc.id];
     if (channel) out.push({ ...channel, serviceId: svc.id, kind: "channel", optional: true });
+    if (svc.id === "slack") {
+      out.push(
+        { ...SLACK_APP_TOKEN_PROMPT, serviceId: svc.id, kind: "app-token", optional: true },
+        { ...SLACK_MEMBER_PROMPT, serviceId: svc.id, kind: "member", optional: true },
+      );
+    }
   }
   return out;
+}
+
+/** Vault name of two-way Slack's app-level token: the name
+ *  `foreman notify slack-interactive` reads by default. */
+export const SLACK_APP_TOKEN_SECRET = "slack-app-token";
+
+/** Optional: turns on two-way Slack (approval buttons, `/foreman`) over
+ *  Socket Mode, the same as `foreman notify slack-interactive`. */
+const SLACK_APP_TOKEN_PROMPT: ChannelPromptSpec = {
+  secretName: SLACK_APP_TOKEN_SECRET,
+  label: "app-level token (optional, for two-way Slack)",
+  whereToGet: null,
+  formatHint: "starts with xapp-",
+  setupSteps: [
+    "Optional: lets you press Allow / Deny and run /foreman in Slack. Enter on empty input skips it (Slack then only posts)",
+    "In api.slack.com/apps → your app: Socket Mode → on",
+    "Basic Information → App-Level Tokens → Generate, with the connections:write scope → copy it (xapp-…)",
+    "Interactivity & Shortcuts → on (no URL needed with Socket Mode), and Slash Commands → create /foreman",
+    "Reinstall the app if Slack asks",
+  ],
+};
+
+const SLACK_MEMBER_PROMPT: ChannelPromptSpec = {
+  secretName: "slack-member-id",
+  label: "your member id (optional, for two-way Slack)",
+  whereToGet: null,
+  formatHint: "starts with U, e.g. U0123ABCD",
+  setupSteps: [
+    "Only this Slack user may press Allow / Deny or run /foreman. Enter on empty input skips it",
+    "In Slack click your profile picture → Profile → ⋮ (More) → Copy member ID",
+  ],
+};
+
+export interface ServiceMemberSubmitInput {
+  value: string;
+  currentIdx: number;
+  totalSelected: number;
+}
+
+export interface ServiceMemberSubmitResult {
+  /** The member id for notify.yaml; null when skipped or refused. */
+  memberId: string | null;
+  /** The value can't be a member id: stay on the prompt and say why. */
+  error: string | null;
+  nextPhase: ServicesPhase;
+  nextIdx: number;
+}
+
+/** Same shape `foreman notify slack-interactive --user` accepts. */
+const SLACK_MEMBER_ID = /^[UW][A-Z0-9]{2,39}$/i;
+
+/** Submit at the Slack member id prompt. Empty skips (two-way Slack stays
+ *  as it was); a value that isn't a member id is refused. */
+export function applyServiceMemberSubmit(
+  input: ServiceMemberSubmitInput,
+): ServiceMemberSubmitResult {
+  const isLast = input.currentIdx + 1 >= input.totalSelected;
+  const onward = {
+    nextPhase: (isLast ? "summary" : "values") as ServicesPhase,
+    nextIdx: input.currentIdx + 1,
+  };
+  const value = input.value.trim();
+  if (value.length === 0) return { memberId: null, error: null, ...onward };
+  if (!SLACK_MEMBER_ID.test(value)) {
+    return {
+      memberId: null,
+      error:
+        "a Slack member id starts with U (e.g. U0123ABCD): your profile picture → Profile → ⋮ (More) → Copy member ID.",
+      nextPhase: "values",
+      nextIdx: input.currentIdx,
+    };
+  }
+  // Slack sends ids in upper case; a lower-case copy would never match.
+  return { memberId: value.toUpperCase(), error: null, ...onward };
+}
+
+/** notify.yaml already has two-way Slack (an earlier run, or the
+ *  slack-interactive command): an app token and at least one allowed user. */
+export function slackTwoWayConfigured(notifyConfigPath: string): boolean {
+  try {
+    const slack = loadNotifyConfig(notifyConfigPath).channels.slack;
+    return Boolean(slack?.app_token_ref) && (slack?.allowed_user_ids?.length ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** What two-way Slack gets from the wizard: both values, or nothing. The
+ *  app token counts when it was saved in this run or kept from an earlier
+ *  one (`servicesSaved`). */
+export function slackTwoWayFromWizard(
+  servicesSaved: readonly string[],
+  memberId: string | null,
+): SlackTwoWay | undefined {
+  if (!memberId || !servicesSaved.includes(SLACK_APP_TOKEN_SECRET)) return undefined;
+  return { appTokenRef: SLACK_APP_TOKEN_SECRET, memberId };
 }
 
 type ChannelPromptSpec = Omit<ServicePrompt, "serviceId" | "kind" | "optional">;
@@ -189,15 +294,30 @@ export function applyServiceValueSubmit(
   };
 }
 
-/** Where to go after a token prompt was skipped: past that service's
- *  channel prompt, which means nothing without a bot token. */
+/** Prompts that mean nothing once an earlier one of the same service was
+ *  skipped: the channel needs the bot token, two-way Slack needs the bot
+ *  and its channel, the member id needs the app token. */
+const DEPENDENT_PROMPT_KINDS: ReadonlySet<ServicePrompt["kind"]> = new Set([
+  "channel",
+  "app-token",
+  "member",
+]);
+
+/** Where to go after a token (or the Slack channel) prompt was skipped:
+ *  past that service's prompts that depend on it. */
 export function nextIdxAfterSkippedToken(
   prompts: readonly ServicePrompt[],
   nextIdx: number,
   serviceId: string,
 ): number {
   let idx = nextIdx;
-  while (prompts[idx]?.kind === "channel" && prompts[idx]?.serviceId === serviceId) idx++;
+  while (
+    prompts[idx] !== undefined &&
+    DEPENDENT_PROMPT_KINDS.has(prompts[idx]!.kind) &&
+    prompts[idx]!.serviceId === serviceId
+  ) {
+    idx++;
+  }
   return idx;
 }
 
@@ -329,6 +449,7 @@ export function persistNotifyConfigFromWizardState(
   serviceCatalog: ServiceEntry[],
   savedStorageNames: string[],
   channelTargets: ChannelTargets = {},
+  slackTwoWay?: SlackTwoWay,
 ): void {
   if (savedStorageNames.length === 0) return;
   try {
@@ -339,6 +460,7 @@ export function persistNotifyConfigFromWizardState(
       secretStore: services.secretStore,
       existing,
       channelTargets,
+      ...(slackTwoWay ? { slackTwoWay } : {}),
     });
     if (wiredChannels.length === 0) return;
     saveNotifyConfig(services.notifyConfigPath, next);
@@ -350,6 +472,7 @@ export function persistNotifyConfigFromWizardState(
         secretStore: services.secretStore,
         existing: defaultNotifyConfig(),
         channelTargets,
+        ...(slackTwoWay ? { slackTwoWay } : {}),
       });
       saveNotifyConfig(services.notifyConfigPath, next);
     } catch (writeErr) {

@@ -114,7 +114,8 @@ arrives, act — don't go idle.
 
 When you delegate via \`foreman write <peer> <task>\`, Foreman runs the
 peer, captures their output, and posts it back as a
-\`📨 <PeerName> finished your task\` message in this chat. **That message
+\`📨 <PeerName> finished your task\` message in this chat (\`… couldn't
+finish your task\` with the reason when the run failed). **That message
 is for you.** Don't treat it as a status update and stop — treat it as
 your next input.
 

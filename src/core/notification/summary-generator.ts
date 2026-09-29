@@ -2,6 +2,7 @@ import { and, eq, gte, sql } from 'drizzle-orm'
 import type { ForemanDb } from '../../db/client.js'
 import { notifications, requests } from '../../db/schema.js'
 import type { LlmClient } from '../llm/client.js'
+import { redactSecretShapes } from '../risk-rules/secret-patterns.js'
 import {
   detectLocaleFromEnv,
   narrateSummary,
@@ -36,16 +37,51 @@ export interface SummaryStats {
   notificationsSent: number
 }
 
+/** Footer when smart analysis isn't turned on (no LLM client). */
+const SMART_OFF_FOOTER =
+  'Smart analysis is off. Enable with `foreman llm enable` for contextual reports.'
+
+/** Longest provider error the footer repeats. */
+const SMART_REASON_MAX = 100
+
+/** Footer when smart analysis is on but the model call failed this time
+ *  (usage limit, provider outage, …). The enable hint would be wrong here:
+ *  it is already enabled. The reason is one short line with secret-shaped
+ *  text masked, since the digest leaves the machine. */
+export function smartFailedFooter(reason: string): string {
+  const firstLine =
+    reason
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => l.length > 0) ?? ''
+  const masked = redactSecretShapes(firstLine.replace(/\s+/g, ' ')).text
+  const short =
+    masked.length <= SMART_REASON_MAX
+      ? masked
+      : `${masked.slice(0, SMART_REASON_MAX - 1)}…`
+  return short
+    ? `Smart analysis failed this time (${short}). The counts above are still accurate.`
+    : 'Smart analysis failed this time. The counts above are still accurate.'
+}
+
 export function generateSummary(
   db: ForemanDb,
   opts: SummaryOptions = {},
+): Omit<Notification, 'id'> {
+  return buildSummary(db, opts, SMART_OFF_FOOTER)
+}
+
+function buildSummary(
+  db: ForemanDb,
+  opts: SummaryOptions,
+  footer: string,
 ): Omit<Notification, 'id'> {
   const now = opts.now ?? Date.now()
   const windowMs = opts.windowMs ?? 12 * 60 * 60 * 1000
   const cutoff = now - windowMs
 
   const stats = computeStats(db, cutoff, now)
-  const body = formatBody(stats, windowMs)
+  const body = formatBody(stats, windowMs, footer)
 
   return {
     level: 'summary',
@@ -109,7 +145,7 @@ function computeStats(
   }
 }
 
-function formatBody(stats: SummaryStats, windowMs: number): string {
+function formatBody(stats: SummaryStats, windowMs: number, footer: string): string {
   const lines: string[] = []
   const window = humanWindow(windowMs)
 
@@ -142,9 +178,7 @@ function formatBody(stats: SummaryStats, windowMs: number): string {
   }
 
   lines.push('')
-  lines.push(
-    'Smart analysis is off. Enable with `foreman llm enable` for contextual reports.',
-  )
+  lines.push(footer)
   return lines.join('\n')
 }
 
@@ -207,6 +241,11 @@ export async function generateSmartSummaryPayload(
     factorCounts,
     locale,
   })
+  if (outcome.status === 'failed') {
+    // Smart analysis is on; only this run failed. Say that instead of
+    // telling the owner to enable something that is already enabled.
+    return buildSummary(db, opts, smartFailedFooter(outcome.reason))
+  }
   if (outcome.status !== 'ok') return payload
   return { ...payload, body: outcome.text }
 }

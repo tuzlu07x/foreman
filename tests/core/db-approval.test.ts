@@ -173,6 +173,23 @@ describe("DbApprovalService", () => {
     expect(resolved[0]?.decision).toBe("denied");
     expect(resolved[0]?.resolvedBy).toBe("user");
   });
+
+  it("says on the local bus where the decision was made", async () => {
+    // The chat message's outcome line ("✗ Denied (on Slack by U0BOSS)")
+    // is rendered from this event: without `via` it said "resolved elsewhere".
+    const service = new DbApprovalService(db, { bus, timeoutMs: 1000, pollIntervalMs: 25 });
+    const resolved: ForemanEventMap["approval:resolved"][] = [];
+    bus.on("approval:resolved", (e) => resolved.push(e));
+    const promise = service.request(req({ requestId: "to-say-where" }));
+    await new Promise((r) => setTimeout(r, 50));
+    db.update(pendingApprovals)
+      .set({ status: "resolved", decision: "denied", resolvedBy: "user", resolvedVia: "slack", resolvedUser: "U0BOSS", resolvedAt: Date.now() })
+      .run();
+    await promise;
+    expect(resolved).toEqual([
+      expect.objectContaining({ requestId: "to-say-where", resolvedBy: "user", via: "slack", userId: "U0BOSS" }),
+    ]);
+  });
 });
 
 describe("ApprovalBridge", () => {

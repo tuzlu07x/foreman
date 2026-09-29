@@ -174,6 +174,8 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
   const agentRows = services.registry.list();
   const policyRuleCount = countPolicyRules(services.policyPath);
   const teamAdded = ctx.state.teamResult?.added ?? [];
+  const teamFailed = ctx.state.teamResult?.failed ?? [];
+  const teamOrgError = ctx.state.teamResult?.orgError ?? null;
   // Agents without an identity file (generic-mcp) aren't push targets.
   const identityTargets = installSummary
     ? installSummary.registered.length -
@@ -282,6 +284,29 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
           </Text>
         ) : null}
       </Box>
+      {/* Roles the Your team step couldn't create: its own result screen
+          said why, but that was easy to miss (10 of 11 roles created and
+          the missing one only noticed later), so they are repeated here. */}
+      {teamFailed.length > 0 || teamOrgError ? (
+        <Box flexDirection="column">
+          <Text bold color={theme.accent.warning}>
+            ⚠ {teamOrgError
+              ? "Your team wasn't saved:"
+              : `${teamFailed.length} role${teamFailed.length === 1 ? "" : "s"} couldn't be created:`}
+          </Text>
+          {teamOrgError ? (
+            <Text color={theme.fg.muted}>
+              {"  "}✗ org.yaml — {teamOrgError}
+            </Text>
+          ) : null}
+          {teamFailed.map((f, i) => (
+            <Text key={`${f.title}:${i}`} color={theme.accent.warning}>
+              {"  "}✗ {f.title} — {f.reason.split("\n")[0]}
+              <Text color={theme.fg.muted}> · add it later with `foreman org add-role`</Text>
+            </Text>
+          ))}
+        </Box>
+      ) : null}
       <TalkToForeman services={serviceIds} />
       {installSummary && (
         <Box flexDirection="column">

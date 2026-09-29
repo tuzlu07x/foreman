@@ -155,6 +155,8 @@ export interface WizardState {
   servicesPendingPaste: { secretName: string; value: string } | null;
   /** Slack channel / Discord channel id per service id, for notify.yaml. */
   servicesChannelTargets: Record<string, string>;
+  /** The owner's Slack member id for two-way Slack; null when skipped. */
+  servicesSlackMemberId: string | null;
 
   // Integrations step (docs/plans/integrations.md §7). `integrationDraft`
   // holds a typed credential only until that integration is saved.
@@ -274,6 +276,7 @@ export function createInitialWizardState(
     servicesWarning: null,
     servicesPendingPaste: null,
     servicesChannelTargets: {},
+    servicesSlackMemberId: null,
 
     integrationsSelected: session?.integrationsSelected ?? [],
     integrationQueue: [],

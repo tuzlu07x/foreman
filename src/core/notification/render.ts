@@ -1,3 +1,4 @@
+import { chatDeciderId } from "../approval.js";
 import type { ForemanEventMap } from "../event-bus.js";
 import { recommendationParts } from "../org/review.js";
 import { predicateHintsForFactors } from "../risk-rules/predicate-hint.js";
@@ -92,8 +93,83 @@ function formatTitle(req: ForemanEventMap["approval:requested"]): string {
   return `[${bucketTag}] ${flow} · ${tool}`;
 }
 
+/** Plain words for the tools agents ask about most, keyed by the lower-cased
+ *  tool name: the normalised names adapters emit (`shell_exec`,
+ *  `file_write`, …) and the raw ones some paths pass through (`Bash`,
+ *  `Read`, …). Anything else falls back to the tool's own name. */
+const PLAIN_TOOL_ACTIONS: Readonly<Record<string, string>> = {
+  shell_exec: "run a shell command",
+  bash: "run a shell command",
+  shell: "run a shell command",
+  exec_command: "run a shell command",
+  run_shell_command: "run a shell command",
+  execute: "run a shell command",
+  file_write: "change a file",
+  write_file: "change a file",
+  edit_file: "change a file",
+  write: "change a file",
+  edit: "change a file",
+  multiedit: "change a file",
+  notebookedit: "change a notebook",
+  apply_patch: "change a file",
+  read_file: "read a file",
+  read: "read a file",
+  search_files: "search files",
+  grep: "search files",
+  glob: "search files",
+  network_fetch: "reach the internet",
+  webfetch: "fetch a web page",
+  websearch: "search the web",
+  mcp_call: "use an MCP tool",
+  permission_overlay: "change its permissions",
+  secrets_get: "read a secret",
+};
+
+/** Longest tool / agent name the lead line repeats verbatim. */
+const LEAD_NAME_MAX = 60;
+
+function leadName(name: string): string {
+  // One line, bounded: names come from agents and must not forge lines.
+  const flat = name.replace(/\s+/g, " ").trim();
+  return flat.length <= LEAD_NAME_MAX
+    ? flat
+    : `${flat.slice(0, LEAD_NAME_MAX - 1)}…`;
+}
+
+/** The plain-words action for a tool name ("run a shell command"), or
+ *  "use <tool>" for tools without a mapping. Exported for tests. */
+export function plainToolAction(tool: string): string {
+  const mapped = PLAIN_TOOL_ACTIONS[tool.toLowerCase()];
+  if (mapped) return mapped;
+  if (tool.startsWith("mcp__")) return `use the MCP tool ${leadName(tool)}`;
+  return `use ${leadName(tool)}`;
+}
+
+/** First line of an approval message: who wants to do what, in plain
+ *  words ("manager wants to run a shell command"). Channels that edit the
+ *  message later (the countdown, the outcome) resend only the body, so
+ *  the answer to "who is this?" has to live in the body, not the title. */
+export function approvalLeadLine(
+  req: Pick<
+    ForemanEventMap["approval:requested"],
+    "sourceAgent" | "targetAgent" | "targetTool"
+  >,
+): string {
+  const who = leadName(req.sourceAgent);
+  if (!req.targetTool) {
+    return req.targetAgent
+      ? `${who} wants to message ${leadName(req.targetAgent)}`
+      : `${who} wants to do something that needs your approval`;
+  }
+  const action = plainToolAction(req.targetTool);
+  return req.targetAgent
+    ? `${who} wants ${leadName(req.targetAgent)} to ${action}`
+    : `${who} wants to ${action}`;
+}
+
 function formatBody(req: ForemanEventMap["approval:requested"]): string {
   const lines: string[] = [];
+  lines.push(approvalLeadLine(req));
   lines.push(`Risk score: ${req.riskScore}/100 (${req.riskBucket})`);
 
   if (req.riskFactors.length === 0 && req.riskReasons.length === 0) {
@@ -289,13 +365,43 @@ export function renderResolvedFooter(
   e: ForemanEventMap["approval:resolved"],
 ): string {
   const verb = e.decision === "allowed" ? "✓ Allowed" : "✗ Denied";
-  const source =
-    e.resolvedBy === "timeout"
-      ? "(timeout default)"
-      : e.resolvedBy === "cancelled"
-        ? "(request withdrawn)"
-        : "(resolved elsewhere)";
-  return `${verb} ${source} at ${new Date().toISOString().slice(11, 19)}`;
+  const remembered = e.remember ? `, saved as always ${e.remember}` : "";
+  return `${verb} (${resolvedWhere(e)}${remembered}) at ${new Date().toISOString().slice(11, 19)}`;
+}
+
+const VIA_LABEL: Readonly<Record<string, string>> = {
+  telegram: "Telegram",
+  slack: "Slack",
+  discord: "Discord",
+};
+
+/** Where / how an approval was decided, for the message's outcome line:
+ *  "in the TUI", "on Slack by U0BOSS", "timed out", … Falls back to
+ *  "resolved elsewhere" only when the event carries no source at all. */
+function resolvedWhere(e: ForemanEventMap["approval:resolved"]): string {
+  if (e.resolvedBy === "timeout") return "timed out: nobody answered in time";
+  if (e.resolvedBy === "cancelled")
+    return "request withdrawn: the agent stopped waiting";
+  if (e.resolvedBy === "agent" || e.via === "agent_mcp") {
+    return e.routedBy
+      ? `relayed from ${leadName(e.routedBy)}'s chat`
+      : "relayed by your chat agent";
+  }
+  switch (e.via) {
+    case "tui":
+      return "in the TUI";
+    case "webhook":
+      return "via webhook";
+    case "telegram":
+    case "slack":
+    case "discord": {
+      const where = `on ${VIA_LABEL[e.via]}`;
+      const who = chatDeciderId(e.via, e.userId);
+      return who ? `${where} by ${who}` : where;
+    }
+    default:
+      return "resolved elsewhere";
+  }
 }
 
 // =============================================================================
