@@ -8,6 +8,10 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Security
 
+- `foreman agent add` no longer prints the agent's private key. Nothing in
+  Foreman uses it (agents authenticate with their identity token), and a
+  key on screen ends up in scrollback and pasted chats. `--key-out <file>`
+  still writes it (0600) ([#726](https://github.com/tuzlu07x/foreman/issues/726)).
 - **Claude Code's hook no longer fails open when Foreman isn't on its
   PATH** ([#714](https://github.com/tuzlu07x/foreman/issues/714)). The hook
   was written as a bare `foreman-hook claude-code`. When the PATH Claude

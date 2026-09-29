@@ -504,9 +504,10 @@ function handlePrivateKey(
     log(dim(`private key written to ${outPath}`));
     return;
   }
-  log("");
-  log(orange("agent private key (printed once, store it now):"));
-  log(privateKey.toString("hex"));
+  // Nothing in Foreman needs the agent's private key (agents authenticate
+  // with their identity token), so it isn't printed: a secret on screen
+  // ends up in scrollback and pasted into chats. --key-out keeps it.
+  log(dim("identity keypair issued; the private key isn't shown (save it with --key-out <file> if you need it)"));
 }
 
 function promptLine(question: string): Promise<string> {
