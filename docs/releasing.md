@@ -63,7 +63,7 @@ git switch main
 
 `scripts/build-binaries.mjs` builds one binary for the machine it runs on (after `npm ci && npm run build`):
 
-1. tsup bundles `dist/cli/index.js` and every dependency into one file. better-sqlite3's native addon, the migrations, the registry and the mascot art are embedded next to it and written to a verified directory in Foreman's cache dir on first start (`scripts/sea-runtime.cjs`).
+1. tsup bundles `dist/cli/index.js` and every dependency into one file. better-sqlite3's native addon, the migrations and the registry are embedded next to it and written to a verified directory in Foreman's cache dir on first start (`scripts/sea-runtime.cjs`).
 2. `@yao-pkg/pkg --sea` downloads the official Node.js binary of the same version as the Node running the build from nodejs.org, checks it against `SHASUMS256.txt`, injects the script and, on macOS, ad-hoc signs it.
 3. The budget is 160 MB; a binary is about 130 MB, almost all of it Node.js.
 
