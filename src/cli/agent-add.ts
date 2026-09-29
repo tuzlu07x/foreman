@@ -73,6 +73,8 @@ export interface AddDeps {
   db: ForemanDb;
   registry: RegistryService;
   log?: (line: string) => void;
+  /** Where errors go (default: stderr). The setup wizard collects them. */
+  logError?: (line: string) => void;
 }
 
 export async function runAgentAddScripted(
@@ -81,6 +83,7 @@ export async function runAgentAddScripted(
   deps: AddDeps,
 ): Promise<number> {
   const log = deps.log ?? ((line: string) => console.log(line));
+  const logError = deps.logError ?? logErrorToStderr;
   if (isReservedAgentId(agentId)) {
     logError(
       `"${agentId}" can't be an agent id: it names you (the CLI, TUI or chat) or an unverified connection.`,
@@ -375,6 +378,7 @@ export async function runAgentAddScripted(
 
 export async function runAgentAddInteractive(deps: AddDeps): Promise<number> {
   const log = deps.log ?? ((line: string) => console.log(line));
+  const logError = deps.logError ?? logErrorToStderr;
   if (!process.stdin.isTTY) {
     logError(
       "interactive 'foreman agent add' requires a TTY. Pass <name> --type <id> for the scripted form.",
@@ -539,6 +543,6 @@ function promptLine(question: string): Promise<string> {
   });
 }
 
-function logError(message: string): void {
+function logErrorToStderr(message: string): void {
   console.error(red("error: ") + message);
 }

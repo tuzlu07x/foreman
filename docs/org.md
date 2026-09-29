@@ -175,6 +175,10 @@ foreman org add-role reviewer --preset code-reviewer --runs-on claude-code --dep
 foreman org add-role research --preset researcher --runs-on claude-code
 ```
 
+The setup wizard's **Your team** step (`foreman setup`) does the same with
+a picker: tick ready-made roles or add your own, and pick Claude Code or
+Codex for each.
+
 Or describe your own, in your own words:
 
 ```bash

@@ -77,6 +77,12 @@ import type {
   SetupWizardProps,
 } from "./setup-wizard/types.js";
 import {
+  handleTeamInput,
+  renderTeamStep,
+  useTeamAutoSkip,
+} from "./setup-wizard/team.js";
+import { teamRuntimes as registeredTeamRuntimes } from "./setup-wizard/team-logic.js";
+import {
   handleWelcomeInput,
   renderWelcomeStep,
 } from "./setup-wizard/welcome.js";
@@ -206,6 +212,15 @@ export function SetupWizard({
     agentCatalog,
   });
 
+  // Read once the team step is reached: install has registered the agents.
+  const teamRuntimes = useMemo(
+    () =>
+      currentStep === "team"
+        ? registeredTeamRuntimes(services.registry.list().map((a) => a.id))
+        : [],
+    [currentStep, services.registry],
+  );
+
   const failureResolverRef = useRef<
     ((resolution: FailureResolution) => void) | null
   >(null);
@@ -232,6 +247,7 @@ export function SetupWizard({
     llmPickerOptions,
     requiredSetupResolution,
     chatPrimaryChannelsNeeded,
+    teamRuntimes,
     failureResolverRef,
   };
 
@@ -240,6 +256,7 @@ export function SetupWizard({
   useAgentConfigEffects(ctx);
   useInstallKickoff(ctx);
   useInstallSpinner(ctx);
+  useTeamAutoSkip(ctx);
 
   // Esc handler — phase-aware back navigation (#153). Stays out of the way
   // during install (no cancel mid-flight) and during welcome (let
@@ -263,6 +280,7 @@ export function SetupWizard({
     if (handleRequiredSetupInput(ctx, input, key)) return;
     if (handleChatPrimaryInput(ctx, input, key)) return;
     if (handleIntegrationsInput(ctx, input, key)) return;
+    if (handleTeamInput(ctx, input, key)) return;
     if (handleDoneInput(ctx, input, key)) return;
     if (handleWelcomeInput(ctx, input, key)) return;
     if (handleInstallFailureInput(ctx, input, key)) return;
@@ -292,6 +310,7 @@ export function SetupWizard({
   if (currentStep === "chat-primary") return renderChatPrimaryStep(ctx);
   if (currentStep === "required-setup") return renderRequiredSetupStep(ctx);
   if (currentStep === "install") return renderInstallStep(ctx);
+  if (currentStep === "team") return renderTeamStep(ctx);
   return renderDoneStep(ctx);
 }
 

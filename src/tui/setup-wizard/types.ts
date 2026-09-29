@@ -32,6 +32,11 @@ export interface WizardServices {
    *  the bundled integration catalog couldn't be loaded: the step then
    *  says so and lets the user continue. */
   integrations?: IntegrationWiring;
+  /** Where the "Your team" step writes roles. Default: this home's org.yaml. */
+  orgConfigPath?: string;
+  /** Adds a role's instance (`foreman agent add <id> --type <runsOn>`);
+   *  null when added, else why not. Default: the CLI's scripted add. */
+  addTeamAgent?: (agentId: string, runsOn: "claude-code" | "codex") => Promise<string | null>;
 }
 
 export interface WizardOauthRunStep {
