@@ -29,7 +29,7 @@ import {
   type NormalisedDecision,
 } from './adapters/index.js'
 import type { CodexApprovalHandler, CodexApprovalWireRequest } from './codex-bridge.js'
-import type { MediatorInput, MediatorOutput } from './mediator.js'
+import { denialReason, type MediatorInput, type MediatorOutput } from './mediator.js'
 
 /** Slim subset of `MediatorService` the connector actually calls. */
 export interface MediatorLike {
@@ -138,6 +138,7 @@ export function wireBridgeToMediator(
         : {
             kind: 'deny',
             reason:
+              denialReason(mediatorOutput) ??
               mediatorOutput.riskReasons?.[0] ??
               `denied by ${mediatorOutput.decidedBy}`,
           }

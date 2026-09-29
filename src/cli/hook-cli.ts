@@ -1,3 +1,4 @@
+import { RegistryService } from "../core/registry.js";
 import { Command } from "commander";
 import { ulid } from "ulid";
 import {
@@ -92,6 +93,9 @@ export interface HookEvaluation {
     home?: string;
     env?: NodeJS.ProcessEnv;
     self?: ForemanSelf;
+    /** FOREMAN_SPAWNED_BY in the hook's environment: the instance Foreman
+     *  launched Claude Code as (agent-instance.ts), if any. */
+    spawnedBy?: string | null;
   };
   requestId?: string;
   /** Gets the approval service, so the daemon can cancel a pending
@@ -180,7 +184,7 @@ async function evaluate(raw: string, agentId: string, ev: HookEvaluation): Promi
   });
   const result = await mediator.handleRequest({
     ...(ev.requestId ? { requestId: ev.requestId } : {}),
-    sourceAgent: normalised.sourceAgent,
+    sourceAgent: hookSource(normalised.sourceAgent, ev.process.spawnedBy ?? null, new RegistryService(db, bus)),
     targetTool: normalised.targetTool,
     ...(normalised.sessionId ? { sessionId: normalised.sessionId } : {}),
     message: {
@@ -198,6 +202,12 @@ async function evaluate(raw: string, agentId: string, ev: HookEvaluation): Promi
       text: `${String(toolName)} allowed (${result.decidedBy}, risk ${result.riskScore}/100).`,
     });
     return { exit: HOOK_ALLOW, lines };
+  }
+  const role = result.decidedBy === "org:role" ? result.riskFactors.find((f) => f.rule === "org_role") : undefined;
+  if (role) {
+    // The role's limits, not a risk verdict: say which and where they're set.
+    lines.push({ level: "error", text: `${String(toolName)} blocked by Foreman: ${role.reason}.` });
+    return { exit: HOOK_BLOCK, lines };
   }
   const reasons = result.riskReasons.length > 0 ? `; ${result.riskReasons.join(", ")}` : "";
   lines.push({
@@ -296,7 +306,7 @@ export async function runHook(agentId: string, timeoutMs: number, raw?: string):
       policyPath: paths.policyPath,
       mcpConfigPath: paths.mcpConfigPath,
       timeoutMs,
-      process: { cwd: process.cwd() },
+      process: { cwd: process.cwd(), spawnedBy: process.env.FOREMAN_SPAWNED_BY ?? null },
     });
     writeHookLines(verdict.lines);
     return verdict.exit;
@@ -307,3 +317,22 @@ export async function runHook(agentId: string, timeoutMs: number, raw?: string):
     }
   }
 }
+
+/**
+ * Who a Claude Code tool call is from. The hook in settings.json names the
+ * agent (`claude-code`), but Foreman launches an instance of it
+ * (`reviewer --type claude-code`) with FOREMAN_SPAWNED_BY=reviewer: its
+ * calls are that instance's, under its role. Only a registered instance of
+ * this very agent counts; anything else stays the agent itself. The same
+ * launch environment `foreman write` trusts (docs/org.md, Limits).
+ */
+export function hookSource(
+  agentId: string,
+  spawnedBy: string | null,
+  registry: Pick<RegistryService, "get">,
+): string {
+  if (!spawnedBy || spawnedBy === agentId) return agentId;
+  const instance = registry.get(spawnedBy);
+  return instance?.metadata?.registryId === agentId ? spawnedBy : agentId;
+}
+

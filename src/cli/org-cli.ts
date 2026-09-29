@@ -18,19 +18,24 @@ import {
   OrgValidationError,
   parseOrgText,
   resolveAssignee,
+  ROLE_CAPABILITIES,
   rolesForAgent,
   saveOrgText,
   UNTRUSTED_DELEGATION,
   validateOrg,
   type OrgDoc,
   type OrgTreeNode,
+  type RoleCapability,
 } from "../core/org/org.js";
+import { findRolePreset, ROLE_PRESETS } from "../core/org/role-library.js";
 import { printPolicyLoadError } from "./policy-error.js";
 import { findOrgTemplate, ORG_TEMPLATES } from "../core/org/templates.js";
 import { buildOrgReport, parsePeriod, renderOrgReport, resolveReportTarget } from "../core/usage/report.js";
 import { BOSS, channelLabel, OrgComms, renderMessages } from "../core/org/comms.js";
 import { closeDb, getDb } from "../db/client.js";
 import { getForemanPaths } from "../utils/config.js";
+import { supportsInstances } from "../core/agent-instance.js";
+import { runAgentAddScripted } from "./agent-add.js";
 import { runAgentUpdateAll } from "./agents-cli.js";
 import { bold, dim, green, orange, red } from "./colors.js";
 import { runWrite } from "./write-cli.js";
@@ -419,35 +424,85 @@ orgCommand
   );
 
 orgCommand
+  .command("roles")
+  .description("Ready-made roles for `org add-role --preset` (any agent can fill any role)")
+  .action(() => {
+    for (const p of ROLE_PRESETS) {
+      console.log(`${bold(p.id.padEnd(14))} ${p.title} — ${p.summary}`);
+      console.log(dim(`${" ".repeat(15)}may: ${p.can.join(", ")} · runs on ${p.runsOn} by default`));
+    }
+    console.log(dim("\nYour own role: foreman org add-role <id> --runs-on claude-code --describe \"what it does, in your words\""));
+  });
+
+orgCommand
   .command("add-role <id>")
-  .description("Add a role to the chart (e.g. a content writer in marketing)")
-  .requiredOption("--agent <agent>", "agent that fills the role")
+  .description("Add a role to the chart: a ready-made one (--preset) or your own (--describe), filled by an agent")
+  .option("--agent <agent>", "agent that fills the role (an agent you registered)")
+  .option(
+    "--runs-on <type>",
+    "fill the role with a new instance of claude-code or codex, named after the role",
+  )
+  .option("--preset <id>", "start from a ready-made role (see `foreman org roles`)")
+  .option("--describe <text>", "what the role does, in your own words (the agent is told this)")
+  .option("--can <list>", "what its agent may do: read,write,shell,network (comma-separated)")
   .option("--title <title>", "job title")
   .option("--department <id>", "department it belongs to")
   .option("--reports-to <role>", "manager role (default: the department head, else human)")
-  .option("--responsibility <text>", "what this role is for")
+  .option("--responsibility <text>", "what this role is for, in one line")
   .option("--model <model>", "model override for this role (a cheaper model for routine work)")
   .action(
-    (
+    async (
       rawId: string,
-      opts: { agent: string; title?: string; department?: string; reportsTo?: string; responsibility?: string; model?: string },
+      opts: {
+        agent?: string;
+        runsOn?: string;
+        preset?: string;
+        describe?: string;
+        can?: string;
+        title?: string;
+        department?: string;
+        reportsTo?: string;
+        responsibility?: string;
+        model?: string;
+      },
     ) => {
       const org = requireOrg();
       const id = rawId.toLowerCase();
       if (Object.hasOwn(org.roles, id)) fail(`role '${id}' already exists`);
+      const preset = opts.preset ? findRolePreset(opts.preset.toLowerCase()) : undefined;
+      if (opts.preset && !preset) fail(`no ready-made role '${opts.preset}' — see \`foreman org roles\``);
+      if (opts.agent && opts.runsOn) fail("pass --agent (an agent you registered) or --runs-on (a new one), not both");
+      const can = opts.can !== undefined ? parseCan(opts.can) : preset?.can;
       const dept = opts.department?.toLowerCase();
       if (dept && !Object.hasOwn(org.departments, dept)) {
         fail(`no department '${dept}' — add it first: foreman org add-department ${dept} --head <role>`);
       }
       const reportsTo = opts.reportsTo?.toLowerCase() ?? (dept ? org.departments[dept]!.head : "human");
+      // Who fills it: a registered agent, or a new instance named after the role.
+      const runsOn = opts.agent ? null : (opts.runsOn ?? preset?.runsOn ?? null);
+      if (!opts.agent && !runsOn) fail("say who fills the role: --agent <registered agent> or --runs-on <claude-code|codex|…>");
+      const agent = opts.agent ?? id;
+      // Only Claude Code and Codex run as several agents; anything else
+      // would be rewired to the role's name, taking its own identity.
+      if (runsOn && agent !== runsOn && !supportsInstances({ id: runsOn })) {
+        fail(`only claude-code and codex can fill several roles; for ${runsOn}, pass --agent ${runsOn}`);
+      }
+      if (runsOn && !registeredAgents().has(agent)) {
+        const db = getDb();
+        const code = await runAgentAddScripted(agent, { type: runsOn }, { db, registry: new RegistryService(db, new EventBus<ForemanEventMap>()) });
+        if (code !== 0) fail(`couldn't add ${agent} (${runsOn}) for the role`);
+      }
       const paths = getForemanPaths();
       const doc = parseDocument(readFileSync(paths.orgConfigPath, "utf-8"));
+      const instructions = opts.describe ?? preset?.instructions;
       doc.setIn(["roles", id], {
-        title: opts.title ?? titleCase(id),
-        agent: opts.agent,
+        title: opts.title ?? preset?.title ?? titleCase(id),
+        agent,
         ...(dept ? { department: dept } : {}),
         reports_to: reportsTo,
         ...(opts.responsibility ? { responsibility: opts.responsibility } : {}),
+        ...(instructions ? { instructions } : {}),
+        ...(can ? { can } : {}),
         ...(opts.model ? { model: opts.model } : {}),
       });
       try {
@@ -455,10 +510,22 @@ orgCommand
       } catch (err) {
         reportInvalid(err);
       }
-      console.log(`${green("✓")} added ${bold(id)} (${opts.agent})${dept ? ` in ${dept}` : ""}, reporting to ${reportsTo}`);
-      if (!registeredAgents().has(opts.agent)) console.log(dim(`Register the agent: ${agentAddCommand(opts.agent)}`));
+      console.log(`${green("✓")} added ${bold(id)} (${agent})${dept ? ` in ${dept}` : ""}, reporting to ${reportsTo}`);
+      if (can) console.log(dim(`  may: ${can.length > 0 ? can.join(", ") : "nothing but talking to colleagues"}`));
+      if (!registeredAgents().has(agent)) console.log(dim(`Register the agent: ${agentAddCommand(agent)}`));
     },
   );
+
+/** `read,write` → the capabilities, or a usage error. */
+function parseCan(list: string): RoleCapability[] {
+  const words = list
+    .split(",")
+    .map((w) => w.trim().toLowerCase())
+    .filter(Boolean);
+  const bad = words.filter((w) => !(ROLE_CAPABILITIES as readonly string[]).includes(w));
+  if (bad.length > 0) fail(`--can takes ${ROLE_CAPABILITIES.join(", ")} (not ${bad.join(", ")})`);
+  return [...new Set(words)] as RoleCapability[];
+}
 
 orgCommand
   .command("messages [channel]")

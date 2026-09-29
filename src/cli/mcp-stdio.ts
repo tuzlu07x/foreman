@@ -42,7 +42,7 @@ import type {
   HubCallResolution,
   McpHub,
 } from "../core/mcp-hub/hub.js";
-import type { MediatorService } from "../core/mediator.js";
+import { denialReason, type MediatorService } from "../core/mediator.js";
 import { OrchestratorChat } from "../core/orchestrator-chat.js";
 import { PendingQuestionsService } from "../core/pending-questions.js";
 import type { PolicyEngine } from "../core/policy-engine.js";
@@ -1603,6 +1603,7 @@ export async function handleMessage(
           : {
               kind: "deny",
               reason:
+                denialReason(mediatorResult) ??
                 mediatorResult.riskReasons?.[0] ??
                 `denied by ${mediatorResult.decidedBy}`,
             };
@@ -1660,7 +1661,7 @@ export async function handleMessage(
         ],
       });
     }
-    return replyError(id, -32603, `Denied by ${result.decidedBy}`);
+    return replyError(id, -32603, denialReason(result) ?? `Denied by ${result.decidedBy}`);
   }
   if (id !== undefined) {
     return replyError(id, -32601, `Method not found: ${method ?? "(unknown)"}`);

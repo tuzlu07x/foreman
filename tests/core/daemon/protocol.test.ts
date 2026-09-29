@@ -77,6 +77,12 @@ describe("parseHookRequest", () => {
     expect(parseHookRequest(line())).toMatchObject({ agentId: "claude-code", timeoutMs: 1000, payload: "{}" });
   });
 
+  it("carries the launch's FOREMAN_SPAWNED_BY, or null", () => {
+    expect(parseHookRequest(line())).toMatchObject({ ctx: { spawnedBy: null } });
+    expect(parseHookRequest(line({ ctx: { ...ctx, spawnedBy: "reviewer" } }))).toMatchObject({ ctx: { spawnedBy: "reviewer" } });
+    expect(typeof parseHookRequest(line({ ctx: { ...ctx, spawnedBy: 7 } }))).toBe("string");
+  });
+
   it("refuses anything malformed, oversized or out of range", () => {
     const bad = [
       "not json",

@@ -177,12 +177,15 @@ export function rolePrompt(input: {
   title: string;
   department?: string | undefined;
   responsibility?: string | undefined;
+  /** The role's own instructions (org.yaml `instructions`). */
+  instructions?: string | undefined;
   agentId: string;
 }): string {
   const dept = input.department ? ` in ${input.department}` : "";
   const resp = input.responsibility ? ` Your responsibility: ${input.responsibility}.` : "";
+  const how = input.instructions ? `\n\n${input.instructions.trim()}\n\n` : " ";
   return (
     `You are ${input.title} (role "${input.roleId}"${dept}) at ${input.company}, working as the agent "${input.agentId}".` +
-    `${resp} Work only on the task you were given; to talk to colleagues or report back, use Foreman's org_post and org_report tools.`
+    `${resp}${how}Work only on the task you were given; to talk to colleagues or report back, use Foreman's org_post and org_report tools.`
   );
 }

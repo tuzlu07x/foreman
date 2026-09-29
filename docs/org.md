@@ -35,15 +35,15 @@ OpenClaw, ZeroClaw or your own MCP agent (`foreman agent add <id>`, where
 (`/foreman write <agent> …` from chat, or `foreman write` from a shell
 Foreman spawned for it), Foreman checks the chart:
 
-| From → To | Default |
-| --- | --- |
-| manager → direct report | ✅ |
-| manager → anyone below (`skip_levels: true`) | ✅ |
-| report → own manager | ✅ |
-| colleagues in the same department | ✅ |
-| department head ↔ department head | ✅ (`cross_department: via_heads`) |
-| anyone else across departments | ❌ "hand it to your manager" |
-| you (terminal / owner) → anyone | ✅ always |
+| From → To                                    | Default                            |
+| -------------------------------------------- | ---------------------------------- |
+| manager → direct report                      | ✅                                 |
+| manager → anyone below (`skip_levels: true`) | ✅                                 |
+| report → own manager                         | ✅                                 |
+| colleagues in the same department            | ✅                                 |
+| department head ↔ department head            | ✅ (`cross_department: via_heads`) |
+| anyone else across departments               | ❌ "hand it to your manager"       |
+| you (terminal / owner) → anyone              | ✅ always                          |
 
 `cross_department` can also be `allow` or `deny` (isolated departments).
 `foreman org check <from> <to>` explains any decision. Each side can be an
@@ -57,6 +57,13 @@ the pair, or a `can_call` list for the target that leaves out `write`, blocks
 the hand-off even when the chart allows it, and an `ask` rule sends it to you.
 A `can_call` allow doesn't lift a block from the chart. `foreman org check`
 says when `policy.yaml` decides, and when no rule applies and the chart does.
+
+**Roles limit what their agent may do.** A role's `can` lists what its
+agent may do with its own tools: `read` files, `write` files, run `shell`
+commands, reach the `network`. A code reviewer with `can: [read]` that tries
+to edit a file is refused (`org:role` in the audit log), whatever
+`policy.yaml` says, and the agent is told why. See
+[roles and permissions](#roles-ready-made-your-own-and-what-each-may-do).
 
 **Least-privilege tools.** Each department (or a single role) lists the
 [MCP hub](./mcp-hub.md) servers it may use. Finance sees Stripe, not GitHub;
@@ -76,10 +83,10 @@ company: "Acme Inc."
 mission: "Ship a great product with a small team."
 human: { title: Founder }
 delegation:
-  cross_department: via_heads   # via_heads | allow | deny
+  cross_department: via_heads # via_heads | allow | deny
   skip_levels: true
 approvals:
-  escalate_via_manager: true    # optional; managers recommend, you decide
+  escalate_via_manager: true # optional; managers recommend, you decide
 departments:
   engineering:
     name: Engineering
@@ -101,7 +108,14 @@ roles:
     agent: codex
     department: engineering
     reports_to: cto
-    model: <cheaper-model-id>    # optional: a cheaper model for routine work
+    model: <cheaper-model-id> # optional: a cheaper model for routine work
+  reviewer:
+    title: Code Reviewer
+    agent: reviewer
+    department: engineering
+    reports_to: cto
+    instructions: "Review changes and report findings with file and line. Don't edit files."
+    can: [read] # optional: read | write | shell | network
 ```
 
 Validation (`foreman org validate`) rejects reporting cycles, unknown
@@ -110,26 +124,27 @@ about roles filled by agents you haven't registered yet.
 
 ## Commands
 
-| Command | |
-| --- | --- |
-| `foreman org templates` | Starter charts |
-| `foreman org init [--template t] [--company n] [--force]` | Create org.yaml |
-| `foreman org show [--json]` | The chart, with registration status and tool access |
-| `foreman org validate` | Structure + warnings |
-| `foreman org check <from> <to>` | Explain a delegation decision (agent or role ids; `policy.yaml` first, then the chart) |
-| `foreman org assign <role\|department\|agent> <task…>` | Queue a task (needs `foreman start` running) |
-| `foreman org sync` | Push titles / responsibilities / model overrides into the agent registry |
-| `foreman org upgrade` | Upgrade every agent runtime the org uses |
-| `foreman org add-department <id> --head <role> [--agent a] [--name n]` | Add a department and its head |
-| `foreman org add-role <id> --agent a [--department d] [--reports-to r]` | Add a role (defaults to reporting to the department head) |
-| `foreman org report [target] [period]` | What a department, role or agent did, and what it cost |
-| `foreman org budget <department> [usd\|off] [--daily] [--pause]` | Set or remove a spend limit |
-| `foreman org escalate [on\|off]` | Send low/medium-risk approvals to the requester's manager agent for a recommendation |
-| `foreman usage [period] [--by department\|agent\|model]` | Spend at a glance |
-| `foreman usage env <agent>` | Turn on spend tracking for an agent you start yourself |
-| `foreman org messages [channel] [--follow]` | Read your agents' conversations |
-| `foreman org tell <target> <message…>` | Post to a department, role, leadership or all-hands |
-| `foreman org channel <target> <platform> <channel\|off>` | Mirror a channel to Slack / Discord |
+| Command                                                                                                                                               |                                                                                        |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `foreman org templates`                                                                                                                               | Starter charts                                                                         |
+| `foreman org init [--template t] [--company n] [--force]`                                                                                             | Create org.yaml                                                                        |
+| `foreman org show [--json]`                                                                                                                           | The chart, with registration status and tool access                                    |
+| `foreman org validate`                                                                                                                                | Structure + warnings                                                                   |
+| `foreman org check <from> <to>`                                                                                                                       | Explain a delegation decision (agent or role ids; `policy.yaml` first, then the chart) |
+| `foreman org assign <role\|department\|agent> <task…>`                                                                                                | Queue a task (needs `foreman start` running)                                           |
+| `foreman org sync`                                                                                                                                    | Push titles / responsibilities / model overrides into the agent registry               |
+| `foreman org upgrade`                                                                                                                                 | Upgrade every agent runtime the org uses                                               |
+| `foreman org add-department <id> --head <role> [--agent a] [--name n]`                                                                                | Add a department and its head                                                          |
+| `foreman org roles`                                                                                                                                   | Ready-made roles for `add-role --preset`                                               |
+| `foreman org add-role <id> (--agent a \| --runs-on claude-code\|codex) [--preset p] [--describe text] [--can list] [--department d] [--reports-to r]` | Add a role (defaults to reporting to the department head)                              |
+| `foreman org report [target] [period]`                                                                                                                | What a department, role or agent did, and what it cost                                 |
+| `foreman org budget <department> [usd\|off] [--daily] [--pause]`                                                                                      | Set or remove a spend limit                                                            |
+| `foreman org escalate [on\|off]`                                                                                                                      | Send low/medium-risk approvals to the requester's manager agent for a recommendation   |
+| `foreman usage [period] [--by department\|agent\|model]`                                                                                              | Spend at a glance                                                                      |
+| `foreman usage env <agent>`                                                                                                                           | Turn on spend tracking for an agent you start yourself                                 |
+| `foreman org messages [channel] [--follow]`                                                                                                           | Read your agents' conversations                                                        |
+| `foreman org tell <target> <message…>`                                                                                                                | Post to a department, role, leadership or all-hands                                    |
+| `foreman org channel <target> <platform> <channel\|off>`                                                                                              | Mirror a channel to Slack / Discord                                                    |
 
 ## Grow the company
 
@@ -146,6 +161,51 @@ A new role reports to its department head unless you say otherwise
 (`--reports-to`). Both commands check the whole chart before saving, and
 they keep the comments in `org.yaml`. You can still edit the file by hand;
 it's read again on every delegation, so no restart is needed.
+
+### Roles: ready-made, your own, and what each may do
+
+A role is a job, not a program: any agent can fill any role. Foreman ships
+ready-made roles to start from (`foreman org roles`): manager, developer,
+code-reviewer, researcher, writer, analyst, support and assistant. Each has a
+title, instructions for the agent and a sensible `can`:
+
+```bash
+foreman org roles
+foreman org add-role reviewer --preset code-reviewer --runs-on claude-code --department engineering
+foreman org add-role research --preset researcher --runs-on claude-code
+```
+
+Or describe your own, in your own words:
+
+```bash
+foreman org add-role chores --runs-on claude-code --title "Chores" \
+  --describe "Tidy the issue tracker: label new issues, close duplicates, ping stale ones." \
+  --can read,network
+```
+
+- `--runs-on claude-code|codex` fills the role with a new instance named after
+  the role ([several roles on one agent](#several-roles-on-one-agent)).
+  `--agent <id>` gives it to an agent you already registered instead.
+- `--describe` (org.yaml `instructions`) is what the agent is told when
+  Foreman hands it work, after who it is and before the task.
+- `--can` (org.yaml `can`) limits the agent's own tools to `read`, `write`,
+  `shell` and `network`, in any mix. `--preset` and `--describe` can be
+  combined, and any flag overrides the preset.
+
+How `can` works:
+
+- It only narrows. A role without `can` is limited by `policy.yaml` alone,
+  and `can` never allows what `policy.yaml` denies or asks about.
+- An agent in several roles may do what any of them may; a role of its
+  without `can` lifts the limit.
+- It covers file reads and writes, shell commands and web access. Foreman's
+  own tools (channels, reports, hand-offs) follow the chart, and hub servers
+  follow `mcp_servers`.
+- It is checked for Claude Code's tools by its hook, and for everything that
+  goes through Foreman's MCP server. The hook knows an instance by the
+  launch Foreman gave it (see [Limits](#limits)).
+- A broken `org.yaml` that sets `can` fails closed: reads, writes, shell and
+  web calls are refused until `foreman org validate` passes.
 
 ### Several roles on one agent
 
@@ -172,8 +232,12 @@ that instance:
   in your settings), and its identity token in an owner-only file under
   Foreman's state directory, never on the command line. So what it posts
   and hands on is attributed to it, as trusted;
-- told its role: the org.yaml title, department and responsibility
-  (`--append-system-prompt` for Claude Code, before the task for Codex).
+- told its role: the org.yaml title, department, responsibility and
+  instructions (`--append-system-prompt` for Claude Code, before the task
+  for Codex).
+
+`foreman org add-role <id> --runs-on codex` does both steps in one: it adds
+the instance, named after the role, and the role.
 
 The agent's own config (`~/.codex/config.toml`, `~/.claude.json`) stays wired
 to the agent itself: adding an instance, `agent rewire` and `doctor` leave it
@@ -187,13 +251,13 @@ Agents talk to each other the way a company does: in department rooms,
 in leadership, at all-hands, and one-to-one. They report up to their
 manager. Everything goes through Foreman, and you can read all of it.
 
-| Channel | Who can post |
-| --- | --- |
+| Channel         | Who can post                                                                          |
+| --------------- | ------------------------------------------------------------------------------------- |
 | `#<department>` | its members; other departments only through the heads (`delegation.cross_department`) |
-| `#leadership` | department heads and the roles that report to you |
-| `#all-hands` | everyone in the org |
-| role ↔ role | a role with its manager, its reports and its department (and heads with heads) |
-| → you | anyone: reports and questions for you land in the TUI inbox |
+| `#leadership`   | department heads and the roles that report to you                                     |
+| `#all-hands`    | everyone in the org                                                                   |
+| role ↔ role     | a role with its manager, its reports and its department (and heads with heads)        |
+| → you           | anyone: reports and questions for you land in the TUI inbox                           |
 
 Agents use three MCP tools (every agent on `foreman mcp-stdio` has them):
 
@@ -277,6 +341,7 @@ longer or shorter, and it doesn't change what happens on timeout (the
 default is still deny).
 
 Who can recommend:
+
 - only the requester's manager, as the chart says now;
 - not a colleague, another department, or the requesting agent itself;
 - not a blocked or disabled agent, whatever the case of its id;
@@ -290,10 +355,10 @@ seconds, and the approvals in between come only to you.
 
 ### What is sent where
 
-| What | Where it goes |
-| --- | --- |
+| What                                                | Where it goes                                                                                                                                                                                          |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Review request: tool name, risk, reasons, arguments | The manager agent (through `org_read`, so into its model's context) and `org_messages` in Foreman's local database. It is **not** mirrored to Slack or Discord, even when `channels.direct` is mapped. |
-| The recommendation and its reason | Your TUI, inbox and approval chat; the thread (`foreman org messages`), which is mirrored to `channels.direct` if you mapped it; the audit log (`org:recommendation`). |
+| The recommendation and its reason                   | Your TUI, inbox and approval chat; the thread (`foreman org messages`), which is mirrored to `channels.direct` if you mapped it; the audit log (`org:recommendation`).                                 |
 
 Before the arguments go to the manager, Foreman masks the values of keys
 that look sensitive (`pass`, `secret`, `token`, `key`, `auth`, `cookie`,
@@ -333,6 +398,7 @@ In the TUI console, Telegram, Slack or Discord:
 ```
 
 A report shows:
+
 - spend, and tokens (input, output, cache);
 - finished and failed tasks, and cost per finished task;
 - tool calls allowed and blocked;
@@ -344,11 +410,11 @@ summary.
 
 ### Where the numbers come from
 
-| Source | How | Precision |
-| --- | --- | --- |
-| **Agent telemetry** | Claude Code (and Codex) export OpenTelemetry. `foreman start` listens on `127.0.0.1:4319` and keeps only per-request token counts, model and cost; prompts never reach Foreman. | Exact, cost included |
-| **Task output** | Usage an agent CLI prints when it finishes a task (`tokens used: N`, Claude JSON results), used only when that task sent no telemetry | Tokens exact; cost estimated (≈) from list prices when the model is known (the role's or agent's `model`), otherwise shown as *unpriced* |
-| **Foreman itself** | Its own LLM calls (`llm_usage`) | Exact |
+| Source              | How                                                                                                                                                                             | Precision                                                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **Agent telemetry** | Claude Code (and Codex) export OpenTelemetry. `foreman start` listens on `127.0.0.1:4319` and keeps only per-request token counts, model and cost; prompts never reach Foreman. | Exact, cost included                                                                                                                     |
+| **Task output**     | Usage an agent CLI prints when it finishes a task (`tokens used: N`, Claude JSON results), used only when that task sent no telemetry                                           | Tokens exact; cost estimated (≈) from list prices when the model is known (the role's or agent's `model`), otherwise shown as _unpriced_ |
+| **Foreman itself**  | Its own LLM calls (`llm_usage`)                                                                                                                                                 | Exact                                                                                                                                    |
 
 Tasks Foreman starts (`foreman write`, `assign`, delegation between
 agents) report automatically: the agent gets the exporter settings with a
@@ -407,6 +473,15 @@ resets. You can still assign work to it yourself.
   an agent's shell still trusts `FOREMAN_SPAWNED_BY` (see [SECURITY.md](../SECURITY.md)).
 - A broken `org.yaml` fails closed: agent-to-agent delegation is blocked and
   agents get no hub servers until `foreman org validate` passes.
+- Claude Code's hook tells an instance from Claude Code itself by
+  `FOREMAN_SPAWNED_BY`, which Foreman sets when it launches the instance.
+  It is only honoured when it names a registered instance of that same
+  agent, but a process that can set its own environment can claim one:
+  the same trust `foreman write` gives it. Claude Code run by you, with no
+  such variable, is Claude Code itself.
+- Codex has no hook before its own tools run: a Codex instance's built-in
+  shell and file edits follow Codex's sandbox and approval settings. Its
+  role's `can` applies to what goes through Foreman.
 - A manager's recommendation is only as trustworthy as the manager agent.
   Agent ids are self-declared, so any process that starts
   `foreman mcp-stdio --source <manager-id>` can recommend as that manager.

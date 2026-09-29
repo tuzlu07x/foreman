@@ -8,11 +8,11 @@ Foreman's risk engine runs next to the policy: it scores each call and can ask y
 
 `policy.yaml` is in Foreman's config directory:
 
-| Platform | Path |
-| --- | --- |
-| Linux, WSL2 | `~/.config/foreman/policy.yaml` (`$XDG_CONFIG_HOME/foreman/` if set) |
-| macOS | `~/Library/Application Support/foreman/policy.yaml` |
-| `FOREMAN_HOME` set | `$FOREMAN_HOME/policy.yaml` |
+| Platform           | Path                                                                 |
+| ------------------ | -------------------------------------------------------------------- |
+| Linux, WSL2        | `~/.config/foreman/policy.yaml` (`$XDG_CONFIG_HOME/foreman/` if set) |
+| macOS              | `~/Library/Application Support/foreman/policy.yaml`                  |
+| `FOREMAN_HOME` set | `$FOREMAN_HOME/policy.yaml`                                          |
 
 `foreman init` (and the first `foreman start`) writes the default template. `foreman doctor` prints the directory on its `foreman_home` line.
 
@@ -36,11 +36,12 @@ error: ~/.config/foreman/policy.yaml failed to parse (line 63): rules.4.effect: 
 For every tool call an agent makes, and every hand-off from one agent to another (see [Hand-offs](#hand-offs-between-agents)), Foreman goes through these steps in order and stops at the first one that decides:
 
 1. **Blocked or disabled agent**: denied (`agent:blocked`, `agent:disabled`). See [`agent-lifecycle.md`](agent-lifecycle.md).
-2. **Rate limits** (`agents.<id>.rate_limits`): denied when the agent is over its calls per minute or tokens per hour.
-3. **Policy rules**: the matching rules pick `allow`, `ask` or `deny` (see [Which rule wins](#which-rule-wins)). `deny` refuses the call here (`policy:<rule id>`).
-4. **Risk engine**: scores the call and puts it in a bucket: low (0–29), medium (30–59), high (60–84) or critical (85–100). By default low is allowed and the rest ask; [`buckets:`](#risk-buckets-buckets) can change that. A bucket set to `deny` refuses the call (`risk:<bucket>`), even when a rule allows it.
-5. **Your approval**: if the policy said `ask` *or* the risk engine did, the call waits for you (`user:tui`, `user:telegram`, `user:slack:<member id>`, …, or `approval-timeout` when nobody answered). See [How approvals work](tui.md#how-approvals-work).
-6. Otherwise the call is allowed. The label names the rule that allowed it (`policy:<rule id>`), or the fallback when no rule matched (`policy:hook:risk-based`, `policy:mcp.yaml:<server>`, `policy:org.yaml` for a hand-off).
+2. **Role limits** (org.yaml `can`): a file read, file write, shell command or web call the agent's [org role](org.md#roles-ready-made-your-own-and-what-each-may-do) doesn't allow is denied (`org:role`). No rule can lift it.
+3. **Rate limits** (`agents.<id>.rate_limits`): denied when the agent is over its calls per minute or tokens per hour.
+4. **Policy rules**: the matching rules pick `allow`, `ask` or `deny` (see [Which rule wins](#which-rule-wins)). `deny` refuses the call here (`policy:<rule id>`).
+5. **Risk engine**: scores the call and puts it in a bucket: low (0–29), medium (30–59), high (60–84) or critical (85–100). By default low is allowed and the rest ask; [`buckets:`](#risk-buckets-buckets) can change that. A bucket set to `deny` refuses the call (`risk:<bucket>`), even when a rule allows it.
+6. **Your approval**: if the policy said `ask` _or_ the risk engine did, the call waits for you (`user:tui`, `user:telegram`, `user:slack:<member id>`, …, or `approval-timeout` when nobody answered). See [How approvals work](tui.md#how-approvals-work).
+7. Otherwise the call is allowed. The label names the rule that allowed it (`policy:<rule id>`), or the fallback when no rule matched (`policy:hook:risk-based`, `policy:mcp.yaml:<server>`, `policy:org.yaml` for a hand-off).
 
 So:
 
@@ -54,20 +55,20 @@ These labels (`policy:12`, `risk:critical`, `approval-timeout`, …) are what `f
 
 ```yaml
 rules:
-  - source: "*"                 # which agent: an agent id, or "*" for any
-    target: "tool:read_file"    # which call
-    effect: ask                 # allow | ask | deny
-    conditions:                 # optional: narrow the rule to some calls
+  - source: "*" # which agent: an agent id, or "*" for any
+    target: "tool:read_file" # which call
+    effect: ask # allow | ask | deny
+    conditions: # optional: narrow the rule to some calls
       pathMatch:
         - "(^|/)\\.env(\\..*)?$"
 ```
 
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `source` | yes | The agent id the rule applies to (as in `foreman agent list`), or `"*"` for every agent. |
-| `target` | yes | The call, matched exactly (no wildcards, but see [Tool-name aliases](#tool-name-aliases)): `tool:<name>` for a tool call, `secret:<name>` for the MCP `secrets/get` tool, or `<agent>:write` for handing work to another agent (see [Hand-offs](#hand-offs-between-agents)). |
-| `effect` | yes | `allow`, `ask` or `deny`. |
-| `conditions` | no | Narrows the rule; see below. Without conditions the rule applies to every call of that target. |
+| Field        | Required | Meaning                                                                                                                                                                                                                                                                      |
+| ------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source`     | yes      | The agent id the rule applies to (as in `foreman agent list`), or `"*"` for every agent.                                                                                                                                                                                     |
+| `target`     | yes      | The call, matched exactly (no wildcards, but see [Tool-name aliases](#tool-name-aliases)): `tool:<name>` for a tool call, `secret:<name>` for the MCP `secrets/get` tool, or `<agent>:write` for handing work to another agent (see [Hand-offs](#hand-offs-between-agents)). |
+| `effect`     | yes      | `allow`, `ask` or `deny`.                                                                                                                                                                                                                                                    |
+| `conditions` | no       | Narrows the rule; see below. Without conditions the rule applies to every call of that target.                                                                                                                                                                               |
 
 There is no priority field, and the order of rules in the file doesn't change any decision.
 
@@ -75,13 +76,13 @@ There is no priority field, and the order of rules in the file doesn't change an
 
 Rules use Foreman's name for a tool, which depends on how the agent reaches Foreman:
 
-| Where the call comes from | `target` |
-| --- | --- |
-| An MCP agent through `foreman mcp-stdio` | `tool:<the tool name the agent called>`, e.g. `tool:read_file`, `tool:shell_exec` |
-| An MCP hub server (`foreman mcp add …`) | `tool:<server>__<tool>`, e.g. `tool:github__create_issue` |
-| Claude Code's PreToolUse hook | `Bash` → `tool:shell_exec`; `Read` → `tool:read_file`; `Write`, `Edit`, `MultiEdit`, `NotebookEdit` → `tool:file_write`; `Grep`, `Glob` → `tool:search_files`; `WebFetch`, `WebSearch` → `tool:network_fetch`; `mcp__*` → `tool:mcp_call`; anything else lower-cased |
-| Codex | `tool:shell_exec` (commands), `tool:file_write` (file changes), `tool:permission_overlay` (permission requests) |
-| Hermes, OpenClaw, ZeroClaw (ACP) | `tool:shell_exec` (execute), `tool:file_write` (edit, delete, move), `tool:network_fetch` (fetch), `tool:read` (read); other kinds as they come (`search`, `think`, `other`) |
+| Where the call comes from                | `target`                                                                                                                                                                                                                                                             |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| An MCP agent through `foreman mcp-stdio` | `tool:<the tool name the agent called>`, e.g. `tool:read_file`, `tool:shell_exec`                                                                                                                                                                                    |
+| An MCP hub server (`foreman mcp add …`)  | `tool:<server>__<tool>`, e.g. `tool:github__create_issue`                                                                                                                                                                                                            |
+| Claude Code's PreToolUse hook            | `Bash` → `tool:shell_exec`; `Read` → `tool:read_file`; `Write`, `Edit`, `MultiEdit`, `NotebookEdit` → `tool:file_write`; `Grep`, `Glob` → `tool:search_files`; `WebFetch`, `WebSearch` → `tool:network_fetch`; `mcp__*` → `tool:mcp_call`; anything else lower-cased |
+| Codex                                    | `tool:shell_exec` (commands), `tool:file_write` (file changes), `tool:permission_overlay` (permission requests)                                                                                                                                                      |
+| Hermes, OpenClaw, ZeroClaw (ACP)         | `tool:shell_exec` (execute), `tool:file_write` (edit, delete, move), `tool:network_fetch` (fetch), `tool:read` (read); other kinds as they come (`search`, `think`, `other`)                                                                                         |
 
 `foreman log tail` shows the name each call arrived with.
 
@@ -89,24 +90,24 @@ Rules use Foreman's name for a tool, which depends on how the agent reaches Fore
 
 Transports use different names for the same kind of call, so Foreman treats these names as one group each:
 
-| Kind | Names |
-| --- | --- |
-| read a file | `read_file`, `read`, `read_text_file`, `read_multiple_files`, `read_media_file` |
-| write a file | `file_write`, `write_file`, `edit_file`, `write`, `edit`, `create_file`, `move_file` |
+| Kind          | Names                                                                                            |
+| ------------- | ------------------------------------------------------------------------------------------------ |
+| read a file   | `read_file`, `read`, `read_text_file`, `read_multiple_files`, `read_media_file`                  |
+| write a file  | `file_write`, `write_file`, `edit_file`, `write`, `edit`, `create_file`, `move_file`             |
 | run a command | `shell_exec`, `execute`, `execute_code`, `run_command`, `run_shell`, `bash`, `sh`, `zsh`, `exec` |
-| fetch a URL | `network_fetch`, `fetch`, `fetch_url`, `web_fetch` |
+| fetch a URL   | `network_fetch`, `fetch`, `fetch_url`, `web_fetch`                                               |
 
 A `deny` or `ask` rule written for one name also applies to the others in its group: the default `.env` guard on `tool:read_file` also covers Hermes' `tool:read` and the MCP filesystem server's `read_text_file`. An `allow` rule covers only the name it was written for, so an alias never widens a permission.
 
 ### Conditions
 
-| Condition | Type | The rule applies when… |
-| --- | --- | --- |
-| `pathMatch` | list of regexes | a path argument matches one of them |
-| `pathNotMatch` | one regex | the path arguments are *not* all excluded by it (see below) |
-| `commandMatch` | list of substrings | a command argument contains one of them |
-| `toolPattern` | regex | the tool name matches it (case-sensitive) |
-| `argContains` | string | any string argument contains it (case-insensitive) |
+| Condition      | Type               | The rule applies when…                                      |
+| -------------- | ------------------ | ----------------------------------------------------------- |
+| `pathMatch`    | list of regexes    | a path argument matches one of them                         |
+| `pathNotMatch` | one regex          | the path arguments are _not_ all excluded by it (see below) |
+| `commandMatch` | list of substrings | a command argument contains one of them                     |
+| `toolPattern`  | regex              | the tool name matches it (case-sensitive)                   |
+| `argContains`  | string             | any string argument contains it (case-insensitive)          |
 
 Every condition in a rule must hold. Details:
 
@@ -116,11 +117,11 @@ Every condition in a rule must hold. Details:
 
 Conditions are applied so that a mistake fails safe:
 
-| | `deny` / `ask` rule | `allow` rule |
-| --- | --- | --- |
-| Several paths or commands in one call | applies if **any** of them matches | applies only if **every** one matches |
-| `pathNotMatch` | skipped only when **every** path is excluded | skipped when **any** path is excluded |
-| A regex that doesn't compile | the rule still applies | the rule never applies |
+|                                       | `deny` / `ask` rule                          | `allow` rule                          |
+| ------------------------------------- | -------------------------------------------- | ------------------------------------- |
+| Several paths or commands in one call | applies if **any** of them matches           | applies only if **every** one matches |
+| `pathNotMatch`                        | skipped only when **every** path is excluded | skipped when **any** path is excluded |
+| A regex that doesn't compile          | the rule still applies                       | the rule never applies                |
 
 ### Which rule wins
 
@@ -133,14 +134,14 @@ When several rules match a call:
 
 With the default policy:
 
-| Call | Matching rules | Result |
-| --- | --- | --- |
-| any agent reads `README.md` | `* read_file allow` | allowed (unless the risk engine asks) |
-| any agent reads `.env` | `* read_file allow`, `* read_file ask` + `pathMatch` | ask: the conditional rule overrides the blanket one |
+| Call                                                                                               | Matching rules                                            | Result                                                                                                          |
+| -------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| any agent reads `README.md`                                                                        | `* read_file allow`                                       | allowed (unless the risk engine asks)                                                                           |
+| any agent reads `.env`                                                                             | `* read_file allow`, `* read_file ask` + `pathMatch`      | ask: the conditional rule overrides the blanket one                                                             |
 | `hermes`, with your own rule `source: hermes, target: tool:read_file, effect: allow`, reads `.env` | `hermes read_file allow`, `* read_file ask` + `pathMatch` | ask: neither overrides the other (one has the exact source, the other the conditions), so the stricter one wins |
-| `hermes` reads `README.md` | `hermes read_file allow`, `* read_file allow` | allowed |
-| Hermes (ACP) reads `.env` as `tool:read` | `* read_file ask` + `pathMatch` (alias) | ask |
-| an agent calls a tool no rule mentions | none | ask |
+| `hermes` reads `README.md`                                                                         | `hermes read_file allow`, `* read_file allow`             | allowed                                                                                                         |
+| Hermes (ACP) reads `.env` as `tool:read`                                                           | `* read_file ask` + `pathMatch` (alias)                   | ask                                                                                                             |
+| an agent calls a tool no rule mentions                                                             | none                                                      | ask                                                                                                             |
 
 ## Per-agent settings (`agents:`)
 
@@ -158,13 +159,13 @@ agents:
       codex: [write]
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `can_access_secrets` | Secrets the agent may fetch with the MCP `secrets/get` tool. Secret access is **deny by default**: only an explicit allow grants it. Becomes a `secret:<name>` allow rule. |
-| `cannot_access_secrets` | Secrets it may never fetch, even through a `"*"` allow. |
-| `rate_limits.messages_per_minute` | Once the agent has made this many calls in the last 60 seconds, further calls are denied (`policy:<rule id>`). It shows in `policy show` as `<agent> → * +cond ASK`. |
-| `rate_limits.tokens_per_hour` | Once the tokens the agent used in the last hour reach this, further calls are denied the same way. Usage comes from Foreman's spend ledger (agent telemetry, task output, Foreman's own calls), so an agent that reports no usage isn't limited by it. |
-| `can_call` / `cannot_call` | What this agent may hand to another agent; see [Hand-offs](#hand-offs-between-agents). |
+| Field                             | Meaning                                                                                                                                                                                                                                                |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `can_access_secrets`              | Secrets the agent may fetch with the MCP `secrets/get` tool. Secret access is **deny by default**: only an explicit allow grants it. Becomes a `secret:<name>` allow rule.                                                                             |
+| `cannot_access_secrets`           | Secrets it may never fetch, even through a `"*"` allow.                                                                                                                                                                                                |
+| `rate_limits.messages_per_minute` | Once the agent has made this many calls in the last 60 seconds, further calls are denied (`policy:<rule id>`). It shows in `policy show` as `<agent> → * +cond ASK`.                                                                                   |
+| `rate_limits.tokens_per_hour`     | Once the tokens the agent used in the last hour reach this, further calls are denied the same way. Usage comes from Foreman's spend ledger (agent telemetry, task output, Foreman's own calls), so an agent that reports no usage isn't limited by it. |
+| `can_call` / `cannot_call`        | What this agent may hand to another agent; see [Hand-offs](#hand-offs-between-agents).                                                                                                                                                                 |
 
 To restrict an agent's **own** tool calls, use `rules:` with its id as `source` and `target: "tool:<name>"`.
 
@@ -193,10 +194,10 @@ identity:
   untrusted: ask
 ```
 
-| Value | Effect |
-| --- | --- |
-| `ask` (default) | Nothing is auto-allowed: every call that isn't denied comes to you. |
-| `deny` | Every call is refused (`policy:identity:untrusted`). |
+| Value             | Effect                                                                                                        |
+| ----------------- | ------------------------------------------------------------------------------------------------------------- |
+| `ask` (default)   | Nothing is auto-allowed: every call that isn't denied comes to you.                                           |
+| `deny`            | Every call is refused (`policy:identity:untrusted`).                                                          |
 | `allow_wildcards` | `source: "*"` allow rules apply to it, as to any agent; it can also read secrets through a `"*"` secret rule. |
 
 In every mode it gets none of the claimed agent's own allow rules, while the claimed agent's `deny` and `ask` rules, its block or pause, and its rate limits still bind it. All unverified connections together get at most 30 calls a minute and 3 approvals waiting at once. "Always allow" isn't remembered for them.
@@ -207,8 +208,8 @@ Overrides what the risk engine recommends for a bucket:
 
 ```yaml
 buckets:
-  critical: deny   # refuse anything scoring 85+ without asking
-  medium: ask      # the default, spelled out
+  critical: deny # refuse anything scoring 85+ without asking
+  medium: ask # the default, spelled out
 ```
 
 Keys: `low`, `medium`, `high`, `critical`. Values: `allow`, `ask`, `deny`. A bucket set to `allow` still asks when a policy rule says `ask`. `foreman policy show` lists active overrides under `bucket overrides:`. See [`detection.md`](detection.md#8-per-bucket-overrides-in-policyyaml).
@@ -220,11 +221,11 @@ Checks calls against each agent's responsibility note (set in the wizard, on the
 ```yaml
 responsibility_policies:
   - responsibility: "code writing"
-    cannot_access:                      # regexes; a matching path adds 60 points
+    cannot_access: # regexes; a matching path adds 60 points
       - "/\\.ssh/"
-    can_call_agents_with_responsibility: ["code review", "testing"]   # another known role adds 40
-    cannot_call_agents_with_responsibility: ["payment processing"]   # adds 50
-    can_use_services: [github]          # other known services add 40
+    can_call_agents_with_responsibility: ["code review", "testing"] # another known role adds 40
+    cannot_call_agents_with_responsibility: ["payment processing"] # adds 50
+    can_use_services: [github] # other known services add 40
 ```
 
 `cannot_call_agents_with_responsibility` is checked on [hand-offs](#hand-offs-between-agents), against the receiving agent's note. `can_call_agents_with_responsibility` is the allowlist form: a hand-off to an agent whose note is known and isn't on the list adds 40 (an agent without a note adds nothing). `can_use_services` only applies when the target is a service id (`telegram`, `github`, …), which no current call has.
@@ -235,8 +236,8 @@ For sessions Foreman manages itself:
 
 ```yaml
 session_limits:
-  token_limit: 100000             # halt the session past this many tokens (default 100000)
-  token_budget_warning_pct: 80    # warn in the risk score from this share of the limit (default 80)
+  token_limit: 100000 # halt the session past this many tokens (default 100000)
+  token_budget_warning_pct: 80 # warn in the risk score from this share of the limit (default 80)
 ```
 
 ## Rules Foreman adds for you

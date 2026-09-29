@@ -169,6 +169,35 @@ describe("foreman hook claude-code — Faz 4 (#517)", () => {
     expect(r.stderr).toMatch(/policy:/);
   });
 
+  it("holds a Claude Code instance to its role (org.yaml `can`), attributed by FOREMAN_SPAWNED_BY", () => {
+    const fm = (...args: string[]) => spawnSync("node", [FM_BIN, ...args], { env, encoding: "utf-8" });
+    expect(fm("agent", "add", "claude-code").status).toBe(0);
+    expect(fm("agent", "add", "reviewer", "--type", "claude-code").status).toBe(0);
+    writeFileSync(
+      join(tmp, "org.yaml"),
+      [
+        "version: 1",
+        "company: Acme",
+        "roles:",
+        "  code-reviewer:",
+        "    title: Code Reviewer",
+        "    agent: reviewer",
+        "    reports_to: human",
+        "    can: [read]",
+        "",
+      ].join("\n"),
+    );
+    const bash = JSON.stringify({ tool_name: "Bash", tool_input: { command: "git status" } });
+    const asReviewer = runHook(bash, { ...env, FOREMAN_SPAWNED_BY: "reviewer" });
+    expect(asReviewer.exit).toBe(2);
+    expect(asReviewer.stderr).toContain("Bash blocked by Foreman: Code Reviewer (code-reviewer) may not run shell commands: this role may only read files (org.yaml `can`).");
+    // Claude Code itself, or a launch claiming an id that isn't its instance, stays claude-code.
+    expect(runHook(bash, env).exit).toBe(0);
+    expect(runHook(bash, { ...env, FOREMAN_SPAWNED_BY: "nobody" }).exit).toBe(0);
+    const read = JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(tmp, "org.yaml") } });
+    expect(runHook(read, { ...env, FOREMAN_SPAWNED_BY: "reviewer" }).exit).toBe(0);
+  });
+
   it("asks before Read touches an SSH private key", () => {
     const r = runHook(
       JSON.stringify({
@@ -331,6 +360,24 @@ describe("foreman hook claude-code — Faz 4 (#517)", () => {
     expect(r.stderr).toMatch(/approval-timeout/);
     expect(Date.now() - started).toBeLessThan(12_000);
   }, 20_000);
+});
+
+describe("hookSource", () => {
+  it("attributes a call to the instance the launch names, only when it is this agent's instance", async () => {
+    const { hookSource } = await import("../../src/cli/hook-cli.js");
+    const agents: Record<string, { metadata?: Record<string, unknown> }> = {
+      reviewer: { metadata: { registryId: "claude-code" } },
+      backend: { metadata: { registryId: "codex" } },
+      plain: {},
+    };
+    const registry = { get: (id: string) => agents[id] as never };
+    expect(hookSource("claude-code", null, registry)).toBe("claude-code");
+    expect(hookSource("claude-code", "claude-code", registry)).toBe("claude-code");
+    expect(hookSource("claude-code", "reviewer", registry)).toBe("reviewer");
+    expect(hookSource("claude-code", "backend", registry)).toBe("claude-code");
+    expect(hookSource("claude-code", "plain", registry)).toBe("claude-code");
+    expect(hookSource("claude-code", "missing", registry)).toBe("claude-code");
+  });
 });
 
 describe("hookTimeoutMs (#656)", () => {

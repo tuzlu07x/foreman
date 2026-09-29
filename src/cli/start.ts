@@ -69,6 +69,7 @@ import { SessionManager } from "../core/session.js";
 import { checkAgentUpdates } from "../core/agent-update-check.js";
 import { loadActiveRegistry } from "../core/registry-catalog.js";
 import { agentsSharingTelegram } from "../core/notification/telegram-listener.js";
+import { createRoleGuard } from "../core/org/role-guard.js";
 import { ensureAgentToken } from "../core/agent-token.js";
 import { loadOrg } from "../core/org/org.js";
 import type { AgentEntry } from "../core/registry-catalog.js";
@@ -387,6 +388,7 @@ export function startForeman(
     db,
     bus,
     verifier: verifier ?? undefined,
+    roleGuard: createRoleGuard(paths.orgConfigPath),
   });
 
   // Surface pending approvals from spawned `foreman mcp-stdio` / `foreman
@@ -2272,6 +2274,7 @@ function instanceLaunchFor(
           title: r.title,
           department: r.department ? (org.departments[r.department]?.name ?? r.department) : undefined,
           responsibility: r.responsibility,
+          instructions: r.instructions,
           agentId,
         });
       }

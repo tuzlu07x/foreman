@@ -26,6 +26,18 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Added
 
+- **Ready-made roles, your own roles, and what each role may do.**
+  `foreman org roles` lists ready-made roles (manager, developer,
+  code-reviewer, researcher, writer, analyst, support, assistant).
+  `foreman org add-role <id> --preset researcher --runs-on claude-code`
+  adds one, filled by a new Claude Code or Codex instance named after the
+  role; `--describe "…"` makes your own, in your own words. The agent is
+  told the role's instructions when Foreman hands it work. A role's
+  `can` (`--can read,write,shell,network`) limits what its agent may do
+  with its own tools: a reviewer that may only read is refused a file
+  edit (`org:role`), whatever `policy.yaml` says, and told why. Claude
+  Code instances are held to their own role by the hook
+  ([#734](https://github.com/tuzlu07x/foreman/issues/734)) ([docs/org.md](docs/org.md#roles-ready-made-your-own-and-what-each-may-do)).
 - **Several roles on one agent.** `foreman agent add backend --type codex`
   (or `--type claude-code`) adds another instance of the agent for another
   role, and it now works as its own agent. When Foreman hands it work, it
