@@ -61,11 +61,51 @@ const SERVICE_FORMATS: Record<string, ServiceFormat> = {
   },
 };
 
+interface LookAlike {
+  test: RegExp;
+  /** What the pasted value is. */
+  is: string;
+}
+
+/** The other values on the same settings pages, pasted by mistake: say what
+ *  was pasted, then where the right one is (real-services test, 2.3.0: an
+ *  `xapp-` token for Slack, the Application ID and Public Key for Discord). */
+const LOOK_ALIKES: Record<string, { where: string; values: LookAlike[] }> = {
+  "slack-bot-token": {
+    where: "the bot token (xoxb-…) is under api.slack.com/apps → your app → OAuth & Permissions → Bot User OAuth Token",
+    values: [
+      { test: /^xapp-/, is: "Slack's app-level token (xapp-…), which two-way Slack uses later" },
+      { test: /^xoxp-/, is: "a Slack user token (xoxp-…)" },
+      { test: /^xoxe/, is: "a Slack refresh or config token" },
+    ],
+  },
+  "discord-bot-token": {
+    where: "the bot token is under discord.com/developers → your app → Bot → Reset Token → Copy (three dot-separated parts)",
+    values: [
+      { test: /^\d{17,20}$/, is: "the Application ID" },
+      { test: /^[0-9a-f]{64}$/i, is: "the Public Key" },
+      { test: /^[A-Za-z0-9_-]{32}$/, is: "probably the OAuth2 Client Secret" },
+    ],
+  },
+  "telegram-bot-token": {
+    where: "the bot token (123456789:ABC-…) is what @BotFather sent when you created the bot",
+    values: [{ test: /^-?\d+$/, is: "a chat id" }],
+  },
+  "telegram-chat-id": {
+    where: "the chat id is a number: message your bot, then open api.telegram.org/bot<token>/getUpdates, or ask @userinfobot",
+    values: [{ test: /^\d{5,}:[A-Za-z0-9_-]{30,}$/, is: "the bot token" }],
+  },
+};
+
 /** A warning when a pasted service secret doesn't have its usual shape,
  *  else null (also for secrets with no known shape). The caller says what
  *  happens next (held back, or saved anyway). */
 export function servicePasteWarning(secretName: string, value: string): string | null {
   const format = SERVICE_FORMATS[secretName];
-  if (!format || format.test.test(value.trim())) return null;
+  const v = value.trim();
+  if (!format || format.test.test(v)) return null;
+  const known = LOOK_ALIKES[secretName];
+  const alike = known?.values.find((a) => a.test.test(v));
+  if (known && alike) return `that's ${alike.is}, not ${format.what}: ${known.where}.`;
   return `that doesn't look like ${format.what} (${format.example}).`;
 }
