@@ -48,7 +48,7 @@ Pick one. All of them put the same `foreman` command on your PATH.
 curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash
 ```
 
-The script reuses the `node` on your PATH when it is Node 22 or 24. Otherwise it installs nvm and Node 22 LTS through it (no compiler or Python needed), then runs `npm install -g foreman-agent`. Options:
+The script reuses the `node` on your PATH when it is Node 22 or 24. Otherwise it installs nvm and Node 22 LTS through it (no compiler or Python needed), then runs `npm install -g foreman-agent`. When nvm already has a Node 22 that just isn't the active one, it says so (*Node 22 LTS is installed through nvm but not active … switching to it*) and switches to it without installing another. Options:
 
 | Variable / flag | Effect |
 | --- | --- |
@@ -62,7 +62,7 @@ The script reuses the `node` on your PATH when it is Node 22 or 24. Otherwise it
 
 Flags go after `bash -s --`, for example `curl -fsSL …/install.sh | bash -s -- --uninstall`.
 
-If the script installed Node through nvm, open a new shell (or run `. "$HOME/.nvm/nvm.sh"`) before running `foreman`. If your nvm default is an older Node (for example 20), new shells start with that one and don't have `foreman`. The script says so and, in a terminal, asks whether to make Node 22 your default (`nvm alias default 22`). Say no to keep your default and run `nvm use 22` in each shell where you use Foreman. Without a terminal it changes nothing unless `FOREMAN_NVM_DEFAULT=1` is set.
+If the script switched Node through nvm, the terminal you ran it in still has your old Node, so its *Next* list starts with `0. nvm use 22`: run that first (or open a new terminal) before running `foreman`. If your nvm default is an older Node (for example 20), new shells start with that one and don't have `foreman`. The script says so and, in a terminal, asks whether to make Node 22 your default (`nvm alias default 22`; Enter or `y` says yes). Say no to keep your default and run `nvm use 22` in each shell where you use Foreman. If nvm can't change the default, the script says so, prints the command to run yourself and carries on. Without a terminal it changes nothing unless `FOREMAN_NVM_DEFAULT=1` is set.
 
 ### npm
 
@@ -314,7 +314,7 @@ The install script does steps 1, 4, 5 and 6 below for you, whichever Node Forema
 curl -fsSL https://raw.githubusercontent.com/tuzlu07x/foreman/main/install.sh | bash -s -- --uninstall
 ```
 
-It asks before deleting Foreman's data; add `--purge` to delete it without asking. It doesn't restore SOUL files (step 3) or remove a hook added to one project with `--project`. By hand, do it in this order: the first steps need the `foreman` command, which step 5 removes.
+It removes Claude Code's hook before the package even when Claude Code isn't a registered agent: a hook left behind would block every Claude Code tool call once Foreman is gone. It asks before deleting Foreman's data; add `--purge` to delete it without asking. It doesn't restore SOUL files (step 3) or remove a hook added to one project with `--project`. By hand, do it in this order: the first steps need the `foreman` command, which step 5 removes.
 
 ```bash
 # 1. Remove the PreToolUse hook Foreman added to Claude Code (if you installed it),
@@ -361,6 +361,7 @@ Keys Foreman projected into an agent's own files (for example `~/.hermes/.env`, 
 | Symptom | What to try |
 | --- | --- |
 | `foreman: command not found` after install | Open a new terminal (or `hash -r`). If you installed through nvm, run `. "$HOME/.nvm/nvm.sh"`. Otherwise check that `$(npm prefix -g)/bin` is on your PATH. |
+| Claude Code blocks every tool call with *Foreman's hook could not run* | Foreman's package (or the Node it was installed under) is gone while its hook is still in Claude Code's settings. Reinstall Foreman (`npm install -g foreman-agent`), or remove Foreman's entry (`"managed_by": "foreman.pre-tool-use"`) under `hooks.PreToolUse` in `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`). |
 | npm warns `EBADENGINE`, or `foreman doctor` fails `node_version` | Your Node is older than Foreman needs (22.12+). Install Node 22 LTS (`nvm install 22`) and reinstall Foreman. |
 | `foreman start` skips the wizard | Foreman's home already exists with registered agents, or you skipped setup before. Run the wizard with `foreman setup --resume` or `foreman setup --reset`, or wipe the home (see [Uninstall](#uninstall)). |
 | Wizard's Step 1 doesn't ask for any key | Nothing was selected when you pressed Enter. Press Esc to go back to the selection, Space on each provider, then Enter. |
