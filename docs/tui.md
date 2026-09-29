@@ -62,7 +62,7 @@ Keys on each page:
 | Policy | `↑↓` select, `Enter` details (the rule's raw condition), `d` turn the rule on / off, `e` edit `policy.yaml` in `$EDITOR`. See [`policy.md`](policy.md#the-tui-policy-page). |
 | Sessions | `↑↓` select, `Enter` details, `k` halt the session |
 | Delegations | `↑↓` select, `Enter` details |
-| Team | `↑↓` select a role (who fills it, on what, what it may do, who it reports to), `n` add a role: a ready-made one or your own (title, what it does, what it may do), `r` switches it between Claude Code and Codex. See [`org.md`](org.md#roles-ready-made-your-own-and-what-each-may-do). |
+| Team | `↑↓` select a role (who fills it, on what, what it may do, who it reports to), `n` add a role: a ready-made one or your own (title, what it does, what it may do), `r` switches it between Claude Code and Codex; `d` add a department (IT, Marketing, Customer Support or your own) with all its roles at once, on the agent you pick, led by its first role. The header counts roles and departments, and a department's lead shows `leads <department>`. See [`org.md`](org.md#ready-made-departments). |
 | Chat | Type to Foreman: plain questions (`report me`, `what is claude-code doing?`) or commands (`write`, `assign`, `approve`, `help`). The same as the `:` console, as a page. `Esc` leaves. |
 | Secrets | `↑↓` select, `Enter` details, `n` new secret, `v` reveal, `r` rotate, `d` delete |
 | Providers, Services | `↑↓` select, `Enter` details, `n` configure the selected one, `r` rotate, `d` remove (asks first), `s` show the value for 10 s; `o` sign in with a Claude / ChatGPT subscription (Providers), `w` setup walkthrough (Services) |

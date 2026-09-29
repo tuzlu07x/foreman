@@ -140,7 +140,8 @@ const EXTRA_SECTIONS: HelpSection[] = [
     rows: [
       { key: "↑ ↓", label: "select a role" },
       { key: "n", label: "add a role (ready-made or your own)" },
-      { key: "r", label: "while adding: Claude Code / Codex" },
+      { key: "d", label: "add a department (IT, Marketing… or your own)" },
+      { key: "r", label: "while adding: Claude Code ⇄ Codex" },
     ],
   },
   {

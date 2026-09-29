@@ -44,6 +44,9 @@ export interface DashboardServices {
   commandContext?: Omit<ForemanCommandContext, "sourceAgent" | "sourceUser" | "trustedOwner">;
   audit?: { logEvent(eventType: string, payload: unknown): void };
   orgConfigPath?: string;
+  /** Team page: adds a role's Claude Code / Codex instance (null when added,
+   *  else why not). Unset: `runAgentAddScripted`. Tests pass a fake. */
+  addTeamAgent?: (agentId: string, runsOn: "claude-code" | "codex") => Promise<string | null>;
   /** Integrations page (`foreman integrations` in the TUI). */
   integrations?: IntegrationWiring;
   /** Set when this TUI is attached to the background gateway (`foreman

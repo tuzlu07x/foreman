@@ -1,5 +1,5 @@
 import React from 'react'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { render } from 'ink-testing-library'
@@ -89,13 +89,16 @@ describe('Team and Chat pages', () => {
   let sqlite: Database.Database
   let app: ReturnType<typeof render>
   let dir: string
+  let registry: RegistryService
+  let added: [string, string][]
 
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'foreman-team-page-'))
     writeFileSync(join(dir, 'org.yaml'), ORG)
     ;({ db, sqlite } = createInMemoryDb())
     const bus = new EventBus<ForemanEventMap>()
-    const registry = new RegistryService(db, bus)
+    registry = new RegistryService(db, bus)
+    added = []
     registry.register({ id: 'claude-code', displayName: 'Claude Code', transport: 'stdio', metadata: { registryId: 'claude-code' } })
     registry.register({ id: 'reviewer', displayName: 'reviewer', transport: 'stdio', metadata: { registryId: 'claude-code' } })
     const router = new ForemanCommandRouter()
@@ -111,6 +114,12 @@ describe('Team and Chat pages', () => {
           inbox: new InboxService(db, bus),
           keySettleMs: 0,
           orgConfigPath: join(dir, 'org.yaml'),
+          // The Team page's instances: registered here, nothing installed.
+          addTeamAgent: async (id: string, runsOn: string) => {
+            added.push([id, runsOn])
+            registry.register({ id, displayName: id, transport: 'stdio', metadata: { registryId: runsOn } })
+            return null
+          },
           commandRouter: router,
           commandContext: { db, registry, llmConfigPath: '/nonexistent/llm.yaml', configDir: '/nonexistent' },
         },
@@ -158,6 +167,98 @@ describe('Team and Chat pages', () => {
     app.stdin.write(ESC)
     await tick()
     expect(strip(app.lastFrame())).toContain('Activity')
+  })
+
+  it('d adds a department: all its roles at once, on the agent you pick, led by its first role', async () => {
+    registry.register({ id: 'codex', displayName: 'Codex', transport: 'stdio', metadata: { registryId: 'codex' } })
+    const until = async (text: string): Promise<string> => {
+      for (let i = 0; i < 100; i++) {
+        const frame = strip(app.lastFrame())
+        if (frame.includes(text)) return frame
+        await tick(20)
+      }
+      throw new Error(`timed out waiting for ${JSON.stringify(text)}; frame:\n${strip(app.lastFrame())}`)
+    }
+    app.stdin.write('t')
+    await until('├─ Tech Lead')
+    expect(strip(app.lastFrame())).toContain('3 roles in 1 department')
+    expect(strip(app.lastFrame())).toContain('leads Engineering')
+    app.stdin.write('d')
+    let frame = await until('Your own department…')
+    expect(frame).toContain('❯ IT')
+    expect(frame).toContain('Marketing')
+    expect(frame).toContain('Customer Support')
+    expect(frame).toContain('Your own department…')
+    // `d` here is "add a department", not the Delegations page.
+    expect(frame).toContain('Team  add a department')
+    app.stdin.write('\r')
+    await until('which agent runs IT?')
+    await until('❯ Codex')
+    app.stdin.write('\u001B[A')
+    await until('❯ Claude Code')
+    app.stdin.write('\r')
+    frame = await until('✓ IT added')
+    expect(frame).toContain('6 roles in 2 departments')
+    expect(frame).toContain('Backend Developer')
+    expect(frame).toContain('leads IT')
+    expect(added).toEqual([
+      ['backend-developer', 'claude-code'],
+      ['frontend-developer', 'claude-code'],
+      ['devops-engineer', 'claude-code'],
+    ])
+    const org = parseOrgText(readFileSync(join(dir, 'org.yaml'), 'utf-8'))
+    expect(org.departments.it).toEqual({ name: 'IT', head: 'backend-developer' })
+    expect(org.departments.engineering?.head).toBe('lead')
+    expect(org.roles['backend-developer']).toMatchObject({ department: 'it', reports_to: 'human' })
+    expect(org.roles['frontend-developer']).toMatchObject({ department: 'it', reports_to: 'backend-developer' })
+    expect(org.roles['devops-engineer']).toMatchObject({ department: 'it', reports_to: 'backend-developer' })
+  })
+
+  it('n offers "+ Add a department…" too, and your own department gets its first role', async () => {
+    const until = async (text: string): Promise<string> => {
+      for (let i = 0; i < 100; i++) {
+        const frame = strip(app.lastFrame())
+        if (frame.includes(text)) return frame
+        await tick(20)
+      }
+      throw new Error(`timed out waiting for ${JSON.stringify(text)}; frame:\n${strip(app.lastFrame())}`)
+    }
+    const type = async (text: string): Promise<void> => {
+      await tick(100)
+      for (const ch of text) {
+        app.stdin.write(ch)
+        await tick(5)
+      }
+      await until(text)
+    }
+    app.stdin.write('t')
+    await until('├─ Tech Lead')
+    app.stdin.write('n')
+    await until('+ Add a department…')
+    app.stdin.write('\u001B[A')
+    await until('❯ + Add a department…')
+    app.stdin.write('\r')
+    await until('add a department')
+    app.stdin.write('\u001B[A')
+    await until('❯ Your own department…')
+    app.stdin.write('\r')
+    await until('your own department')
+    await type('Sales')
+    app.stdin.write('\r')
+    // Only Claude Code is registered: no question which agent runs it.
+    await until("Sales's first role")
+    await type('Closer')
+    app.stdin.write('\r')
+    await until('What should Closer do?')
+    await type('Close deals.')
+    app.stdin.write('\r')
+    await until('what may Closer do?')
+    app.stdin.write('\r')
+    await until('✓ Sales added')
+    const org = parseOrgText(readFileSync(join(dir, 'org.yaml'), 'utf-8'))
+    expect(org.departments.sales).toEqual({ name: 'Sales', head: 'closer' })
+    expect(org.roles.closer).toMatchObject({ department: 'sales', reports_to: 'human', instructions: 'Close deals.', can: ['read'] })
+    expect(added).toEqual([['closer', 'claude-code']])
   })
 
   it('c opens a chat with Foreman that takes typed text, and Esc leaves it', async () => {

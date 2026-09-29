@@ -14,6 +14,8 @@ export interface TeamRow {
   runsOn: string | null;
   registered: boolean;
   department: string | null;
+  /** Leads its department (org.yaml `head`). */
+  head: boolean;
 }
 
 const RUNTIME_NAMES: Record<string, string> = {
@@ -52,6 +54,7 @@ export function teamRows(org: OrgDoc, agents: readonly TeamAgent[]): TeamRow[] {
         runsOn: agent ? runtimeName(agent) : null,
         registered: agent !== undefined,
         department: dept ? (org.departments[dept]?.name ?? dept) : null,
+        head: Boolean(dept && org.departments[dept]?.head === node.roleId),
       });
       walk(node.children, `${prefix}${last ? "   " : "│  "}`);
     });
@@ -72,6 +75,14 @@ export function canWords(role: OrgRole): string {
   if (role.can === undefined) return "anything policy.yaml allows";
   if (role.can.length === 0) return "only talk to colleagues";
   return role.can.map((c) => CAN_WORDS[c] ?? c).join(", ");
+}
+
+/** `3 roles in 2 departments`, for the page header. */
+export function teamCounts(org: OrgDoc): string {
+  const roles = Object.keys(org.roles).length;
+  const depts = Object.keys(org.departments).length;
+  const r = `${roles} role${roles === 1 ? "" : "s"}`;
+  return depts === 0 ? r : `${r} in ${depts} department${depts === 1 ? "" : "s"}`;
 }
 
 /** Who a role reports to, in words. */
