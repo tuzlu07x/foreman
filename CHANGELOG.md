@@ -85,6 +85,10 @@ All notable changes to Foreman are documented here. The format follows
   `channel` in `notify.yaml`, like `foreman notify enable slack|discord
   --channel`. Before, both channels were enabled without one and could not
   be built.
+- A Slack or Discord set up in the wizard now receives approvals, alerts
+  and the digest: the default routing named Telegram only, so nothing was
+  sent to them until `foreman notify route …`. A channel you already
+  routed keeps your routing.
 
 ## [2.2.0] - 2026-09-29
 

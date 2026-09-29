@@ -1,7 +1,9 @@
-import type {
-  ChannelToggle,
-  NotifyConfig,
+import {
+  addChannelToRoutes,
+  type ChannelToggle,
+  type NotifyConfig,
 } from "../core/notification/notify-config.js";
+import type { NotificationLevel } from "../core/notification/types.js";
 import type { ServiceEntry } from "../core/registry-catalog.js";
 
 // =============================================================================
@@ -162,15 +164,24 @@ export function buildNotifyConfigFromWizard(
     return { next: input.existing, wiredChannels: [], unwiredChannels: unwired };
   }
 
-  return {
-    next: {
-      ...input.existing,
-      channels: {
-        ...input.existing.channels,
-        ...channelUpdates,
-      },
+  const next: NotifyConfig = {
+    ...input.existing,
+    channels: {
+      ...input.existing.channels,
+      ...channelUpdates,
     },
-    wiredChannels: wired,
-    unwiredChannels: unwired,
+    routing: structuredClone(input.existing.routing),
   };
+  // A chat app no level routes to would receive nothing (the default
+  // routing names Telegram only, so a Slack or Discord set up here got no
+  // approval, alert or digest). It gets those levels; a channel you
+  // routed yourself keeps your routing.
+  const routed = new Set(Object.values(input.existing.routing).flatMap((r) => r?.channels ?? []));
+  for (const channel of wired) {
+    if (!routed.has(channel)) addChannelToRoutes(next, channel, WIZARD_CHANNEL_LEVELS);
+  }
+  return { next, wiredChannels: wired, unwiredChannels: unwired };
 }
+
+/** Levels a chat app set up in the wizard receives. */
+const WIZARD_CHANNEL_LEVELS: readonly NotificationLevel[] = ["critical", "warning", "risk_deny", "budget_alert", "summary"];

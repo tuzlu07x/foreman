@@ -377,3 +377,44 @@ describe('notifyWiringNames', () => {
     expect(notifyWiringNames([], [], catalog, vault(['telegram-bot-token', 'telegram-chat-id']))).toEqual([])
   })
 })
+
+describe("routing for chat apps set up in the wizard", () => {
+  const catalog = [
+    { id: "slack", secret_name: "slack-bot-token" },
+    { id: "discord", secret_name: "discord-bot-token" },
+  ] as unknown as Parameters<typeof buildNotifyConfigFromWizard>[0]["serviceCatalog"];
+  const store = { exists: () => true, get: () => "x" } as unknown as Parameters<typeof buildNotifyConfigFromWizard>[0]["secretStore"];
+
+  it("routes approvals, alerts and the digest to a chat app it turns on (it used to receive nothing)", () => {
+    const existing = defaultNotifyConfig();
+    const { next } = buildNotifyConfigFromWizard({
+      savedStorageNames: ["slack-bot-token"],
+      serviceCatalog: catalog,
+      secretStore: store,
+      existing,
+      channelTargets: { slack: "#foreman" },
+    });
+    for (const level of ["critical", "warning", "risk_deny", "budget_alert", "summary"] as const) {
+      expect(next.routing[level]?.channels, level).toContain("slack");
+    }
+    expect(next.routing.critical?.channels).toContain("telegram");
+    // The input is left as it was.
+    expect(existing.routing.critical?.channels).not.toContain("slack");
+  });
+
+  it("leaves the routing of a chat app you already routed alone", () => {
+    const existing = defaultNotifyConfig();
+    existing.routing.critical = { channels: ["slack"], timeout_seconds: 300, default_action: "deny" };
+    existing.routing.warning = { channels: [], timeout_seconds: 0, default_action: "deny" };
+    const { next } = buildNotifyConfigFromWizard({
+      savedStorageNames: ["slack-bot-token"],
+      serviceCatalog: catalog,
+      secretStore: store,
+      existing,
+      channelTargets: { slack: "#foreman" },
+    });
+    expect(next.routing.warning?.channels).toEqual([]);
+    expect(next.routing.critical?.channels).toEqual(["slack"]);
+  });
+});
+
