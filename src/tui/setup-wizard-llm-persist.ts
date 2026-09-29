@@ -50,6 +50,7 @@ const CATALOG_ID_TO_PROVIDER: Record<string, ProviderId> = {
   openai: "openai",
   gemini: "gemini",
   ollama: "ollama",
+  "openai-compatible": "openai_compatible",
   custom: "openai_compatible",
 };
 
@@ -133,6 +134,9 @@ export function buildLlmConfigFromWizard(
     const slot = credentialsUpdate[providerId] ?? {};
     if (catalogEntry.kind === "secret") {
       slot.secret_name = storageName;
+      // A key pasted now is how this provider connects, whatever an earlier
+      // run chose.
+      slot.auth_mode = "api_key";
     } else {
       // Endpoint prompt — wizard stored it as a "secret" in the vault since
       // values are opaque there. The runtime reads it back via endpoint_secret.
@@ -147,6 +151,8 @@ export function buildLlmConfigFromWizard(
   // queued `foreman llm login <provider>` runs (see setup-wizard.tsx's
   // Done-screen handler + requestOauthRun callback).
   for (const signedInId of input.signedInProviders ?? []) {
+    // A key saved in the same run wins: no browser sign-in on top of it.
+    if (credentialsUpdate[signedInId]?.secret_name) continue;
     if (!wired.includes(signedInId)) wired.push(signedInId);
     const slot = credentialsUpdate[signedInId] ?? {};
     slot.auth_mode = "oauth";

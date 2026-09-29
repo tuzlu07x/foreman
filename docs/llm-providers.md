@@ -25,11 +25,15 @@ Foreman treats LLM providers as first-class — the wizard's Step 1 and the TUI'
 ```
 Step 1 of 6 — LLM Providers
   picker  → choose providers you want to wire up
+  connect → Anthropic / OpenAI only: "API key" (the default) or
+            "Claude / ChatGPT subscription"
   values  → per-provider key (and endpoint when required)
-  summary → "N providers configured"
+  summary → saved keys, and the subscriptions to sign in to after setup
 ```
 
-Esc returns to the picker. Already-configured providers show a `(configured)` tag.
+For Anthropic and OpenAI the wizard first asks how to connect. **API key** is highlighted, so Enter leads to the key prompt. **Subscription** skips the key and signs you in through your browser when setup ends (`foreman llm login <provider>`). A key saved in this run always wins: no browser sign-in is queued for that provider. Gemini, Ollama and custom endpoints take a key or endpoint only.
+
+On the summary, `y` (or Enter) continues; `n` or Esc goes back to the picker with your ticks kept and asks the key-or-subscription question again. In Step 2, a provider you can't pick yet (✗) says why on its row.
 
 ## TUI management
 

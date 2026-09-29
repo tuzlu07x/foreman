@@ -14,8 +14,10 @@ import { theme } from "../theme.js";
 import type { WizardContext } from "./context.js";
 import { renderIntegrationsNextSteps } from "./integrations.js";
 import {
-  configuredProviderIds,
+  configuredBrainProviderIds,
   configuredServiceIds,
+  foremanLlmLoginsNeeded,
+  isOAuthCapableProvider,
   safeFind,
 } from "./shared.js";
 import { wizardServiceChoices } from "./services-logic.js";
@@ -28,8 +30,9 @@ export function handleDoneInput(
   input: string,
   key: Key,
 ): boolean {
-  const { services, exit, currentStep, requiredSetupResolution } = ctx;
-  const { providersSignedIn, donePhase } = ctx.state;
+  const { services, exit, currentStep, requiredSetupResolution, providerCatalog } = ctx;
+  const { donePhase } = ctx.state;
+  const llmLogins = foremanLlmLoginsNeeded(ctx.state.providersSignedIn, providerCatalog, new Set(ctx.state.providersSaved));
   const { setDonePhase, setDoctorReport } = ctx.set;
   if (currentStep === "done" && donePhase === "main") {
     const mandatoryOauthSteps = requiredSetupResolution.oauthSteps.filter(
@@ -43,7 +46,7 @@ export function handleDoneInput(
     // is set but no tokens exist and the first call errors with
     // LlmOAuthLoginRequiredError.
     const foremanLlmOauthSteps: WizardOauthRunStep[] =
-      providersSignedIn.map((pid) => ({
+      llmLogins.map((pid) => ({
         agentId: "foreman-llm",
         command: `foreman llm login ${pid}`,
         verify: null,
@@ -159,10 +162,13 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
   );
   // Presets (Foreman's brain → OpenAI-compatible) keep their key in their
   // own slot, which the provider catalog doesn't know about.
+  // Providers connected by key or by subscription (a sign-in chosen now
+  // counts too): "0 LLM providers" after choosing ChatGPT sign-in was wrong.
   const providerIds = [
-    ...configuredProviderIds(providerCatalog, storedNames),
+    ...configuredBrainProviderIds(providerCatalog, storedNames, providersSignedIn.filter(isOAuthCapableProvider)),
     ...configuredPresetIds(llmPresetDoc.presets, storedNames),
   ];
+  const llmLogins = foremanLlmLoginsNeeded(providersSignedIn, providerCatalog, new Set(ctx.state.providersSaved));
   const serviceIds = doneServiceIds(serviceCatalog, storedNames);
   const agentRows = services.registry.list();
   const policyRuleCount = countPolicyRules(services.policyPath);
@@ -266,6 +272,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
           {policyRuleCount === 1 ? "" : "s"}   smart defaults active
         </Text>
       </Box>
+      <TalkToForeman services={serviceIds} />
       {installSummary && (
         <Box flexDirection="column">
           {identityTargets > 0 ? (
@@ -435,12 +442,12 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
             ))}
         </Box>
       )}
-      {providersSignedIn.length > 0 && (
+      {llmLogins.length > 0 && (
         <Box flexDirection="column">
           <Text bold color={theme.accent.warning}>
             ⚿ Foreman LLM sign-in — opens your browser
           </Text>
-          {providersSignedIn.map((pid) => (
+          {llmLogins.map((pid) => (
             <Box
               key={`foreman-llm-signin:${pid}`}
               flexDirection="column"
@@ -461,7 +468,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
         {(() => {
           const mandatoryCount =
             requiredSetupResolution.oauthSteps.filter((o) => o.mandatory).length +
-            providersSignedIn.length;
+            llmLogins.length;
           if (mandatoryCount > 0) {
             // Same host rule as below: under `foreman start` the sign-ins
             // run and then the TUI launches; `foreman setup` just exits.
@@ -486,7 +493,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
           );
         })()}
         {requiredSetupResolution.oauthSteps.length > 0 ||
-        providersSignedIn.length > 0 ? (
+        llmLogins.length > 0 ? (
           <Text color={theme.fg.muted}>
             {"  "}[y]     Run ALL OAuth steps now (incl. optional)
           </Text>
@@ -498,7 +505,7 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
         <Text color={theme.fg.muted}>{"  "}[l]     Show install log</Text>
         <Text color={theme.fg.muted}>
           {"  "}[q]     Exit
-          {requiredSetupResolution.oauthSteps.length > 0 || providersSignedIn.length > 0
+          {requiredSetupResolution.oauthSteps.length > 0 || llmLogins.length > 0
             ? " (skip OAuth)"
             : ""}
         </Text>
@@ -564,6 +571,24 @@ export function claudeHookInstalled(configPaths: string[]): boolean | null {
 // Done-screen tile that lists how to start each newly-installed agent. Driven
 // by `secret_projection.launch` in the registry — single string OR array of
 // {command, label} (Hermes chat vs gateway, OpenClaw chat vs gateway).
+/** Where to talk to Foreman once it runs, on one line (the screen must fit
+ *  24 rows): the TUI's console always, and each chat app set up here. */
+function TalkToForeman({ services }: { services: string[] }): JSX.Element {
+  const places = ["press : in the TUI"];
+  if (services.includes("telegram")) places.push("message your Telegram bot");
+  if (services.includes("slack")) places.push("/foreman in Slack");
+  if (services.includes("discord")) places.push("/foreman in Discord");
+  return (
+    <Text color={theme.fg.muted}>
+      <Text bold color={theme.fg.default}>
+        Talk to Foreman
+      </Text>
+      {"  "}
+      {places.join(" · ")} — e.g. report me
+    </Text>
+  );
+}
+
 function LaunchCommands({ agentIds }: { agentIds: string[] }): JSX.Element | null {
   const { doc } = loadActiveRegistry();
   const rows = agentIds
