@@ -10,6 +10,8 @@ import {
 } from "../../src/core/event-bus.js";
 import {
   ForemanCommandRouter,
+  greetingReply,
+  handOutPlan,
   plainTextRefusal,
   registerBuiltinCommands,
   relayedCommandAccess,
@@ -819,6 +821,149 @@ describe("ForemanCommandRouter (#431)", () => {
   //   1 arg  → Foreman LLM model (provider-preserving)
   //   2 args, first = provider → Foreman LLM provider+model
   //   2 args, first = agent id → per-agent override (agents.model_version)
+  describe("chat manners (2.3.1)", () => {
+    it("answers a bare hello with a short hello and what to try, in Turkish or English, without the LLM", async () => {
+      const answer = vi.fn();
+      const chat = { isEnabled: () => true, answer };
+      const tr = await router.dispatch("selam", ["kanka"], { ...ctx, orchestratorChat: chat });
+      expect(tr.text).toMatch(/^Selam! Ben Foreman/);
+      const en = await router.dispatch("hey", [], { ...ctx, orchestratorChat: chat });
+      expect(en.text).toMatch(/^Hi! I'm Foreman/);
+      expect(greetingReply("hey", ["what", "is", "codex", "doing"])).toBeNull();
+      expect(answer).not.toHaveBeenCalled();
+    });
+
+    it("doesn't repeat the same failure in full on every message", async () => {
+      const chat = { isEnabled: () => true, answer: async () => ({ status: "failed" as const, reason: "401 invalid x-api-key" }) };
+      const c = { ...ctx, orchestratorChat: chat, conversation: "telegram:7" };
+      const first = await router.dispatch("ne", ["durumdayız"], c);
+      expect(first.text).toContain("401");
+      const second = await router.dispatch("peki", ["şimdi?"], c);
+      expect(second.text).toMatch(/^Still the same problem/);
+      const elsewhere = await router.dispatch("ne", ["durumdayız"], { ...c, conversation: "slack:8" });
+      expect(elsewhere.text).toContain("401");
+    });
+  });
+
+  describe("sentences that start with a command word (2.3.1)", () => {
+    it("reads \"Write the release notes as a team\" as plain words, but `write codex …` stays a hand-off", async () => {
+      registry.register({ id: "codex", displayName: "Codex", transport: "stdio" });
+      const answer = vi.fn(async () => ({ status: "ok" as const, text: "Sure.", costUsd: 0, durationMs: 1 }));
+      const chat = { isEnabled: () => true, answer };
+      const said = await router.dispatch("Write", ["the", "v2", "release", "notes", "as", "a", "team"], { ...ctx, orchestratorChat: chat });
+      expect(said.text).toBe("Sure.");
+      expect(answer).toHaveBeenCalledWith(expect.objectContaining({ question: "Write the v2 release notes as a team" }));
+      // Plain text from you: a sentence is a question; a hand-off still needs /foreman.
+      expect(plainTextRefusal(router, registry, "Write", ["the", "v2", "notes"])).toBeNull();
+      expect(plainTextRefusal(router, registry, "write", ["codex", "fix", "it"])).not.toBeNull();
+      // An agent relaying it: always treated as a hand-off.
+      expect(relayedCommandAccess(router, registry, "write", ["the", "v2", "notes"])).toBe("delegate");
+      // Without the chat, `write` explains itself as before.
+      const plain = await router.dispatch("write", ["the", "v2", "notes"], ctx);
+      expect(plain.ok).toBe(false);
+      expect(answer).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("chat plans (2.3.1)", () => {
+    const plan = [
+      { target: "it", task: "Analyse github.com/x/y; report to manager." },
+      { target: "manager", task: "Price IT's plan." },
+    ];
+    const chatWith = (answers: unknown[]) => ({
+      isEnabled: () => true,
+      answer: vi.fn(async (input: unknown) => {
+        answers.push(input);
+        return { status: "ok" as const, text: "IT analiz etsin, Manager fiyatlasın.", costUsd: 0, durationMs: 1, proposals: plan };
+      }),
+    });
+
+    it("sends the owner's plan for one approval and shows it numbered", async () => {
+      const answers: unknown[] = [];
+      const proposePlan = vi.fn(async () => "I've sent this plan for your approval.");
+      const result = await router.dispatch("Ekip", ["olarak", "analiz", "edin"], {
+        ...ctx,
+        sourceAgent: "telegram",
+        sourceUser: "telegram:42",
+        trustedOwner: true,
+        conversation: "telegram:42",
+        orchestratorChat: chatWith(answers),
+        proposePlan,
+      });
+      expect(answers[0]).toMatchObject({ question: "Ekip olarak analiz edin", conversation: "telegram:42", canPropose: true });
+      expect(proposePlan).toHaveBeenCalledWith(plan, { sourceAgent: "telegram", sourceUser: "telegram:42" });
+      expect(result.text).toBe(
+        "IT analiz etsin, Manager fiyatlasın.\n\n1. it: Analyse github.com/x/y; report to manager.\n2. manager: Price IT's plan.\n\nI've sent this plan for your approval.",
+      );
+    });
+
+    it("never starts a plan for an agent relaying the chat, or where no one can approve it", async () => {
+      const answers: unknown[] = [];
+      const proposePlan = vi.fn(async () => "sent");
+      await router.dispatch("analyse", ["it"], { ...ctx, orchestratorChat: chatWith(answers), proposePlan });
+      await router.dispatch("analyse", ["it"], { ...ctx, trustedOwner: true, orchestratorChat: chatWith(answers) });
+      expect(answers).toMatchObject([{ canPropose: false }, { canPropose: false }]);
+      expect(proposePlan).not.toHaveBeenCalled();
+    });
+
+    it("hands an approved plan out as the asker's assigns, each audited like /foreman assign", async () => {
+      const seen: Array<{ args: string[]; ctx: ForemanCommandContext }> = [];
+      const planRouter = new ForemanCommandRouter();
+      planRouter.register(
+        "assign",
+        (args, c) => {
+          seen.push({ args, ctx: c });
+          return args[0] === "it"
+            ? { ok: true, text: "→ backend-developer (Backend Developer) · backend\nSpawning backend with your task." }
+            : { ok: false, text: "'manager' is not a role, department or agent in org.yaml.", errorCode: "UNKNOWN_SUBCOMMAND" };
+        },
+        "assign",
+      );
+      const events: Array<[string, unknown]> = [];
+      const lines = await handOutPlan(planRouter, plan, { sourceAgent: "slack", sourceUser: "slack:U0BOSS" }, ctx, {
+        approvalId: "req-1",
+        logEvent: (type, payload) => events.push([type, payload]),
+      });
+      expect(seen.map((s) => s.args)).toEqual([
+        ["it", "Analyse github.com/x/y; report to manager."],
+        ["manager", "Price IT's plan."],
+      ]);
+      expect(seen.every((s) => s.ctx.sourceAgent === "slack" && s.ctx.sourceUser === "slack:U0BOSS" && s.ctx.trustedOwner === true)).toBe(true);
+      expect(lines).toEqual([
+        "✓ it: Spawning backend with your task.",
+        "✗ manager: 'manager' is not a role, department or agent in org.yaml.",
+      ]);
+      expect(events).toEqual([
+        [
+          "foreman:command",
+          {
+            command: "assign",
+            args: ["it", "Analyse github.com/x/y; report to manager."],
+            sourceAgent: "slack",
+            sourceUser: "slack:U0BOSS",
+            ok: true,
+            errorCode: null,
+            via: "foreman_plan",
+            requestId: "req-1",
+          },
+        ],
+        [
+          "foreman:command",
+          {
+            command: "assign",
+            args: ["manager", "Price IT's plan."],
+            sourceAgent: "slack",
+            sourceUser: "slack:U0BOSS",
+            ok: false,
+            errorCode: "UNKNOWN_SUBCOMMAND",
+            via: "foreman_plan",
+            requestId: "req-1",
+          },
+        ],
+      ]);
+    });
+  });
+
   describe("model", () => {
     beforeEach(() => {
       registry.register({
@@ -1996,8 +2141,9 @@ describe("plain text in chat (#716)", () => {
     for (const [verb, ...args] of [["report", "me"], ["status"], ["help"], ["how", "are", "my", "agents?"], ["integration", "list"], ["pause", "claude-code"]]) {
       expect(plainTextRefusal(router, registry, verb!, args), verb).toBeNull();
     }
+    const codexKnown = { findByCommandToken: (t: string) => (t === "codex" ? ({ kind: "match" as const, agent: { id: "codex" } }) : ({ kind: "none" as const })) };
     for (const [verb, ...args] of [["stop"], ["tell", "marketing", "ship", "it"], ["integration", "disable", "github"], ["write", "codex", "fix", "it"], ["llm", "disable"]]) {
-      expect(plainTextRefusal(router, registry, verb!, args), verb).toBe(
+      expect(plainTextRefusal(router, codexKnown as never, verb!, args), verb).toBe(
         `That would change something, so I only run it as a command: send \`/foreman ${[verb, ...args].join(" ")}\`.`,
       );
     }

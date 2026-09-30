@@ -48,10 +48,15 @@ import {
 import { probeGateway, type GatewayProbe } from "../core/gateway.js";
 import { defaultLlmConfig, saveLlmConfig } from "../core/llm/config.js";
 import {
+  CHAT_PLAN_TOOL,
   ForemanCommandRouter,
+  handOutPlan,
   plainTextRefusal,
   registerBuiltinCommands,
+  type ChatPlan,
+  type PlanAsker,
 } from "../core/foreman-command.js";
+import type { JSONRPCMessage } from "../mcp/types.js";
 import {
   InboxRecorder,
   InboxService,
@@ -69,8 +74,8 @@ import { checkAgentUpdates } from "../core/agent-update-check.js";
 import { loadActiveRegistry } from "../core/registry-catalog.js";
 import { agentsSharingTelegram } from "../core/notification/telegram-listener.js";
 import { createRoleGuard } from "../core/org/role-guard.js";
-import { ensureAgentToken } from "../core/agent-token.js";
 import { loadOrg } from "../core/org/org.js";
+import { instanceLaunchFor } from "../core/role-launch.js";
 import {
   claudeHookInstalled,
   roleWorkspace,
@@ -79,16 +84,7 @@ import {
   type TaskPermissions,
 } from "../core/task-permissions.js";
 import type { AgentEntry } from "../core/registry-catalog.js";
-import {
-  catalogEntryFor,
-  foremanCliArgv,
-  instanceLaunch,
-  isInstance,
-  rolePrompt,
-  supportsInstances,
-  writeInstanceTokenFile,
-  type InstanceLaunch,
-} from "../core/agent-instance.js";
+import { catalogEntryFor } from "../core/agent-instance.js";
 import { checkForUpdate } from "../core/update-check.js";
 import { closeDb, getDb, getSqlite, type ForemanDb } from "../db/client.js";
 import { controlCommands } from "../db/schema.js";
@@ -569,6 +565,7 @@ export function startForeman(
       secretStore,
       registry,
       bus,
+      orgConfigPath: paths.orgConfigPath,
     });
   } catch {
     orchestratorChat = null;
@@ -654,7 +651,7 @@ export function startForeman(
     controlChannel,
     ownerStore: secretStore,
     secretStore,
-    ...(orchestratorChat ? { orchestratorChat } : {}),
+    ...(orchestratorChat ? { orchestratorChat, proposePlan: (plan: ChatPlan, who: PlanAsker) => proposePlan(plan, who) } : {}),
     ...(integrationWiring
       ? {
           integrations: {
@@ -666,6 +663,60 @@ export function startForeman(
         }
       : {}),
   };
+  // 2.3.1 — A plan the chat proposed ("backend analyses the repo, the
+  // manager prices it"): one approval for all of it, then each hand-off is
+  // assigned as yours, exactly like `/foreman assign`. The approval goes
+  // through the mediator (policy, risk, audit, your channels); nothing is
+  // assigned without an Allow. The outcome goes back where you asked.
+  const proposePlan = async (plan: ChatPlan, who: PlanAsker): Promise<string> => {
+    const listed = plan.map((p) => `${p.target}: ${p.task.slice(0, 300)}`);
+    void (async () => {
+      let decision: "allowed" | "denied" = "denied";
+      let approvalId = "";
+      try {
+        const out = await mediator.handleRequest({
+          sourceAgent: "foreman",
+          targetTool: CHAT_PLAN_TOOL,
+          message: {
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: { name: CHAT_PLAN_TOOL, arguments: { plan: listed } },
+          } as JSONRPCMessage,
+          requireHuman: {
+            factor: {
+              rule: "chat_plan",
+              category: "structural",
+              points: 40,
+              reason: `Hand out ${plan.length === 1 ? "1 task" : `${plan.length} tasks`} to your team, as you asked in ${who.sourceAgent}`,
+            },
+          },
+        });
+        decision = out.decision;
+        approvalId = out.requestId;
+      } catch {
+        decision = "denied";
+      }
+      if (decision !== "allowed") {
+        tellAsker(who, "Plan not started", "Nobody allowed it (denied or timed out). Ask again when you want it.");
+        return;
+      }
+      const lines = await handOutPlan(commandRouter, plan, who, commandContext, {
+        approvalId,
+        logEvent: (type, payload) => audit.logEvent(type, payload),
+      });
+      tellAsker(who, "Plan handed out", lines.join("\n"));
+    })();
+    return "I've sent this plan for your approval. Tap Allow and I'll hand it out; nothing starts before that.";
+  };
+  const tellAsker = (who: PlanAsker, title: string, body: string): void => {
+    inbox.add({ level: "info", kind: "system", title: `${title} (from ${who.sourceAgent})`, body, dedupeKey: `chat-plan:${Date.now()}:${title}` });
+    const channel = who.sourceAgent;
+    if (!notificationSetup || !["telegram", "slack", "discord"].includes(channel)) return;
+    void notificationSetup.service
+      .sendTo([channel], "info", { level: "info", requestId: null, title, body, actions: [], agentBlocking: false })
+      .catch(() => undefined);
+  };
+
   // `/foreman …` typed in Slack or Discord. The channel already checked the
   // sender against its allowed_user_ids over a connection only Foreman
   // holds, so it runs as the owner, like the TUI. Audited either way.
@@ -700,6 +751,7 @@ export function startForeman(
       ...commandContext,
       sourceAgent: channel,
       sourceUser,
+      conversation: sourceUser,
       trustedOwner: true,
       integrationOwner: isIntegrationOwner(paths.notifyConfigPath, channel, userId),
     });
@@ -2374,46 +2426,4 @@ function taskCwd(agentId: string, fromTask: string | undefined): string | undefi
   }
 }
 
-/**
- * The launch additions for a second (third, …) instance of an agent: its own
- * Foreman MCP server and identity, and its org.yaml role (agent-instance.ts).
- * Null for the agent itself, or one Foreman can't point at its own server;
- * a failure is logged and the agent runs with its config's wiring.
- */
-function instanceLaunchFor(
-  agentId: string,
-  entry: AgentEntry,
-  store: SecretStore,
-  paths: { stateDir: string; orgConfigPath: string },
-): InstanceLaunch | null {
-  if (!isInstance(agentId, entry) || !supportsInstances(entry)) return null;
-  try {
-    const tokenFile = writeInstanceTokenFile(paths.stateDir, agentId, ensureAgentToken(store, agentId));
-    let role: string | null = null;
-    try {
-      const org = loadOrg(paths.orgConfigPath);
-      const found = org ? Object.entries(org.roles).find(([, r]) => r.agent === agentId) : undefined;
-      if (org && found) {
-        const [roleId, r] = found;
-        role = rolePrompt({
-          company: org.company,
-          roleId,
-          title: r.title,
-          department: r.department ? (org.departments[r.department]?.name ?? r.department) : undefined,
-          responsibility: r.responsibility,
-          instructions: r.instructions,
-          agentId,
-        });
-      }
-    } catch {
-      // an unreadable org.yaml: no role, the task still runs
-    }
-    return instanceLaunch(entry, { agentId, tokenFile, foremanArgv: foremanCliArgv(), role });
-  } catch (err) {
-    process.stderr.write(
-      `foreman: couldn't give ${agentId} its own identity (${err instanceof Error ? err.message : String(err)}); it runs with ${entry.id}'s wiring\n`,
-    );
-    return null;
-  }
-}
 

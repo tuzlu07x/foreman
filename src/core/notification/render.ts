@@ -123,6 +123,7 @@ const PLAIN_TOOL_ACTIONS: Readonly<Record<string, string>> = {
   mcp_call: "use an MCP tool",
   permission_overlay: "change its permissions",
   secrets_get: "read a secret",
+  foreman_plan: "hand out a plan to your team",
 };
 
 /** Longest tool / agent name the lead line repeats verbatim. */

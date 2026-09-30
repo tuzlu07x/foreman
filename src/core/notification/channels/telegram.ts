@@ -120,10 +120,17 @@ interface TelegramUpdate {
   }
   message?: {
     text?: string
+    /** Unix seconds, when it was sent. */
+    date?: number
     chat?: { id?: number | string; type?: string }
     from?: { id?: number | string; is_bot?: boolean }
   }
 }
+
+/** A chat message sent this long before Foreman started reading the bot is
+ *  not run: Telegram keeps undelivered updates for a day, and a `stop` or
+ *  `write` typed while Foreman was off must not act hours later. */
+export const STALE_MESSAGE_MS = 2 * 60 * 1000
 
 interface TelegramSendResponse {
   ok: boolean
@@ -149,6 +156,10 @@ export class TelegramChannel implements NotificationChannel {
   private readonly pollBackoffMs: number
   private readonly minPollIntervalMs: number
   private polling: { stop: boolean; abort: AbortController; done: Promise<void> } | null = null
+  /** When the current poller started: older chat messages are stale. */
+  private pollStartedAt = 0
+  /** Stale messages skipped since the poller started, told once. */
+  private staleSkipped = 0
   /** Keyboards of messages still open, so a countdown edit keeps them
    *  (editMessageText without reply_markup removes the buttons). */
   private readonly keyboards = new Map<string, unknown>()
@@ -325,6 +336,8 @@ export class TelegramChannel implements NotificationChannel {
   ): Promise<void> {
     let offset = 0
     let warnedUnreachable = false
+    this.pollStartedAt = Date.now()
+    this.staleSkipped = 0
     while (!state.stop) {
       const startedAt = Date.now()
       let res: Awaited<ReturnType<TelegramFetch>>
@@ -374,6 +387,7 @@ export class TelegramChannel implements NotificationChannel {
       }
       const body = (await res.json().catch(() => null)) as { result?: TelegramUpdate[] } | null
       const updates = body?.result ?? []
+      const skippedBefore = this.staleSkipped
       for (const update of updates) {
         offset = Math.max(offset, update.update_id + 1)
         try {
@@ -382,6 +396,7 @@ export class TelegramChannel implements NotificationChannel {
           // One bad update must not stop the poller.
         }
       }
+      if (this.staleSkipped > skippedBefore) await this.tellStaleSkipped(this.staleSkipped - skippedBefore)
       const elapsed = Date.now() - startedAt
       if (updates.length === 0 && elapsed < this.minPollIntervalMs) {
         await pause(this.minPollIntervalMs - elapsed, state.abort.signal)
@@ -415,6 +430,20 @@ export class TelegramChannel implements NotificationChannel {
     )
   }
 
+  /** One note for the messages skipped as stale, in your own chat. */
+  private async tellStaleSkipped(n: number): Promise<void> {
+    await this.call(
+      'sendMessage',
+      {
+        chat_id: this.chatId,
+        text:
+          `Foreman was off when you sent ${n === 1 ? 'your last message' : `your last ${n} messages`}, ` +
+          'so I did not act on them. Send again what you still want.',
+      },
+      this.approvalBotToken,
+    )
+  }
+
   private async handleApprovalBotUpdate(
     update: TelegramUpdate,
     onDecision: (d: UserDecision) => Promise<void>,
@@ -422,6 +451,11 @@ export class TelegramChannel implements NotificationChannel {
     const tap = update.callback_query
     if (!tap) {
       const msg = update.message
+      // Sent while Foreman wasn't reading the bot: don't run it now.
+      if (msg && typeof msg.date === 'number' && msg.date * 1000 < this.pollStartedAt - STALE_MESSAGE_MS) {
+        if (String(msg.chat?.id) === this.chatId && msg.text) this.staleSkipped++
+        return
+      }
       if (msg && this.onCommand && msg.text && APPROVAL_BOT_COMMAND_RE.test(msg.text.trim())) {
         await this.handleApprovalBotCommand(msg)
         return

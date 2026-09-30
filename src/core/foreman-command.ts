@@ -151,14 +151,30 @@ export interface ForemanCommandContext {
     answer(input: {
       question: string;
       focusAgentId?: string;
+      conversation?: string;
+      canPropose?: boolean;
     }): Promise<
-      | { status: "ok"; text: string; costUsd: number; durationMs: number }
+      | {
+          status: "ok";
+          text: string;
+          costUsd: number;
+          durationMs: number;
+          proposals?: { target: string; task: string }[];
+        }
       | { status: "disabled"; reason: string }
       | { status: "budget_exceeded"; spentUsd: number; capUsd: number }
       | { status: "failed"; reason: string }
       | { status: "empty_response" }
     >;
   };
+  /** Who is talking, where (`telegram:<user>`): the chat remembers the
+   *  conversation. Unset: every question stands alone. */
+  conversation?: string;
+  /** 2.3.1 — Ask you to approve a plan the chat proposed (one approval for
+   *  all its hand-offs); on allow, each is assigned as yours. Returns a
+   *  line for the reply. Only the owner surfaces set it, and only
+   *  `trustedOwner` requests use it. */
+  proposePlan?: (plan: ChatPlan, who: PlanAsker) => Promise<string>;
 }
 
 export interface ForemanCommandResult {
@@ -218,7 +234,7 @@ export class ForemanCommandRouter {
     ctx: ForemanCommandContext,
   ): Promise<ForemanCommandResult> {
     const handler = this.handlers.get(command.toLowerCase());
-    if (handler) {
+    if (handler && !isSentenceNotCommand(command, args, ctx)) {
       return await handler(args, ctx);
     }
     // #524 — Free-form agent invocation. Before falling through to the
@@ -242,6 +258,9 @@ export class ForemanCommandRouter {
       // through to LLM so "openclaw" by itself becomes "ne yapıyor
       // openclaw?", not an awkward empty-task error.
     }
+    // "hey", "selam": a short hello and what to try, no LLM call.
+    const hello = greetingReply(command, args);
+    if (hello) return { ok: true, text: hello };
     // #432 — Free-form fallback. When the verb isn't registered but
     // Foreman LLM orchestrator chat is enabled, treat the whole input
     // (`<command> <args...>`) as a natural-language question. Agent id
@@ -262,11 +281,22 @@ export class ForemanCommandRouter {
           `[${lookup.candidates.join(", ")}]; ask the user to clarify.\n\n` +
           question;
       }
+      const canPropose = ctx.trustedOwner === true && ctx.proposePlan !== undefined;
       const outcome = await ctx.orchestratorChat.answer({
         question,
         focusAgentId,
+        ...(ctx.conversation ? { conversation: ctx.conversation } : {}),
+        canPropose,
       });
-      return { ...renderChatOutcome(outcome), answeredByLlm: true };
+      const rendered = { ...renderChatOutcome(outcome), answeredByLlm: true, text: sameFailureAgain(ctx.conversation, outcome) ?? renderChatOutcome(outcome).text };
+      if (outcome.status === "ok" && outcome.proposals && outcome.proposals.length > 0 && canPropose) {
+        const note = await ctx.proposePlan!(outcome.proposals, {
+          sourceAgent: ctx.sourceAgent,
+          ...(ctx.sourceUser ? { sourceUser: ctx.sourceUser } : {}),
+        });
+        return { ...rendered, text: [rendered.text, formatPlan(outcome.proposals), note].filter(Boolean).join("\n\n") };
+      }
+      return rendered;
     }
     return {
       ok: false,
@@ -355,6 +385,9 @@ export function plainTextRefusal(
   args: readonly string[],
 ): string | null {
   if (relayedCommandAccess(router, registry, command, args) === "read") return null;
+  // "Write the release notes as a team" is a sentence, not `write <agent>`:
+  // it goes to the chat (isSentenceNotCommand), which only reads.
+  if (command.toLowerCase() === "write" && args.length >= 2 && !namesAgent(registry, args[0]!)) return null;
   const typed = [command, ...args].join(" ");
   return `That would change something, so I only run it as a command: send \`/foreman ${typed}\`.`;
 }
@@ -366,6 +399,134 @@ export function plainTextRefusal(
 // middle of the task body stays intact.
 function stripLeadingPunctuation(s: string): string {
   return s.replace(/^[\s,;:–—-]+/u, "");
+}
+
+const GREETINGS_EN = new Set(["hi", "hey", "hello", "yo", "hiya", "morning"]);
+const GREETINGS_TR = new Set(["selam", "merhaba", "sa", "slm", "mrb", "hey", "günaydın", "gunaydin", "iyi"]);
+
+/** A bare greeting gets a short hello and what to try (finding 10): no
+ *  LLM call, no command list. Null for anything else. */
+export function greetingReply(command: string, args: readonly string[]): string | null {
+  const words = [command, ...args].map((w) => w.toLowerCase().replace(/[!.,?]+$/u, "")).filter(Boolean);
+  if (words.length === 0 || words.length > 2) return null;
+  const tr = words.every((w) => GREETINGS_TR.has(w) || ["kanka", "abi", "foreman"].includes(w)) && !words.every((w) => GREETINGS_EN.has(w));
+  const en = words.every((w) => GREETINGS_EN.has(w) || ["there", "foreman"].includes(w));
+  if (tr) {
+    return [
+      "Selam! Ben Foreman. Şunları deneyebilirsin:",
+      "• report me: ekip ne yapıyor",
+      "• model: kim hangi programla ve modelle çalışıyor",
+      "• ya da ne istediğini yaz: \"github.com/… projesini ekip olarak analiz edin\"; kime ne vereceğimi önerir, onayını beklerim.",
+    ].join("\n");
+  }
+  if (en) {
+    return [
+      "Hi! I'm Foreman. Try:",
+      "• report me: what the team is doing",
+      "• model: who runs on which program and model",
+      "• or just say what you want done: \"analyse github.com/… as a team\"; I'll propose who does what and wait for your OK.",
+    ].join("\n");
+  }
+  return null;
+}
+
+/** A conversation's last LLM failure, so the same one isn't repeated in
+ *  full on every message (finding 9). */
+const lastFailure = new Map<string, { text: string; at: number }>();
+const FAILURE_REPEAT_MS = 10 * 60 * 1000;
+
+function sameFailureAgain(
+  conversation: string | undefined,
+  outcome: { status: string },
+  now: number = Date.now(),
+): string | null {
+  if (!conversation) return null;
+  if (outcome.status === "ok") {
+    lastFailure.delete(conversation);
+    return null;
+  }
+  const text = renderChatOutcome(outcome as Parameters<typeof renderChatOutcome>[0]).text;
+  const before = lastFailure.get(conversation);
+  lastFailure.set(conversation, { text, at: now });
+  if (lastFailure.size > 200) lastFailure.delete(lastFailure.keys().next().value!);
+  if (before && before.text === text && now - before.at < FAILURE_REPEAT_MS) {
+    return "Still the same problem as a moment ago, so I can't answer that yet. `report` and `model` work without it.";
+  }
+  return null;
+}
+
+function namesAgent(registry: Pick<RegistryService, "findByCommandToken">, token: string): boolean {
+  return registry.findByCommandToken(token).kind !== "none";
+}
+
+/** Plain words that start with a verb ("Write the v2 notes as a team",
+ *  "Assign someone to the bug") go to Foreman's chat instead of failing
+ *  as `write the …`: when the chat is on and the word after `write` /
+ *  `assign` names no agent, role or department. */
+function isSentenceNotCommand(command: string, args: readonly string[], ctx: ForemanCommandContext): boolean {
+  const verb = command.toLowerCase();
+  if ((verb !== "write" && verb !== "assign") || args.length < 2 || !ctx.orchestratorChat?.isEnabled()) return false;
+  const target = args[0]!;
+  if (namesAgent(ctx.registry, target) || ctx.registry.get(target) !== null) return false;
+  if (verb === "assign") {
+    try {
+      const doc = loadOrg(join(ctx.configDir, "org.yaml"));
+      if (doc && resolveAssignee(doc, target) !== null) return false;
+    } catch {
+      return false; // a broken org.yaml: let assign say so
+    }
+  }
+  return true;
+}
+
+/** The approval a chat plan asks for (mediated like a tool call). */
+export const CHAT_PLAN_TOOL = "foreman_plan";
+export type ChatPlan = { target: string; task: string }[];
+export interface PlanAsker {
+  sourceAgent: string;
+  sourceUser?: string;
+}
+
+/** The plan as the chat shows it, numbered, one line per hand-off. */
+export function formatPlan(plan: readonly { target: string; task: string }[]): string {
+  return plan.map((p, i) => `${i + 1}. ${p.target}: ${p.task.length > 300 ? `${p.task.slice(0, 299)}…` : p.task}`).join("\n");
+}
+
+/**
+ * Hand out an approved plan: each hand-off is `assign <target> <task>` as
+ * the person who asked, exactly like `/foreman assign` from their chat, and
+ * audited like it (`foreman:command`, with the approval's request id).
+ * Returns one ✓ / ✗ line per hand-off for the reply.
+ */
+export async function handOutPlan(
+  router: ForemanCommandRouter,
+  plan: ChatPlan,
+  who: PlanAsker,
+  ctx: Omit<ForemanCommandContext, "sourceAgent">,
+  opts: { approvalId: string; logEvent: (eventType: string, payload: unknown) => void },
+): Promise<string[]> {
+  const lines: string[] = [];
+  for (const p of plan) {
+    const args = [p.target, p.task];
+    const r = await router.dispatch("assign", args, {
+      ...ctx,
+      sourceAgent: who.sourceAgent,
+      ...(who.sourceUser ? { sourceUser: who.sourceUser } : {}),
+      trustedOwner: true,
+    });
+    opts.logEvent("foreman:command", {
+      command: "assign",
+      args,
+      sourceAgent: who.sourceAgent,
+      sourceUser: who.sourceUser ?? null,
+      ok: r.ok,
+      errorCode: r.errorCode ?? null,
+      via: CHAT_PLAN_TOOL,
+      requestId: opts.approvalId,
+    });
+    lines.push(`${r.ok ? "✓" : "✗"} ${p.target}: ${(r.text.split("\n")[r.ok ? 1 : 0] ?? r.text).slice(0, 200)}`);
+  }
+  return lines;
 }
 
 // Translates the chat service's outcome variants into a uniform
@@ -727,7 +888,7 @@ function reportHandler(
       ? REPORT_DEFAULT_QUESTION_TR
       : REPORT_DEFAULT_QUESTION_EN
     : trailing;
-  return ctx.orchestratorChat.answer({ question }).then((outcome) => {
+  return ctx.orchestratorChat.answer({ question, ...(ctx.conversation ? { conversation: ctx.conversation } : {}) }).then((outcome) => {
     if (outcome.status === "ok" || !isMeOrEmpty) return renderChatOutcome(outcome);
     const fallback = orgReport([], ctx, true)!;
     return { ...fallback, text: `${fallback.text}\n\n(${renderChatOutcome(outcome).text})` };

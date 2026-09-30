@@ -108,4 +108,24 @@ describe('Telegram approval bot commands', () => {
     expect(reply).toContain('Ask me anything, e.g. "report me"')
     expect(h.seen).toEqual([])
   })
+
+  // Real-services test (2.3.0): messages sent while Foreman was off were
+  // all answered at the next start, and a `/foreman stop` would have run.
+  it("doesn't run messages sent while Foreman was off, and says so once", async () => {
+    const old = Math.floor((Date.now() - 60 * 60 * 1000) / 1000)
+    const now = Math.floor(Date.now() / 1000)
+    const h = harness([
+      { ...dm('/foreman stop'), date: old },
+      { ...dm('hi'), date: old },
+      { ...dm('report me'), date: now },
+    ])
+    await h.channel.listen(async () => undefined)
+    await settle()
+    await h.channel.shutdown()
+    expect(h.seen).toEqual([{ text: '/foreman report me', user: CHAT, plain: true }])
+    const replies = h.calls.filter((c) => c.method === 'sendMessage').map((c) => String(c.body.text))
+    expect(replies.filter((t) => t.includes('Foreman was off'))).toEqual([
+      'Foreman was off when you sent your last 2 messages, so I did not act on them. Send again what you still want.',
+    ])
+  })
 })
