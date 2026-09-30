@@ -1983,7 +1983,7 @@ function renderPanels(layout: "wide" | "medium" | "narrow"): JSX.Element {
       <>
         <AgentList width="20%" />
         <Box width="60%" flexDirection="column">
-          <ActivityFeed />
+          <ActivityFeed share="60%" />
           <HomeGuide />
         </Box>
         <StatsPanel width="20%" />

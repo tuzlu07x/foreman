@@ -6,6 +6,7 @@ import { loadOrg, type OrgDoc } from "../../core/org/org.js";
 import { getForemanPaths } from "../../utils/config.js";
 import { PageHeader } from "../components/typography.js";
 import { useDashboardServices } from "../dashboard-context.js";
+import { oneLine } from "../format.js";
 import {
   applyTeam,
   CAPABILITY_LABELS,
@@ -465,7 +466,7 @@ export function TeamPage({ onLeave, onEditingChange, height }: TeamPageProps): J
               <Text key={r.roleId} wrap="truncate-end">
                 <Text color={theme.fg.muted}>{r.prefix}</Text>
                 <Text color={focused ? theme.accent.primary : undefined} bold={focused}>
-                  {r.role.title}
+                  {oneLine(r.role.title)}
                 </Text>
                 <Text color={theme.fg.muted}>
                   {"  "}
@@ -474,7 +475,7 @@ export function TeamPage({ onLeave, onEditingChange, height }: TeamPageProps): J
                   </Text>{" "}
                   {r.role.agent}
                   {r.runsOn && r.runsOn.toLowerCase() !== r.role.agent ? ` (${r.runsOn})` : ""}
-                  {r.department ? ` · ${r.head ? `leads ${r.department}` : r.department}` : ""}
+                  {r.department ? oneLine(` · ${r.head ? `leads ${r.department}` : r.department}`) : ""}
                 </Text>
               </Text>
             );
@@ -485,11 +486,11 @@ export function TeamPage({ onLeave, onEditingChange, height }: TeamPageProps): J
       {org && pick ? (
         <Box flexDirection="column" marginTop={1}>
           <Text wrap="truncate-end">
-            <Text bold>{pick.role.title}</Text>
+            <Text bold>{oneLine(pick.role.title)}</Text>
             <Text color={theme.fg.muted}>
               {" "}
               · role {pick.roleId} · reports to {reportsToWords(org, pick.role)}
-              {pick.department ? ` · ${pick.head ? "leads " : ""}${pick.department}` : ""}
+              {pick.department ? oneLine(` · ${pick.head ? "leads " : ""}${pick.department}`) : ""}
             </Text>
           </Text>
           <Text wrap="truncate-end" color={theme.fg.muted}>
@@ -497,7 +498,7 @@ export function TeamPage({ onLeave, onEditingChange, height }: TeamPageProps): J
           </Text>
           <Text wrap="truncate-end" color={theme.fg.muted}>
             {pick.registered
-              ? (pick.role.instructions ?? pick.role.responsibility ?? "No instructions: it works from the task it's given.")
+              ? oneLine(pick.role.instructions ?? pick.role.responsibility ?? "No instructions: it works from the task it's given.")
               : `${pick.role.agent} isn't registered: foreman agent add ${pick.role.agent}`}
           </Text>
         </Box>

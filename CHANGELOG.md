@@ -85,6 +85,16 @@ All notable changes to Foreman are documented here. The format follows
   foreman-agent`) or remove Foreman's entry under `hooks.PreToolUse` in
   Claude Code's `settings.json`. Run the hook install again to get the new
   text into an existing hook.
+- **Activity rows no longer draw over each other.** With more rows than
+  the Home page had room for, each two-line row was squeezed into one, so
+  a row's status line landed on the next row and cut off its time and
+  agent (*id=6anager: why don't you share…*). The feed now drops its
+  oldest rows at the bottom instead, and the Team and Next steps box under
+  it keeps its lines. On a wide terminal the rows are fitted to the feed's
+  column, not the whole terminal, so a long path keeps its file name.
+  Rows are measured in terminal columns (an emoji or a CJK character takes
+  two), and a line break in an agent's message, an inbox notice or a
+  role's instructions shows as ⏎ instead of starting a new line.
 
 ### Fixed
 

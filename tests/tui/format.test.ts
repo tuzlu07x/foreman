@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   aggregateStats,
+  displayWidth,
+  fitWidth,
   formatDuration,
   formatTime,
+  oneLine,
   percentBar,
   percentLabel,
   shortenPath,
@@ -194,5 +197,78 @@ describe('summariseTool with a width', () => {
   })
   it('is unchanged without a width', () => {
     expect(summariseTool('read_file', args)).toBe('read_file("/srv/data/clients/acme/tuitour/.env")')
+  })
+})
+
+// Finding 38: one-line rows measured in terminal columns, with agent text
+// that can't break the line.
+const ESC = String.fromCodePoint(0x1b)
+
+describe('oneLine', () => {
+  it('shows a line break as ⏎ and a tab as a space', () => {
+    expect(oneLine('first\nsecond')).toBe('first ⏎ second')
+    expect(oneLine('first\r\nsecond')).toBe('first ⏎ second')
+    expect(oneLine('a\tb')).toBe('a b')
+  })
+  it('makes a carriage return and escapes visible, so nothing moves the cursor', () => {
+    const out = oneLine(`id=6\rmanager ${ESC}[2K${ESC}[31mred`)
+    expect(out).toBe('id=6␍manager ␛[2K␛[31mred')
+    expect(out).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/)
+  })
+  it('leaves plain text alone', () => {
+    expect(oneLine("why don't you share 🎉 漢字")).toBe("why don't you share 🎉 漢字")
+  })
+})
+
+describe('displayWidth', () => {
+  it('counts terminal columns, not UTF-16 units', () => {
+    expect(displayWidth('abc')).toBe(3)
+    expect(displayWidth('漢字')).toBe(4)
+    expect(displayWidth('🎉')).toBe(2)
+    expect(displayWidth('👩‍💻')).toBe(2)
+    expect(displayWidth('é')).toBe(1)
+    expect(displayWidth('→ … ⏎ ␍')).toBe(7)
+  })
+})
+
+describe('fitWidth', () => {
+  it('leaves text that fits alone', () => {
+    expect(fitWidth('hello', 5)).toBe('hello')
+    expect(fitWidth('漢字', 4)).toBe('漢字')
+  })
+  it('cuts at the width with …, never splitting a wide character', () => {
+    expect(fitWidth('hello world', 6)).toBe('hello…')
+    expect(fitWidth('漢字漢字', 6)).toBe('漢字…')
+    // No room for all of 字: it goes whole.
+    expect(fitWidth('漢字漢字', 4)).toBe('漢…')
+    expect(fitWidth('a🎉🎉🎉', 4)).toBe('a🎉…')
+    expect(fitWidth('👩‍💻👩‍💻👩‍💻', 5)).toBe('👩‍💻👩‍💻…')
+  })
+  it('never exceeds the width', () => {
+    const text = 'share 🎉 漢字 the ⏎ plan with éveryone 👩‍💻'
+    for (let w = 0; w <= displayWidth(text) + 1; w++) {
+      expect(displayWidth(fitWidth(text, w))).toBeLessThanOrEqual(w)
+    }
+  })
+})
+
+describe('shortenPath and summariseTool in terminal columns', () => {
+  const home = '/Users/me'
+  const wide = '/Users/me/プロジェクト/クライアント/漢字🎉/tuitour/.env'
+
+  it('measures wide characters as two columns', () => {
+    for (let w = 1; w <= displayWidth(wide) + 2; w++) {
+      expect(displayWidth(shortenPath(wide, w, home))).toBeLessThanOrEqual(w)
+    }
+    expect(shortenPath(wide, 20, home)).toBe('~/…/tuitour/.env')
+    expect(shortenPath('/srv/漢字漢字漢字.txt', 8, home)).toBe('…字.txt')
+  })
+
+  it('fits a call with a wide path, or wide text, to the width', () => {
+    const call = summariseTool('read_file', JSON.stringify({ path: `/srv/${'漢字/'.repeat(20)}.env` }), 30)
+    expect(displayWidth(call)).toBeLessThanOrEqual(30)
+    expect(call.endsWith('.env")')).toBe(true)
+    const text = summariseTool('say', JSON.stringify({ text: '🎉'.repeat(40) }), 20)
+    expect(displayWidth(text)).toBeLessThanOrEqual(20)
   })
 })
