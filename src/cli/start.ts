@@ -50,6 +50,7 @@ import { defaultLlmConfig, saveLlmConfig } from "../core/llm/config.js";
 import {
   CHAT_PLAN_TOOL,
   ForemanCommandRouter,
+  planApprovalNote,
   handOutPlan,
   plainTextRefusal,
   registerBuiltinCommands,
@@ -706,7 +707,7 @@ export function startForeman(
       });
       tellAsker(who, "Plan handed out", lines.join("\n"));
     })();
-    return "I've sent this plan for your approval. Tap Allow and I'll hand it out; nothing starts before that.";
+    return planApprovalNote(who.sourceAgent);
   };
   const tellAsker = (who: PlanAsker, title: string, body: string): void => {
     inbox.add({ level: "info", kind: "system", title: `${title} (from ${who.sourceAgent})`, body, dedupeKey: `chat-plan:${Date.now()}:${title}` });

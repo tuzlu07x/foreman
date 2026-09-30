@@ -487,6 +487,16 @@ export interface PlanAsker {
   sourceUser?: string;
 }
 
+/** Where to approve a plan, said for the place it was asked from: the
+ *  TUI has no button (2.3.1 real test: "Tap Allow" in the TUI). */
+export function planApprovalNote(sourceAgent: string): string {
+  const where =
+    sourceAgent === "tui" || sourceAgent === "cli"
+      ? "Type `allow` here (or `deny`), or tap Allow in your chat app"
+      : "Tap Allow on the approval message (or approve it in the TUI)";
+  return `I've sent this plan for your approval. ${where}; nothing starts before that.`;
+}
+
 /** The plan as the chat shows it, numbered, one line per hand-off. */
 export function formatPlan(plan: readonly { target: string; task: string }[]): string {
   return plan.map((p, i) => `${i + 1}. ${p.target}: ${p.task.length > 300 ? `${p.task.slice(0, 299)}…` : p.task}`).join("\n");

@@ -61,8 +61,8 @@ describe('Telegram approval bot commands', () => {
     ])
     const replies = h.calls.filter((c) => c.method === 'sendMessage').map((c) => c.body)
     expect(replies).toEqual([
-      { chat_id: CHAT, text: 'ran: /integration disable jira' },
-      { chat_id: CHAT, text: 'ran: /integrations' },
+      { chat_id: CHAT, text: 'ran: /integration disable jira', disable_web_page_preview: true },
+      { chat_id: CHAT, text: 'ran: /integrations', disable_web_page_preview: true },
     ])
     expect(h.calls.some((c) => c.method === 'setMyCommands')).toBe(true)
   })

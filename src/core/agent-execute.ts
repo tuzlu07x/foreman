@@ -654,7 +654,8 @@ export function renderOutputText(
     { runtime: input.entry.id, program: input.entry.name.trim() || input.agentId, agentId: input.agentId },
     lang,
   );
-  const task = `_${tr ? "Görev" : "Task"}:_ ${escapeMd(truncateForTelegram(input.message, 200))}`;
+  const asked = input.message.replace(/\s+/g, " ").trim();
+  const task = `_${tr ? "Görev" : "Task"}:_ ${escapeMd(asked.length > 200 ? `${asked.slice(0, 199)}…` : asked)}`;
   if (failure === null) {
     const header = `📨 *${escapeMd(agentName)}* ${tr ? "görevini bitirdi" : "finished your task"}`;
     const answer = spawn.kind === "ok" ? spawn.stdout.trim() : "";

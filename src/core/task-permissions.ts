@@ -18,8 +18,8 @@ import type { RoleCapability } from "./org/org.js";
 //     sandbox`: no sandbox at all, while no Foreman hook sees Codex's shell.
 //
 // The rules:
-//   - Claude Code may always use Foreman's own MCP tools: Foreman mediates
-//     every one of them itself.
+//   - Claude Code and Codex may always use Foreman's own MCP tools: Foreman
+//     mediates every one of them itself.
 //   - Claude Code skips its own prompts only when Foreman's PreToolUse hook
 //     is in its settings (every Bash, Edit, Read… then goes through
 //     Foreman's policy, the role's `can` and your approval; a hook's deny
@@ -83,6 +83,12 @@ export function taskPermissions(input: TaskPermissionInput): TaskPermissions | n
         // Foreman picks the folder (the task's project, or the role's own
         // workspace); Codex's "trusted directory" check has no one to ask.
         "--skip-git-repo-check",
+        // Headless, Codex's approval policy is "never", so a tool it would
+        // ask about is refused: org_report and org_post were (2.3.1 real
+        // test). Foreman's own tools need no second gate: Foreman mediates
+        // every one of them itself.
+        "-c",
+        'mcp_servers.foreman.default_tools_approval_mode="approve"',
         "--sandbox",
         sandbox,
         ...(sandbox === "workspace-write" ? ["-c", `sandbox_workspace_write.network_access=${network}`] : []),

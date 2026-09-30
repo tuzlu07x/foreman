@@ -425,7 +425,12 @@ export class TelegramChannel implements NotificationChannel {
     }
     await this.call(
       'sendMessage',
-      { chat_id: this.chatId, text: reply.length > TELEGRAM_TEXT_MAX ? `${reply.slice(0, TELEGRAM_TEXT_MAX - 1)}…` : reply },
+      {
+        chat_id: this.chatId,
+        text: reply.length > TELEGRAM_TEXT_MAX ? `${reply.slice(0, TELEGRAM_TEXT_MAX - 1)}…` : reply,
+        // A GitHub link in a task echoed back would open a big card each time.
+        disable_web_page_preview: true,
+      },
       this.approvalBotToken,
     )
   }

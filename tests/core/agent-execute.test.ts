@@ -205,6 +205,12 @@ describe("renderOutputText", () => {
     expect(taskLanguage("şu repoyu incele")).toBe("tr");
   });
 
+  it("cuts a long task with …, not a truncation note", () => {
+    const text = renderOutputText(input(`Analyse the repo. ${"y".repeat(400)}`), { kind: "ok", exitCode: 0, stdout: "ok", stderr: "", durationMs: 1 });
+    expect(text).not.toMatch(/more chars truncated/);
+    expect(text).toMatch(/y…\n/);
+  });
+
   it("includes the task excerpt so the user sees what they asked for", () => {
     const text = renderOutputText(
       input("review PR #42 — focus on auth changes"),
