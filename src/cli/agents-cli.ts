@@ -981,6 +981,7 @@ hookSub
           `  ${dim("revoke")}    \`foreman agent hook uninstall ${agentId}${opts.project !== undefined && opts.project !== false ? " --project" + (typeof opts.project === "string" ? ` ${opts.project}` : "") : ""}\``,
         );
       }
+      if (!opts.dryRun && !result.alreadyInstalled) console.log(hookRestartNote(agentId, "guards"));
       closeDb();
     },
   );
@@ -1038,9 +1039,18 @@ hookSub
           (opts.dryRun ? dim(" (dry-run)") : ""),
       );
       console.log(`  ${dim("settings")}  ${result.settingsPath}`);
+      if (!opts.dryRun) console.log(hookRestartNote(agentId, "stops guarding"));
     }
     closeDb();
   });
+
+/** Claude Code reads its hooks when a session starts: the change reaches
+ *  new sessions only (2.3.0 real test: an uninstalled hook kept guarding
+ *  the open session). */
+function hookRestartNote(agentId: string, what: "guards" | "stops guarding"): string {
+  const name = agentId === "claude-code" ? "Claude Code" : agentId;
+  return `  ${orange("restart")}   Foreman ${what} new ${name} sessions only: close and reopen the ones already open.`;
+}
 
 agentsCommand
   .command("untrust <agentId>")
