@@ -47,6 +47,13 @@ export interface DashboardServices {
   /** Team page: adds a role's Claude Code / Codex instance (null when added,
    *  else why not). Unset: `runAgentAddScripted`. Tests pass a fake. */
   addTeamAgent?: (agentId: string, runsOn: "claude-code" | "codex") => Promise<string | null>;
+  /** Team page: unregisters a removed role's instance (null when done,
+   *  else why not). Unset: unregister, revoke its token, unwire it (as
+   *  Agents `x` does). Tests pass a fake. */
+  removeTeamAgent?: (agentId: string) => Promise<string | null>;
+  /** Team page: the model an agent program's own config picks (unset:
+   *  `agentDefaultModel`). Tests pass a fake. */
+  agentDefaultModel?: (runtime: string) => string | null;
   /** Integrations page (`foreman integrations` in the TUI). */
   integrations?: IntegrationWiring;
   /** Set when this TUI is attached to the background gateway (`foreman

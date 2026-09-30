@@ -8,6 +8,19 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Added
 
+- **The Team page is managed by department.** Roles are listed under
+  their departments (fold one with `←→` or Enter), with the roles in no
+  department last, and each row shows the role's title, id, what runs it
+  and its model: the one set in Foreman, else the agent's own setting
+  (`gpt-6-luna (Codex's setting)`), else `default model`. Without opening a
+  role: `x` removes it (after asking; its reports move to its manager, the
+  department's next role leads if it was the lead, and its own instance is
+  unregistered), `r` switches it between Claude Code and Codex, and `m`
+  picks its model (the agent's own, the provider's usual models, or one you
+  type). On a department's header the same keys act on all its roles and
+  ask first. Each change is written to `org.yaml` and the registry at once
+  and recorded in the audit log.
+
 - **Departments in the setup wizard's Your team step and on the Team
   page.** **+ Add a department…** (or `d` on the Team page) adds a
   ready-made department (IT: backend, frontend and devops developers;

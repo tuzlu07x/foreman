@@ -196,7 +196,15 @@ Claude Code or Codex. On the department's row, Space picks or drops all
 its roles, `r` switches all of them between Claude Code and Codex, and `x`
 removes the department; `r` on one role's row switches just that role. Your
 own role can join a department too. The Team page (`t` in the TUI) does the
-same with `d`, adding all of a department's roles at once.
+same with `d`, adding all of a department's roles at once. It shows the
+roles under their departments with what runs each and which model it uses;
+on a role, `x` removes it, `r` switches it between Claude Code and Codex and
+`m` picks its model, and on a department's header the same keys act on all
+of its roles (after asking). Removing a role re-points whoever reported to
+it to its manager; if it led its department, the department's next role
+leads it (as when a lead's agent can't be added), and a department with no
+role left is removed. A role's own instance goes with it; Claude Code and
+Codex themselves, and an instance another role uses, stay registered.
 
 Reporting lines follow the department: its lead (org.yaml `head`) reports
 to the Manager when there is one (else to you), and the rest of the

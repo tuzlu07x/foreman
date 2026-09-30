@@ -854,7 +854,7 @@ function modelHandler(
 // inline-keyboard model picker without owning the bot.
 /** Tap-to-copy model ids per provider, from registry/providers.json's
  *  model_tiers (a new model generation is a registry change). */
-function quickModels(provider: string): Array<{ id: string; hint: string }> {
+export function quickModels(provider: string): Array<{ id: string; hint: string }> {
   const tiers = providerModelTiers(provider);
   if (!tiers) return [];
   return [
@@ -868,7 +868,7 @@ function quickModels(provider: string): Array<{ id: string; hint: string }> {
 // surface. Today only callable agents (codex / claude-code) need
 // this; daemon-style agents (Hermes, OpenClaw) don't have a
 // task_model_flag so the override would be a no-op.
-const AGENT_PROVIDER: Record<string, string> = {
+export const AGENT_PROVIDER: Readonly<Record<string, string>> = {
   codex: "openai",
   "claude-code": "anthropic",
 };

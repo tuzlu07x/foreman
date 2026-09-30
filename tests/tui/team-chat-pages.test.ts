@@ -145,8 +145,12 @@ describe('Team and Chat pages', () => {
     await tick()
     let frame = strip(app.lastFrame())
     expect(frame).toContain('Team')
-    expect(frame).toContain('├─ Tech Lead')
-    expect(frame).toContain('│  └─ Code Reviewer')
+    // By department: Engineering's lead, its reviewer under it, then the
+    // roles with no department.
+    expect(frame).toContain('▾ Engineering · 2 roles · led by Tech Lead · Claude Code')
+    expect(frame).toContain('└─ Tech Lead (lead)')
+    expect(frame).toContain('   └─ Code Reviewer')
+    expect(frame).toContain('▾ No department · 1 role')
     expect(frame).toContain('May: anything policy.yaml allows')
     app.stdin.write(DOWN)
     await tick()
@@ -180,7 +184,7 @@ describe('Team and Chat pages', () => {
       throw new Error(`timed out waiting for ${JSON.stringify(text)}; frame:\n${strip(app.lastFrame())}`)
     }
     app.stdin.write('t')
-    await until('├─ Tech Lead')
+    await until('└─ Tech Lead')
     expect(strip(app.lastFrame())).toContain('3 roles in 1 department')
     expect(strip(app.lastFrame())).toContain('leads Engineering')
     app.stdin.write('d')
@@ -200,7 +204,12 @@ describe('Team and Chat pages', () => {
     frame = await until('✓ IT added')
     expect(frame).toContain('6 roles in 2 departments')
     expect(frame).toContain('Backend Developer')
-    expect(frame).toContain('leads IT')
+    // ← goes to Engineering's header, ← again folds it: IT's header shows.
+    app.stdin.write('\u001B[D')
+    await until('❯ ▾ Engineering')
+    app.stdin.write('\u001B[D')
+    await until('▸ Engineering')
+    await until('IT · 3 roles · led by Backend Developer · Claude Code')
     expect(added).toEqual([
       ['backend-developer', 'claude-code'],
       ['frontend-developer', 'claude-code'],
@@ -232,7 +241,7 @@ describe('Team and Chat pages', () => {
       await until(text)
     }
     app.stdin.write('t')
-    await until('├─ Tech Lead')
+    await until('└─ Tech Lead')
     app.stdin.write('n')
     await until('+ Add a department…')
     app.stdin.write('\u001B[A')

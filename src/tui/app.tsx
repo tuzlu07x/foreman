@@ -2,9 +2,7 @@ import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApprovalRequest } from "../core/approval.js";
 import { loadOrg } from "../core/org/org.js";
-import { revokeAgentToken } from "../core/agent-token.js";
-import { unwireAgent } from "../core/agent-wiring.js";
-import { findAgent, loadActiveRegistry, type AgentEntry } from "../core/registry-catalog.js";
+import { removeAgentAndWiring } from "./agent-removal.js";
 import { isUntrustedSource } from "../core/agent-identity.js";
 import { rememberScope } from "../core/remember-scope.js";
 import type { BootInfo } from "./boot-info.js";
@@ -729,24 +727,12 @@ function Shell({ bootInfo }: { bootInfo: BootInfo }): JSX.Element {
     const target = registry.listAll()[agentsSelectedIdx];
     if (!target) return;
     const id = target.id;
-    const registryId =
-      typeof target.metadata?.registryId === "string" ? target.metadata.registryId : null;
     setPendingConfirm({
       question: `Remove agent "${id}"? Foreman unregisters it, revokes its key and identity token and removes its foreman MCP entry. Its binary stays installed.`,
       yesLabel: "remove",
       run: () => {
         try {
-          registry.remove(id);
-          // A removed agent's identity token must not keep proving it (#618).
-          if (secretStore) revokeAgentToken(secretStore, id);
-          // Best-effort: never blocks the removal, only reports.
-          let entry: AgentEntry | null = null;
-          try {
-            entry = registryId ? findAgent(loadActiveRegistry().doc, registryId) : null;
-          } catch {
-            entry = null;
-          }
-          const unwired = unwireAgent(id, entry);
+          const unwired = removeAgentAndWiring(registry, secretStore, id);
           setAgentsNotice(
             `✓ ${id} removed (binary left installed)` +
               (unwired.removed.length > 0 ? ` · removed ${unwired.removed.join(", ")}` : "") +
