@@ -48,10 +48,14 @@ import {
 import { probeGateway, type GatewayProbe } from "../core/gateway.js";
 import { defaultLlmConfig, saveLlmConfig } from "../core/llm/config.js";
 import {
+  CHAT_PLAN_TOOL,
   ForemanCommandRouter,
   plainTextRefusal,
   registerBuiltinCommands,
+  type ChatPlan,
+  type PlanAsker,
 } from "../core/foreman-command.js";
+import type { JSONRPCMessage } from "../mcp/types.js";
 import {
   InboxRecorder,
   InboxService,
@@ -569,6 +573,7 @@ export function startForeman(
       secretStore,
       registry,
       bus,
+      orgConfigPath: paths.orgConfigPath,
     });
   } catch {
     orchestratorChat = null;
@@ -654,7 +659,7 @@ export function startForeman(
     controlChannel,
     ownerStore: secretStore,
     secretStore,
-    ...(orchestratorChat ? { orchestratorChat } : {}),
+    ...(orchestratorChat ? { orchestratorChat, proposePlan: (plan: ChatPlan, who: PlanAsker) => proposePlan(plan, who) } : {}),
     ...(integrationWiring
       ? {
           integrations: {
@@ -666,6 +671,64 @@ export function startForeman(
         }
       : {}),
   };
+  // 2.3.1 — A plan the chat proposed ("backend analyses the repo, the
+  // manager prices it"): one approval for all of it, then each hand-off is
+  // assigned as yours, exactly like `/foreman assign`. The approval goes
+  // through the mediator (policy, risk, audit, your channels); nothing is
+  // assigned without an Allow. The outcome goes back where you asked.
+  const proposePlan = async (plan: ChatPlan, who: PlanAsker): Promise<string> => {
+    const listed = plan.map((p) => `${p.target}: ${p.task.slice(0, 300)}`);
+    void (async () => {
+      let decision: "allowed" | "denied" = "denied";
+      try {
+        const out = await mediator.handleRequest({
+          sourceAgent: "foreman",
+          targetTool: CHAT_PLAN_TOOL,
+          message: {
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: { name: CHAT_PLAN_TOOL, arguments: { plan: listed } },
+          } as JSONRPCMessage,
+          requireHuman: {
+            factor: {
+              rule: "chat_plan",
+              category: "structural",
+              points: 40,
+              reason: `Hand out ${plan.length === 1 ? "1 task" : `${plan.length} tasks`} to your team, as you asked in ${who.sourceAgent}`,
+            },
+          },
+        });
+        decision = out.decision;
+      } catch {
+        decision = "denied";
+      }
+      if (decision !== "allowed") {
+        tellAsker(who, "Plan not started", "Nobody allowed it (denied or timed out). Ask again when you want it.");
+        return;
+      }
+      const lines: string[] = [];
+      for (const p of plan) {
+        const r = await commandRouter.dispatch("assign", [p.target, p.task], {
+          ...commandContext,
+          sourceAgent: who.sourceAgent,
+          ...(who.sourceUser ? { sourceUser: who.sourceUser } : {}),
+          trustedOwner: true,
+        });
+        lines.push(`${r.ok ? "✓" : "✗"} ${p.target}: ${(r.text.split("\n")[r.ok ? 1 : 0] ?? r.text).slice(0, 200)}`);
+      }
+      tellAsker(who, "Plan handed out", lines.join("\n"));
+    })();
+    return "I've sent this plan for your approval. Tap Allow and I'll hand it out; nothing starts before that.";
+  };
+  const tellAsker = (who: PlanAsker, title: string, body: string): void => {
+    inbox.add({ level: "info", kind: "system", title: `${title} (from ${who.sourceAgent})`, body, dedupeKey: `chat-plan:${Date.now()}:${title}` });
+    const channel = who.sourceAgent;
+    if (!notificationSetup || !["telegram", "slack", "discord"].includes(channel)) return;
+    void notificationSetup.service
+      .sendTo([channel], "info", { level: "info", requestId: null, title, body, actions: [], agentBlocking: false })
+      .catch(() => undefined);
+  };
+
   // `/foreman …` typed in Slack or Discord. The channel already checked the
   // sender against its allowed_user_ids over a connection only Foreman
   // holds, so it runs as the owner, like the TUI. Audited either way.
@@ -700,6 +763,7 @@ export function startForeman(
       ...commandContext,
       sourceAgent: channel,
       sourceUser,
+      conversation: sourceUser,
       trustedOwner: true,
       integrationOwner: isIntegrationOwner(paths.notifyConfigPath, channel, userId),
     });

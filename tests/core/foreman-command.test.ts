@@ -819,6 +819,48 @@ describe("ForemanCommandRouter (#431)", () => {
   //   1 arg  → Foreman LLM model (provider-preserving)
   //   2 args, first = provider → Foreman LLM provider+model
   //   2 args, first = agent id → per-agent override (agents.model_version)
+  describe("chat plans (2.3.1)", () => {
+    const plan = [
+      { target: "it", task: "Analyse github.com/x/y; report to manager." },
+      { target: "manager", task: "Price IT's plan." },
+    ];
+    const chatWith = (answers: unknown[]) => ({
+      isEnabled: () => true,
+      answer: vi.fn(async (input: unknown) => {
+        answers.push(input);
+        return { status: "ok" as const, text: "IT analiz etsin, Manager fiyatlasın.", costUsd: 0, durationMs: 1, proposals: plan };
+      }),
+    });
+
+    it("sends the owner's plan for one approval and shows it numbered", async () => {
+      const answers: unknown[] = [];
+      const proposePlan = vi.fn(async () => "I've sent this plan for your approval.");
+      const result = await router.dispatch("Ekip", ["olarak", "analiz", "edin"], {
+        ...ctx,
+        sourceAgent: "telegram",
+        sourceUser: "telegram:42",
+        trustedOwner: true,
+        conversation: "telegram:42",
+        orchestratorChat: chatWith(answers),
+        proposePlan,
+      });
+      expect(answers[0]).toMatchObject({ question: "Ekip olarak analiz edin", conversation: "telegram:42", canPropose: true });
+      expect(proposePlan).toHaveBeenCalledWith(plan, { sourceAgent: "telegram", sourceUser: "telegram:42" });
+      expect(result.text).toBe(
+        "IT analiz etsin, Manager fiyatlasın.\n\n1. it: Analyse github.com/x/y; report to manager.\n2. manager: Price IT's plan.\n\nI've sent this plan for your approval.",
+      );
+    });
+
+    it("never starts a plan for an agent relaying the chat, or where no one can approve it", async () => {
+      const answers: unknown[] = [];
+      const proposePlan = vi.fn(async () => "sent");
+      await router.dispatch("analyse", ["it"], { ...ctx, orchestratorChat: chatWith(answers), proposePlan });
+      await router.dispatch("analyse", ["it"], { ...ctx, trustedOwner: true, orchestratorChat: chatWith(answers) });
+      expect(answers).toMatchObject([{ canPropose: false }, { canPropose: false }]);
+      expect(proposePlan).not.toHaveBeenCalled();
+    });
+  });
+
   describe("model", () => {
     beforeEach(() => {
       registry.register({

@@ -151,14 +151,30 @@ export interface ForemanCommandContext {
     answer(input: {
       question: string;
       focusAgentId?: string;
+      conversation?: string;
+      canPropose?: boolean;
     }): Promise<
-      | { status: "ok"; text: string; costUsd: number; durationMs: number }
+      | {
+          status: "ok";
+          text: string;
+          costUsd: number;
+          durationMs: number;
+          proposals?: { target: string; task: string }[];
+        }
       | { status: "disabled"; reason: string }
       | { status: "budget_exceeded"; spentUsd: number; capUsd: number }
       | { status: "failed"; reason: string }
       | { status: "empty_response" }
     >;
   };
+  /** Who is talking, where (`telegram:<user>`): the chat remembers the
+   *  conversation. Unset: every question stands alone. */
+  conversation?: string;
+  /** 2.3.1 — Ask you to approve a plan the chat proposed (one approval for
+   *  all its hand-offs); on allow, each is assigned as yours. Returns a
+   *  line for the reply. Only the owner surfaces set it, and only
+   *  `trustedOwner` requests use it. */
+  proposePlan?: (plan: ChatPlan, who: PlanAsker) => Promise<string>;
 }
 
 export interface ForemanCommandResult {
@@ -262,11 +278,22 @@ export class ForemanCommandRouter {
           `[${lookup.candidates.join(", ")}]; ask the user to clarify.\n\n` +
           question;
       }
+      const canPropose = ctx.trustedOwner === true && ctx.proposePlan !== undefined;
       const outcome = await ctx.orchestratorChat.answer({
         question,
         focusAgentId,
+        ...(ctx.conversation ? { conversation: ctx.conversation } : {}),
+        canPropose,
       });
-      return { ...renderChatOutcome(outcome), answeredByLlm: true };
+      const rendered = { ...renderChatOutcome(outcome), answeredByLlm: true };
+      if (outcome.status === "ok" && outcome.proposals && outcome.proposals.length > 0 && canPropose) {
+        const note = await ctx.proposePlan!(outcome.proposals, {
+          sourceAgent: ctx.sourceAgent,
+          ...(ctx.sourceUser ? { sourceUser: ctx.sourceUser } : {}),
+        });
+        return { ...rendered, text: [rendered.text, formatPlan(outcome.proposals), note].filter(Boolean).join("\n\n") };
+      }
+      return rendered;
     }
     return {
       ok: false,
@@ -366,6 +393,19 @@ export function plainTextRefusal(
 // middle of the task body stays intact.
 function stripLeadingPunctuation(s: string): string {
   return s.replace(/^[\s,;:–—-]+/u, "");
+}
+
+/** The approval a chat plan asks for (mediated like a tool call). */
+export const CHAT_PLAN_TOOL = "foreman_plan";
+export type ChatPlan = { target: string; task: string }[];
+export interface PlanAsker {
+  sourceAgent: string;
+  sourceUser?: string;
+}
+
+/** The plan as the chat shows it, numbered, one line per hand-off. */
+export function formatPlan(plan: readonly { target: string; task: string }[]): string {
+  return plan.map((p, i) => `${i + 1}. ${p.target}: ${p.task.length > 300 ? `${p.task.slice(0, 299)}…` : p.task}`).join("\n");
 }
 
 // Translates the chat service's outcome variants into a uniform
@@ -727,7 +767,7 @@ function reportHandler(
       ? REPORT_DEFAULT_QUESTION_TR
       : REPORT_DEFAULT_QUESTION_EN
     : trailing;
-  return ctx.orchestratorChat.answer({ question }).then((outcome) => {
+  return ctx.orchestratorChat.answer({ question, ...(ctx.conversation ? { conversation: ctx.conversation } : {}) }).then((outcome) => {
     if (outcome.status === "ok" || !isMeOrEmpty) return renderChatOutcome(outcome);
     const fallback = orgReport([], ctx, true)!;
     return { ...fallback, text: `${fallback.text}\n\n(${renderChatOutcome(outcome).text})` };

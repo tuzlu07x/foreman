@@ -1,4 +1,7 @@
 import type Database from "better-sqlite3";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EventBus,
@@ -245,6 +248,91 @@ describe("OrchestratorChat (#432)", () => {
         expect(outcome.status).toBe("empty_response");
       } finally {
         callSpy.mockRestore();
+      }
+    });
+  });
+
+  describe("a chat that remembers and proposes plans (2.3.1)", () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "foreman-chat-plan-"));
+      writeFileSync(
+        join(dir, "org.yaml"),
+        [
+          "version: 1",
+          "company: Acme",
+          "departments:",
+          "  it:",
+          "    name: IT",
+          "    head: backend-developer",
+          "roles:",
+          "  manager:",
+          "    title: Manager",
+          "    agent: manager",
+          "    reports_to: human",
+          "  backend-developer:",
+          "    title: Backend Developer",
+          "    agent: backend-developer",
+          "    department: it",
+          "    reports_to: manager",
+          "",
+        ].join("\n"),
+      );
+      secretStore.add("anthropic-key", "sk-ant-test");
+    });
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    const reply = (text: string) => ({ text, inputTokens: 10, outputTokens: 10, costUsd: 0, durationMs: 1, cacheHit: false });
+
+    it("hands the owner a plan, remembers the conversation, and forgets it after 30 minutes", async () => {
+      let now = 1_000_000;
+      const chat = new OrchestratorChat({ db, config: buildConfig(), secretStore, registry, orgConfigPath: join(dir, "org.yaml"), now: () => now });
+      const Anthropic = await import("../../src/core/llm/providers/anthropic.js");
+      const prompts: string[] = [];
+      const spy = vi.spyOn(Anthropic.AnthropicLlmClient.prototype, "call").mockImplementation(async (prompt: string) => {
+        prompts.push(prompt);
+        return prompts.length === 1
+          ? reply("IT analiz etsin, Manager maliyeti çıkarsın. Onaylıyor musun?\nASSIGN it :: Analyse github.com/x/y and report to manager.\nASSIGN manager :: Price IT's plan.\nASSIGN ghost :: nope")
+          : reply("Tamam.");
+      });
+      try {
+        const first = await chat.answer({ question: "Ekip olarak github.com/x/y'yi analiz edin", conversation: "telegram:1", canPropose: true });
+        expect(first).toMatchObject({
+          status: "ok",
+          text: "IT analiz etsin, Manager maliyeti çıkarsın. Onaylıyor musun?",
+          proposals: [
+            { target: "it", task: "Analyse github.com/x/y and report to manager." },
+            { target: "manager", task: "Price IT's plan." },
+          ],
+        });
+        expect(prompts[0]).toContain("ASSIGN <role or department id> :: <task>");
+        await chat.answer({ question: "tamam", conversation: "telegram:1", canPropose: true });
+        expect(prompts[1]).toContain("User: Ekip olarak github.com/x/y'yi analiz edin");
+        expect(prompts[1]).toContain("(proposed: it: Analyse github.com/x/y and report to manager.; manager: Price IT's plan.)");
+        // Another person's chat starts fresh.
+        await chat.answer({ question: "selam", conversation: "slack:2", canPropose: true });
+        expect(prompts[2]).not.toContain("Ekip olarak");
+        now += 31 * 60 * 1000;
+        expect(chat.history("telegram:1")).toEqual([]);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("proposes nothing to someone who can't approve a plan, and drops ASSIGN lines from the text", async () => {
+      const chat = new OrchestratorChat({ db, config: buildConfig(), secretStore, registry, orgConfigPath: join(dir, "org.yaml") });
+      const Anthropic = await import("../../src/core/llm/providers/anthropic.js");
+      let prompt = "";
+      const spy = vi.spyOn(Anthropic.AnthropicLlmClient.prototype, "call").mockImplementation(async (p: string) => {
+        prompt = p;
+        return reply("Durum iyi.\nASSIGN manager :: do something");
+      });
+      try {
+        const out = await chat.answer({ question: "durum ne?" });
+        expect(out).toEqual({ status: "ok", text: "Durum iyi.", costUsd: 0, durationMs: 1 });
+        expect(prompt).not.toContain("ASSIGN <role");
+      } finally {
+        spy.mockRestore();
       }
     });
   });
