@@ -465,6 +465,43 @@ export function formatPlan(plan: readonly { target: string; task: string }[]): s
   return plan.map((p, i) => `${i + 1}. ${p.target}: ${p.task.length > 300 ? `${p.task.slice(0, 299)}…` : p.task}`).join("\n");
 }
 
+/**
+ * Hand out an approved plan: each hand-off is `assign <target> <task>` as
+ * the person who asked, exactly like `/foreman assign` from their chat, and
+ * audited like it (`foreman:command`, with the approval's request id).
+ * Returns one ✓ / ✗ line per hand-off for the reply.
+ */
+export async function handOutPlan(
+  router: ForemanCommandRouter,
+  plan: ChatPlan,
+  who: PlanAsker,
+  ctx: Omit<ForemanCommandContext, "sourceAgent">,
+  opts: { approvalId: string; logEvent: (eventType: string, payload: unknown) => void },
+): Promise<string[]> {
+  const lines: string[] = [];
+  for (const p of plan) {
+    const args = [p.target, p.task];
+    const r = await router.dispatch("assign", args, {
+      ...ctx,
+      sourceAgent: who.sourceAgent,
+      ...(who.sourceUser ? { sourceUser: who.sourceUser } : {}),
+      trustedOwner: true,
+    });
+    opts.logEvent("foreman:command", {
+      command: "assign",
+      args,
+      sourceAgent: who.sourceAgent,
+      sourceUser: who.sourceUser ?? null,
+      ok: r.ok,
+      errorCode: r.errorCode ?? null,
+      via: CHAT_PLAN_TOOL,
+      requestId: opts.approvalId,
+    });
+    lines.push(`${r.ok ? "✓" : "✗"} ${p.target}: ${(r.text.split("\n")[r.ok ? 1 : 0] ?? r.text).slice(0, 200)}`);
+  }
+  return lines;
+}
+
 // Translates the chat service's outcome variants into a uniform
 // ForemanCommandResult. `disabled` / `budget_exceeded` / `failed` /
 // `empty_response` are surfaced as `ok: false` so the agent's relay can

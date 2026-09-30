@@ -11,6 +11,7 @@ import {
 import {
   ForemanCommandRouter,
   greetingReply,
+  handOutPlan,
   plainTextRefusal,
   registerBuiltinCommands,
   relayedCommandAccess,
@@ -883,6 +884,63 @@ describe("ForemanCommandRouter (#431)", () => {
       await router.dispatch("analyse", ["it"], { ...ctx, trustedOwner: true, orchestratorChat: chatWith(answers) });
       expect(answers).toMatchObject([{ canPropose: false }, { canPropose: false }]);
       expect(proposePlan).not.toHaveBeenCalled();
+    });
+
+    it("hands an approved plan out as the asker's assigns, each audited like /foreman assign", async () => {
+      const seen: Array<{ args: string[]; ctx: ForemanCommandContext }> = [];
+      const planRouter = new ForemanCommandRouter();
+      planRouter.register(
+        "assign",
+        (args, c) => {
+          seen.push({ args, ctx: c });
+          return args[0] === "it"
+            ? { ok: true, text: "→ backend-developer (Backend Developer) · backend\nSpawning backend with your task." }
+            : { ok: false, text: "'manager' is not a role, department or agent in org.yaml.", errorCode: "UNKNOWN_SUBCOMMAND" };
+        },
+        "assign",
+      );
+      const events: Array<[string, unknown]> = [];
+      const lines = await handOutPlan(planRouter, plan, { sourceAgent: "slack", sourceUser: "slack:U0BOSS" }, ctx, {
+        approvalId: "req-1",
+        logEvent: (type, payload) => events.push([type, payload]),
+      });
+      expect(seen.map((s) => s.args)).toEqual([
+        ["it", "Analyse github.com/x/y; report to manager."],
+        ["manager", "Price IT's plan."],
+      ]);
+      expect(seen.every((s) => s.ctx.sourceAgent === "slack" && s.ctx.sourceUser === "slack:U0BOSS" && s.ctx.trustedOwner === true)).toBe(true);
+      expect(lines).toEqual([
+        "✓ it: Spawning backend with your task.",
+        "✗ manager: 'manager' is not a role, department or agent in org.yaml.",
+      ]);
+      expect(events).toEqual([
+        [
+          "foreman:command",
+          {
+            command: "assign",
+            args: ["it", "Analyse github.com/x/y; report to manager."],
+            sourceAgent: "slack",
+            sourceUser: "slack:U0BOSS",
+            ok: true,
+            errorCode: null,
+            via: "foreman_plan",
+            requestId: "req-1",
+          },
+        ],
+        [
+          "foreman:command",
+          {
+            command: "assign",
+            args: ["manager", "Price IT's plan."],
+            sourceAgent: "slack",
+            sourceUser: "slack:U0BOSS",
+            ok: false,
+            errorCode: "UNKNOWN_SUBCOMMAND",
+            via: "foreman_plan",
+            requestId: "req-1",
+          },
+        ],
+      ]);
     });
   });
 

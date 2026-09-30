@@ -50,6 +50,7 @@ import { defaultLlmConfig, saveLlmConfig } from "../core/llm/config.js";
 import {
   CHAT_PLAN_TOOL,
   ForemanCommandRouter,
+  handOutPlan,
   plainTextRefusal,
   registerBuiltinCommands,
   type ChatPlan,
@@ -671,6 +672,7 @@ export function startForeman(
     const listed = plan.map((p) => `${p.target}: ${p.task.slice(0, 300)}`);
     void (async () => {
       let decision: "allowed" | "denied" = "denied";
+      let approvalId = "";
       try {
         const out = await mediator.handleRequest({
           sourceAgent: "foreman",
@@ -690,6 +692,7 @@ export function startForeman(
           },
         });
         decision = out.decision;
+        approvalId = out.requestId;
       } catch {
         decision = "denied";
       }
@@ -697,16 +700,10 @@ export function startForeman(
         tellAsker(who, "Plan not started", "Nobody allowed it (denied or timed out). Ask again when you want it.");
         return;
       }
-      const lines: string[] = [];
-      for (const p of plan) {
-        const r = await commandRouter.dispatch("assign", [p.target, p.task], {
-          ...commandContext,
-          sourceAgent: who.sourceAgent,
-          ...(who.sourceUser ? { sourceUser: who.sourceUser } : {}),
-          trustedOwner: true,
-        });
-        lines.push(`${r.ok ? "✓" : "✗"} ${p.target}: ${(r.text.split("\n")[r.ok ? 1 : 0] ?? r.text).slice(0, 200)}`);
-      }
+      const lines = await handOutPlan(commandRouter, plan, who, commandContext, {
+        approvalId,
+        logEvent: (type, payload) => audit.logEvent(type, payload),
+      });
       tellAsker(who, "Plan handed out", lines.join("\n"));
     })();
     return "I've sent this plan for your approval. Tap Allow and I'll hand it out; nothing starts before that.";
