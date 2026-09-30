@@ -845,6 +845,26 @@ describe("ForemanCommandRouter (#431)", () => {
     });
   });
 
+  describe("sentences that start with a command word (2.3.1)", () => {
+    it("reads \"Write the release notes as a team\" as plain words, but `write codex …` stays a hand-off", async () => {
+      registry.register({ id: "codex", displayName: "Codex", transport: "stdio" });
+      const answer = vi.fn(async () => ({ status: "ok" as const, text: "Sure.", costUsd: 0, durationMs: 1 }));
+      const chat = { isEnabled: () => true, answer };
+      const said = await router.dispatch("Write", ["the", "v2", "release", "notes", "as", "a", "team"], { ...ctx, orchestratorChat: chat });
+      expect(said.text).toBe("Sure.");
+      expect(answer).toHaveBeenCalledWith(expect.objectContaining({ question: "Write the v2 release notes as a team" }));
+      // Plain text from you: a sentence is a question; a hand-off still needs /foreman.
+      expect(plainTextRefusal(router, registry, "Write", ["the", "v2", "notes"])).toBeNull();
+      expect(plainTextRefusal(router, registry, "write", ["codex", "fix", "it"])).not.toBeNull();
+      // An agent relaying it: always treated as a hand-off.
+      expect(relayedCommandAccess(router, registry, "write", ["the", "v2", "notes"])).toBe("delegate");
+      // Without the chat, `write` explains itself as before.
+      const plain = await router.dispatch("write", ["the", "v2", "notes"], ctx);
+      expect(plain.ok).toBe(false);
+      expect(answer).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("chat plans (2.3.1)", () => {
     const plan = [
       { target: "it", task: "Analyse github.com/x/y; report to manager." },
@@ -2121,8 +2141,9 @@ describe("plain text in chat (#716)", () => {
     for (const [verb, ...args] of [["report", "me"], ["status"], ["help"], ["how", "are", "my", "agents?"], ["integration", "list"], ["pause", "claude-code"]]) {
       expect(plainTextRefusal(router, registry, verb!, args), verb).toBeNull();
     }
+    const codexKnown = { findByCommandToken: (t: string) => (t === "codex" ? ({ kind: "match" as const, agent: { id: "codex" } }) : ({ kind: "none" as const })) };
     for (const [verb, ...args] of [["stop"], ["tell", "marketing", "ship", "it"], ["integration", "disable", "github"], ["write", "codex", "fix", "it"], ["llm", "disable"]]) {
-      expect(plainTextRefusal(router, registry, verb!, args), verb).toBe(
+      expect(plainTextRefusal(router, codexKnown as never, verb!, args), verb).toBe(
         `That would change something, so I only run it as a command: send \`/foreman ${[verb, ...args].join(" ")}\`.`,
       );
     }

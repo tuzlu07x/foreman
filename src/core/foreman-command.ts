@@ -234,7 +234,7 @@ export class ForemanCommandRouter {
     ctx: ForemanCommandContext,
   ): Promise<ForemanCommandResult> {
     const handler = this.handlers.get(command.toLowerCase());
-    if (handler) {
+    if (handler && !isSentenceNotCommand(command, args, ctx)) {
       return await handler(args, ctx);
     }
     // #524 — Free-form agent invocation. Before falling through to the
@@ -385,6 +385,9 @@ export function plainTextRefusal(
   args: readonly string[],
 ): string | null {
   if (relayedCommandAccess(router, registry, command, args) === "read") return null;
+  // "Write the release notes as a team" is a sentence, not `write <agent>`:
+  // it goes to the chat (isSentenceNotCommand), which only reads.
+  if (command.toLowerCase() === "write" && args.length >= 2 && !namesAgent(registry, args[0]!)) return null;
   const typed = [command, ...args].join(" ");
   return `That would change something, so I only run it as a command: send \`/foreman ${typed}\`.`;
 }
@@ -450,6 +453,30 @@ function sameFailureAgain(
     return "Still the same problem as a moment ago, so I can't answer that yet. `report` and `model` work without it.";
   }
   return null;
+}
+
+function namesAgent(registry: Pick<RegistryService, "findByCommandToken">, token: string): boolean {
+  return registry.findByCommandToken(token).kind !== "none";
+}
+
+/** Plain words that start with a verb ("Write the v2 notes as a team",
+ *  "Assign someone to the bug") go to Foreman's chat instead of failing
+ *  as `write the …`: when the chat is on and the word after `write` /
+ *  `assign` names no agent, role or department. */
+function isSentenceNotCommand(command: string, args: readonly string[], ctx: ForemanCommandContext): boolean {
+  const verb = command.toLowerCase();
+  if ((verb !== "write" && verb !== "assign") || args.length < 2 || !ctx.orchestratorChat?.isEnabled()) return false;
+  const target = args[0]!;
+  if (namesAgent(ctx.registry, target) || ctx.registry.get(target) !== null) return false;
+  if (verb === "assign") {
+    try {
+      const doc = loadOrg(join(ctx.configDir, "org.yaml"));
+      if (doc && resolveAssignee(doc, target) !== null) return false;
+    } catch {
+      return false; // a broken org.yaml: let assign say so
+    }
+  }
+  return true;
 }
 
 /** The approval a chat plan asks for (mediated like a tool call). */
