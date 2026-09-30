@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, expect, it } from 'vitest'
@@ -89,6 +89,7 @@ interface AgentLogLine {
   spawnedBy: string | null
   server: { command: string; args: string[]; env: Record<string, string> } | null
   argv: string[]
+  cwd: string
 }
 
 let sandbox: Sandbox | null = null
@@ -192,11 +193,21 @@ it('One runtime, several roles: two Codex and a Claude Code instance each work a
     expect(backend.server?.env.FOREMAN_AGENT_TOKEN_FILE).toMatch(/agent-tokens\/backend\.token$/)
     expect(backend.task).toContain('You are Backend Developer (role "backend-dev" in Engineering) at Acme QA')
     expect(backend.argv.join(' ')).not.toMatch(/fat_[A-Za-z0-9_-]{8,}/)
+    // Codex always keeps its sandbox (read-only: nobody trusted it) and
+    // gets no "trusted directory" question; it works in its own folder.
+    expect(backend.argv).toContain('--skip-git-repo-check')
+    expect(backend.argv[backend.argv.indexOf('--sandbox') + 1]).toBe('read-only')
+    expect(backend.argv.join(' ')).not.toMatch(/danger|bypass/)
+    expect(backend.cwd).toBe(realpathSync(join(sb.env.HOME!, 'foreman-work', 'backend')))
     // reviewer is Claude Code, launched as reviewer, its role as a system prompt.
     const reviewer = byTask('Review the signup change')
     expect(reviewer).toMatchObject({ agent: 'claude-code', spawnedBy: 'reviewer' })
     expect(reviewer.server?.args.slice(-3)).toEqual(['mcp-stdio', '--source', 'reviewer'])
     expect(reviewer.argv).toContain('--append-system-prompt')
+    // Foreman's own tools are always allowed; no hook here, so Claude
+    // Code's own prompts stay on.
+    expect(reviewer.argv.join(' ')).toContain('--allowedTools mcp__foreman')
+    expect(reviewer.argv).not.toContain('--dangerously-skip-permissions')
     expect(reviewer.argv.join(' ')).toContain("Review the change and report findings with file and line. Don't edit files.")
     // The lead is the agent itself: launched as before.
     expect(byTask('Ship the signup feature')).toMatchObject({ agent: 'claude-code', spawnedBy: 'claude-code', server: null })

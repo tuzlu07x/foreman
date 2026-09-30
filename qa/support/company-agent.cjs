@@ -95,6 +95,7 @@ function play(task, argv = []) {
       depth: process.env.FOREMAN_SPAWN_DEPTH || null,
       server,
       argv,
+      cwd: process.cwd(),
     }) + '\n',
   )
   const book = JSON.parse(fs.readFileSync(process.env.QA_PLAYBOOK, 'utf8'))

@@ -72,6 +72,13 @@ import { agentsSharingTelegram } from "../core/notification/telegram-listener.js
 import { createRoleGuard } from "../core/org/role-guard.js";
 import { ensureAgentToken } from "../core/agent-token.js";
 import { loadOrg } from "../core/org/org.js";
+import {
+  claudeHookInstalled,
+  roleWorkspace,
+  taskPermissions,
+  type TaskPermissionInput,
+  type TaskPermissions,
+} from "../core/task-permissions.js";
 import type { AgentEntry } from "../core/registry-catalog.js";
 import {
   catalogEntryFor,
@@ -1277,7 +1284,18 @@ export function startForeman(
             const taskUsageKey = otlpBoundPort
               ? otlp.issueTaskKey(agentId, String(row.id))
               : null;
-            const launch = entry ? instanceLaunchFor(agentId, entry, secretStore, paths) : null;
+            const instance = entry ? instanceLaunchFor(agentId, entry, secretStore, paths) : null;
+            const trusted = registryRow?.taskSkipPermissions === true;
+            const permissions = entry ? taskPermissionsFor(agentId, entry, trusted, paths.orgConfigPath) : null;
+            const cwd = taskCwd(agentId, derivedCwd);
+            const launch =
+              permissions || instance
+                ? {
+                    args: [...(instance?.args ?? []), ...(permissions?.args ?? [])],
+                    env: instance?.env ?? {},
+                    taskPrefix: instance?.taskPrefix ?? "",
+                  }
+                : null;
             const exec = await executeWriteDirective(
               {
                 agentId,
@@ -1286,8 +1304,10 @@ export function startForeman(
                 sourceUser: row.sourceUser ?? undefined,
                 entry,
                 modelVersion: registryRow?.modelVersion ?? null,
-                taskSkipPermissions: registryRow?.taskSkipPermissions === true,
-                ...(derivedCwd ? { cwd: derivedCwd } : {}),
+                // Covered runtimes get their flags from taskPermissions;
+                // the catalog's skip flag is for the others.
+                taskSkipPermissions: permissions ? false : trusted,
+                ...(cwd ? { cwd } : {}),
                 // Report the task's token usage to the spend ledger, with
                 // a key that can only book usage to this agent and task.
                 ...(otlpBoundPort && taskUsageKey
@@ -2244,6 +2264,36 @@ function telegramSharedWith(registry: RegistryService): string[] {
     // Without the catalog we can't tell: assume an agent may share the bot,
     // so Foreman never fights it for updates.
     return ["unknown"];
+  }
+}
+
+/** The flags for what the agent may do on its own during the task
+ *  (task-permissions.ts), or null for an agent they don't cover. */
+function taskPermissionsFor(agentId: string, entry: AgentEntry, trusted: boolean, orgConfigPath: string): TaskPermissions | null {
+  let can: TaskPermissionInput["can"];
+  try {
+    const org = loadOrg(orgConfigPath);
+    can = org ? Object.values(org.roles).find((r) => r.agent === agentId)?.can : undefined;
+  } catch {
+    // An unreadable org.yaml: no write, no network. The task still runs.
+    can = ["read"];
+  }
+  return taskPermissions({
+    runtime: entry.id,
+    trusted,
+    hookInstalled: entry.id === "claude-code" ? claudeHookInstalled(entry.config_paths ?? []) : null,
+    can,
+  });
+}
+
+/** The folder a task runs in: the one the task names, else the role's own
+ *  workspace (null when it can't be made: the service's cwd, as before). */
+function taskCwd(agentId: string, fromTask: string | undefined): string | undefined {
+  if (fromTask) return fromTask;
+  try {
+    return roleWorkspace(agentId);
+  } catch {
+    return undefined;
   }
 }
 
