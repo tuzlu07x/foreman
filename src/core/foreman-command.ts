@@ -258,6 +258,9 @@ export class ForemanCommandRouter {
       // through to LLM so "openclaw" by itself becomes "ne yapıyor
       // openclaw?", not an awkward empty-task error.
     }
+    // "hey", "selam": a short hello and what to try, no LLM call.
+    const hello = greetingReply(command, args);
+    if (hello) return { ok: true, text: hello };
     // #432 — Free-form fallback. When the verb isn't registered but
     // Foreman LLM orchestrator chat is enabled, treat the whole input
     // (`<command> <args...>`) as a natural-language question. Agent id
@@ -285,7 +288,7 @@ export class ForemanCommandRouter {
         ...(ctx.conversation ? { conversation: ctx.conversation } : {}),
         canPropose,
       });
-      const rendered = { ...renderChatOutcome(outcome), answeredByLlm: true };
+      const rendered = { ...renderChatOutcome(outcome), answeredByLlm: true, text: sameFailureAgain(ctx.conversation, outcome) ?? renderChatOutcome(outcome).text };
       if (outcome.status === "ok" && outcome.proposals && outcome.proposals.length > 0 && canPropose) {
         const note = await ctx.proposePlan!(outcome.proposals, {
           sourceAgent: ctx.sourceAgent,
@@ -393,6 +396,60 @@ export function plainTextRefusal(
 // middle of the task body stays intact.
 function stripLeadingPunctuation(s: string): string {
   return s.replace(/^[\s,;:–—-]+/u, "");
+}
+
+const GREETINGS_EN = new Set(["hi", "hey", "hello", "yo", "hiya", "morning"]);
+const GREETINGS_TR = new Set(["selam", "merhaba", "sa", "slm", "mrb", "hey", "günaydın", "gunaydin", "iyi"]);
+
+/** A bare greeting gets a short hello and what to try (finding 10): no
+ *  LLM call, no command list. Null for anything else. */
+export function greetingReply(command: string, args: readonly string[]): string | null {
+  const words = [command, ...args].map((w) => w.toLowerCase().replace(/[!.,?]+$/u, "")).filter(Boolean);
+  if (words.length === 0 || words.length > 2) return null;
+  const tr = words.every((w) => GREETINGS_TR.has(w) || ["kanka", "abi", "foreman"].includes(w)) && !words.every((w) => GREETINGS_EN.has(w));
+  const en = words.every((w) => GREETINGS_EN.has(w) || ["there", "foreman"].includes(w));
+  if (tr) {
+    return [
+      "Selam! Ben Foreman. Şunları deneyebilirsin:",
+      "• report me: ekip ne yapıyor",
+      "• model: kim hangi programla ve modelle çalışıyor",
+      "• ya da ne istediğini yaz: \"github.com/… projesini ekip olarak analiz edin\"; kime ne vereceğimi önerir, onayını beklerim.",
+    ].join("\n");
+  }
+  if (en) {
+    return [
+      "Hi! I'm Foreman. Try:",
+      "• report me: what the team is doing",
+      "• model: who runs on which program and model",
+      "• or just say what you want done: \"analyse github.com/… as a team\"; I'll propose who does what and wait for your OK.",
+    ].join("\n");
+  }
+  return null;
+}
+
+/** A conversation's last LLM failure, so the same one isn't repeated in
+ *  full on every message (finding 9). */
+const lastFailure = new Map<string, { text: string; at: number }>();
+const FAILURE_REPEAT_MS = 10 * 60 * 1000;
+
+function sameFailureAgain(
+  conversation: string | undefined,
+  outcome: { status: string },
+  now: number = Date.now(),
+): string | null {
+  if (!conversation) return null;
+  if (outcome.status === "ok") {
+    lastFailure.delete(conversation);
+    return null;
+  }
+  const text = renderChatOutcome(outcome as Parameters<typeof renderChatOutcome>[0]).text;
+  const before = lastFailure.get(conversation);
+  lastFailure.set(conversation, { text, at: now });
+  if (lastFailure.size > 200) lastFailure.delete(lastFailure.keys().next().value!);
+  if (before && before.text === text && now - before.at < FAILURE_REPEAT_MS) {
+    return "Still the same problem as a moment ago, so I can't answer that yet. `report` and `model` work without it.";
+  }
+  return null;
 }
 
 /** The approval a chat plan asks for (mediated like a tool call). */

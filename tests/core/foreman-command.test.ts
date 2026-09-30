@@ -10,6 +10,7 @@ import {
 } from "../../src/core/event-bus.js";
 import {
   ForemanCommandRouter,
+  greetingReply,
   plainTextRefusal,
   registerBuiltinCommands,
   relayedCommandAccess,
@@ -819,6 +820,30 @@ describe("ForemanCommandRouter (#431)", () => {
   //   1 arg  → Foreman LLM model (provider-preserving)
   //   2 args, first = provider → Foreman LLM provider+model
   //   2 args, first = agent id → per-agent override (agents.model_version)
+  describe("chat manners (2.3.1)", () => {
+    it("answers a bare hello with a short hello and what to try, in Turkish or English, without the LLM", async () => {
+      const answer = vi.fn();
+      const chat = { isEnabled: () => true, answer };
+      const tr = await router.dispatch("selam", ["kanka"], { ...ctx, orchestratorChat: chat });
+      expect(tr.text).toMatch(/^Selam! Ben Foreman/);
+      const en = await router.dispatch("hey", [], { ...ctx, orchestratorChat: chat });
+      expect(en.text).toMatch(/^Hi! I'm Foreman/);
+      expect(greetingReply("hey", ["what", "is", "codex", "doing"])).toBeNull();
+      expect(answer).not.toHaveBeenCalled();
+    });
+
+    it("doesn't repeat the same failure in full on every message", async () => {
+      const chat = { isEnabled: () => true, answer: async () => ({ status: "failed" as const, reason: "401 invalid x-api-key" }) };
+      const c = { ...ctx, orchestratorChat: chat, conversation: "telegram:7" };
+      const first = await router.dispatch("ne", ["durumdayız"], c);
+      expect(first.text).toContain("401");
+      const second = await router.dispatch("peki", ["şimdi?"], c);
+      expect(second.text).toMatch(/^Still the same problem/);
+      const elsewhere = await router.dispatch("ne", ["durumdayız"], { ...c, conversation: "slack:8" });
+      expect(elsewhere.text).toContain("401");
+    });
+  });
+
   describe("chat plans (2.3.1)", () => {
     const plan = [
       { target: "it", task: "Analyse github.com/x/y; report to manager." },
