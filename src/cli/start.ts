@@ -127,6 +127,7 @@ import {
   mirrorsFromNotifyConfig,
 } from "../core/org/comms-mirror.js";
 import { OrgComms } from "../core/org/comms.js";
+import { ownerNotifier } from "../core/org/owner-notice.js";
 import { ApprovalReviews, ApprovalReviewWorker } from "../core/org/review.js";
 import { BudgetWatcher } from "../core/usage/budget-watcher.js";
 import { UsageLedger } from "../core/usage/ledger.js";
@@ -165,6 +166,7 @@ import {
   channelConfig,
   loadNotifyConfig,
   routeFor,
+  type NotifyConfig,
 } from "../core/notification/notify-config.js";
 import { loadNotifyState } from "../core/notification/notify-state.js";
 import {
@@ -712,13 +714,24 @@ export function startForeman(
 
   // Department channels (#630): mirror what agents say to each other to
   // the Slack / Discord channels org.yaml maps, with the bot tokens from
-  // notify.yaml. Agents never hold those tokens.
+  // notify.yaml. Agents never hold those tokens. Messages to you also go
+  // to your Telegram / Slack / Discord (finding 33): this worker is the
+  // one place that sees every row, whichever mcp-stdio process wrote it.
   const commsMirror = new CommsMirrorWorker(db, {
     orgConfigPath: paths.orgConfigPath,
     mirrors: mirrorsFromNotifyConfig(
       chatBotTokens(paths.notifyConfigPath, secretStore),
     ),
     inbox,
+    ...(notificationSetup
+      ? {
+          owner: ownerNotifier({
+            service: notificationSetup.service,
+            config: notificationSetup.config,
+            getState: () => loadNotifyState(paths.notifyStatePath),
+          }),
+        }
+      : {}),
   });
   if (!attach) commsMirror.start();
 
@@ -1638,6 +1651,7 @@ function setupNotificationBridge(args: {
   bridge: NotificationBridge;
   scheduler: DailyScheduler | null;
   service: NotificationService;
+  config: NotifyConfig;
   channelIds: string[];
 } | null {
   let config;
@@ -1721,7 +1735,7 @@ function setupNotificationBridge(args: {
     }
   }
 
-  return { bridge, scheduler, service, channelIds: [...channels.keys()] };
+  return { bridge, scheduler, service, config, channelIds: [...channels.keys()] };
 }
 
 // =============================================================================

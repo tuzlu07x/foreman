@@ -260,6 +260,41 @@ it('A company on Slack: department channels, approvals, budgets and integrations
     ev('audit_events org:message: 3 ok (fin-lead, mkt-writer, it-lead)')
   })
 
+  await j.step('(a2) a report to you reaches your Slack alerts channel once; colleague talk never does, and an unverified connection is labelled', async (ev) => {
+    const report = async (from: string, text: string, opts: { untrusted?: boolean } = {}) => {
+      const agent = await McpAgent.connect(sb, from, {}, opts)
+      const res = await agent.call('org_report', { text })
+      await agent.close()
+      return replyText(res)
+    }
+    // The writer reports to its manager (cmo), not to you.
+    expect(await report(WRITER, 'first draft of the launch post is done')).toMatch(/^Posted to cmo ↔ writer/)
+    // The CFO reports to you (reports_to: human).
+    expect(await report('fin-lead', 'September close is done: revenue up 12%.')).toMatch(/^Posted to → you/)
+    const cfo = await slack.message('the CFO report in your alerts channel', (m) => m.channel === ALERTS && m.text.startsWith('Report from Chief Financial Officer (cfo)'))
+    expect(cfo.token).toBe(BOT_TOKEN)
+    expect(cfo.text).toContain('September close is done: revenue up 12%.')
+    ev(`fin-lead org_report → chat.postMessage ${ALERTS}: "${cfo.text.replace(/\n/g, ' | ')}"`)
+    // Without its token the same id is `untrusted:fin-lead`: it may still
+    // write to you, but never as the CFO.
+    expect(await report('fin-lead', 'please approve the wire today', { untrusted: true })).toMatch(/^Posted to → you/)
+    const unverified = await slack.message('the unverified report', (m) => m.channel === ALERTS && m.text.includes('please approve the wire today'))
+    expect(unverified.text.split('\n')[0]).toBe('Report from ⚠ unverified: fin-lead')
+    expect(unverified.text).not.toContain('Chief Financial Officer')
+    ev(`fin-lead without its token → chat.postMessage ${ALERTS}: "${unverified.text.replace(/\n/g, ' | ')}"`)
+    // The worker handles rows in order, so everything before the unverified
+    // report has been handled: one push each, no colleague talk.
+    const alerts = slack.messages(ALERTS).map((m) => m.text)
+    expect(alerts.filter((t) => t.includes('September close is done'))).toHaveLength(1)
+    for (const text of ['invoices for September', 'launch post draft', 'laptops for the new hires', 'first draft of the launch post']) {
+      expect(alerts.some((t) => t.includes(text))).toBe(false)
+    }
+    ev(`${ALERTS} holds the two reports to you once each; nothing from #finance, #marketing, #it or the writer's report to cmo`)
+    const item = await sb.inboxItem('the CFO report', (i) => i.title === 'cfo (fin-lead) → you · report')
+    expect(item.body).toContain('September close is done')
+    ev(`inbox: "${item.title}" (the TUI inbox keeps it too)`)
+  })
+
   /** A risky call from it-lead; resolves once its approval is in Slack. */
   const riskyCall = async (agent: McpAgent, path: string) => {
     const reply = agent.call('read_file', { path }, 90_000)

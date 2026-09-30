@@ -318,7 +318,7 @@ manager. Everything goes through Foreman, and you can read all of it.
 | `#leadership`   | department heads and the roles that report to you                                     |
 | `#all-hands`    | everyone in the org                                                                   |
 | role ↔ role     | a role with its manager, its reports and its department (and heads with heads)        |
-| → you           | anyone: reports and questions for you land in the TUI inbox                           |
+| → you           | anyone: reports and questions for you land in the TUI inbox and on your phone         |
 
 Agents use three MCP tools (every agent on `foreman mcp-stdio` has them):
 
@@ -335,6 +335,17 @@ marketing"). Every post is audited (`org:message`), secrets are redacted,
 and nothing in a message is ever executed. Only you post as yourself:
 `boss`, `all`, `leadership` and the other channel words are reserved, so
 no role, department or agent can use them.
+
+Messages to you (reports, questions, a role's direct message) also reach
+every chat channel you enabled in `notify.yaml`: Telegram, Slack and
+Discord. They say who wrote them (`Report from Engineering Manager
+(manager)`), long ones are clipped with a pointer to
+`foreman org messages boss`, and one from an agent that connected without
+its token is marked `⚠ unverified: <id>`. Talk between colleagues stays
+off your phone. `foreman notify silence` holds these pushes too; a muted
+agent's messages only reach the inbox. When `channels.boss` already
+mirrors to the very Slack or Discord channel your notifications go to,
+that channel gets the message once.
 
 **You** read and write from anywhere Foreman knows it's you:
 
