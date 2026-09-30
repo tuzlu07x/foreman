@@ -11,6 +11,7 @@ import {
 import {
   ForemanCommandRouter,
   greetingReply,
+  planApprovalNote,
   handOutPlan,
   plainTextRefusal,
   registerBuiltinCommands,
@@ -863,6 +864,11 @@ describe("ForemanCommandRouter (#431)", () => {
       expect(plain.ok).toBe(false);
       expect(answer).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("says where to approve a plan: a command in the TUI, a button in a chat app", () => {
+    expect(planApprovalNote("tui")).toContain("Type `allow` here");
+    expect(planApprovalNote("telegram")).toContain("Tap Allow on the approval message");
   });
 
   describe("chat plans (2.3.1)", () => {

@@ -248,7 +248,7 @@ it('Chat that hands out work: a plan proposed from Slack, one approval, the team
     expect(text).not.toContain('ghost')
     expect(text).not.toContain('rm -rf')
     expect(text).not.toContain('ASSIGN')
-    expect(text).toContain("I've sent this plan for your approval. Tap Allow and I'll hand it out; nothing starts before that.")
+    expect(text).toContain("I've sent this plan for your approval. Tap Allow on the approval message (or approve it in the TUI); nothing starts before that.")
     ev(`${BOSS} /foreman ${ASK_ANALYSIS} → "${oneLine(text)}"`)
     const call = await llm.call('the analysis question', (q) => q === ASK_ANALYSIS)
     firstPrompt = call.prompt
