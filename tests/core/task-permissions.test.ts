@@ -31,6 +31,8 @@ describe("task permissions", () => {
         const args = taskPermissions({ runtime: "codex", trusted, hookInstalled: null, can })!.args;
         expect(args.join(" ")).not.toMatch(/danger|bypass|full-access/);
         expect(args).toContain("--skip-git-repo-check");
+        // Its approval policy is "never" headless: Foreman's tools must not need one.
+        expect(args).toContain('mcp_servers.foreman.default_tools_approval_mode="approve"');
         expect(args[args.indexOf("--sandbox") + 1]).toMatch(/^(read-only|workspace-write)$/);
       }
     }
@@ -38,6 +40,8 @@ describe("task permissions", () => {
     expect(codexSandboxFor({ trusted: true, can: undefined })).toEqual({ sandbox: "workspace-write", network: true });
     expect(taskPermissions({ runtime: "codex", trusted: true, hookInstalled: null, can: undefined })!.args).toEqual([
       "--skip-git-repo-check",
+      "-c",
+      'mcp_servers.foreman.default_tools_approval_mode="approve"',
       "--sandbox",
       "workspace-write",
       "-c",

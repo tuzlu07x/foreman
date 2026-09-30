@@ -131,8 +131,18 @@ function play(received, argv = []) {
   if (!rule) return 'Done: ' + task
   const lines = [rule.reply]
   const mcp = server || userServer()
-  if (rule.post) lines.push('posted: ' + (mcp ? mcpCall(mcp, 'org_post', { to: rule.post[0], text: rule.post[1] }) : 'no Foreman server in this launch'))
-  if (rule.report) lines.push('reported: ' + (mcp ? mcpCall(mcp, 'org_report', { text: rule.report }) : 'no Foreman server in this launch'))
+  // Like the real Codex (0.159) run headless: its approval policy is
+  // "never", so a tool call it would ask about is refused unless the
+  // server's tools are approved up front (or all approvals are bypassed).
+  const refused =
+    agent === 'codex' &&
+    mcp &&
+    mcp.default_tools_approval_mode !== 'approve' &&
+    !argv.includes('--dangerously-bypass-approvals-and-sandbox')
+  const call = (name, args) =>
+    refused ? `rejected: ${name} requires approval and the active approval policy is "never"` : mcpCall(mcp, name, args)
+  if (rule.post) lines.push('posted: ' + (mcp ? call('org_post', { to: rule.post[0], text: rule.post[1] }) : 'no Foreman server in this launch'))
+  if (rule.report) lines.push('reported: ' + (mcp ? call('org_report', { text: rule.report }) : 'no Foreman server in this launch'))
   for (const [to, subtask] of rule.delegate || []) {
     const r = spawnSync('foreman', ['write', to, subtask], { encoding: 'utf8', env: process.env })
     const said = ((r.stderr || '') + (r.stdout || '')).trim().split('\n')[0]
