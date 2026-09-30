@@ -14,7 +14,7 @@ import {
 } from "../../src/core/orchestrator-snapshot.js";
 import { RegistryService } from "../../src/core/registry.js";
 import { createInMemoryDb, type ForemanDb } from "../../src/db/client.js";
-import { requests, sessions } from "../../src/db/schema.js";
+import { orgMessages, requests, sessions } from "../../src/db/schema.js";
 
 describe("buildOrchestratorSnapshot (#432)", () => {
   let db: ForemanDb;
@@ -65,6 +65,19 @@ describe("buildOrchestratorSnapshot (#432)", () => {
     expect(snap.activeSessions).toHaveLength(0);
     expect(snap.agents).toHaveLength(0);
     expect(snap.capturedAt).toBe(NOW);
+  });
+
+  it("carries the latest reports, newest first, cut to size", () => {
+    const row = (id: string, ts: number, channel: string, kind: "report" | "message", text: string) =>
+      db.insert(orgMessages).values({ id, ts, channel, fromAgent: "backend-developer", fromRole: "backend-developer", kind, text }).run();
+    row("m1", NOW - 3000, "dm:backend-developer|manager", "report", "Old analysis");
+    row("m2", NOW - 2000, "boss", "report", "x".repeat(5000));
+    row("m3", NOW - 1000, "dept:it", "message", "chit-chat");
+    const snap = buildOrchestratorSnapshot(db, registry, { now: () => NOW });
+    expect(snap.reports.map((r) => [r.to, r.text.length])).toEqual([
+      ["you", 1500],
+      ["dm:backend-developer|manager", 12],
+    ]);
   });
 
   it("caps requests at lastN (default 30)", () => {
@@ -206,6 +219,7 @@ describe("buildOrchestratorPrompt (#432)", () => {
     ],
     team: null,
     handoffs: [],
+    reports: [],
     capturedAt: 1_700_000_000_000,
   };
 
@@ -270,6 +284,7 @@ describe("chat that hands out work (2.3.1)", () => {
     agents: [{ id: "manager", displayName: "manager", status: "active" as const, lastSeenAt: null, responsibilityNote: null }],
     team,
     handoffs: [{ source: "telegram", target: "manager", task: "Analyse the repo", status: "applied" as const, createdAt: 500 }],
+    reports: [{ from: "Backend Developer (backend-developer)", to: "manager", text: "Stack: TypeScript.\nTop priority: DNS tests.", createdAt: 900 }],
     capturedAt: 1_000,
   };
 
@@ -293,6 +308,24 @@ describe("chat that hands out work (2.3.1)", () => {
     // Agent text lives between the snapshot markers, after the rules.
     expect(prompt.indexOf("rm -rf")).toBeGreaterThan(prompt.indexOf("SNAPSHOT"));
     expect(prompt.indexOf("rm -rf")).toBeLessThan(prompt.indexOf("END SNAPSHOT"));
+  });
+
+  it("shows the latest reports, so the owner can ask for the results (2.3.1 real test)", () => {
+    const prompt = buildOrchestratorPrompt({ snapshot: snap, question: "give me the analysis" });
+    expect(prompt).toContain("Backend Developer (backend-developer) → manager:\n      Stack: TypeScript.\n      Top priority: DNS tests.");
+    expect(prompt.indexOf("Top priority")).toBeLessThan(prompt.indexOf("END SNAPSHOT"));
+  });
+
+  it("keeps the approval question out of the task", () => {
+    const allowed = new Set(["manager", "it"]);
+    const { proposals } = parseAssignProposals(
+      "ASSIGN manager :: Combine IT's analysis with a time and cost estimate. Do you approve?\nASSIGN it :: Analiz et ve raporla. Onaylıyor musun?",
+      allowed,
+    );
+    expect(proposals).toEqual([
+      { target: "manager", task: "Combine IT's analysis with a time and cost estimate." },
+      { target: "it", task: "Analiz et ve raporla." },
+    ]);
   });
 
   it("offers no plans unless the owner can approve one", () => {

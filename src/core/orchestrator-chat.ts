@@ -32,7 +32,8 @@ import type { RegistryService } from "./registry.js";
 // new feature line `orchestrator_chat` and the global budget cap stays
 // effective.
 
-const DEFAULT_MAX_TOKENS = 350;
+/** Room to summarise a report the user asks for. */
+const DEFAULT_MAX_TOKENS = 700;
 /** Room for a short plan and its ASSIGN lines. */
 const PLAN_MAX_TOKENS = 900;
 const DEFAULT_TEMPERATURE = 0.3;

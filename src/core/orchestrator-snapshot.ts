@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, or } from "drizzle-orm";
 import type { ForemanDb } from "../db/client.js";
-import { controlCommands, requests, sessions } from "../db/schema.js";
+import { controlCommands, orgMessages, requests, sessions } from "../db/schema.js";
 import { loadOrg, type OrgDoc } from "./org/org.js";
 import type { RegistryService } from "./registry.js";
 
@@ -67,10 +67,16 @@ export interface OrchestratorSnapshot {
     status: "pending" | "applied" | "failed" | "rejected";
     createdAt: number;
   }>;
+  /** Latest reports (org_report), newest first, each cut to
+   *  REPORT_CHARS: "give me the analysis" is answered from these. */
+  reports: Array<{ from: string; to: string; text: string; createdAt: number }>;
   /** When the snapshot was built. LLM uses this to anchor relative
    *  phrasing like "5 minutes ago". */
   capturedAt: number;
 }
+
+const REPORTS_IN_SNAPSHOT = 6;
+const REPORT_CHARS = 1500;
 
 export interface TeamSnapshot {
   company: string;
@@ -234,6 +240,19 @@ export function buildOrchestratorSnapshot(
         createdAt: c.createdAt,
       };
     }),
+    reports: db
+      .select()
+      .from(orgMessages)
+      .where(eq(orgMessages.kind, "report"))
+      .orderBy(desc(orgMessages.ts))
+      .limit(REPORTS_IN_SNAPSHOT)
+      .all()
+      .map((m) => ({
+        from: m.fromRole && m.fromRole !== m.fromAgent ? `${m.fromRole} (${m.fromAgent})` : m.fromAgent,
+        to: m.channel === "boss" ? "you" : m.channel,
+        text: m.text.length > REPORT_CHARS ? `${m.text.slice(0, REPORT_CHARS - 1)}…` : m.text,
+        createdAt: m.ts,
+      })),
     capturedAt: now,
   };
 }
@@ -315,12 +334,21 @@ export function parseAssignProposals(
       continue;
     }
     const target = m[1]!;
-    const task = m[2]!.slice(0, MAX_TASK_CHARS);
+    const task = stripApprovalQuestion(m[2]!).slice(0, MAX_TASK_CHARS);
+    if (!task) continue;
     if (allowed.has(target) && proposals.length < MAX_PROPOSALS && !proposals.some((p) => p.target === target && p.task === task)) {
       proposals.push({ target, task });
     }
   }
   return { text: kept.join("\n").trim(), proposals };
+}
+
+/** A trailing "Do you approve?" belongs to the user, not the task (2.3.1
+ *  real test: it reached the manager as part of its task). */
+function stripApprovalQuestion(task: string): string {
+  return task
+    .replace(/\s*(?:(?:do|shall|should|can|may) (?:you|i|we)[^.?!]*|onaylı?yor musun|onaylar mısın|onay veriyor musun|ok|okay|tamam mı)\?\s*$/iu, "")
+    .trim();
 }
 
 /** Bound one line of agent-supplied text for the prompt. */
@@ -376,6 +404,10 @@ export function buildOrchestratorPrompt(args: BuildPromptArgs): string {
     (h) => `  - ${describeAgo(snap.capturedAt - h.createdAt)}: ${h.source} → ${h.target} (${h.status}): ${clip(h.task, 160)}`,
   );
 
+  const reportLines = (snap.reports ?? []).map(
+    (r) => `  - ${describeAgo(snap.capturedAt - r.createdAt)}, ${r.from} → ${r.to}:\n${r.text.split("\n").map((l) => `      ${l}`).join("\n")}`,
+  );
+
   const historyLines = (args.history ?? []).slice(-6).map(
     (t) => `${t.role === "user" ? "User" : "Foreman"}: ${clip(t.text, 600)}`,
   );
@@ -392,7 +424,7 @@ export function buildOrchestratorPrompt(args: BuildPromptArgs): string {
         `  - Then, at the very end, one line per hand-off, exactly: ${ASSIGN_LINE_FORMAT}`,
         `  - Use only role or department ids from "Your team" below. At most ${MAX_PROPOSALS} lines. Prefer a department id or a lead when the work spans a team: the lead splits it further.`,
         "  - Each task must stand on its own: what to do, on what (repo URL, path), and what to report back.",
-        "  - Close by asking the user to approve the plan; nothing starts before they do.",
+        "  - Close by asking the user to approve the plan, in your text: never inside an ASSIGN line. Nothing starts before they approve.",
         "  - If you need one detail first (which repo? by when?), ask it instead, with no ASSIGN lines.",
         "Never write ASSIGN lines when the user only asks a question.",
       ]
@@ -419,6 +451,9 @@ export function buildOrchestratorPrompt(args: BuildPromptArgs): string {
     "",
     "Latest hand-offs, newest first:",
     handoffLines.length > 0 ? handoffLines.join("\n") : "  (none)",
+    "",
+    "Latest reports, newest first (quote or summarise them when the user asks for results):",
+    reportLines.length > 0 ? reportLines.join("\n") : "  (none)",
     "",
     `Recent requests (${snap.recentRequests.length}, newest first):`,
     requestLines.length > 0 ? requestLines.join("\n") : "  (none)",
