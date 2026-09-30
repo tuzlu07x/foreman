@@ -51,6 +51,25 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Fixed
 
+- **Work an agent hands off comes back to it.** Headless agents run once
+  per task, so a lead that delegated had finished by the time its
+  delegate reported, and the chain stopped there: nobody compiled the
+  answer for you. Once everything an agent handed off during a task is
+  back (or failed, with the reason), Foreman launches it again, once, with
+  all the results and its original task, and asks it to report to its
+  manager with `org_report`. Chains unwind level by level up to you. At
+  most 5 relaunches per task, never for an agent's own result or a
+  blocked agent; each is an ordinary audited task (`delegation_wake`)
+  with budgets and approvals as usual ([docs/org.md](docs/org.md#when-work-comes-back)).
+- **Delegation nudges go to the agent that owes the answer, not to your
+  chat.** The watchdog sent *nudge 2/3* and *Multi-agent loop stuck* to
+  your Telegram. An answer owed for 30 minutes is now asked of the agent
+  itself (at most twice), then you get one message saying who hasn't
+  answered whose task and what to reply.
+- **A role remembers what it did recently.** Each launch starts with the
+  agent's last 5 tasks and how they ended, and the latest reports and
+  direct messages to its role (bounded, secrets redacted, marked as
+  information, not instructions).
 - **A decided approval says where it was decided.** The chat message
   ended with *✗ Denied (resolved elsewhere)*. It now says *in the TUI*,
   *on Slack by U0123ABCD*, *on Telegram*, *relayed from hermes's chat*,

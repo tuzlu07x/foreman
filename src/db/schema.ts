@@ -531,6 +531,16 @@ export const delegations = sqliteTable(
       .notNull()
       .default("open"),
     spawnOutcome: text("spawn_outcome"),
+    // Closing the loop (0030, delegation-loop.ts): which hand-off this run
+    // works on, the sender's thread when it handed off, what the run
+    // produced, and whether the result went back to the sender.
+    threadId: text("thread_id"),
+    parentThreadId: text("parent_thread_id"),
+    resultText: text("result_text"),
+    settledAt: integer("settled_at"),
+    wokenAt: integer("woken_at"),
+    wakeControlId: integer("wake_control_id"),
+    escalatedAt: integer("escalated_at"),
   },
   (t) => ({
     statusOutputIdx: index("delegations_status_output_idx").on(
@@ -539,11 +549,31 @@ export const delegations = sqliteTable(
     ),
     initiatorIdx: index("delegations_initiator_idx").on(t.initiatorAgent),
     targetIdx: index("delegations_target_idx").on(t.targetAgent),
+    threadIdx: index("delegations_thread_idx").on(t.threadId),
+    parentThreadIdx: index("delegations_parent_thread_idx").on(t.parentThreadId),
   }),
 );
 
 export type Delegation = typeof delegations.$inferSelect;
 export type NewDelegation = typeof delegations.$inferInsert;
+
+// Runs Foreman queued itself to close the delegation loop (0030): a wake
+// (the sender, with the results) or a nudge (the agent that owes one).
+export const delegationFollowups = sqliteTable(
+  "delegation_followups",
+  {
+    controlCommandId: integer("control_command_id").primaryKey(),
+    threadId: text("thread_id"),
+    kind: text("kind", { enum: ["wake", "nudge"] }).notNull(),
+    agent: text("agent").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => ({
+    threadIdx: index("delegation_followups_thread_idx").on(t.threadId, t.kind),
+  }),
+);
+
+export type DelegationFollowup = typeof delegationFollowups.$inferSelect;
 
 // In-app inbox (#613) — what the TUI notification centre shows. See
 // migrations/0023_inbox.sql.

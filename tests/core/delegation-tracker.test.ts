@@ -1,8 +1,7 @@
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  composeEscalationText,
-  composeNudgeText,
+  clipResultText,
   DEFAULT_MAX_NUDGES,
   DEFAULT_NUDGE_THRESHOLD_MS,
   DelegationTracker,
@@ -383,80 +382,57 @@ describe("DelegationTracker", () => {
 });
 
 // =============================================================================
-// Nudge / escalation text composition
+// Threads and results (delegation-loop.ts builds on these)
 // =============================================================================
 
-describe("composeNudgeText", () => {
-  function fakeRow(overrides: Record<string, unknown> = {}): {
-    id: string;
-    initiatorAgent: string;
-    targetAgent: string;
-    promptSummary: string;
-    nudgeCount: number;
-    spawnOutcome: string | null;
-    [k: string]: unknown;
-  } {
-    return {
-      id: "del-1",
-      initiatorAgent: "hermes",
-      targetAgent: "codex",
-      promptSummary: "build the thing",
-      nudgeCount: 0,
-      spawnOutcome: "ok",
-      ...overrides,
-    };
-  }
+describe("DelegationTracker — threads and results", () => {
+  let db: ForemanDb;
+  let sqlite: Database.Database;
+  let tracker: DelegationTracker;
 
-  it("includes the peer name, prompt summary, and a directive to act", () => {
-    const text = composeNudgeText(
-      fakeRow() as unknown as Parameters<typeof composeNudgeText>[0],
-    );
-    expect(text).toContain("codex");
-    expect(text).toContain("build the thing");
-    expect(text).toMatch(/next step|review|merge|don't go idle/i);
+  beforeEach(() => {
+    const h = createInMemoryDb();
+    db = h.db;
+    sqlite = h.sqlite;
+    tracker = new DelegationTracker({ db, nowMs: () => 1_700_000_000_000 });
   });
 
-  it("includes nudge counter after the first nudge", () => {
-    const text = composeNudgeText(
-      fakeRow({ nudgeCount: 1 }) as unknown as Parameters<
-        typeof composeNudgeText
-      >[0],
-    );
-    expect(text).toMatch(/nudge 2\/3/);
+  afterEach(() => {
+    sqlite.close();
   });
 
-  it("surfaces the spawn outcome when set", () => {
-    const text = composeNudgeText(
-      fakeRow({ spawnOutcome: "failed" }) as unknown as Parameters<
-        typeof composeNudgeText
-      >[0],
-    );
-    expect(text.toLowerCase()).toContain("failed");
+  it("a fresh hand-off starts its own thread and remembers the sender's", () => {
+    const parent = tracker.recordDelegation({ initiatorAgent: "cli", targetAgent: "manager", prompt: "p" });
+    const child = tracker.recordDelegation({
+      initiatorAgent: "manager",
+      targetAgent: "backend",
+      prompt: "c",
+      parentThreadId: parent,
+    });
+    expect(tracker.find(parent)).toMatchObject({ threadId: parent, parentThreadId: null });
+    expect(tracker.find(child)).toMatchObject({ threadId: child, parentThreadId: parent });
   });
-});
 
-describe("composeEscalationText", () => {
-  function fakeRow(overrides: Record<string, unknown> = {}): Parameters<
-    typeof composeEscalationText
-  >[0] {
-    return {
-      id: "del-1",
-      initiatorAgent: "hermes",
-      targetAgent: "codex",
-      promptSummary: "build the thing",
-      nudgeCount: 3,
-      spawnOutcome: "ok",
-      ...overrides,
-    } as Parameters<typeof composeEscalationText>[0];
-  }
+  it("a follow-up run joins the thread it continues", () => {
+    const root = tracker.recordDelegation({ initiatorAgent: "cli", targetAgent: "manager", prompt: "p" });
+    const wake = tracker.recordDelegation({ initiatorAgent: "foreman:delegation", targetAgent: "manager", prompt: "w", threadId: root });
+    expect(tracker.find(wake)).toMatchObject({ threadId: root, parentThreadId: null });
+  });
 
-  it("includes all key fields for the user to take over", () => {
-    const text = composeEscalationText(fakeRow());
-    expect(text).toContain("hermes");
-    expect(text).toContain("codex");
-    expect(text).toContain("build the thing");
-    expect(text).toMatch(/foreman write hermes/);
-    expect(text).toMatch(/stop/i);
+  it("stores the result redacted and clipped to its end", () => {
+    const id = tracker.recordDelegation({ initiatorAgent: "a", targetAgent: "b", prompt: "p" });
+    const token = `ghp_${"A".repeat(36)}`;
+    tracker.recordOutputReceived({ delegationId: id, spawnOutcome: "ok", resultText: `${"x".repeat(5000)}\nkey ${token}\nDONE` });
+    const stored = tracker.find(id)!.resultText!;
+    expect(stored.length).toBeLessThanOrEqual(4000);
+    expect(stored.endsWith("DONE")).toBe(true);
+    expect(stored).not.toContain(token);
+    expect(stored).toContain("[REDACTED");
+  });
+
+  it("clipResultText strips control characters and keeps short text as is", () => {
+    expect(clipResultText("ok\u0007 done\r\n")).toBe("ok done");
+    expect(clipResultText("abcdef", 4)).toBe("…def");
   });
 });
 

@@ -97,6 +97,9 @@ export interface CommsMirrorOptions {
   inbox?: InboxService;
   /** Pushes messages to you to your Telegram / Slack / Discord. */
   owner?: OwnerNotifier;
+  /** Told about every new message once, before it is mirrored (the
+   *  delegation loop reads reports here). Must not throw. */
+  onMessage?: (message: OrgMessage) => void;
   intervalMs?: number;
   now?: () => number;
 }
@@ -148,6 +151,11 @@ export class CommsMirrorWorker {
       if (pending.length === 0) return;
       const org = this.org();
       for (const m of pending) {
+        try {
+          this.opts.onMessage?.(m);
+        } catch {
+          /* a listener's problem is not the mirror's */
+        }
         // Reports to you (and a role's direct thread with you) always reach
         // the inbox, however late.
         if (m.channel === BOSS || isToOwner(m)) this.toInbox(m);

@@ -169,10 +169,17 @@ it('Spend and budgets: OTLP usage, reports, a paused department', async (context
     expect(replyText(res)).toContain('Paused by budget: Engineering is over its monthly budget ($2.50 of $1.00)')
     const refused = await sb.event<CommandEvent>('foreman:command', (e) => e.errorCode === 'ORG_POLICY')
     expect(refused).toMatchObject({ command: 'write', sourceAgent: 'hermes', ok: false })
-    const writes = sb.query<{ source_agent: string }>("SELECT source_agent FROM control_commands WHERE command = 'write'")
-    expect(writes).toEqual([{ source_agent: 'hermes' }])
+    // The first directive, and Foreman handing codex's result back to
+    // hermes (delegation-loop.ts); nothing new from hermes.
+    const writes = sb.query<{ source_agent: string; agent: string }>(
+      "SELECT source_agent, json_extract(args, '$[0]') AS agent FROM control_commands WHERE command = 'write' ORDER BY id",
+    )
+    expect(writes).toEqual([
+      { source_agent: 'hermes', agent: 'codex' },
+      { source_agent: 'foreman:delegation', agent: 'hermes' },
+    ])
     ev(`hermes → codex: "${replyText(res).slice(0, 120)}…"`)
-    ev('audit_events foreman:command: write from hermes ok=false errorCode=ORG_POLICY; control_commands still holds only the first directive')
+    ev('audit_events foreman:command: write from hermes ok=false errorCode=ORG_POLICY; control_commands holds only the first directive (and Foreman handing its result back to hermes)')
   })
 
   await j.step('the owner can still assign work to the paused department from the TUI', async (ev) => {

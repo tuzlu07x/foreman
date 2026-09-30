@@ -306,6 +306,37 @@ alone. Instances work for Claude Code and Codex. For Hermes, OpenClaw and
 ZeroClaw a second instance runs with the agent's own wiring (pass
 `--config-path` to give it a config of its own).
 
+## When work comes back
+
+Foreman runs Claude Code, Codex and the ACP agents once per task, so a lead
+that hands work off has usually finished its run by the time the work is
+done. Foreman closes the loop:
+
+- **Results go back to whoever asked.** Once everything an agent handed off
+  during a task is back (finished, failed, or refused by a budget), Foreman
+  launches that agent again, once, with all the results and its original
+  task: "Continue your task with these results. When everything you
+  delegated is back, report to (its manager) with org_report." A chain
+  unwinds level by level: the developer's result goes to the IT head, and
+  the IT head's final answer (its `org_report` if it sent one) to the
+  manager, who reports to you.
+- **Bounded.** At most 5 relaunches per task; after that Foreman stops and
+  tells you once. An agent is never relaunched for its own result, and never
+  when it is blocked, disabled or has no non-interactive command. A relaunch
+  is an ordinary task from `foreman:delegation`: department budgets, the
+  role's identity and every tool call's approval apply as usual, and it is
+  audited (`delegation_wake`).
+- **An answer still owed is asked of the agent that owes it.** A task that
+  hasn't been answered in 30 minutes (a task relayed to an agent Foreman
+  can't launch, or a run lost with a restart) is re-sent to that agent, at
+  most twice. Only then do you get one message: *backend-developer hasn't
+  answered manager's task for 1 hour; I nudged it twice. Reply /foreman
+  write …*. Nothing else about it reaches your chat.
+- **Memory.** Every launch starts with *What you did recently*: the agent's
+  last 5 tasks with how each ended, and the latest reports and direct
+  messages to its role (at most 3,000 characters, secrets redacted), marked
+  as information, not instructions.
+
 ## Department channels
 
 Agents talk to each other the way a company does: in department rooms,

@@ -498,6 +498,70 @@ describe("executeWriteDirective", () => {
     }
   });
 
+  it("puts the context block before the task in what the agent gets, not in the relay or the tracker", async () => {
+    const argsDump = makeScript("args.sh", '#!/bin/sh\nprintf "%s" "$1"\n');
+    const fakeFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, result: { message_id: 1 } }),
+    });
+    const recorded: Array<Record<string, unknown>> = [];
+    const outputs: Array<Record<string, unknown>> = [];
+    const result = await executeWriteDirective(
+      {
+        agentId: "codex",
+        message: "fix the login bug",
+        contextPrefix: "## What you did recently\n  - earlier task\n\n## Your task\n",
+        entry: agent({ task_command_template: `${argsDump} {task}` }),
+      },
+      {
+        telegramBotToken: "bot-1",
+        telegramChatId: "2",
+        fetchImpl: fakeFetch as unknown as typeof fetch,
+        initiatorAgent: "manager",
+        controlCommandId: 7,
+        delegationLink: { threadId: null, parentThreadId: "thread-1" },
+        tracker: {
+          recordDelegation: (input) => {
+            recorded.push(input);
+            return "run-1";
+          },
+          recordOutputReceived: (input) => {
+            outputs.push(input);
+          },
+        },
+      },
+    );
+    expect(result.spawn.kind).toBe("ok");
+    if (result.spawn.kind === "ok") {
+      expect(result.spawn.stdout).toBe("## What you did recently\n  - earlier task\n\n## Your task\nfix the login bug");
+    }
+    expect(result.delegationId).toBe("run-1");
+    expect(recorded).toEqual([
+      { initiatorAgent: "manager", targetAgent: "codex", prompt: "fix the login bug", controlCommandId: 7, threadId: null, parentThreadId: "thread-1" },
+    ]);
+    // What the run printed is what goes back to the agent that asked.
+    expect(outputs).toEqual([{ delegationId: "run-1", spawnOutcome: "ok", resultText: result.spawn.kind === "ok" ? result.spawn.stdout.trim() : "" }]);
+    const body = JSON.parse((fakeFetch.mock.calls[0]![1] as { body: string }).body) as { text: string };
+    expect(body.text).toContain("fix the login bug");
+    // The chat shows the task alone as what was asked.
+    expect(body.text).toContain("_Task:_ fix the login bug\n");
+  });
+
+  it("records the friendly failure reason as the result of a failed run", async () => {
+    const fail = makeScript("fail.sh", '#!/bin/sh\necho "Failed to authenticate. API Error: 401" >&2\nexit 1\n');
+    const outputs: Array<Record<string, unknown>> = [];
+    await executeWriteDirective(
+      { agentId: "codex", message: "x", entry: agent({ task_command_template: fail }) },
+      {
+        initiatorAgent: "manager",
+        tracker: { recordDelegation: () => "run-2", recordOutputReceived: (input) => void outputs.push(input) },
+      },
+    );
+    expect(outputs).toEqual([
+      { delegationId: "run-2", spawnOutcome: "failed", resultText: "Couldn't finish: Failed to authenticate. API Error: 401" },
+    ]);
+  });
+
   it("is a no-op when the catalog entry has no task_skip_permissions_flag even if trusted", async () => {
     // Hermes-style daemon agent: no flag in the catalog → trust is
     // meaningless on the spawn side. Defensive: don't append a phantom

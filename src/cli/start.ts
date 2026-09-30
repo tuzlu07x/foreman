@@ -14,11 +14,9 @@ import {
 import { AgentDaemonManager } from "../core/agent-daemon-manager.js";
 import { AuditLogger } from "../core/audit.js";
 import { bus, EventBus, type ForemanEventMap } from "../core/event-bus.js";
-import {
-  composeEscalationText,
-  composeNudgeText,
-  DelegationTracker,
-} from "../core/delegation-tracker.js";
+import { DelegationTracker } from "../core/delegation-tracker.js";
+import { DelegationLoop, WAKE_SOURCE } from "../core/delegation-loop.js";
+import { buildRoleMemory } from "../core/role-memory.js";
 import { MediatorService } from "../core/mediator.js";
 import { PolicyEngine } from "../core/policy-engine.js";
 import { followPolicyFile, PolicyLoadError } from "../core/policy-load.js";
@@ -36,6 +34,7 @@ import {
   ControlChannel,
   ControlDrainPoller,
   type ControlHandler,
+  type ControlHandlerOutcome,
 } from "../core/control-channel.js";
 import {
   acquireForemanPidfile,
@@ -580,6 +579,64 @@ export function startForeman(
   // finishes. See `src/core/delegation-tracker.ts` for the lifecycle.
   // Watchdog timer is set up below the drain loop wiring.
   const delegationTracker = new DelegationTracker({ db });
+  // Closing the loop (delegation-loop.ts): when work an agent handed off
+  // comes back, Foreman launches that agent again with the results, and
+  // an answer still owed is asked of the agent that owes it. Only a stuck
+  // chain reaches you, once.
+  const delegationLoop = new DelegationLoop({
+    db,
+    tracker: delegationTracker,
+    orgConfigPath: paths.orgConfigPath,
+    enqueue: ({ agent, task, sourceUser }) =>
+      controlChannel.enqueue({
+        command: "write",
+        args: [agent, task],
+        sourceAgent: WAKE_SOURCE,
+        ...(sourceUser ? { sourceUser } : {}),
+      }).id,
+    launchRefusal: (agentId) => {
+      const agent = registry.get(agentId);
+      if (!agent) return "it isn't registered";
+      if (agent.status === "blocked" || agent.status === "disabled") {
+        return `it is ${agent.status}`;
+      }
+      try {
+        const entry = catalogEntryFor(loadActiveRegistry().doc, agentId, agent);
+        const launchable =
+          Boolean(entry?.task_command_template) ||
+          (entry?.approval_adapter === "acp-stdio-v1" && entry.acp_command !== undefined);
+        return launchable ? null : "it has no non-interactive command";
+      } catch {
+        return "its registry entry can't be read";
+      }
+    },
+    escalate: ({ title, text, agentId }) => {
+      inbox.add({
+        level: "warning",
+        kind: "delegation",
+        title,
+        body: text,
+        agentId,
+        dedupeKey: `delegation-escalation:${Date.now()}:${agentId}`,
+      });
+      const botToken = secretStore.exists("telegram-bot-token")
+        ? secretStore.get("telegram-bot-token")
+        : undefined;
+      const chatId = secretStore.exists("telegram-chat-id")
+        ? secretStore.get("telegram-chat-id")
+        : undefined;
+      if (botToken && chatId) {
+        void pushTelegramNudge({ text, botToken, chatId }).catch((err) => {
+          process.stderr.write(
+            `foreman: delegation escalation push failed: ${
+              err instanceof Error ? err.message : String(err)
+            }\n`,
+          );
+        });
+      }
+    },
+    audit: (event, data) => audit.logEvent(event, data),
+  });
 
   // OOB notification bridge (#235 / C11a-2). Best-effort: any failure here
   // (notify.yaml malformed, secret missing, etc.) is logged but does NOT
@@ -732,6 +789,9 @@ export function startForeman(
           }),
         }
       : {}),
+    // An org_report from an agent whose task was relayed (or lost) is its
+    // answer: it goes back to the agent waiting for it.
+    onMessage: (message) => delegationLoop.onMessage(message),
   });
   if (!attach) commsMirror.start();
 
@@ -1131,344 +1191,419 @@ export function startForeman(
     ],
     [
       "write",
+      // Every hand-off runs inside the delegation loop (delegation-loop.ts):
+      // its run is recorded in its thread, and once the drain is done with
+      // the row, results go back to whoever is waiting for them.
       async (row) => {
-        // #433 — `/foreman write <agent> <message>`. Delivery is
-        // hybrid: always a visible Telegram post (so the human sees
-        // it + can manually forward), plus an optional inbound_dir
-        // file when the agent declares one. The user-side reply
-        // ("Directive queued for openclaw") already went out via
-        // mcp-stdio; this loop just executes the side-effects.
+        const loopRun: { delegationId: string | null } = { delegationId: null };
+        delegationLoop.begin(row.id);
         try {
-          // Args format: classic `[agentId, message]`, or flow-aware
-          // `[agentId, message, flowId, stepId]`. The 4-element variant
-          // signals that this directive is a step inside an active flow
-          // and the executor should hand it the router so the post-spawn
-          // hook can classify + chain.
-          const parsed = JSON.parse(row.args) as string[];
-          const [agentId, message, flowId, stepId] = parsed;
-          if (!agentId || !message) {
-            return {
-              status: "rejected",
-              error: "write requires [agentId, message] args",
-            };
-          }
-          if (!registry.get(agentId)) {
-            return {
-              status: "rejected",
-              error: `unknown agent "${agentId}"`,
-            };
-          }
-          const registryDoc = loadActiveRegistry();
-          // `backend --type codex` runs as Codex (agent-instance.ts).
-          const entry = catalogEntryFor(registryDoc.doc, agentId, registry.get(agentId));
-          const inboundDir = entry?.inbound_dir;
-          const telegramBotToken = secretStore.exists("telegram-bot-token")
-            ? secretStore.get("telegram-bot-token")
-            : undefined;
-          const telegramChatId = secretStore.exists("telegram-chat-id")
-            ? secretStore.get("telegram-chat-id")
-            : undefined;
-          // PR D — when the target agent declares task_command_template
-          // we ACTUALLY spawn the agent here (via PR C's engine) and
-          // post the captured output back via Telegram. The directive's
-          // initial "queued" ack already went out via mcp-stdio's tool
-          // response; this is the follow-up post with the result.
-          // Agents without the template fall back to the v0.1 queue+
-          // relay path (Telegram visible post + inbound_dir file).
-          //
-          // #445 / #552 (post-launch fix) — ACP agents (Hermes/OpenClaw/
-          // ZeroClaw) declare `approval_adapter='acp-stdio-v1'` +
-          // `acp_command` instead of `task_command_template`. Without
-          // this extension they were silently falling through to the
-          // legacy hybrid path, breaking the integration shipped in
-          // #568. The `executeWriteDirective` ACP branch handles the
-          // actual spawn via runAcpMediatedTask; we just need the
-          // dispatch gate to include them.
-          const isAcpAgent =
-            entry?.approval_adapter === "acp-stdio-v1" &&
-            entry.acp_command !== undefined;
-          if (entry?.task_command_template || isAcpAgent) {
-            // Pick up the per-agent model override stored in `agents.
-            // model_version` so the spawn engine can append the
-            // registry's `task_model_flag` argv pair (e.g. `--model
-            // claude-sonnet-4-6`). NULL = use the agent's own default.
-            // #517 Faz 3 wiring — read the operator-set trust flag so
-            // `foreman agent trust <id>` actually flips the spawn into
-            // `--full-auto` / `--dangerously-skip-permissions` mode.
-            // Without this forward, the DB flag was a silent no-op + a
-            // trusted codex still ran in `sandbox: read-only` (#544 finish).
-            const registryRow = registry.get(agentId);
-            // QA-fix 2026-05-24 — extract a workdir hint from the task
-            // text so codex's sandbox roots include the project the
-            // user actually mentioned. Without this, codex landed in
-            // Foreman's own cwd and refused to write outside it.
-            const derivedCwd = extractCwdFromTask(message);
-            // QA-fix 2026-05-24 (Wiring 4) — heartbeat the agent so its
-            // status flips from "never seen" to a real timestamp.
-            // Best-effort; ignore if the row was racey-removed.
+          return await (async (): Promise<ControlHandlerOutcome> => {
+            // #433 — `/foreman write <agent> <message>`. Delivery is
+            // hybrid: always a visible Telegram post (so the human sees
+            // it + can manually forward), plus an optional inbound_dir
+            // file when the agent declares one. The user-side reply
+            // ("Directive queued for openclaw") already went out via
+            // mcp-stdio; this loop just executes the side-effects.
             try {
-              registry.heartbeat(agentId);
-            } catch {
-              /* ignore — agent might have been removed mid-drain */
-            }
-            // Responsibility-based auto-routing — when args carry
-            // flowId + stepId, wire the executor with a FlowRouter +
-            // an enqueueFollowUp callback. The callback inserts the
-            // next step's directive into control_commands so the next
-            // drain iteration spawns it (no recursive call from inside
-            // the drain handler).
-            const flowContext =
-              flowId && stepId
-                ? {
-                    flowId,
-                    stepId,
-                    flowManager,
-                    router: flowRouter,
-                    enqueueFollowUp: async (next: {
-                      targetAgent: string;
-                      prompt: string;
-                      flowId: string;
-                      stepId: string;
-                    }): Promise<number | null> => {
-                      const inserted = db
-                        .insert(controlCommands)
-                        .values({
-                          command: "write",
-                          args: JSON.stringify([
-                            next.targetAgent,
-                            next.prompt,
-                            next.flowId,
-                            next.stepId,
-                          ]),
-                          sourceAgent: "foreman:flow-router",
-                          sourceUser: row.sourceUser ?? null,
-                          status: "pending",
-                          createdAt: Date.now(),
-                        })
-                        .returning({ id: controlCommands.id })
-                        .get();
-                      return inserted?.id ?? null;
-                    },
-                  }
+              // Args format: classic `[agentId, message]`, or flow-aware
+              // `[agentId, message, flowId, stepId]`. The 4-element variant
+              // signals that this directive is a step inside an active flow
+              // and the executor should hand it the router so the post-spawn
+              // hook can classify + chain.
+              const parsed = JSON.parse(row.args) as string[];
+              const [agentId, message, flowId, stepId] = parsed;
+              if (!agentId || !message) {
+                return {
+                  status: "rejected",
+                  error: "write requires [agentId, message] args",
+                };
+              }
+              if (!registry.get(agentId)) {
+                return {
+                  status: "rejected",
+                  error: `unknown agent "${agentId}"`,
+                };
+              }
+              const registryDoc = loadActiveRegistry();
+              // `backend --type codex` runs as Codex (agent-instance.ts).
+              const entry = catalogEntryFor(registryDoc.doc, agentId, registry.get(agentId));
+              const inboundDir = entry?.inbound_dir;
+              const telegramBotToken = secretStore.exists("telegram-bot-token")
+                ? secretStore.get("telegram-bot-token")
                 : undefined;
-            // Department budgets, enforced here too: whichever path queued
-            // it (chat, CLI, flow routing), an agent can't hand work into
-            // a department that has spent its budget.
-            if (!isHumanSource(row.sourceAgent ?? "cli")) {
-              const overBudget = orgBudgetBlock(
-                db,
-                paths.orgConfigPath,
-                agentId,
-              );
-              if (overBudget)
+              const telegramChatId = secretStore.exists("telegram-chat-id")
+                ? secretStore.get("telegram-chat-id")
+                : undefined;
+              // Where this run sits in the delegation loop: the thread a
+              // Foreman wake / nudge continues, or the sender's own thread.
+              const link = delegationLoop.linkFor(row);
+              const recordUnrunHandOff = (
+                outcome: "blocked" | "failed",
+                reason: string,
+              ): string | null => {
+                try {
+                  return delegationLoop.recordUnrun({
+                    row,
+                    initiator: row.sourceAgent ?? "cli",
+                    target: agentId,
+                    task: message,
+                    link,
+                    outcome,
+                    reason,
+                  });
+                } catch {
+                  return null; // tracking is best-effort
+                }
+              };
+              // PR D — when the target agent declares task_command_template
+              // we ACTUALLY spawn the agent here (via PR C's engine) and
+              // post the captured output back via Telegram. The directive's
+              // initial "queued" ack already went out via mcp-stdio's tool
+              // response; this is the follow-up post with the result.
+              // Agents without the template fall back to the v0.1 queue+
+              // relay path (Telegram visible post + inbound_dir file).
+              //
+              // #445 / #552 (post-launch fix) — ACP agents (Hermes/OpenClaw/
+              // ZeroClaw) declare `approval_adapter='acp-stdio-v1'` +
+              // `acp_command` instead of `task_command_template`. Without
+              // this extension they were silently falling through to the
+              // legacy hybrid path, breaking the integration shipped in
+              // #568. The `executeWriteDirective` ACP branch handles the
+              // actual spawn via runAcpMediatedTask; we just need the
+              // dispatch gate to include them.
+              const isAcpAgent =
+                entry?.approval_adapter === "acp-stdio-v1" &&
+                entry.acp_command !== undefined;
+              if (entry?.task_command_template || isAcpAgent) {
+                // Pick up the per-agent model override stored in `agents.
+                // model_version` so the spawn engine can append the
+                // registry's `task_model_flag` argv pair (e.g. `--model
+                // claude-sonnet-4-6`). NULL = use the agent's own default.
+                // #517 Faz 3 wiring — read the operator-set trust flag so
+                // `foreman agent trust <id>` actually flips the spawn into
+                // `--full-auto` / `--dangerously-skip-permissions` mode.
+                // Without this forward, the DB flag was a silent no-op + a
+                // trusted codex still ran in `sandbox: read-only` (#544 finish).
+                const registryRow = registry.get(agentId);
+                // QA-fix 2026-05-24 — extract a workdir hint from the task
+                // text so codex's sandbox roots include the project the
+                // user actually mentioned. Without this, codex landed in
+                // Foreman's own cwd and refused to write outside it.
+                const derivedCwd = extractCwdFromTask(message);
+                // QA-fix 2026-05-24 (Wiring 4) — heartbeat the agent so its
+                // status flips from "never seen" to a real timestamp.
+                // Best-effort; ignore if the row was racey-removed.
+                try {
+                  registry.heartbeat(agentId);
+                } catch {
+                  /* ignore — agent might have been removed mid-drain */
+                }
+                // Responsibility-based auto-routing — when args carry
+                // flowId + stepId, wire the executor with a FlowRouter +
+                // an enqueueFollowUp callback. The callback inserts the
+                // next step's directive into control_commands so the next
+                // drain iteration spawns it (no recursive call from inside
+                // the drain handler).
+                const flowContext =
+                  flowId && stepId
+                    ? {
+                        flowId,
+                        stepId,
+                        flowManager,
+                        router: flowRouter,
+                        enqueueFollowUp: async (next: {
+                          targetAgent: string;
+                          prompt: string;
+                          flowId: string;
+                          stepId: string;
+                        }): Promise<number | null> => {
+                          const inserted = db
+                            .insert(controlCommands)
+                            .values({
+                              command: "write",
+                              args: JSON.stringify([
+                                next.targetAgent,
+                                next.prompt,
+                                next.flowId,
+                                next.stepId,
+                              ]),
+                              sourceAgent: "foreman:flow-router",
+                              sourceUser: row.sourceUser ?? null,
+                              status: "pending",
+                              createdAt: Date.now(),
+                            })
+                            .returning({ id: controlCommands.id })
+                            .get();
+                          return inserted?.id ?? null;
+                        },
+                      }
+                    : undefined;
+                // Department budgets, enforced here too: whichever path queued
+                // it (chat, CLI, flow routing, a wake), an agent can't hand work
+                // into a department that has spent its budget.
+                if (!isHumanSource(row.sourceAgent ?? "cli")) {
+                  const overBudget = orgBudgetBlock(
+                    db,
+                    paths.orgConfigPath,
+                    agentId,
+                  );
+                  if (overBudget) {
+                    // The sender still hears why (delegation-loop.ts).
+                    loopRun.delegationId = recordUnrunHandOff(
+                      "blocked",
+                      `paused by budget: ${overBudget}`,
+                    );
+                    return {
+                      status: "failed",
+                      error: `paused by budget: ${overBudget}`,
+                    };
+                  }
+                }
+                // Mark the step running before the spawn so `foreman flow
+                // show` reflects in-progress state in real time.
+                if (flowId && stepId) {
+                  try {
+                    flowManager.markStepRunning(stepId, row.id);
+                  } catch {
+                    /* ignore — step might have been racey-removed */
+                  }
+                }
+                // Autonomous loop tracker — when an LLM agent (Hermes,
+                // OpenClaw, …) issues a new `foreman write`, that's our
+                // heuristic for "they're acting on whatever peer output
+                // they last received." Close their open awaiting/nudged
+                // delegations before recording the new one. Skip for
+                // `sourceAgent === 'cli'` (terminal user; no chat to
+                // nudge).
+                const initiator = row.sourceAgent ?? "cli";
+                if (!isHumanSource(initiator)) {
+                  try {
+                    delegationTracker.closeOpenInitiatorRows(initiator);
+                  } catch (err) {
+                    process.stderr.write(
+                      `foreman: tracker.closeOpenInitiatorRows failed: ${
+                        err instanceof Error ? err.message : String(err)
+                      }\n`,
+                    );
+                  }
+                }
+                const taskUsageKey = otlpBoundPort
+                  ? otlp.issueTaskKey(agentId, String(row.id))
+                  : null;
+                const instance = entry ? instanceLaunchFor(agentId, entry, secretStore, paths) : null;
+                const trusted = registryRow?.taskSkipPermissions === true;
+                const permissions = entry ? taskPermissionsFor(agentId, entry, trusted, paths.orgConfigPath) : null;
+                const cwd = taskCwd(agentId, derivedCwd);
+                const launch =
+                  permissions || instance
+                    ? {
+                        args: [...(instance?.args ?? []), ...(permissions?.args ?? [])],
+                        env: instance?.env ?? {},
+                        taskPrefix: instance?.taskPrefix ?? "",
+                      }
+                    : null;
+                // "What you did recently" (role-memory.ts): a headless run
+                // starts with no memory of its own.
+                let memory = "";
+                try {
+                  memory = buildRoleMemory(db, {
+                    agentId,
+                    orgConfigPath: paths.orgConfigPath,
+                    excludeControlId: row.id,
+                  });
+                } catch {
+                  memory = ""; // the task runs without it
+                }
+                const exec = await executeWriteDirective(
+                  {
+                    agentId,
+                    message,
+                    ...(launch ? { launch } : {}),
+                    ...(memory ? { contextPrefix: memory } : {}),
+                    sourceUser: row.sourceUser ?? undefined,
+                    entry,
+                    modelVersion: registryRow?.modelVersion ?? null,
+                    // Covered runtimes get their flags from taskPermissions;
+                    // the catalog's skip flag is for the others.
+                    taskSkipPermissions: permissions ? false : trusted,
+                    ...(cwd ? { cwd } : {}),
+                    // Report the task's token usage to the spend ledger, with
+                    // a key that can only book usage to this agent and task.
+                    ...(otlpBoundPort && taskUsageKey
+                      ? {
+                          extraEnv: telemetryEnv({
+                            port: otlpBoundPort,
+                            key: taskUsageKey,
+                            agentId,
+                            taskRef: String(row.id),
+                          }),
+                        }
+                      : {}),
+                    // QA-fix 2026-05-24 (Wiring 4) — hand the session
+                    // manager to the executor so it opens/closes a session
+                    // around the spawn. Lights up #523 lifecycle pushes,
+                    // #530 cost rollup, and the TUI Sessions panel.
+                    sessionManager,
+                    ...(flowContext ? { flowContext } : {}),
+                  },
+                  {
+                    telegramBotToken,
+                    telegramChatId,
+                    // #445 / #552 — Required by the ACP path so every
+                    // approval the agent emits during the prompt routes
+                    // through Foreman's risk + approval pipeline. The
+                    // codex / task_command_template path ignores this
+                    // option — only the ACP branch reads it.
+                    mediator,
+                    // Autonomous loop tracker — executor records the
+                    // delegation lifecycle for the watchdog below.
+                    tracker: delegationTracker,
+                    initiatorAgent: initiator,
+                    controlCommandId: row.id,
+                    delegationLink: link,
+                  },
+                );
+                loopRun.delegationId = exec.delegationId ?? null;
+                // #498 — Always audit the spawn outcome. control_commands.error
+                // only stores a one-liner (e.g. "agent exited 1"); the real
+                // stderr/stdout was previously lost. Persist the full capture
+                // so users (and future us) can debug "why did claude --print
+                // fail" without instrumenting per-bug. Truncate to keep audit
+                // rows from ballooning under chatty agents.
+                audit.logEvent("control_write_outcome", {
+                  id: row.id,
+                  agentId,
+                  // task_command_template for codex/claude-code; for ACP
+                  // agents we record the acp_command argv so the audit
+                  // row still tells the operator what got spawned.
+                  command:
+                    entry.task_command_template ??
+                    (entry.acp_command
+                      ? `${entry.acp_command.command} ${(entry.acp_command.args ?? []).join(" ")}`.trim()
+                      : null),
+                  spawnKind: exec.spawn.kind,
+                  exitCode:
+                    exec.spawn.kind === "ok" || exec.spawn.kind === "failed"
+                      ? exec.spawn.exitCode
+                      : null,
+                  durationMs:
+                    "durationMs" in exec.spawn ? exec.spawn.durationMs : null,
+                  timeoutMs:
+                    exec.spawn.kind === "timeout" ? exec.spawn.timeoutMs : null,
+                  stdoutLen: "stdout" in exec.spawn ? exec.spawn.stdout.length : 0,
+                  stderrLen: "stderr" in exec.spawn ? exec.spawn.stderr.length : 0,
+                  stdoutTail:
+                    "stdout" in exec.spawn ? exec.spawn.stdout.slice(-2000) : null,
+                  stderrTail:
+                    "stderr" in exec.spawn ? exec.spawn.stderr.slice(-2000) : null,
+                  spawnError:
+                    exec.spawn.kind === "spawn-error" ? exec.spawn.error : null,
+                  unsupportedReason:
+                    exec.spawn.kind === "unsupported" ? exec.spawn.reason : null,
+                  outputRelay: exec.outputRelay,
+                });
+                if (taskUsageKey) otlp.revokeTaskKey(taskUsageKey);
+                // Usage the agent printed (Codex `tokens used`, Claude JSON
+                // results); telemetry for the same task takes precedence.
+                if ("stdout" in exec.spawn) {
+                  const printed = parseTaskUsage(
+                    exec.spawn.stdout,
+                    exec.spawn.stderr,
+                  );
+                  if (printed) {
+                    try {
+                      usageLedger.record({
+                        agentId,
+                        source: "task-output",
+                        ...printed,
+                        // The agent's configured model prices a bare token count.
+                        model: printed.model ?? registryRow?.modelVersion ?? null,
+                        taskRef: String(row.id),
+                      });
+                      onUsageRecorded();
+                    } catch {
+                      /* reporting only */
+                    }
+                  }
+                }
+                // The TUI promised "output will arrive in your inbox".
+                recordDelegationOutcome(inbox, {
+                  controlId: row.id,
+                  agentId,
+                  task: message,
+                  spawn: exec.spawn,
+                });
+                if (exec.spawn.kind === "ok") {
+                  return { status: "applied" };
+                }
+                // Failed / timeout / spawn-error still mark the row as
+                // failed for audit traceability — the output relay already
+                // delivered the error explanation to the user's chat.
                 return {
                   status: "failed",
-                  error: `paused by budget: ${overBudget}`,
+                  error:
+                    exec.spawn.kind === "failed"
+                      ? `agent exited ${exec.spawn.exitCode}`
+                      : exec.spawn.kind === "timeout"
+                        ? `agent timed out after ${exec.spawn.timeoutMs}ms`
+                        : exec.spawn.kind === "spawn-error"
+                          ? `spawn error: ${exec.spawn.error}`
+                          : `unsupported: ${exec.spawn.reason}`,
                 };
-            }
-            // Mark the step running before the spawn so `foreman flow
-            // show` reflects in-progress state in real time.
-            if (flowId && stepId) {
-              try {
-                flowManager.markStepRunning(stepId, row.id);
-              } catch {
-                /* ignore — step might have been racey-removed */
               }
-            }
-            // Autonomous loop tracker — when an LLM agent (Hermes,
-            // OpenClaw, …) issues a new `foreman write`, that's our
-            // heuristic for "they're acting on whatever peer output
-            // they last received." Close their open awaiting/nudged
-            // delegations before recording the new one. Skip for
-            // `sourceAgent === 'cli'` (terminal user; no chat to
-            // nudge).
-            const initiator = row.sourceAgent ?? "cli";
-            if (!isHumanSource(initiator)) {
-              try {
-                delegationTracker.closeOpenInitiatorRows(initiator);
-              } catch (err) {
-                process.stderr.write(
-                  `foreman: tracker.closeOpenInitiatorRows failed: ${
-                    err instanceof Error ? err.message : String(err)
-                  }\n`,
-                );
-              }
-            }
-            const taskUsageKey = otlpBoundPort
-              ? otlp.issueTaskKey(agentId, String(row.id))
-              : null;
-            const instance = entry ? instanceLaunchFor(agentId, entry, secretStore, paths) : null;
-            const trusted = registryRow?.taskSkipPermissions === true;
-            const permissions = entry ? taskPermissionsFor(agentId, entry, trusted, paths.orgConfigPath) : null;
-            const cwd = taskCwd(agentId, derivedCwd);
-            const launch =
-              permissions || instance
-                ? {
-                    args: [...(instance?.args ?? []), ...(permissions?.args ?? [])],
-                    env: instance?.env ?? {},
-                    taskPrefix: instance?.taskPrefix ?? "",
-                  }
-                : null;
-            const exec = await executeWriteDirective(
-              {
-                agentId,
-                message,
-                ...(launch ? { launch } : {}),
-                sourceUser: row.sourceUser ?? undefined,
-                entry,
-                modelVersion: registryRow?.modelVersion ?? null,
-                // Covered runtimes get their flags from taskPermissions;
-                // the catalog's skip flag is for the others.
-                taskSkipPermissions: permissions ? false : trusted,
-                ...(cwd ? { cwd } : {}),
-                // Report the task's token usage to the spend ledger, with
-                // a key that can only book usage to this agent and task.
-                ...(otlpBoundPort && taskUsageKey
-                  ? {
-                      extraEnv: telemetryEnv({
-                        port: otlpBoundPort,
-                        key: taskUsageKey,
-                        agentId,
-                        taskRef: String(row.id),
-                      }),
-                    }
-                  : {}),
-                // QA-fix 2026-05-24 (Wiring 4) — hand the session
-                // manager to the executor so it opens/closes a session
-                // around the spawn. Lights up #523 lifecycle pushes,
-                // #530 cost rollup, and the TUI Sessions panel.
-                sessionManager,
-                ...(flowContext ? { flowContext } : {}),
-              },
-              {
-                telegramBotToken,
-                telegramChatId,
-                // #445 / #552 — Required by the ACP path so every
-                // approval the agent emits during the prompt routes
-                // through Foreman's risk + approval pipeline. The
-                // codex / task_command_template path ignores this
-                // option — only the ACP branch reads it.
-                mediator,
-                // Autonomous loop tracker — executor records the
-                // delegation lifecycle for the watchdog below.
-                tracker: delegationTracker,
-                initiatorAgent: initiator,
-                controlCommandId: row.id,
-              },
-            );
-            // #498 — Always audit the spawn outcome. control_commands.error
-            // only stores a one-liner (e.g. "agent exited 1"); the real
-            // stderr/stdout was previously lost. Persist the full capture
-            // so users (and future us) can debug "why did claude --print
-            // fail" without instrumenting per-bug. Truncate to keep audit
-            // rows from ballooning under chatty agents.
-            audit.logEvent("control_write_outcome", {
-              id: row.id,
-              agentId,
-              // task_command_template for codex/claude-code; for ACP
-              // agents we record the acp_command argv so the audit
-              // row still tells the operator what got spawned.
-              command:
-                entry.task_command_template ??
-                (entry.acp_command
-                  ? `${entry.acp_command.command} ${(entry.acp_command.args ?? []).join(" ")}`.trim()
-                  : null),
-              spawnKind: exec.spawn.kind,
-              exitCode:
-                exec.spawn.kind === "ok" || exec.spawn.kind === "failed"
-                  ? exec.spawn.exitCode
-                  : null,
-              durationMs:
-                "durationMs" in exec.spawn ? exec.spawn.durationMs : null,
-              timeoutMs:
-                exec.spawn.kind === "timeout" ? exec.spawn.timeoutMs : null,
-              stdoutLen: "stdout" in exec.spawn ? exec.spawn.stdout.length : 0,
-              stderrLen: "stderr" in exec.spawn ? exec.spawn.stderr.length : 0,
-              stdoutTail:
-                "stdout" in exec.spawn ? exec.spawn.stdout.slice(-2000) : null,
-              stderrTail:
-                "stderr" in exec.spawn ? exec.spawn.stderr.slice(-2000) : null,
-              spawnError:
-                exec.spawn.kind === "spawn-error" ? exec.spawn.error : null,
-              unsupportedReason:
-                exec.spawn.kind === "unsupported" ? exec.spawn.reason : null,
-              outputRelay: exec.outputRelay,
-            });
-            if (taskUsageKey) otlp.revokeTaskKey(taskUsageKey);
-            // Usage the agent printed (Codex `tokens used`, Claude JSON
-            // results); telemetry for the same task takes precedence.
-            if ("stdout" in exec.spawn) {
-              const printed = parseTaskUsage(
-                exec.spawn.stdout,
-                exec.spawn.stderr,
+              const outcome = await deliverWriteDirective(
+                {
+                  agentId,
+                  message,
+                  sourceUser: row.sourceUser ?? undefined,
+                  inboundDir,
+                },
+                { telegramBotToken, telegramChatId },
               );
-              if (printed) {
-                try {
-                  usageLedger.record({
-                    agentId,
-                    source: "task-output",
-                    ...printed,
-                    // The agent's configured model prices a bare token count.
-                    model: printed.model ?? registryRow?.modelVersion ?? null,
-                    taskRef: String(row.id),
-                  });
-                  onUsageRecorded();
-                } catch {
-                  /* reporting only */
-                }
+              if (outcome.status === "failed") {
+                loopRun.delegationId = recordUnrunHandOff("failed", outcome.error);
+                return { status: "failed", error: outcome.error };
               }
-            }
-            // The TUI promised "output will arrive in your inbox".
-            recordDelegationOutcome(inbox, {
-              controlId: row.id,
-              agentId,
-              task: message,
-              spawn: exec.spawn,
-            });
-            if (exec.spawn.kind === "ok") {
+              // Its answer comes back as an org_report (or the watchdog asks).
+              try {
+                loopRun.delegationId = delegationLoop.recordRelay({
+                  row,
+                  initiator: row.sourceAgent ?? "cli",
+                  target: agentId,
+                  task: message,
+                  link,
+                });
+              } catch {
+                /* tracking is best-effort */
+              }
+              inbox.add({
+                level: "info",
+                kind: "delegation",
+                title: `Task handed to ${agentId}: ${oneLineSummary(message, 60)}`,
+                body: `${agentId} has no non-interactive command, so the task was posted for it to pick up.`,
+                agentId,
+                dedupeKey: `control:${row.id}:outcome`,
+              });
               return { status: "applied" };
+            } catch (err) {
+              return {
+                status: "failed",
+                error: err instanceof Error ? err.message : String(err),
+              };
             }
-            // Failed / timeout / spawn-error still mark the row as
-            // failed for audit traceability — the output relay already
-            // delivered the error explanation to the user's chat.
-            return {
-              status: "failed",
-              error:
-                exec.spawn.kind === "failed"
-                  ? `agent exited ${exec.spawn.exitCode}`
-                  : exec.spawn.kind === "timeout"
-                    ? `agent timed out after ${exec.spawn.timeoutMs}ms`
-                    : exec.spawn.kind === "spawn-error"
-                      ? `spawn error: ${exec.spawn.error}`
-                      : `unsupported: ${exec.spawn.reason}`,
-            };
+          })();
+        } finally {
+          try {
+            delegationLoop.afterWrite(row, loopRun.delegationId);
+          } catch (err) {
+            process.stderr.write(
+              `foreman: delegation loop failed for #${row.id}: ${
+                err instanceof Error ? err.message : String(err)
+              }\n`,
+            );
           }
-          const outcome = await deliverWriteDirective(
-            {
-              agentId,
-              message,
-              sourceUser: row.sourceUser ?? undefined,
-              inboundDir,
-            },
-            { telegramBotToken, telegramChatId },
-          );
-          if (outcome.status === "failed") {
-            return { status: "failed", error: outcome.error };
-          }
-          inbox.add({
-            level: "info",
-            kind: "delegation",
-            title: `Task handed to ${agentId}: ${oneLineSummary(message, 60)}`,
-            body: `${agentId} has no non-interactive command, so the task was posted for it to pick up.`,
-            agentId,
-            dedupeKey: `control:${row.id}:outcome`,
-          });
-          return { status: "applied" };
-        } catch (err) {
-          return {
-            status: "failed",
-            error: err instanceof Error ? err.message : String(err),
-          };
+          delegationLoop.end();
         }
       },
     ],
@@ -1478,35 +1613,21 @@ export function startForeman(
   // task twice. An attached TUI's console enqueues; the gateway drains.
   if (!attach) controlPoller.start();
 
-  // Autonomous loop watchdog — periodically scan delegations where
-  // the peer's output arrived but the initiator hasn't followed up.
-  // Push a chat nudge per row; after `maxNudges` consecutive nudges
-  // without an initiator reaction, escalate to the user. Checked
-  // every 15s — tighter than the 30s default threshold so a nudge
-  // doesn't have to wait a full extra interval after it becomes
-  // due.
-  //
-  // Quiet when neither Telegram credentials are configured nor
-  // there's anywhere to send the nudge: the row stays awaiting,
-  // watchdog wakes again next tick.
-  const nudgeBotToken = secretStore.exists("telegram-bot-token")
-    ? secretStore.get("telegram-bot-token")
-    : undefined;
-  const nudgeChatId = secretStore.exists("telegram-chat-id")
-    ? secretStore.get("telegram-chat-id")
-    : undefined;
+  // Delegation watchdog (delegation-loop.ts): every 15s, an answer owed
+  // for longer than the answer timeout (a relayed task, a run lost with a
+  // restart) is asked of the agent that owes it, at most twice, then you
+  // are told once. Results that came back are handed to the agent waiting
+  // for them by the drain itself, not by this timer.
   if (!attach) watchdogTimer = setInterval(() => {
-    void runDelegationWatchdog({
-      tracker: delegationTracker,
-      telegramBotToken: nudgeBotToken,
-      telegramChatId: nudgeChatId,
-    }).catch((err) => {
+    try {
+      runDelegationWatchdog({ loop: delegationLoop });
+    } catch (err) {
       process.stderr.write(
         `foreman: delegation watchdog tick failed: ${
           err instanceof Error ? err.message : String(err)
         }\n`,
       );
-    });
+    }
   }, 15_000);
   // Avoid keeping Node alive purely on the timer when the rest of
   // the process is winding down (e.g. CLI test runners) — the
@@ -2067,79 +2188,21 @@ export function readStartChoice(rl: ReadlineInterface): Promise<StartChoice> {
 
 // =============================================================================
 // Delegation watchdog — runs on a 15s timer (see runForeman above).
-// Pulls pending nudges from the tracker + posts each to Telegram.
-// Pure helper so unit tests can drive it deterministically.
+// The decisions live in DelegationLoop.watchdog (re-prompt the agent that
+// owes an answer, then tell the owner once); this is the tick.
 // =============================================================================
 
 const TELEGRAM_API_URL = "https://api.telegram.org";
 
 export interface DelegationWatchdogDeps {
-  tracker: DelegationTracker;
-  telegramBotToken?: string | undefined;
-  telegramChatId?: string | undefined;
-  /** Override the network call for tests. Defaults to global fetch. */
-  fetchImpl?: typeof fetch;
-  /** Override the clock for tests. Defaults to Date.now via the tracker. */
-  nowMs?: () => number;
+  loop: Pick<DelegationLoop, "watchdog">;
 }
 
-/**
- * One tick of the watchdog: query pending nudges, push each one to
- * Telegram, record the nudge (or escalation if past max). Returns the
- * count of nudges + escalations dispatched for observability +
- * test assertions.
- */
-export async function runDelegationWatchdog(
+/** One tick of the watchdog. Returns what it did, for tests and logs. */
+export function runDelegationWatchdog(
   deps: DelegationWatchdogDeps,
-): Promise<{ nudged: number; escalated: number }> {
-  const pending = deps.tracker.pendingNudges();
-  let nudged = 0;
-  let escalated = 0;
-  if (pending.length === 0) return { nudged, escalated };
-
-  // No chat configured → record-only mode: the tracker still flips
-  // status awaiting → nudged so the row doesn't sit forever, but no
-  // outbound message is dispatched. Operator can see the state via
-  // the CLI (PR B adds `foreman delegations list`).
-  const canPush = Boolean(deps.telegramBotToken && deps.telegramChatId);
-  for (const row of pending) {
-    // Initiators that aren't LLM agents (e.g. `cli` for terminal users)
-    // have nothing to nudge — they SEE the output in their own context.
-    if (isHumanSource(row.initiatorAgent)) continue;
-
-    const isLastNudge = row.nudgeCount + 1 >= deps.tracker.maxNudges;
-    const text = isLastNudge
-      ? composeEscalationText(row)
-      : composeNudgeText(row);
-
-    if (canPush) {
-      try {
-        await pushTelegramNudge({
-          text,
-          botToken: deps.telegramBotToken!,
-          chatId: deps.telegramChatId!,
-          fetchImpl: deps.fetchImpl,
-        });
-      } catch (err) {
-        process.stderr.write(
-          `foreman: nudge push failed for ${row.id}: ${
-            err instanceof Error ? err.message : String(err)
-          }\n`,
-        );
-        // Keep going — DB state still advances so we don't spin on
-        // the same row forever.
-      }
-    }
-
-    if (isLastNudge) {
-      deps.tracker.recordEscalation(row.id);
-      escalated += 1;
-    } else {
-      deps.tracker.recordNudge(row.id);
-      nudged += 1;
-    }
-  }
-  return { nudged, escalated };
+): { nudged: number; escalated: number } {
+  return deps.loop.watchdog();
 }
 
 interface PushTelegramNudgeInput {

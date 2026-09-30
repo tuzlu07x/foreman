@@ -60,6 +60,11 @@ export interface ExecuteDirectiveInput {
   /** A second (third, …) instance of the agent: its own Foreman MCP
    *  server, env and role for this launch (agent-instance.ts). */
   launch?: InstanceLaunch;
+  /** Put before the task in what the agent receives (after an instance's
+   *  role prompt): the "What you did recently" block (role-memory.ts).
+   *  Not part of `message`, so the task summary, the cwd hint and the
+   *  chat relay stay the task alone. */
+  contextPrefix?: string;
   extraEnv?: Record<string, string>;
   /** Working directory for the spawned process. Drain handler derives
    *  this from the task text via `extractCwdFromTask(message)` so an
@@ -145,6 +150,10 @@ export interface ExecuteDeliveryDeps {
   /** Optional id of the control_commands row carrying this directive.
    *  Recorded on the delegation row for audit correlation. */
   controlCommandId?: number;
+  /** Where this run sits in the delegation loop (delegation-loop.ts):
+   *  the thread a Foreman follow-up continues, or the sender's thread
+   *  for a fresh hand-off. Recorded on the delegation row. */
+  delegationLink?: { threadId?: string | null; parentThreadId?: string | null };
 }
 
 /** Slim interface the executor uses for the tracker — keeps the
@@ -156,10 +165,13 @@ export interface DelegationTrackerLike {
     targetAgent: string;
     prompt: string;
     controlCommandId?: number | null;
+    threadId?: string | null;
+    parentThreadId?: string | null;
   }): string;
   recordOutputReceived(input: {
     delegationId: string;
     spawnOutcome?: string;
+    resultText?: string;
   }): void;
 }
 
@@ -179,6 +191,9 @@ export interface ExecuteDirectiveOutcome {
    *  `null` when the directive wasn't part of a flow. Callers can
    *  inspect this to log/audit the chain or update the TUI. */
   routing?: RoutingDecision | null;
+  /** The delegation row recorded for this run, when a tracker was wired
+   *  (and could record it). The drain hands it to the delegation loop. */
+  delegationId?: string | null;
 }
 
 const DEFAULT_MAX_OUTPUT = 3500;
@@ -206,6 +221,8 @@ export async function executeWriteDirective(
         targetAgent: input.agentId,
         prompt: input.message,
         controlCommandId: deps.controlCommandId ?? null,
+        threadId: deps.delegationLink?.threadId ?? null,
+        parentThreadId: deps.delegationLink?.parentThreadId ?? null,
       });
     } catch (err) {
       // Tracking failures must not break execution. Surface to stderr
@@ -236,32 +253,32 @@ export async function executeWriteDirective(
         deps.tracker.recordOutputReceived({
           delegationId: trackerId,
           spawnOutcome: outcome.spawn.kind,
+          resultText: delegationResultText(outcome.spawn),
         });
       } catch {
         /* best-effort */
       }
     }
-    return outcome;
+    return { ...outcome, delegationId: trackerId };
   }
 
   if (!input.entry.task_command_template) {
+    const spawn: SpawnAgentTaskOutcome = {
+      kind: "unsupported",
+      reason: `agent "${input.agentId}" has no task_command_template`,
+    };
     if (trackerId && deps.tracker) {
       try {
         deps.tracker.recordOutputReceived({
           delegationId: trackerId,
           spawnOutcome: "unsupported",
+          resultText: delegationResultText(spawn),
         });
       } catch {
         /* best-effort */
       }
     }
-    return {
-      spawn: {
-        kind: "unsupported",
-        reason: `agent "${input.agentId}" has no task_command_template`,
-      },
-      outputRelay: null,
-    };
+    return { spawn, outputRelay: null, delegationId: trackerId };
   }
 
   // QA-fix 2026-05-24 (Wiring 4) — open a session BEFORE the spawn so
@@ -290,7 +307,7 @@ export async function executeWriteDirective(
 
   const spawn = await spawnAgentTask({
     entry: input.entry,
-    task: `${input.launch?.taskPrefix ?? ""}${input.message}`,
+    task: `${input.launch?.taskPrefix ?? ""}${input.contextPrefix ?? ""}${input.message}`,
     spawnedBy: input.agentId,
     ...(input.launch && input.launch.args.length > 0 ? { extraArgs: input.launch.args } : {}),
     modelVersion: input.modelVersion ?? null,
@@ -410,13 +427,26 @@ export async function executeWriteDirective(
       deps.tracker.recordOutputReceived({
         delegationId: trackerId,
         spawnOutcome: spawn.kind,
+        resultText: delegationResultText(spawn),
       });
     } catch {
       /* best-effort */
     }
   }
 
-  return { spawn, outputRelay, routing };
+  return { spawn, outputRelay, routing, delegationId: trackerId };
+}
+
+/**
+ * What a run produced, for the agent that handed it the task (the wake
+ * in delegation-loop.ts): what it printed when it finished, or the
+ * friendly reason it couldn't. The tracker redacts and clips it.
+ */
+export function delegationResultText(spawn: SpawnAgentTaskOutcome): string {
+  const failure = spawnFailureLine(spawn);
+  if (failure !== null) return `Couldn't finish: ${failure}`;
+  const out = spawn.kind === "ok" ? spawn.stdout.trim() : "";
+  return out.length > 0 ? out : "(finished without output)";
 }
 
 // =============================================================================
@@ -495,7 +525,7 @@ async function executeAcpDirective(
   const acpOutcome = await runAcpMediatedTask({
     mediator: deps.mediator,
     sourceAgent: input.agentId,
-    prompt: input.message,
+    prompt: `${input.contextPrefix ?? ""}${input.message}`,
     cwd: input.cwd,
     spawnImpl: deps.acpSpawnImpl,
     argv: {
