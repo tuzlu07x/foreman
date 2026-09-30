@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
-import { AGENT_TOKEN_FILE_ENV } from "./agent-identity.js";
+import { AGENT_TOKEN_ENV, AGENT_TOKEN_FILE_ENV } from "./agent-identity.js";
 import type { AgentEntry, RegistryDoc } from "./registry-catalog.js";
 import type { RegisteredAgent } from "./registry.js";
 
@@ -81,12 +81,17 @@ export function instanceLaunch(entry: Pick<AgentEntry, "id">, input: InstanceLau
   const [command, ...cliArgs] = input.foremanArgv;
   if (!command) return null;
   const serverArgs = [...cliArgs, "mcp-stdio", "--source", input.agentId];
-  const env = { [AGENT_TOKEN_FILE_ENV]: input.tokenFile };
+  // The agent's own wiring may carry its token directly (FOREMAN_AGENT_TOKEN
+  // wins over the file): blank it, or the instance would present the base
+  // agent's token and run untrusted (token-mismatch).
+  const env = { [AGENT_TOKEN_ENV]: "", [AGENT_TOKEN_FILE_ENV]: input.tokenFile };
   const rolePrompt = input.role ? `${input.role}\n\n` : "";
   if (entry.id === "codex") {
-    // `-c key=value` overrides ~/.codex/config.toml for this run; the env
-    // table is replaced whole, so a token written into the config for
-    // another id isn't used.
+    // `-c key=value` overrides ~/.codex/config.toml for this run. Codex
+    // merges tables key by key (even `-c mcp_servers.foreman={…}`), so the
+    // config's `env = { FOREMAN_AGENT_TOKEN = … }` for plain `codex`
+    // survives unless we overwrite that key too; and a server disabled in
+    // the config stays disabled unless we switch it on.
     return {
       args: [
         "-c",
@@ -94,7 +99,9 @@ export function instanceLaunch(entry: Pick<AgentEntry, "id">, input: InstanceLau
         "-c",
         `mcp_servers.foreman.args=[${serverArgs.map(tomlString).join(",")}]`,
         "-c",
-        `mcp_servers.foreman.env={${AGENT_TOKEN_FILE_ENV}=${tomlString(input.tokenFile)}}`,
+        `mcp_servers.foreman.env={${AGENT_TOKEN_ENV}="",${AGENT_TOKEN_FILE_ENV}=${tomlString(input.tokenFile)}}`,
+        "-c",
+        "mcp_servers.foreman.enabled=true",
       ],
       env: {},
       taskPrefix: rolePrompt,

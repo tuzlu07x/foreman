@@ -24,24 +24,39 @@
 const { spawnSync } = require('node:child_process')
 const fs = require('node:fs')
 const readline = require('node:readline')
+const toml = require('smol-toml')
 
 const [agent, mode, ...rest] = process.argv.slice(2)
 
-/** The Foreman MCP server this launch was given, from its argv, or null. */
+/** The Foreman MCP server this launch was given, from its argv, or null.
+ *  Codex does what the real Codex (0.159) does: it starts from the
+ *  `foreman` server in its own config.toml and merges each `-c` into it
+ *  table by table, so keys the launch leaves alone (a token `agent add
+ *  codex` wrote there) survive. */
 function launchServer(argv) {
   const cfg = argv.indexOf('--mcp-config')
   if (cfg >= 0) return JSON.parse(argv[cfg + 1]).mcpServers.foreman
-  const server = {}
+  if (agent !== 'codex') return null
+  let config = {}
+  const home = process.env.CODEX_HOME || require('node:path').join(process.env.HOME || '', '.codex')
+  try {
+    config = toml.parse(fs.readFileSync(require('node:path').join(home, 'config.toml'), 'utf8'))
+  } catch {}
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] !== '-c') continue
-    const [key, ...value] = argv[i + 1].split('=')
-    const v = value.join('=')
-    if (key === 'mcp_servers.foreman.command') server.command = JSON.parse(v)
-    if (key === 'mcp_servers.foreman.args') server.args = JSON.parse(v)
-    const env = /^\{(\w+)=("(?:[^"\\]|\\.)*")\}$/.exec(v)
-    if (key === 'mcp_servers.foreman.env' && env) server.env = { [env[1]]: JSON.parse(env[2]) }
+    try {
+      config = mergeTables(config, toml.parse(argv[i + 1]))
+    } catch {}
   }
-  return server.command ? server : null
+  const server = (config.mcp_servers || {}).foreman
+  return server && server.command && server.enabled !== false ? server : null
+}
+
+function mergeTables(into, from) {
+  const isTable = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
+  const out = { ...into }
+  for (const [key, value] of Object.entries(from)) out[key] = isTable(out[key]) && isTable(value) ? mergeTables(out[key], value) : value
+  return out
 }
 
 /** Post through Foreman's MCP server, as the launch says, and return its reply. */
@@ -53,8 +68,12 @@ function mcpPost(server, to, text) {
   ]
     .map((m) => JSON.stringify(m))
     .join('\n')
-  const env = { ...process.env, ...(server.env || {}) }
+  // Like the real agents: the server gets its configured env, not the
+  // agent's own identity variables.
+  const env = { ...process.env }
   delete env.FOREMAN_AGENT_TOKEN
+  delete env.FOREMAN_AGENT_TOKEN_FILE
+  Object.assign(env, server.env || {})
   const r = spawnSync(server.command, server.args || [], { input: input + '\n', encoding: 'utf8', env, timeout: 30000 })
   for (const line of (r.stdout || '').split('\n')) {
     try {
