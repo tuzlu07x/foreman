@@ -72,6 +72,38 @@ describe('foreman self-protection rule', () => {
     expect(cli('foreman log tail')).toEqual([])
   })
 
+  it('reads a Foreman command in a shell only where it runs (finding 18), and stays strict where text can run', () => {
+    const bash = (command: string) =>
+      rules({ sourceAgent: 'claude-code', targetTool: 'Bash', args: { command, description: 'x' } }).filter((r) => r === 'foreman_cli_tamper')
+    // Runs it: caught, by any path, after other commands, with env vars.
+    expect(bash('foreman policy reset')).toEqual(['foreman_cli_tamper'])
+    expect(bash('cd /tmp && FOO=1 /usr/local/bin/foreman agent trust codex')).toEqual(['foreman_cli_tamper'])
+    expect(bash('"fore"man secrets show gh --reveal')).toEqual(['foreman_cli_tamper'])
+    expect(bash('npm test; foreman hook uninstall claude-code')).toEqual(['foreman_cli_tamper'])
+    // Only mentions it: a commit message, a PR body, a grep.
+    expect(bash('git commit -m "docs: run foreman agent hook install claude-code after upgrading"')).toEqual([])
+    expect(bash('gh pr create --title x --body "Then: foreman policy show"')).toEqual([])
+    expect(bash("grep -rn 'foreman agent trust' src")).toEqual([])
+    // Anything that can run text is read as a whole, as before.
+    expect(bash('echo "foreman policy reset" | sh')).toEqual(['foreman_cli_tamper'])
+    expect(bash('bash -c "foreman agent trust codex"')).toEqual(['foreman_cli_tamper'])
+    expect(bash('eval "foreman policy reset"')).toEqual(['foreman_cli_tamper'])
+    expect(bash('x=$(foreman secrets list)')).toEqual(['foreman_cli_tamper'])
+    expect(bash('cat <<EOF | sh\nforeman policy reset\nEOF')).toEqual(['foreman_cli_tamper'])
+    expect(bash('echo `foreman policy reset`')).toEqual(['foreman_cli_tamper'])
+    expect(bash('xargs foreman policy < list')).toEqual(['foreman_cli_tamper'])
+    expect(bash('sudo foreman policy reset')).toEqual(['foreman_cli_tamper'])
+  })
+
+  it('does not read file content as a command, but still guards the path it writes', () => {
+    const write = (args: Record<string, unknown>) => rules({ sourceAgent: 'claude-code', targetTool: 'Write', args })
+    expect(write({ file_path: '/repo/docs/upgrade.md', content: 'Run `foreman agent hook install claude-code` once.' })).toEqual([])
+    expect(
+      rules({ sourceAgent: 'claude-code', targetTool: 'Edit', args: { file_path: '/repo/README.md', old_string: 'a', new_string: 'foreman policy show' } }),
+    ).toEqual([])
+    expect(write({ file_path: '/Users/x/Library/Application Support/foreman/policy.yaml', content: 'rules: []' })).toContain('foreman_self_tamper')
+  })
+
   it('ignores ordinary work', () => {
     expect(rules({ sourceAgent: 'a', targetTool: 'shell_exec', args: { cmd: 'npm test && git status' } })).toEqual([])
     expect(rules({ sourceAgent: 'a', targetTool: 'read_file', args: { path: 'src/foreman/index.ts' } })).toEqual([])
