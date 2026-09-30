@@ -73,8 +73,8 @@ import { checkAgentUpdates } from "../core/agent-update-check.js";
 import { loadActiveRegistry } from "../core/registry-catalog.js";
 import { agentsSharingTelegram } from "../core/notification/telegram-listener.js";
 import { createRoleGuard } from "../core/org/role-guard.js";
-import { ensureAgentToken } from "../core/agent-token.js";
 import { loadOrg } from "../core/org/org.js";
+import { instanceLaunchFor } from "../core/role-launch.js";
 import {
   claudeHookInstalled,
   roleWorkspace,
@@ -83,16 +83,7 @@ import {
   type TaskPermissions,
 } from "../core/task-permissions.js";
 import type { AgentEntry } from "../core/registry-catalog.js";
-import {
-  catalogEntryFor,
-  foremanCliArgv,
-  instanceLaunch,
-  isInstance,
-  rolePrompt,
-  supportsInstances,
-  writeInstanceTokenFile,
-  type InstanceLaunch,
-} from "../core/agent-instance.js";
+import { catalogEntryFor } from "../core/agent-instance.js";
 import { checkForUpdate } from "../core/update-check.js";
 import { closeDb, getDb, getSqlite, type ForemanDb } from "../db/client.js";
 import { controlCommands } from "../db/schema.js";
@@ -2438,46 +2429,4 @@ function taskCwd(agentId: string, fromTask: string | undefined): string | undefi
   }
 }
 
-/**
- * The launch additions for a second (third, …) instance of an agent: its own
- * Foreman MCP server and identity, and its org.yaml role (agent-instance.ts).
- * Null for the agent itself, or one Foreman can't point at its own server;
- * a failure is logged and the agent runs with its config's wiring.
- */
-function instanceLaunchFor(
-  agentId: string,
-  entry: AgentEntry,
-  store: SecretStore,
-  paths: { stateDir: string; orgConfigPath: string },
-): InstanceLaunch | null {
-  if (!isInstance(agentId, entry) || !supportsInstances(entry)) return null;
-  try {
-    const tokenFile = writeInstanceTokenFile(paths.stateDir, agentId, ensureAgentToken(store, agentId));
-    let role: string | null = null;
-    try {
-      const org = loadOrg(paths.orgConfigPath);
-      const found = org ? Object.entries(org.roles).find(([, r]) => r.agent === agentId) : undefined;
-      if (org && found) {
-        const [roleId, r] = found;
-        role = rolePrompt({
-          company: org.company,
-          roleId,
-          title: r.title,
-          department: r.department ? (org.departments[r.department]?.name ?? r.department) : undefined,
-          responsibility: r.responsibility,
-          instructions: r.instructions,
-          agentId,
-        });
-      }
-    } catch {
-      // an unreadable org.yaml: no role, the task still runs
-    }
-    return instanceLaunch(entry, { agentId, tokenFile, foremanArgv: foremanCliArgv(), role });
-  } catch (err) {
-    process.stderr.write(
-      `foreman: couldn't give ${agentId} its own identity (${err instanceof Error ? err.message : String(err)}); it runs with ${entry.id}'s wiring\n`,
-    );
-    return null;
-  }
-}
 

@@ -17,6 +17,7 @@ import { migrateCommand } from "./migrate.js";
 import { llmCommand } from "./llm-cli.js";
 import { migrateConfigCommand } from "./migrate-config.js";
 import { notifyCommand } from "./notify-cli.js";
+import { openCommand } from "./open-cli.js";
 import { orgCommand } from "./org-cli.js";
 import { inboxCommand } from "./inbox-cli.js";
 import { usageCommand } from "./usage-cli.js";
@@ -55,6 +56,7 @@ export function buildProgram(): Command {
   program.addCommand(mcpCommand);
   program.addCommand(integrationsCommand);
   program.addCommand(orgCommand);
+  program.addCommand(openCommand);
   program.addCommand(inboxCommand);
   program.addCommand(usageCommand);
   program.addCommand(demoCommand);
