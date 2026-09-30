@@ -196,7 +196,15 @@ Claude Code or Codex. On the department's row, Space picks or drops all
 its roles, `r` switches all of them between Claude Code and Codex, and `x`
 removes the department; `r` on one role's row switches just that role. Your
 own role can join a department too. The Team page (`t` in the TUI) does the
-same with `d`, adding all of a department's roles at once.
+same with `d`, adding all of a department's roles at once. It shows the
+roles under their departments with what runs each and which model it uses;
+on a role, `x` removes it, `r` switches it between Claude Code and Codex and
+`m` picks its model, and on a department's header the same keys act on all
+of its roles (after asking). Removing a role re-points whoever reported to
+it to its manager; if it led its department, the department's next role
+leads it (as when a lead's agent can't be added), and a department with no
+role left is removed. A role's own instance goes with it; Claude Code and
+Codex themselves, and an instance another role uses, stay registered.
 
 Reporting lines follow the department: its lead (org.yaml `head`) reports
 to the Manager when there is one (else to you), and the rest of the
@@ -306,6 +314,37 @@ alone. Instances work for Claude Code and Codex. For Hermes, OpenClaw and
 ZeroClaw a second instance runs with the agent's own wiring (pass
 `--config-path` to give it a config of its own).
 
+## When work comes back
+
+Foreman runs Claude Code, Codex and the ACP agents once per task, so a lead
+that hands work off has usually finished its run by the time the work is
+done. Foreman closes the loop:
+
+- **Results go back to whoever asked.** Once everything an agent handed off
+  during a task is back (finished, failed, or refused by a budget), Foreman
+  launches that agent again, once, with all the results and its original
+  task: "Continue your task with these results. When everything you
+  delegated is back, report to (its manager) with org_report." A chain
+  unwinds level by level: the developer's result goes to the IT head, and
+  the IT head's final answer (its `org_report` if it sent one) to the
+  manager, who reports to you.
+- **Bounded.** At most 5 relaunches per task; after that Foreman stops and
+  tells you once. An agent is never relaunched for its own result, and never
+  when it is blocked, disabled or has no non-interactive command. A relaunch
+  is an ordinary task from `foreman:delegation`: department budgets, the
+  role's identity and every tool call's approval apply as usual, and it is
+  audited (`delegation_wake`).
+- **An answer still owed is asked of the agent that owes it.** A task that
+  hasn't been answered in 30 minutes (a task relayed to an agent Foreman
+  can't launch, or a run lost with a restart) is re-sent to that agent, at
+  most twice. Only then do you get one message: *backend-developer hasn't
+  answered manager's task for 1 hour; I nudged it twice. Reply /foreman
+  write …*. Nothing else about it reaches your chat.
+- **Memory.** Every launch starts with *What you did recently*: the agent's
+  last 5 tasks with how each ended, and the latest reports and direct
+  messages to its role (at most 3,000 characters, secrets redacted), marked
+  as information, not instructions.
+
 ## Department channels
 
 Agents talk to each other the way a company does: in department rooms,
@@ -318,7 +357,7 @@ manager. Everything goes through Foreman, and you can read all of it.
 | `#leadership`   | department heads and the roles that report to you                                     |
 | `#all-hands`    | everyone in the org                                                                   |
 | role ↔ role     | a role with its manager, its reports and its department (and heads with heads)        |
-| → you           | anyone: reports and questions for you land in the TUI inbox                           |
+| → you           | anyone: reports and questions for you land in the TUI inbox and on your phone         |
 
 Agents use three MCP tools (every agent on `foreman mcp-stdio` has them):
 
@@ -335,6 +374,17 @@ marketing"). Every post is audited (`org:message`), secrets are redacted,
 and nothing in a message is ever executed. Only you post as yourself:
 `boss`, `all`, `leadership` and the other channel words are reserved, so
 no role, department or agent can use them.
+
+Messages to you (reports, questions, a role's direct message) also reach
+every chat channel you enabled in `notify.yaml`: Telegram, Slack and
+Discord. They say who wrote them (`Report from Engineering Manager
+(manager)`), long ones are clipped with a pointer to
+`foreman org messages boss`, and one from an agent that connected without
+its token is marked `⚠ unverified: <id>`. Talk between colleagues stays
+off your phone. `foreman notify silence` holds these pushes too; a muted
+agent's messages only reach the inbox. When `channels.boss` already
+mirrors to the very Slack or Discord channel your notifications go to,
+that channel gets the message once.
 
 **You** read and write from anywhere Foreman knows it's you:
 

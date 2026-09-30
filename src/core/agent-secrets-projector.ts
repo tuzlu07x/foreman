@@ -219,8 +219,18 @@ export function projectSecretsForAgent(
   // -----------------------------------------------------------------------
   const envPairs: Record<string, string> = {};
   const envSecretNames: string[] = [];
+  // On a subscription route (Claude Pro/Max sign-in) an API key in the
+  // agent's env wins over the subscription: never write one, and take
+  // back the one Foreman wrote before the switch (2.3.0 real test: the
+  // manager failed with 401 on a key left in Claude Code's settings).
+  const subscription = onSubscriptionRoute(entry, ctx);
+  const takeBack: { varName: string; secret: string }[] = [];
   if (projection.env_vars) {
     for (const [varName, spec] of Object.entries(projection.env_vars)) {
+      if (subscription && spec.if_provider === ctx.llmProvider) {
+        takeBack.push({ varName, secret: spec.from_secret });
+        continue;
+      }
       if (resolverWonProviderWrites && spec.if_provider) continue;
       if (!filterMatches(spec, ctx, entry.id)) continue;
       const value = safeGet(ctx.secretStore, spec.from_secret, result.skipped);
@@ -250,6 +260,27 @@ export function projectSecretsForAgent(
     } else {
       const w = writeJsonEnvBlock(path, projection.json_env.section, envPairs);
       result.files.push({ path, secrets: envSecretNames, ...w });
+    }
+  }
+
+  if (projection.json_env && takeBack.length > 0) {
+    const path = expand(projection.json_env.path);
+    // Only a value that is Foreman's own secret: a key you set yourself
+    // stays (doctor's claude_subscription check points at it).
+    const ours = takeBack.filter(({ secret }) => {
+      try {
+        return ctx.secretStore.exists(secret);
+      } catch {
+        return false;
+      }
+    });
+    const removed = removeJsonEnvVars(
+      path,
+      projection.json_env.section,
+      Object.fromEntries(ours.map(({ varName, secret }) => [varName, () => safeGet(ctx.secretStore, secret, [])])),
+    );
+    for (const varName of removed) {
+      result.skipped.push({ secret: varName, reason: `removed from ${path}: ${entry.id} uses your subscription` });
     }
   }
 
@@ -774,6 +805,51 @@ export function writeJsonEnvBlock(
   writeDotPath(root, section, next);
   atomicWrite0600(path, JSON.stringify(root, null, 2) + "\n");
   return { created: !exists, replacedStale };
+}
+
+/** Remove each `vars` key from the JSON env block at `section` when its
+ *  value is still the one `vars[key]()` returns; other values stay.
+ *  Returns the keys removed. */
+export function removeJsonEnvVars(
+  path: string,
+  section: string,
+  vars: Record<string, () => string | null>,
+): string[] {
+  if (!existsSync(path)) return [];
+  let root: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf-8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+    root = parsed as Record<string, unknown>;
+  } catch {
+    return [];
+  }
+  const block = readDotPath(root, section);
+  if (!block || typeof block !== "object" || Array.isArray(block)) return [];
+  const next = { ...(block as Record<string, unknown>) };
+  const removed: string[] = [];
+  for (const [key, expected] of Object.entries(vars)) {
+    const value = next[key];
+    if (typeof value !== "string") continue;
+    const ours = expected();
+    if (ours === null || value.trim() !== ours.trim()) continue;
+    delete next[key];
+    removed.push(key);
+  }
+  if (removed.length === 0) return [];
+  writeDotPath(root, section, next);
+  atomicWrite0600(path, JSON.stringify(root, null, 2) + "\n");
+  return removed;
+}
+
+/** The agent's chosen route for its LLM provider is a sign-in (no API
+ *  key): Claude Pro/Max for Claude Code, ChatGPT for Codex. */
+function onSubscriptionRoute(entry: AgentEntry, ctx: ProjectionContext): boolean {
+  if (!ctx.llmProvider) return false;
+  const mapping = entry.provider_mapping?.[ctx.llmProvider];
+  if (!mapping) return false;
+  const variant = mapping.variants[ctx.providerVariant ?? mapping.preferred];
+  return !!variant && !variant.required_secret && !!variant.interactive_setup;
 }
 
 /**

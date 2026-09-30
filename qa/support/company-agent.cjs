@@ -15,46 +15,91 @@
 //
 // What it does with a task comes from the playbook in QA_PLAYBOOK: a reply,
 // work to hand on with `foreman write <agent> <task>` (as itself: Foreman
-// sets FOREMAN_SPAWNED_BY), and a post to a channel through the Foreman MCP
-// server this launch was given (an instance's own: Codex `-c
-// mcp_servers.foreman.*`, Claude Code `--mcp-config`). Every task it
-// receives is logged to QA_AGENT_LOG, with its argv. It touches no network
-// and no file outside the sandbox.
+// sets FOREMAN_SPAWNED_BY), and a post or an org_report through the Foreman
+// MCP server this launch was given (an instance's own: Codex `-c
+// mcp_servers.foreman.*`, Claude Code `--mcp-config`; Claude Code itself
+// reads ~/.claude.json, as the real one does). The "What you did recently"
+// block Foreman puts before a task is set aside before the playbook is
+// matched, so a rule answers the task, not the memory. Every task it
+// receives is logged to QA_AGENT_LOG, with its argv and that block. It
+// touches no network and no file outside the sandbox.
 
 const { spawnSync } = require('node:child_process')
 const fs = require('node:fs')
 const readline = require('node:readline')
+const toml = require('smol-toml')
 
 const [agent, mode, ...rest] = process.argv.slice(2)
 
-/** The Foreman MCP server this launch was given, from its argv, or null. */
+/** The Foreman MCP server this launch was given, from its argv, or null.
+ *  Codex does what the real Codex (0.159) does: it starts from the
+ *  `foreman` server in its own config.toml and merges each `-c` into it
+ *  table by table, so keys the launch leaves alone (a token `agent add
+ *  codex` wrote there) survive. */
 function launchServer(argv) {
   const cfg = argv.indexOf('--mcp-config')
   if (cfg >= 0) return JSON.parse(argv[cfg + 1]).mcpServers.foreman
-  const server = {}
+  if (agent !== 'codex') return null
+  let config = {}
+  const home = process.env.CODEX_HOME || require('node:path').join(process.env.HOME || '', '.codex')
+  try {
+    config = toml.parse(fs.readFileSync(require('node:path').join(home, 'config.toml'), 'utf8'))
+  } catch {}
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] !== '-c') continue
-    const [key, ...value] = argv[i + 1].split('=')
-    const v = value.join('=')
-    if (key === 'mcp_servers.foreman.command') server.command = JSON.parse(v)
-    if (key === 'mcp_servers.foreman.args') server.args = JSON.parse(v)
-    const env = /^\{(\w+)=("(?:[^"\\]|\\.)*")\}$/.exec(v)
-    if (key === 'mcp_servers.foreman.env' && env) server.env = { [env[1]]: JSON.parse(env[2]) }
+    try {
+      config = mergeTables(config, toml.parse(argv[i + 1]))
+    } catch {}
   }
-  return server.command ? server : null
+  const server = (config.mcp_servers || {}).foreman
+  return server && server.command && server.enabled !== false ? server : null
 }
 
-/** Post through Foreman's MCP server, as the launch says, and return its reply. */
-function mcpPost(server, to, text) {
+function mergeTables(into, from) {
+  const isTable = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
+  const out = { ...into }
+  for (const [key, value] of Object.entries(from)) out[key] = isTable(out[key]) && isTable(value) ? mergeTables(out[key], value) : value
+  return out
+}
+
+/** Claude Code without an instance's own server uses its user config. */
+function userServer() {
+  if (agent !== 'claude-code') return null
+  try {
+    const cfg = JSON.parse(fs.readFileSync(require('node:path').join(process.env.HOME, '.claude.json'), 'utf8'))
+    return (cfg.mcpServers && cfg.mcpServers.foreman) || null
+  } catch {
+    return null
+  }
+}
+
+const MEMORY_HEADER = '## What you did recently\n'
+const MEMORY_END = '## Your task\n'
+
+/** [the task without Foreman's memory block, the block or null]. */
+function splitMemory(task) {
+  const at = task.indexOf(MEMORY_HEADER)
+  const end = at >= 0 ? task.indexOf(MEMORY_END, at) : -1
+  if (end < 0) return [task, null]
+  return [task.slice(0, at) + task.slice(end + MEMORY_END.length), task.slice(at, end + MEMORY_END.length)]
+}
+
+/** Call a Foreman MCP tool, as the launch says, and return its reply. */
+function mcpCall(server, name, args) {
   const input = [
     { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'qa-company-agent', version: '0' } } },
     { jsonrpc: '2.0', method: 'notifications/initialized' },
-    { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'org_post', arguments: { to, text } } },
+    { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } },
   ]
     .map((m) => JSON.stringify(m))
     .join('\n')
-  const env = { ...process.env, ...(server.env || {}) }
+  // The server's own env is what proves who calls (a token file for an
+  // instance, the token in ~/.claude.json for Claude Code itself), never
+  // one inherited from the launch.
+  const env = { ...process.env }
   delete env.FOREMAN_AGENT_TOKEN
+  delete env.FOREMAN_AGENT_TOKEN_FILE
+  Object.assign(env, server.env || {})
   const r = spawnSync(server.command, server.args || [], { input: input + '\n', encoding: 'utf8', env, timeout: 30000 })
   for (const line of (r.stdout || '').split('\n')) {
     try {
@@ -65,24 +110,29 @@ function mcpPost(server, to, text) {
   return 'no answer: ' + (r.stderr || '').trim().split('\n').pop()
 }
 
-function play(task, argv = []) {
+function play(received, argv = []) {
   const server = launchServer(argv)
+  const [task, memory] = splitMemory(received)
   fs.appendFileSync(
     process.env.QA_AGENT_LOG,
     JSON.stringify({
       agent,
       task,
+      memory,
       spawnedBy: process.env.FOREMAN_SPAWNED_BY || null,
       depth: process.env.FOREMAN_SPAWN_DEPTH || null,
       server,
       argv,
+      cwd: process.cwd(),
     }) + '\n',
   )
   const book = JSON.parse(fs.readFileSync(process.env.QA_PLAYBOOK, 'utf8'))
   const rule = (book[agent] || []).find((r) => new RegExp(r.when, 'i').test(task))
   if (!rule) return 'Done: ' + task
   const lines = [rule.reply]
-  if (rule.post) lines.push('posted: ' + (server ? mcpPost(server, rule.post[0], rule.post[1]) : 'no Foreman server in this launch'))
+  const mcp = server || userServer()
+  if (rule.post) lines.push('posted: ' + (mcp ? mcpCall(mcp, 'org_post', { to: rule.post[0], text: rule.post[1] }) : 'no Foreman server in this launch'))
+  if (rule.report) lines.push('reported: ' + (mcp ? mcpCall(mcp, 'org_report', { text: rule.report }) : 'no Foreman server in this launch'))
   for (const [to, subtask] of rule.delegate || []) {
     const r = spawnSync('foreman', ['write', to, subtask], { encoding: 'utf8', env: process.env })
     const said = ((r.stderr || '') + (r.stdout || '')).trim().split('\n')[0]

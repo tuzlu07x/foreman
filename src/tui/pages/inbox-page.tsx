@@ -1,7 +1,7 @@
 import { Box, Text, useInput } from "ink";
 import { type JSX, useMemo, useState } from "react";
 import type { InboxItem } from "../../db/schema.js";
-import { relativeTime } from "../format.js";
+import { oneLine, relativeTime } from "../format.js";
 import { roundBorder, theme } from "../theme.js";
 
 // Notification centre (#613): everything Foreman wanted you to know,
@@ -157,7 +157,7 @@ export function InboxPage({
                   <Text color={color}>{glyph}</Text>
                   <Text> </Text>
                   <Text color={isUnread ? theme.fg.emphasis : theme.fg.default} bold={isUnread}>
-                    {item.title}
+                    {oneLine(item.title)}
                   </Text>
                   {group.items.length > 1 ? (
                     <Text color={theme.fg.muted}>{` ×${group.items.length}`}</Text>
@@ -166,7 +166,7 @@ export function InboxPage({
                 </Text>
                 {expanded === item.id || (isSelected && item.body.length > 0) ? (
                   <Text color={theme.fg.muted} wrap={expanded === item.id ? "wrap" : "truncate-end"}>
-                    {`      ${item.body || "(no details)"}`}
+                    {`      ${item.body ? oneLine(item.body) : "(no details)"}`}
                   </Text>
                 ) : null}
               </Box>

@@ -11,16 +11,18 @@
  *
  *   2. **Watchdog** — `pendingNudges(threshold)` returns delegations
  *      whose output arrived but the initiator has been idle for
- *      longer than `threshold`. The drain loop in `foreman start`
- *      calls this every ~15s.
+ *      longer than `threshold`.
  *
  *   3. **Dispatcher** — `recordNudge` / `recordEscalation` advance the
  *      lifecycle state when a nudge fires.
  *
+ * What happens when work comes back — relaunching the agent that asked
+ * with the results, nudging the agent that owes an answer, and the one
+ * message to you when a chain is stuck — lives in delegation-loop.ts,
+ * on top of these rows.
+ *
  * The module is intentionally pure (no IO, no clock from a global —
- * `Date.now()` injection via `nowMs` so tests are deterministic). The
- * actual nudge message + Telegram push lives in `start.ts` so this
- * module doesn't pull in the channel layer.
+ * `Date.now()` injection via `nowMs` so tests are deterministic).
  */
 
 import { and, asc, eq, isNotNull, isNull, lt } from "drizzle-orm";
@@ -32,6 +34,8 @@ import {
   type Delegation,
   type NewDelegation,
 } from "../db/schema.js";
+import { stripControl } from "./inbox.js";
+import { redactSecretShapes } from "./risk-rules/secret-patterns.js";
 
 // =============================================================================
 // Configuration constants
@@ -84,6 +88,13 @@ export interface RecordDelegationInput {
    *  directive — lets the audit log + the watchdog correlate
    *  nudges with the underlying queue entry. */
   controlCommandId?: number | null;
+  /** The thread this run works on (delegation-loop.ts): set for the runs
+   *  Foreman adds to a hand-off (a wake, a nudge). Omitted or null: the
+   *  run is a fresh hand-off and starts its own thread. */
+  threadId?: string | null;
+  /** The sender's thread when it handed this off, or null when it wasn't
+   *  running a task Foreman launched. */
+  parentThreadId?: string | null;
 }
 
 export interface RecordOutputInput {
@@ -93,7 +104,14 @@ export interface RecordOutputInput {
    *  actual situation: "codex finished" vs "codex failed (exit 1) —
    *  handle this". */
   spawnOutcome?: string;
+  /** What the run produced for the agent that asked: the end of its
+   *  output, or why it couldn't finish. Stored redacted and clipped
+   *  (`clipResultText`). */
+  resultText?: string;
 }
+
+/** Longest result kept per run: the end of the output is what matters. */
+export const RESULT_TEXT_MAX = 4_000;
 
 export interface DelegationTrackerOptions {
   db: ForemanDb;
@@ -218,6 +236,8 @@ export class DelegationTracker {
       controlCommandId: input.controlCommandId ?? null,
       startedAt: this.nowMs(),
       status: "open",
+      threadId: input.threadId ?? id,
+      parentThreadId: input.parentThreadId ?? null,
     };
     this.db.insert(delegations).values(row).run();
     return id;
@@ -238,6 +258,9 @@ export class DelegationTracker {
       .set({
         outputReceivedAt: this.nowMs(),
         spawnOutcome: input.spawnOutcome ?? null,
+        ...(input.resultText !== undefined
+          ? { resultText: clipResultText(input.resultText) }
+          : {}),
         status: row.status === "open" ? "awaiting" : row.status,
       })
       .where(eq(delegations.id, input.delegationId))
@@ -450,12 +473,23 @@ function truncatePrompt(s: string): string {
   return trimmed.slice(0, PROMPT_SUMMARY_MAX - 1) + "…";
 }
 
+/** A run's result as it is stored: control characters stripped, secret
+ *  shapes redacted, and only the last RESULT_TEXT_MAX characters kept
+ *  (an agent's conclusion is at the end of what it printed). */
+export function clipResultText(text: string, max: number = RESULT_TEXT_MAX): string {
+  const clean = redactSecretShapes(stripControl(text.replace(/\r\n?/g, "\n"))).text.trim();
+  return clean.length > max ? `…${clean.slice(clean.length - (max - 1))}` : clean;
+}
+
 /** Spawn outcomes that mean the target agent never did the task. */
 const FAILED_SPAWN_OUTCOMES = new Set([
   "failed",
   "timeout",
   "spawn-error",
   "unsupported",
+  // delegation-loop.ts: refused before it ran (budget), or never answered.
+  "blocked",
+  "no-answer",
 ]);
 
 export type DelegationStatusLabel = Delegation["status"] | "failed";
@@ -478,57 +512,4 @@ export function delegationStatusLabel(
     return "failed";
   }
   return row.status;
-}
-
-// =============================================================================
-// Nudge text builders — pure, exported for tests + the dispatcher.
-// =============================================================================
-
-/**
- * Compose the chat message the watchdog pushes to the initiator
- * when a nudge fires. Includes the peer, the prompt summary, and a
- * suggested action ladder so the LLM gets a concrete next step
- * rather than just "do something."
- */
-export function composeNudgeText(row: Delegation): string {
-  const peerLabel = row.targetAgent;
-  const promptLine = row.promptSummary ? `\n_Task:_ ${row.promptSummary}` : "";
-  const outcomeLine = row.spawnOutcome
-    ? `\n_Outcome:_ ${row.spawnOutcome}`
-    : "";
-  const numbered =
-    row.nudgeCount === 0
-      ? "📩"
-      : `📩 (nudge ${row.nudgeCount + 1}/${maxNudgeText(row)})`;
-  return (
-    `${numbered} ${peerLabel}'s output is waiting on your action.${promptLine}${outcomeLine}\n\n` +
-    `Per your responsibility, review what ${peerLabel} produced and take the next step ` +
-    `(merge / request changes / re-delegate / escalate to user). Don't go idle.`
-  );
-}
-
-/** Max-nudge text helper that pulls the cap from the row's existing
- *  state when the tracker isn't directly accessible. Defaults to 3
- *  so the message reads sensibly without coupling to the service. */
-function maxNudgeText(_row: Delegation): string {
-  return String(DEFAULT_MAX_NUDGES);
-}
-
-/**
- * Compose the escalation text — pushed to the user (not the
- * initiator) when an LLM agent ignores N nudges in a row. Signals
- * that human intervention is needed.
- */
-export function composeEscalationText(row: Delegation): string {
-  return (
-    `⚠ Multi-agent loop stuck:\n\n` +
-    `• Initiator: ${row.initiatorAgent}\n` +
-    `• Peer:      ${row.targetAgent}\n` +
-    `• Task:      ${row.promptSummary}\n` +
-    `• Status:    ${row.targetAgent} finished` +
-    (row.spawnOutcome ? ` (${row.spawnOutcome})` : "") +
-    `, but ${row.initiatorAgent} hasn't followed up after ${row.nudgeCount} nudges.\n\n` +
-    `Action needed: type \`/foreman write ${row.initiatorAgent} <next step>\` to ` +
-    `unstick the loop, or "stop" if the chain should halt.`
-  );
 }

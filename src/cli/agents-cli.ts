@@ -1,4 +1,7 @@
-import { isInstance, supportsInstances } from "../core/agent-instance.js";
+import { catalogEntryFor, isInstance, supportsInstances } from "../core/agent-instance.js";
+import { loadOrg, type RoleCapability } from "../core/org/org.js";
+import { installedAgent, updateCommandFor } from "../core/agent-runtime-info.js";
+import { claudeHookInstalled, taskPermissions } from "../core/task-permissions.js";
 import { existsSync, writeFileSync } from "node:fs";
 import { Command, Option } from "commander";
 import { bus } from "../core/event-bus.js";
@@ -45,6 +48,7 @@ import {
   detectInstall,
   preferredUninstallCommand,
   runInstall,
+  runShell,
   runUninstall,
 } from "../core/agent-install.js";
 import {
@@ -821,10 +825,9 @@ agentsCommand
 agentsCommand
   .command("trust <agentId>")
   .description(
-    "Skip the agent's own shell-tool allowlist on every spawn — trust " +
-      "Foreman's MCP-level mediation as the only boundary. The agent's " +
-      "catalog entry must declare `task_skip_permissions_flag` for this " +
-      "to take effect.",
+    "Let the agent work on its own during tasks Foreman hands it: Codex " +
+      "may write in its folder (still sandboxed), Claude Code skips its " +
+      "own prompts. The role's permissions in org.yaml still apply.",
   )
   .action((agentId: string) => {
     const registry = getRegistry();
@@ -838,48 +841,18 @@ agentsCommand
       closeDb();
       process.exit(1);
     }
-    // Warn (but don't refuse) when the catalog entry doesn't declare a
-    // skip flag — the DB row flips fine, but the spawn engine will be
-    // a no-op until the catalog adds one. Better to surface this now
-    // than leave the operator confused why their trust call had no
-    // visible effect.
-    let catalogFlag: string | null = null;
-    try {
-      const catalogEntry = safeFindAgent(loadActiveRegistry().doc, agentId);
-      catalogFlag = catalogEntry?.task_skip_permissions_flag ?? null;
-    } catch {
-      catalogFlag = null;
-    }
     try {
       registry.setTaskSkipPermissions(agentId, true);
     } catch (err) {
       handleAgentError(err);
     }
-    console.log(
-      `${green("✓")} ${bold(agentId)} trusted — spawns will skip the ` +
-        `agent's shell allowlist`,
-    );
-    if (catalogFlag) {
+    console.log(`${green("✓")} ${bold(agentId)} trusted`);
+    const what = describeTaskPermissions(agentId, registry.get(agentId), true);
+    if (what) console.log(`  ${dim("now")}       ${what}`);
+    else
       console.log(
-        `  ${dim("flag")}      ${catalogFlag} (appended to every \`foreman write ${agentId}\` argv)`,
+        `  ${dim("now")}       ${agentId} gets no extra rights from trust: Foreman has no way to change what it may do on its own`,
       );
-    } else {
-      console.log(
-        `  ${red("!")}  this agent's catalog entry has no \`task_skip_permissions_flag\` —`,
-      );
-      console.log(
-        `      the DB flag is set but the spawn engine has nothing to append.`,
-      );
-      console.log(
-        `      Either the agent has no skip-permissions mode, or the catalog`,
-      );
-      console.log(`      needs an update (PR welcome).`);
-    }
-    console.log(
-      `  ${dim("safety")}    Foreman's MCP mediation is now the ONLY gate ` +
-        `on this agent's shell tool calls. Audit + per-call risk scoring`,
-    );
-    console.log(`            stay active.`);
     console.log(
       `  ${dim("revoke")}    \`foreman agent untrust ${agentId}\``,
     );
@@ -1008,6 +981,7 @@ hookSub
           `  ${dim("revoke")}    \`foreman agent hook uninstall ${agentId}${opts.project !== undefined && opts.project !== false ? " --project" + (typeof opts.project === "string" ? ` ${opts.project}` : "") : ""}\``,
         );
       }
+      if (!opts.dryRun && !result.alreadyInstalled) console.log(hookRestartNote(agentId, "guards"));
       closeDb();
     },
   );
@@ -1065,15 +1039,24 @@ hookSub
           (opts.dryRun ? dim(" (dry-run)") : ""),
       );
       console.log(`  ${dim("settings")}  ${result.settingsPath}`);
+      if (!opts.dryRun) console.log(hookRestartNote(agentId, "stops guarding"));
     }
     closeDb();
   });
 
+/** Claude Code reads its hooks when a session starts: the change reaches
+ *  new sessions only (2.3.0 real test: an uninstalled hook kept guarding
+ *  the open session). */
+function hookRestartNote(agentId: string, what: "guards" | "stops guarding"): string {
+  const name = agentId === "claude-code" ? "Claude Code" : agentId;
+  return `  ${orange("restart")}   Foreman ${what} new ${name} sessions only: close and reopen the ones already open.`;
+}
+
 agentsCommand
   .command("untrust <agentId>")
   .description(
-    "Re-enable the agent's own shell-tool allowlist gate (revoke " +
-      "`foreman agent trust`).",
+    "Take back `foreman agent trust`: Codex reads only, Claude Code asks " +
+      "unless Foreman's hook guards it.",
   )
   .action((agentId: string) => {
     const registry = getRegistry();
@@ -1091,10 +1074,9 @@ agentsCommand
     } catch (err) {
       handleAgentError(err);
     }
-    console.log(
-      `${green("✓")} ${bold(agentId)} no longer trusted — spawns will respect ` +
-        `the agent's shell allowlist`,
-    );
+    console.log(`${green("✓")} ${bold(agentId)} no longer trusted`);
+    const what = describeTaskPermissions(agentId, registry.get(agentId), false);
+    if (what) console.log(`  ${dim("now")}       ${what}`);
     closeDb();
   });
 
@@ -1392,11 +1374,15 @@ async function runAgentUpdateOne(
     return 1;
   }
 
-  console.log(orange(`updating ${agent.id} (${entry.install.npm})…`));
-  const result = await runInstall({
-    install: entry.install,
-    onLine: (line) => console.log(`  ${dim(line)}`),
-  });
+  // Update the copy Foreman launches, with the npm (or brew) that
+  // installed it: another Node's npm would add a second copy the old one
+  // keeps shadowing on PATH.
+  const installed = installedAgent(entry.install);
+  const inPlace = installed ? updateCommandFor(installed, entry.install.npm) : null;
+  console.log(orange(`updating ${agent.id} (${entry.install.npm ?? entry.install.brew})…`));
+  if (installed) console.log(`  ${dim("found")}     ${installed.binPath}${installed.version ? ` (v${installed.version})` : ""}`);
+  const onLine = (line: string): void => console.log(`  ${dim(line)}`);
+  const result = inPlace ? await runShell(inPlace, onLine) : await runInstall({ install: entry.install, onLine });
   if (!result.ok) {
     console.error(
       red("error: ") +
@@ -1404,7 +1390,8 @@ async function runAgentUpdateOne(
     );
     return 1;
   }
-  console.log(`${green("✓")} ${agent.id} updated`);
+  const after = installedAgent(entry.install);
+  console.log(`${green("✓")} ${agent.id} updated${after?.version ? ` to v${after.version}` : ""}`);
   return 0;
 }
 
@@ -1446,4 +1433,34 @@ function handleAgentError(err: unknown): void {
     process.exit(1);
   }
   throw err;
+}
+
+/** What `agentId` may do on its own during a task, in one line
+ *  (task-permissions.ts), or null for an agent those rules don't cover. */
+function describeTaskPermissions(
+  agentId: string,
+  registered: Parameters<typeof catalogEntryFor>[2],
+  trusted: boolean,
+): string | null {
+  try {
+    const entry = catalogEntryFor(loadActiveRegistry().doc, agentId, registered);
+    if (!entry) return null;
+    let can: RoleCapability[] | undefined;
+    try {
+      const org = loadOrg(getForemanPaths().orgConfigPath);
+      can = org ? Object.values(org.roles).find((r) => r.agent === agentId)?.can : undefined;
+    } catch {
+      can = ["read"];
+    }
+    return (
+      taskPermissions({
+        runtime: entry.id,
+        trusted,
+        hookInstalled: entry.id === "claude-code" ? claudeHookInstalled(entry.config_paths ?? []) : null,
+        can,
+      })?.summary ?? null
+    );
+  } catch {
+    return null;
+  }
 }

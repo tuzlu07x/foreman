@@ -3,7 +3,10 @@ import { Spinner } from "@inkjs/ui";
 import { type JSX, useEffect, useState } from "react";
 import type { ControlCommand, Request } from "../../db/schema.js";
 import {
+  displayWidth,
+  fitWidth,
   formatDuration,
+  oneLine,
   relativeTime,
   statusIconFor,
   safe,
@@ -18,6 +21,10 @@ const FADE_DURATION_MS = 200;
 
 export interface ActivityFeedProps {
   width?: string;
+  /** The feed's share of the terminal when a parent box sets its width
+   *  (the wide layout puts it in a 60% column), so rows are fitted to the
+   *  columns they really have. `width` wins when both are set. */
+  share?: string;
   minimal?: boolean;
 }
 
@@ -29,6 +36,7 @@ type FeedItem =
 
 export function ActivityFeed({
   width,
+  share,
   minimal,
 }: ActivityFeedProps): JSX.Element {
   const { recentRequests, recentControlCommands, pendingRequests } =
@@ -47,10 +55,14 @@ export function ActivityFeed({
   ].sort((a, b) => b.createdAt - a.createdAt);
   const visible = minimal ? merged.slice(0, 5) : merged.slice(0, 20);
   const { cols } = useTerminalSize();
-  const rowWidth = feedRowWidth(cols, width, minimal === true);
+  const rowWidth = feedRowWidth(cols, width ?? share, minimal === true);
 
+  // The page gives the feed a fixed height. Rows keep their own height
+  // (flexShrink 0) and the frame clips what doesn't fit (overflow hidden),
+  // so the oldest rows drop off the bottom. Left to shrink, Yoga squeezes
+  // every two-line row into one and draws each row over the next.
   const inner = (
-    <Box flexDirection="column">
+    <Box flexDirection="column" flexShrink={0}>
       {pendingRequests.map((p) => (
         <PendingRow key={p.requestId} pending={p} />
       ))}
@@ -67,7 +79,7 @@ export function ActivityFeed({
           item.kind === "request" ? (
             <ActivityRow key={`r${item.row.id}`} request={item.row} rowWidth={rowWidth} />
           ) : (
-            <ControlRow key={`c${item.row.id}`} command={item.row} />
+            <ControlRow key={`c${item.row.id}`} command={item.row} rowWidth={rowWidth} />
           ),
         )
       )}
@@ -76,8 +88,10 @@ export function ActivityFeed({
 
   if (minimal) {
     return (
-      <Box flexDirection="column" paddingX={1}>
-        <Text color={theme.accent.primary}>Activity</Text>
+      <Box flexDirection="column" paddingX={1} overflow="hidden">
+        <Box flexShrink={0}>
+          <Text color={theme.accent.primary}>Activity</Text>
+        </Box>
         {inner}
       </Box>
     );
@@ -91,8 +105,11 @@ export function ActivityFeed({
       borderDimColor
       paddingX={1}
       flexGrow={1}
+      overflow="hidden"
     >
-      <Text color={theme.accent.primary}>Activity</Text>
+      <Box flexShrink={0}>
+        <Text color={theme.accent.primary}>Activity</Text>
+      </Box>
       {inner}
     </Box>
   );
@@ -136,7 +153,7 @@ function ActivityRow({
   const who = targetLabel(request.sourceAgent, request.targetAgent);
   // One line per row: the call gets what the time and agent leave, and a
   // long path gives up its middle, not its file name.
-  const callWidth = Math.max(8, rowWidth - when.length - 3 - who.length - 1);
+  const callWidth = Math.max(8, rowWidth - displayWidth(when) - 3 - displayWidth(who) - 1);
   return (
     <Box flexDirection="column" marginBottom={0}>
       <Text color={headerColor} wrap="truncate-end">
@@ -167,7 +184,13 @@ function ActivityRow({
 // ActivityRow's fade-in + alignment so the merged stream looks
 // consistent regardless of source. Status glyph reflects the
 // orchestration outcome (applied / failed / rejected / pending).
-function ControlRow({ command }: { command: ControlCommand }): JSX.Element {
+function ControlRow({
+  command,
+  rowWidth,
+}: {
+  command: ControlCommand;
+  rowWidth: number;
+}): JSX.Element {
   const [faded, setFaded] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setFaded(true), FADE_DURATION_MS);
@@ -183,16 +206,21 @@ function ControlRow({ command }: { command: ControlCommand }): JSX.Element {
           ? theme.accent.warning
           : theme.accent.info;
   const headerColor = faded ? theme.fg.default : theme.fg.muted;
-  const summary = summariseControlCommand(command);
+  const when = relativeTime(command.createdAt);
+  const who = safe(command.sourceAgent ?? "");
+  // Same budget as a request row: the summary gets what the time and agent
+  // leave, measured in terminal columns (an emoji or CJK character is two).
+  const summaryWidth = Math.max(8, rowWidth - displayWidth(when) - 3 - displayWidth(who) - 1);
+  const summary = fitWidth(summariseControlCommand(command), summaryWidth);
   return (
     <Box flexDirection="column" marginBottom={0}>
       <Text color={headerColor} wrap="truncate-end">
-        <Text color={theme.fg.muted}>{relativeTime(command.createdAt)}</Text>
+        <Text color={theme.fg.muted}>{when}</Text>
         <Text color={theme.fg.muted}> · </Text>
         <Text color={faded ? theme.accent.primary : theme.fg.muted}>
-          {safe(command.sourceAgent ?? "")}
+          {who}
         </Text>{" "}
-        <Text bold={faded}>{safe(summary)}</Text>
+        <Text bold={faded}>{summary}</Text>
       </Text>
       <Text wrap="truncate-end">
         {"  "}
@@ -210,10 +238,11 @@ function ControlRow({ command }: { command: ControlCommand }): JSX.Element {
   );
 }
 
-// Compact one-line summary of the directive: "write codex \"review PR…\""
-// or "stop" / "llm switch openai gpt-4o-mini". Truncates the write
-// message to keep the row to one terminal line.
-function summariseControlCommand(command: ControlCommand): string {
+// Compact one-line summary of the directive: "write codex: review PR…"
+// or "stop" / "llm switch openai gpt-4o-mini". Agent-supplied text is
+// flattened to one line (line breaks as ⏎, hidden characters made
+// visible); the caller fits it to the row.
+export function summariseControlCommand(command: ControlCommand): string {
   let args: string[];
   try {
     const parsed = JSON.parse(command.args);
@@ -222,19 +251,18 @@ function summariseControlCommand(command: ControlCommand): string {
     args = [];
   }
   if (command.command === "write") {
-    const target = args[0] ?? "?";
-    const body = args.slice(1).join(" ");
-    const preview = body.length > 40 ? `${body.slice(0, 37)}…` : body;
-    return `write ${target}: ${preview}`;
+    const target = oneLine(args[0] ?? "?");
+    const body = oneLine(args.slice(1).join(" "));
+    return `write ${target}: ${fitWidth(body, 40)}`;
   }
   if (command.command === "llm-switch") {
-    return `llm switch ${args.join(" ")}`.trim();
+    return oneLine(`llm switch ${args.join(" ")}`.trim());
   }
   if (command.command === "llm-budget") {
-    return `llm budget ${args.join(" ")}`.trim();
+    return oneLine(`llm budget ${args.join(" ")}`.trim());
   }
   if (command.command === "stop") return "stop";
-  return `${command.command} ${args.join(" ")}`.trim();
+  return oneLine(`${command.command} ${args.join(" ")}`.trim());
 }
 
 function controlStatusIconFor(status: ControlCommand["status"]): {
@@ -261,7 +289,7 @@ function PendingRow({
   return (
     <Box flexDirection="row" gap={1}>
       <Spinner />
-      <Text color={theme.accent.info}>
+      <Text color={theme.accent.info} wrap="truncate-end">
         {safe(pending.sourceAgent)}
         {pending.targetTool ? ` → ${safe(pending.targetTool)}` : ""}{" "}
         <Text color={theme.fg.muted}>…</Text>

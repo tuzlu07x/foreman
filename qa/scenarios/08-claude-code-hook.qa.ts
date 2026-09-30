@@ -84,6 +84,7 @@ it('Claude Code PreToolUse hook: install, allow, approve and deny in the TUI, fa
 
     const out = sb.ok(['agent', 'hook', 'install', 'claude-code'])
     expect(out).toContain('Installed PreToolUse hook for claude-code')
+    expect(out).toContain('close and reopen the ones already open')
     expect(out).toContain(settingsPath)
     const settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) as ClaudeSettings
     const groups = settings.hooks?.PreToolUse ?? []

@@ -12,6 +12,7 @@ import {
 import { slackEndpoints, type SlackEndpoints } from "../notification/channels/slack-endpoints.js";
 import { BOSS, channelLabel } from "./comms.js";
 import { loadOrg, type OrgDoc } from "./org.js";
+import { isToOwner, ownerNotice, sameChatChannel, type OwnerChatChannel, type OwnerNotifier } from "./owner-notice.js";
 
 // =============================================================================
 // Mirror department channels to Slack / Discord (#630)
@@ -24,7 +25,8 @@ import { loadOrg, type OrgDoc } from "./org.js";
 //
 // Adapters are small and pluggable: a platform is a name in org.yaml
 // (`channels: { slack: "#marketing" }`) plus an OrgMirror here. Messages
-// to you also land in the TUI inbox.
+// to you also land in the TUI inbox and, through `owner`, on every chat
+// channel you get notifications on (owner-notice.ts).
 
 export interface MirrorMessage {
   author: string;
@@ -93,6 +95,11 @@ export interface CommsMirrorOptions {
   orgConfigPath: string;
   mirrors: ReadonlyMap<string, OrgMirror>;
   inbox?: InboxService;
+  /** Pushes messages to you to your Telegram / Slack / Discord. */
+  owner?: OwnerNotifier;
+  /** Told about every new message once, before it is mirrored (the
+   *  delegation loop reads reports here). Must not throw. */
+  onMessage?: (message: OrgMessage) => void;
   intervalMs?: number;
   now?: () => number;
 }
@@ -101,6 +108,8 @@ export interface CommsMirrorOptions {
 const MAX_AGE_MS = 24 * 3_600_000;
 /** Back off this long after a platform says 429. */
 const RATE_LIMIT_PAUSE_MS = 10_000;
+/** A push to you that takes longer finishes on its own; the mirror moves on. */
+const OWNER_PUSH_WAIT_MS = 15_000;
 
 export class CommsMirrorWorker {
   private timer: NodeJS.Timeout | null = null;
@@ -142,12 +151,21 @@ export class CommsMirrorWorker {
       if (pending.length === 0) return;
       const org = this.org();
       for (const m of pending) {
-        // Reports to you always reach the inbox, however late.
-        if (m.channel === BOSS) this.toInbox(m);
+        try {
+          this.opts.onMessage?.(m);
+        } catch {
+          /* a listener's problem is not the mirror's */
+        }
+        // Reports to you (and a role's direct thread with you) always reach
+        // the inbox, however late.
+        if (m.channel === BOSS || isToOwner(m)) this.toInbox(m);
         // Chat channels only get what is still news. Review requests
         // (#623) stay local: they carry a report's tool arguments, which
         // must not leave the machine.
         const fresh = m.ts > now - MAX_AGE_MS && m.kind !== "review";
+        // Your notification channels this message already reached through
+        // a mirror to the very same channel: no second post there.
+        const alreadyThere = new Set<OwnerChatChannel>();
         for (const [platform, target] of fresh ? targetsFor(org, m.channel) : []) {
           const mirror = this.opts.mirrors.get(platform);
           if (!mirror) {
@@ -161,6 +179,9 @@ export class CommsMirrorWorker {
               kind: m.kind,
               text: m.text,
             });
+            if ((platform === "slack" || platform === "discord") && sameChatChannel(target, this.opts.owner?.chatTargets[platform])) {
+              alreadyThere.add(platform);
+            }
           } catch (err) {
             const status = err instanceof ChannelDeliveryError ? err.status : 0;
             if (status === 429) {
@@ -175,7 +196,18 @@ export class CommsMirrorWorker {
           }
         }
         // Delivered or given up: each message is attempted once.
-        this.db.update(orgMessages).set({ mirroredAt: now }).where(and(isNull(orgMessages.mirroredAt), eq(orgMessages.id, m.id))).run();
+        const claimed = this.db
+          .update(orgMessages)
+          .set({ mirroredAt: now })
+          .where(and(isNull(orgMessages.mirroredAt), eq(orgMessages.id, m.id)))
+          .run();
+        // Your phone gets it after the row is marked, and only from the pass
+        // that marked it: a crash or a rate-limited retry never pushes the
+        // same message twice.
+        if (fresh && claimed.changes === 1 && this.opts.owner && isToOwner(m)) {
+          const push = this.opts.owner.send(ownerNotice(m, org), { fromAgent: m.fromAgent, skip: alreadyThere });
+          await settledWithin(push, OWNER_PUSH_WAIT_MS);
+        }
       }
     } finally {
       this.running = false;
@@ -238,6 +270,17 @@ function authorOf(m: OrgMessage): string {
   const who = m.fromRole ? `${m.fromRole} (${m.fromAgent})` : m.fromAgent;
   if (m.channel === BOSS) return `${who} → you`;
   return m.channel.startsWith("dm:") ? `${who} → ${channelLabel(m.channel)}` : who;
+}
+
+/** Wait for `work`, but no longer than `ms`; its failure is swallowed. */
+async function settledWithin(work: Promise<unknown>, ms: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+  await Promise.race([work.catch(() => undefined), late]);
+  clearTimeout(timer);
 }
 
 /** Quote every line (`> `), so the body reads as one block under its author. */

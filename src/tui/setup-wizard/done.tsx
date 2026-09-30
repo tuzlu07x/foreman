@@ -22,8 +22,7 @@ import {
 } from "./shared.js";
 import { wizardServiceChoices } from "./services-logic.js";
 import { teamRoleList } from "./team-logic.js";
-import { hasForemanHook, type ClaudeSettings } from "../../core/agent-hook.js";
-import { resolveAgentSettingsPath } from "../../core/agent-permissions.js";
+import { claudeHookInstalled } from "../../core/task-permissions.js";
 import type { WizardOauthRunStep } from "./types.js";
 
 export function handleDoneInput(
@@ -590,18 +589,7 @@ export function countPolicyRules(policyPath: string): number {
   }
 }
 
-/** Whether Claude Code's settings carry Foreman's PreToolUse hook: false
- *  when they don't (the Done screen suggests installing it), null when the
- *  file can't be read (say nothing). */
-export function claudeHookInstalled(configPaths: string[]): boolean | null {
-  try {
-    const path = resolveAgentSettingsPath(configPaths);
-    if (!existsSync(path)) return false;
-    return hasForemanHook(JSON.parse(readFileSync(path, "utf-8")) as ClaudeSettings, "claude-code");
-  } catch {
-    return null;
-  }
-}
+export { claudeHookInstalled };
 
 // Done-screen tile that lists how to start each newly-installed agent. Driven
 // by `secret_projection.launch` in the registry — single string OR array of

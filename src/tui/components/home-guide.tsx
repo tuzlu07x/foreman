@@ -28,7 +28,9 @@ export function HomeGuide({ width }: { width?: string }): JSX.Element | null {
   const steps = nextSteps(facts);
   const team = teamSummary(facts.org);
   return (
-    <Box width={width} flexDirection="column" borderStyle={roundBorder()} borderDimColor paddingX={1}>
+    // Stacked under the Activity feed in a fixed-height page: the guide keeps
+    // its lines and the feed gives up rows instead (flexShrink 0).
+    <Box width={width} flexDirection="column" borderStyle={roundBorder()} borderDimColor paddingX={1} flexShrink={0}>
       <Text color={theme.accent.primary}>Team</Text>
       <Text wrap="truncate-end" color={team ? theme.fg.default : theme.fg.muted}>
         {facts.orgBroken ? "org.yaml doesn't parse (foreman org validate)" : (team ?? "no team yet")}

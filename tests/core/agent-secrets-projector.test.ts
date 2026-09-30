@@ -392,6 +392,36 @@ describe("projectSecretsForAgent — wiring", () => {
     expect(parsed.env.ANTHROPIC_API_KEY).toBe("sk-ant-1");
   });
 
+  it("on the Claude subscription route writes no API key, and takes back the one it wrote before", () => {
+    const mapping = {
+      anthropic: {
+        preferred: "direct",
+        variants: {
+          direct: { label: "API", env_vars: { ANTHROPIC_API_KEY: "${secret:anthropic-key}" }, required_secret: "anthropic-key" },
+          oauth: { label: "Claude Pro/Max", interactive_setup: "claude auth login", required_secret: null },
+        },
+      },
+    };
+    const entry = fakeEntry({
+      provider_mapping: mapping,
+      secret_projection: {
+        json_env: { path: `${tmp}/settings.json`, section: "env" },
+        env_vars: { ANTHROPIC_API_KEY: { from_secret: "anthropic-key", if_provider: "anthropic" } },
+      },
+    } as Partial<AgentEntry>);
+    const ctx = { providersSelected: ["anthropic"], servicesSelected: [], secretStore: store, home: tmp, llmProvider: "anthropic" };
+    // Before: the API-key route (or a version that ignored the route).
+    writeJsonEnvBlock(`${tmp}/settings.json`, "env", { ANTHROPIC_API_KEY: "sk-ant-1", OTHER: "keep" });
+    const result = projectSecretsForAgent(entry, { ...ctx, providerVariant: "oauth" });
+    const env = JSON.parse(readFileSync(`${tmp}/settings.json`, "utf-8")).env;
+    expect(env).toEqual({ OTHER: "keep" });
+    expect(result.skipped).toContainEqual({ secret: "ANTHROPIC_API_KEY", reason: expect.stringContaining("uses your subscription") });
+    // A key you put there yourself stays.
+    writeJsonEnvBlock(`${tmp}/settings.json`, "env", { ANTHROPIC_API_KEY: "sk-ant-yours" });
+    projectSecretsForAgent(entry, { ...ctx, providerVariant: "oauth" });
+    expect(JSON.parse(readFileSync(`${tmp}/settings.json`, "utf-8")).env.ANTHROPIC_API_KEY).toBe("sk-ant-yours");
+  });
+
   it("dispatches to writeJsonChannels when json_channels is set", () => {
     const entry = fakeEntry({
       secret_projection: {

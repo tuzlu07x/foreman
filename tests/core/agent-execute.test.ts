@@ -8,6 +8,7 @@ import {
   spawnFailureLine,
   taskAgentLabel,
 } from "../../src/core/agent-execute.js";
+import { taskLanguage } from "../../src/core/task-failure-hints.js";
 import { EventBus, type ForemanEventMap } from "../../src/core/event-bus.js";
 import type { AgentEntry } from "../../src/core/registry-catalog.js";
 import { SessionManager } from "../../src/core/session.js";
@@ -75,8 +76,10 @@ describe("renderOutputText", () => {
         durationMs: 100,
       },
     );
-    expect(text).toContain("Exit code: 2");
-    expect(text).toContain("ENOENT");
+    // The reason, never a stderr dump or an exit code.
+    expect(text.split("\n")[1]).toBe("ENOENT: missing file");
+    expect(text).not.toContain("Exit code");
+    expect(text).not.toContain("stderr");
   });
 
   it("names the role with the program and never says a failed run finished", () => {
@@ -98,13 +101,13 @@ describe("renderOutputText", () => {
         durationMs: 100,
       },
     );
-    const [header, reason] = text.split("\n");
+    const [header, reason, fix] = text.split("\n");
     expect(header).toBe("📨 *manager \\(Claude Code\\)* couldn't finish your task");
-    expect(reason).toBe("Failed to authenticate\\. API Error: 401");
+    expect(reason).toBe("Claude Code couldn't sign in \\(401\\)\\.");
+    expect(fix).toContain("What to do: Sign in again with `claude auth login`");
     expect(text).not.toContain("finished your task");
-    // The reason comes before the task text; the details stay below.
-    expect(text.indexOf("API Error")).toBeLessThan(text.indexOf("_Task:_"));
-    expect(text).toContain("Exit code: 1");
+    expect(text.indexOf("401")).toBeLessThan(text.indexOf("_Task:_"));
+    expect(text).not.toContain("more detail");
   });
 
   it("names the role with the program on success too", () => {
@@ -143,8 +146,7 @@ describe("renderOutputText", () => {
         timeoutMs: 5000,
       },
     );
-    expect(text).toContain("Timed out");
-    expect(text).toContain("5s");
+    expect(text).toContain("It ran longer than 1 min, so Foreman stopped it");
     expect(text).toContain("partial work");
   });
 
@@ -171,8 +173,7 @@ describe("renderOutputText", () => {
       input("x"),
       { kind: "unsupported", reason: "no template declared" },
     );
-    expect(text).toContain("Cannot spawn");
-    expect(text).toContain("no template declared");
+    expect(text).toContain("can't take tasks from Foreman");
   });
 
   it("renders a spawn-error with the underlying error message", () => {
@@ -180,8 +181,28 @@ describe("renderOutputText", () => {
       input("x"),
       { kind: "spawn-error", error: "ENOENT" },
     );
-    expect(text).toContain("Spawn error");
-    expect(text).toContain("ENOENT");
+    expect(text).toContain("couldn't finish your task\nENOENT");
+  });
+
+  it("answers in Turkish when the task is Turkish, and explains the errors people hit (2.3.1)", () => {
+    const codex = { agentId: "backend-developer", entry: agent({ id: "codex", name: "Codex", task_command_template: "echo" }) };
+    const ok = renderOutputText({ ...codex, message: "Projeyi analiz et" }, { kind: "ok", exitCode: 0, stdout: "Bitti.", stderr: "lots of progress", durationMs: 1 });
+    expect(ok.split("\n")[0]).toBe("📨 *backend\\-developer \\(Codex\\)* görevini bitirdi");
+    expect(ok).toContain("_Görev:_ Projeyi analiz et");
+    expect(ok).not.toContain("lots of progress");
+    const cases: [string, RegExp][] = [
+      ["Error: unknown variant `max`, expected one of low, medium, high", /Codex verilen modeli kullanamadı[\s\S]*foreman agent update codex/],
+      ["Not inside a trusted directory and --skip-git-repo-check was not specified.", /güvenilir klasör değil/],
+      ["You've hit your usage limit. Upgrade to Pro", /kullanım limitine takıldı/],
+      ["Permission for submit_command hasn't been granted yet", /izin sorusunda durdu[\s\S]*foreman agent trust backend\\-developer|foreman agent trust backend-developer/],
+    ];
+    for (const [stderr, expected] of cases) {
+      const text = renderOutputText({ ...codex, message: "Projeyi analiz et" }, { kind: "failed", exitCode: 1, stdout: "", stderr: stderr + "\n" + "x".repeat(50_000), durationMs: 1 });
+      expect(text).toMatch(expected);
+      expect(text.length).toBeLessThan(1200);
+    }
+    expect(taskLanguage("Analyse the repo")).toBe("en");
+    expect(taskLanguage("şu repoyu incele")).toBe("tr");
   });
 
   it("includes the task excerpt so the user sees what they asked for", () => {
@@ -240,7 +261,7 @@ describe("renderOutputText", () => {
     expect(text).toContain("C:\\\\path");
   });
 
-  it("wraps stderr in a code block on failed spawns (same reserved-char fix)", () => {
+  it("escapes the failure reason for Telegram (same reserved-char fix)", () => {
     const text = renderOutputText(
       input("x"),
       {
@@ -251,9 +272,7 @@ describe("renderOutputText", () => {
         durationMs: 100,
       },
     );
-    expect(text).toContain("```");
-    expect(text).toContain("file not found");
-    expect(text).toContain(".txt!");
+    expect(text).toContain("Error: file not found at /tmp/foo\\.txt\\!");
   });
 });
 
@@ -358,8 +377,7 @@ describe("executeWriteDirective", () => {
     const body = JSON.parse(
       (fakeFetch.mock.calls[0]![1] as { body: string }).body,
     );
-    expect(body.text).toContain("Exit code: 3");
-    expect(body.text).toContain("broke");
+    expect(body.text).toContain("couldn't finish your task\nbroke");
   });
 
   it("reports the failure to Telegram when the HTTP POST itself errors", async () => {
@@ -496,6 +514,70 @@ describe("executeWriteDirective", () => {
     if (result.spawn.kind === "ok") {
       expect(result.spawn.stdout.trim()).toBe("http://127.0.0.1:4319|foreman.agent=codex,foreman.task=12|codex");
     }
+  });
+
+  it("puts the context block before the task in what the agent gets, not in the relay or the tracker", async () => {
+    const argsDump = makeScript("args.sh", '#!/bin/sh\nprintf "%s" "$1"\n');
+    const fakeFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, result: { message_id: 1 } }),
+    });
+    const recorded: Array<Record<string, unknown>> = [];
+    const outputs: Array<Record<string, unknown>> = [];
+    const result = await executeWriteDirective(
+      {
+        agentId: "codex",
+        message: "fix the login bug",
+        contextPrefix: "## What you did recently\n  - earlier task\n\n## Your task\n",
+        entry: agent({ task_command_template: `${argsDump} {task}` }),
+      },
+      {
+        telegramBotToken: "bot-1",
+        telegramChatId: "2",
+        fetchImpl: fakeFetch as unknown as typeof fetch,
+        initiatorAgent: "manager",
+        controlCommandId: 7,
+        delegationLink: { threadId: null, parentThreadId: "thread-1" },
+        tracker: {
+          recordDelegation: (input) => {
+            recorded.push(input);
+            return "run-1";
+          },
+          recordOutputReceived: (input) => {
+            outputs.push(input);
+          },
+        },
+      },
+    );
+    expect(result.spawn.kind).toBe("ok");
+    if (result.spawn.kind === "ok") {
+      expect(result.spawn.stdout).toBe("## What you did recently\n  - earlier task\n\n## Your task\nfix the login bug");
+    }
+    expect(result.delegationId).toBe("run-1");
+    expect(recorded).toEqual([
+      { initiatorAgent: "manager", targetAgent: "codex", prompt: "fix the login bug", controlCommandId: 7, threadId: null, parentThreadId: "thread-1" },
+    ]);
+    // What the run printed is what goes back to the agent that asked.
+    expect(outputs).toEqual([{ delegationId: "run-1", spawnOutcome: "ok", resultText: result.spawn.kind === "ok" ? result.spawn.stdout.trim() : "" }]);
+    const body = JSON.parse((fakeFetch.mock.calls[0]![1] as { body: string }).body) as { text: string };
+    expect(body.text).toContain("fix the login bug");
+    // The chat shows the task alone as what was asked.
+    expect(body.text).toContain("_Task:_ fix the login bug\n");
+  });
+
+  it("records the friendly failure reason as the result of a failed run", async () => {
+    const fail = makeScript("fail.sh", '#!/bin/sh\necho "Failed to authenticate. API Error: 401" >&2\nexit 1\n');
+    const outputs: Array<Record<string, unknown>> = [];
+    await executeWriteDirective(
+      { agentId: "codex", message: "x", entry: agent({ task_command_template: fail }) },
+      {
+        initiatorAgent: "manager",
+        tracker: { recordDelegation: () => "run-2", recordOutputReceived: (input) => void outputs.push(input) },
+      },
+    );
+    expect(outputs).toEqual([
+      { delegationId: "run-2", spawnOutcome: "failed", resultText: "Couldn't finish: Failed to authenticate. API Error: 401" },
+    ]);
   });
 
   it("is a no-op when the catalog entry has no task_skip_permissions_flag even if trusted", async () => {

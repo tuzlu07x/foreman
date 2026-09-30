@@ -1,10 +1,59 @@
 import { homedir } from "node:os";
+import stringWidth from "string-width";
 import type { Request } from "../db/schema.js";
 import { terminalSafe } from "../core/terminal-text.js";
 
 /** Agent-supplied text as the TUI shows it (#656): control, escape, bidi
  *  and zero-width characters become visible stand-ins. */
 export const safe = terminalSafe;
+
+/** Agent-supplied prose (a message, a prompt, a role's instructions) for a
+ *  one-line row: a line break shows as `⏎`, a tab as a space, and every
+ *  other hidden character as its `safe` stand-in. Nothing in it can start
+ *  a new line or move the cursor back over the row. */
+export function oneLine(text: string): string {
+  return terminalSafe(text.replace(/\r\n|\n/g, " ⏎ ").replace(/\t/g, " "));
+}
+
+/** Columns `text` takes on a terminal, the way Ink measures it: CJK and
+ *  most emoji take two, combining marks none. Not `.length`, which counts
+ *  UTF-16 code units. */
+export function displayWidth(text: string): number {
+  return stringWidth(text);
+}
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/** `text` cut to at most `maxWidth` columns, ending in `…` when cut.
+ *  Cuts between whole characters, so an emoji or a CJK character is never
+ *  split in half. */
+export function fitWidth(text: string, maxWidth: number): string {
+  if (displayWidth(text) <= maxWidth) return text;
+  if (maxWidth <= 0) return "";
+  let out = "";
+  let used = 0;
+  for (const { segment } of graphemes.segment(text)) {
+    const w = displayWidth(segment);
+    if (used + w > maxWidth - 1) break;
+    out += segment;
+    used += w;
+  }
+  return `${out}…`;
+}
+
+/** The end of `text` in at most `maxWidth` columns, whole characters only. */
+function tailWidth(text: string, maxWidth: number): string {
+  const parts = Array.from(graphemes.segment(text), (s) => s.segment);
+  let out = "";
+  let used = 0;
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const w = displayWidth(parts[i]!);
+    if (used + w > maxWidth) break;
+    out = parts[i]! + out;
+    used += w;
+  }
+  return out;
+}
 
 export interface DecisionStats {
   allowed: number;
@@ -70,12 +119,12 @@ export function summariseTool(
   if (maxWidth !== undefined && path !== null) {
     const name = terminalSafe(tool);
     // `name("` + path + `")`
-    const room = maxWidth - name.length - 4;
+    const room = maxWidth - displayWidth(name) - 4;
     if (room >= 1) return `${name}("${shortenPath(terminalSafe(path), room)}")`;
   }
   const inline = formatArgsInline(args);
   const full = terminalSafe(`${tool}(${inline})`);
-  return maxWidth === undefined ? full : truncate(full, Math.max(1, maxWidth));
+  return maxWidth === undefined ? full : fitWidth(full, Math.max(1, maxWidth));
 }
 
 /** A file path shortened to fit `maxWidth` columns, for one-line rows.
@@ -95,22 +144,22 @@ export function shortenPath(
     if (p === h) p = "~";
     else if (p.startsWith(`${h}/`)) p = `~${p.slice(h.length)}`;
   }
-  if (p.length <= maxWidth) return p;
+  if (displayWidth(p) <= maxWidth) return p;
   if (maxWidth <= 1) return "…";
   const parts = p.split("/");
   const head = parts[0]!;
   // Keep the first folder and the longest tail that fits…
   for (let keep = parts.length - 2; keep >= 1; keep--) {
     const candidate = `${head}/…/${parts.slice(-keep).join("/")}`;
-    if (candidate.length <= maxWidth) return candidate;
+    if (displayWidth(candidate) <= maxWidth) return candidate;
   }
   // …then the tail alone…
   for (let keep = parts.length - 1; keep >= 1; keep--) {
     const candidate = `…/${parts.slice(-keep).join("/")}`;
-    if (candidate.length <= maxWidth) return candidate;
+    if (displayWidth(candidate) <= maxWidth) return candidate;
   }
   // …and at the very least the end of the file name.
-  return `…${p.slice(-(maxWidth - 1))}`;
+  return `…${tailWidth(p, maxWidth - 1)}`;
 }
 
 export function targetLabel(
@@ -177,7 +226,7 @@ function formatArgsInline(args: unknown): string {
   if (typeof args !== "object") return JSON.stringify(args);
   const obj = args as Record<string, unknown>;
   if (typeof obj.path === "string") return `"${obj.path}"`;
-  if (typeof obj.text === "string") return `"${truncate(obj.text, 32)}"`;
+  if (typeof obj.text === "string") return `"${fitWidth(obj.text, 32)}"`;
   const keys = Object.keys(obj);
   if (keys.length === 0) return "";
   if (keys.length === 1) {
@@ -185,8 +234,4 @@ function formatArgsInline(args: unknown): string {
     return `${k}=${JSON.stringify(obj[k])}`;
   }
   return `…${keys.length} args`;
-}
-
-function truncate(text: string, max: number): string {
-  return text.length <= max ? text : text.slice(0, max - 1) + "…";
 }

@@ -8,6 +8,19 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Added
 
+- **The Team page is managed by department.** Roles are listed under
+  their departments (fold one with `←→` or Enter), with the roles in no
+  department last, and each row shows the role's title, id, what runs it
+  and its model: the one set in Foreman, else the agent's own setting
+  (`gpt-6-luna (Codex's setting)`), else `default model`. Without opening a
+  role: `x` removes it (after asking; its reports move to its manager, the
+  department's next role leads if it was the lead, and its own instance is
+  unregistered), `r` switches it between Claude Code and Codex, and `m`
+  picks its model (the agent's own, the provider's usual models, or one you
+  type). On a department's header the same keys act on all its roles and
+  ask first. Each change is written to `org.yaml` and the registry at once
+  and recorded in the audit log.
+
 - **Departments in the setup wizard's Your team step and on the Team
   page.** **+ Add a department…** (or `d` on the Team page) adds a
   ready-made department (IT: backend, frontend and devops developers;
@@ -51,6 +64,25 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Fixed
 
+- **Work an agent hands off comes back to it.** Headless agents run once
+  per task, so a lead that delegated had finished by the time its
+  delegate reported, and the chain stopped there: nobody compiled the
+  answer for you. Once everything an agent handed off during a task is
+  back (or failed, with the reason), Foreman launches it again, once, with
+  all the results and its original task, and asks it to report to its
+  manager with `org_report`. Chains unwind level by level up to you. At
+  most 5 relaunches per task, never for an agent's own result or a
+  blocked agent; each is an ordinary audited task (`delegation_wake`)
+  with budgets and approvals as usual ([docs/org.md](docs/org.md#when-work-comes-back)).
+- **Delegation nudges go to the agent that owes the answer, not to your
+  chat.** The watchdog sent *nudge 2/3* and *Multi-agent loop stuck* to
+  your Telegram. An answer owed for 30 minutes is now asked of the agent
+  itself (at most twice), then you get one message saying who hasn't
+  answered whose task and what to reply.
+- **A role remembers what it did recently.** Each launch starts with the
+  agent's last 5 tasks and how they ended, and the latest reports and
+  direct messages to its role (bounded, secrets redacted, marked as
+  information, not instructions).
 - **A decided approval says where it was decided.** The chat message
   ended with *✗ Denied (resolved elsewhere)*. It now says *in the TUI*,
   *on Slack by U0123ABCD*, *on Telegram*, *relayed from hermes's chat*,
@@ -85,6 +117,16 @@ All notable changes to Foreman are documented here. The format follows
   foreman-agent`) or remove Foreman's entry under `hooks.PreToolUse` in
   Claude Code's `settings.json`. Run the hook install again to get the new
   text into an existing hook.
+- **Activity rows no longer draw over each other.** With more rows than
+  the Home page had room for, each two-line row was squeezed into one, so
+  a row's status line landed on the next row and cut off its time and
+  agent (*id=6anager: why don't you share…*). The feed now drops its
+  oldest rows at the bottom instead, and the Team and Next steps box under
+  it keeps its lines. On a wide terminal the rows are fitted to the feed's
+  column, not the whole terminal, so a long path keeps its file name.
+  Rows are measured in terminal columns (an emoji or a CJK character takes
+  two), and a line break in an agent's message, an inbox notice or a
+  role's instructions shows as ⏎ instead of starting a new line.
 
 ### Fixed
 

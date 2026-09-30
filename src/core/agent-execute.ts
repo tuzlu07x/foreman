@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import { runAcpMediatedTask } from "./acp-mediated-task.js";
+import { explainTaskFailure, taskLanguage } from "./task-failure-hints.js";
 import {
   type SpawnAgentTaskOutcome,
   spawnAgentTask,
@@ -60,6 +61,11 @@ export interface ExecuteDirectiveInput {
   /** A second (third, …) instance of the agent: its own Foreman MCP
    *  server, env and role for this launch (agent-instance.ts). */
   launch?: InstanceLaunch;
+  /** Put before the task in what the agent receives (after an instance's
+   *  role prompt): the "What you did recently" block (role-memory.ts).
+   *  Not part of `message`, so the task summary, the cwd hint and the
+   *  chat relay stay the task alone. */
+  contextPrefix?: string;
   extraEnv?: Record<string, string>;
   /** Working directory for the spawned process. Drain handler derives
    *  this from the task text via `extractCwdFromTask(message)` so an
@@ -145,6 +151,10 @@ export interface ExecuteDeliveryDeps {
   /** Optional id of the control_commands row carrying this directive.
    *  Recorded on the delegation row for audit correlation. */
   controlCommandId?: number;
+  /** Where this run sits in the delegation loop (delegation-loop.ts):
+   *  the thread a Foreman follow-up continues, or the sender's thread
+   *  for a fresh hand-off. Recorded on the delegation row. */
+  delegationLink?: { threadId?: string | null; parentThreadId?: string | null };
 }
 
 /** Slim interface the executor uses for the tracker — keeps the
@@ -156,10 +166,13 @@ export interface DelegationTrackerLike {
     targetAgent: string;
     prompt: string;
     controlCommandId?: number | null;
+    threadId?: string | null;
+    parentThreadId?: string | null;
   }): string;
   recordOutputReceived(input: {
     delegationId: string;
     spawnOutcome?: string;
+    resultText?: string;
   }): void;
 }
 
@@ -179,6 +192,9 @@ export interface ExecuteDirectiveOutcome {
    *  `null` when the directive wasn't part of a flow. Callers can
    *  inspect this to log/audit the chain or update the TUI. */
   routing?: RoutingDecision | null;
+  /** The delegation row recorded for this run, when a tracker was wired
+   *  (and could record it). The drain hands it to the delegation loop. */
+  delegationId?: string | null;
 }
 
 const DEFAULT_MAX_OUTPUT = 3500;
@@ -206,6 +222,8 @@ export async function executeWriteDirective(
         targetAgent: input.agentId,
         prompt: input.message,
         controlCommandId: deps.controlCommandId ?? null,
+        threadId: deps.delegationLink?.threadId ?? null,
+        parentThreadId: deps.delegationLink?.parentThreadId ?? null,
       });
     } catch (err) {
       // Tracking failures must not break execution. Surface to stderr
@@ -236,32 +254,32 @@ export async function executeWriteDirective(
         deps.tracker.recordOutputReceived({
           delegationId: trackerId,
           spawnOutcome: outcome.spawn.kind,
+          resultText: delegationResultText(outcome.spawn),
         });
       } catch {
         /* best-effort */
       }
     }
-    return outcome;
+    return { ...outcome, delegationId: trackerId };
   }
 
   if (!input.entry.task_command_template) {
+    const spawn: SpawnAgentTaskOutcome = {
+      kind: "unsupported",
+      reason: `agent "${input.agentId}" has no task_command_template`,
+    };
     if (trackerId && deps.tracker) {
       try {
         deps.tracker.recordOutputReceived({
           delegationId: trackerId,
           spawnOutcome: "unsupported",
+          resultText: delegationResultText(spawn),
         });
       } catch {
         /* best-effort */
       }
     }
-    return {
-      spawn: {
-        kind: "unsupported",
-        reason: `agent "${input.agentId}" has no task_command_template`,
-      },
-      outputRelay: null,
-    };
+    return { spawn, outputRelay: null, delegationId: trackerId };
   }
 
   // QA-fix 2026-05-24 (Wiring 4) — open a session BEFORE the spawn so
@@ -290,7 +308,7 @@ export async function executeWriteDirective(
 
   const spawn = await spawnAgentTask({
     entry: input.entry,
-    task: `${input.launch?.taskPrefix ?? ""}${input.message}`,
+    task: `${input.launch?.taskPrefix ?? ""}${input.contextPrefix ?? ""}${input.message}`,
     spawnedBy: input.agentId,
     ...(input.launch && input.launch.args.length > 0 ? { extraArgs: input.launch.args } : {}),
     modelVersion: input.modelVersion ?? null,
@@ -410,13 +428,26 @@ export async function executeWriteDirective(
       deps.tracker.recordOutputReceived({
         delegationId: trackerId,
         spawnOutcome: spawn.kind,
+        resultText: delegationResultText(spawn),
       });
     } catch {
       /* best-effort */
     }
   }
 
-  return { spawn, outputRelay, routing };
+  return { spawn, outputRelay, routing, delegationId: trackerId };
+}
+
+/**
+ * What a run produced, for the agent that handed it the task (the wake
+ * in delegation-loop.ts): what it printed when it finished, or the
+ * friendly reason it couldn't. The tracker redacts and clips it.
+ */
+export function delegationResultText(spawn: SpawnAgentTaskOutcome): string {
+  const failure = spawnFailureLine(spawn);
+  if (failure !== null) return `Couldn't finish: ${failure}`;
+  const out = spawn.kind === "ok" ? spawn.stdout.trim() : "";
+  return out.length > 0 ? out : "(finished without output)";
 }
 
 // =============================================================================
@@ -495,7 +526,7 @@ async function executeAcpDirective(
   const acpOutcome = await runAcpMediatedTask({
     mediator: deps.mediator,
     sourceAgent: input.agentId,
-    prompt: input.message,
+    prompt: `${input.contextPrefix ?? ""}${input.message}`,
     cwd: input.cwd,
     spawnImpl: deps.acpSpawnImpl,
     argv: {
@@ -604,11 +635,11 @@ function renderSpawnStdout(spawn: SpawnAgentTaskOutcome): string {
 }
 
 /**
- * Build the Telegram message body that delivers the spawned agent's
- * output back to the user. Includes a short header showing which
- * agent ran + the spawn outcome (success/timeout/etc), then the
- * captured stdout (truncated if very long), then a stderr block when
- * present. Pure for tests.
+ * The one message that brings a task's result back (2.3.1: the task sends
+ * two, "handed to …" and this). Success: who did it, the task, and the
+ * agent's answer, cut to fit. Failure: the reason in one line and what to
+ * do in the next (task-failure-hints.ts), never the agent's stderr. In
+ * Turkish when the task was written in Turkish. Pure for tests.
  */
 export function renderOutputText(
   input: ExecuteDirectiveInput,
@@ -616,61 +647,38 @@ export function renderOutputText(
   maxLength: number = DEFAULT_MAX_OUTPUT,
 ): string {
   const agentName = taskAgentLabel(input);
-  // A failed run must not read as "finished": say so, and lead with the
-  // reason (e.g. "Failed to authenticate. API Error: 401") before the task.
-  const failure = spawnFailureLine(spawn);
-  const header =
-    failure === null
-      ? `📨 *${escapeMd(agentName)}* finished your task`
-      : `📨 *${escapeMd(agentName)}* couldn't finish your task\n${escapeMd(failure)}`;
-  let body: string;
-  let tail = "";
-  switch (spawn.kind) {
-    case "ok": {
-      // QA17 — Wrap stdout in a MarkdownV2 ``` code block so reserved
-      // chars (`.`, `!`, `-`, `(`, `_`, …) in the agent's response
-      // don't break the entire message. Inside a `pre`/`code` block
-      // only `` ` `` and `\` need escaping per Telegram docs. Before
-      // this fix the raw stdout caused HTTP 400 from sendMessage and
-      // the user saw NOTHING — the spawn succeeded but the post was
-      // dropped silently.
-      body = wrapCodeBlock(spawn.stdout || "(no output)", maxLength);
-      if (spawn.stderr.trim()) {
-        tail = `\n\n_stderr:_\n${wrapCodeBlock(spawn.stderr, 800)}`;
-      }
-      break;
-    }
-    case "failed": {
-      body =
-        `⚠ Exit code: ${spawn.exitCode}\n\n` +
-        (spawn.stderr.trim()
-          ? `_stderr:_\n${wrapCodeBlock(spawn.stderr, 1500)}`
-          : "\\(no stderr\\)");
-      if (spawn.stdout.trim()) {
-        tail = `\n\n_stdout:_\n${wrapCodeBlock(spawn.stdout, 1500)}`;
-      }
-      break;
-    }
-    case "timeout": {
-      body =
-        `⏱ Timed out after ${escapeMd((spawn.timeoutMs / 1000).toFixed(0))}s\\.\n\n` +
-        (spawn.stdout.trim() || spawn.stderr.trim()
-          ? `_partial output:_\n${wrapCodeBlock(
-              spawn.stdout || spawn.stderr,
-              1500,
-            )}`
-          : "\\(no output captured before timeout\\)");
-      break;
-    }
-    case "unsupported":
-      body = `⚠ Cannot spawn ${escapeMd(input.agentId)}: ${escapeMd(spawn.reason)}`;
-      break;
-    case "spawn-error":
-      body = `✗ Spawn error: ${escapeMd(spawn.error)}`;
-      break;
+  const lang = taskLanguage(input.message);
+  const tr = lang === "tr";
+  const failure = explainTaskFailure(
+    spawn,
+    { runtime: input.entry.id, program: input.entry.name.trim() || input.agentId, agentId: input.agentId },
+    lang,
+  );
+  const task = `_${tr ? "Görev" : "Task"}:_ ${escapeMd(truncateForTelegram(input.message, 200))}`;
+  if (failure === null) {
+    const header = `📨 *${escapeMd(agentName)}* ${tr ? "görevini bitirdi" : "finished your task"}`;
+    const answer = spawn.kind === "ok" ? spawn.stdout.trim() : "";
+    const body = answer
+      ? wrapCodeBlock(answer, maxLength)
+      : escapeMd(tr ? "(yazılı bir cevap vermedi)" : "(it gave no written answer)");
+    return `${header}\n\n${task}\n\n${body}`;
   }
-  const taskExcerpt = truncateForTelegram(input.message, 200);
-  return `${header}\n\n_Task:_ ${escapeMd(taskExcerpt)}\n\n${body}${tail}`;
+  const header = `📨 *${escapeMd(agentName)}* ${tr ? "görevini bitiremedi" : "couldn't finish your task"}\n${escapeMd(failure.reason)}`;
+  const fix = failure.fix ? `\n${escapeMd(tr ? "Ne yapmalı: " : "What to do: ")}${escapeMdKeepCode(failure.fix)}` : "";
+  // What a timed-out agent had so far can still be useful; nothing else.
+  const partial =
+    spawn.kind === "timeout" && spawn.stdout.trim()
+      ? `\n\n_${tr ? "O ana kadar" : "What it had so far"}:_\n${wrapCodeBlock(spawn.stdout.trim(), 800)}`
+      : "";
+  return `${header}${fix}\n\n${task}${partial}`;
+}
+
+/** MarkdownV2 text where `code` spans stay code. */
+function escapeMdKeepCode(text: string): string {
+  return text
+    .split(/(`[^`]*`)/)
+    .map((part) => (part.startsWith("`") && part.endsWith("`") && part.length > 1 ? `\`${part.slice(1, -1).replace(/[\\`]/g, (m) => `\\${m}`)}\`` : escapeMd(part)))
+    .join("");
 }
 
 /** Who ran the task: the agent id (the role instance, e.g. "manager") with

@@ -58,12 +58,31 @@ export class NotificationService {
     level: NotificationLevel,
     payload: Omit<Notification, 'id'>,
   ): Promise<SendResult> {
+    return this.dispatch(routeFor(this.deps.config, level).channels, level, payload)
+  }
+
+  /** Dispatch to these channels, whatever notify.yaml routes for `level`
+   *  (messages to you from the org, which go to every chat channel you
+   *  enabled). A channel that isn't registered or enabled is skipped, as
+   *  in `send`. */
+  async sendTo(
+    channels: readonly string[],
+    level: NotificationLevel,
+    payload: Omit<Notification, 'id'>,
+  ): Promise<SendResult> {
+    return this.dispatch(channels, level, payload)
+  }
+
+  private async dispatch(
+    channels: readonly string[],
+    level: NotificationLevel,
+    payload: Omit<Notification, 'id'>,
+  ): Promise<SendResult> {
     const notificationId = ulid()
     const n: Notification = { id: notificationId, ...payload }
-    const route = routeFor(this.deps.config, level)
     const outcomes = new Map<ChannelId, ChannelOutcome>()
 
-    for (const channelName of route.channels) {
+    for (const channelName of channels) {
       const channelId = channelName as ChannelId
       const channel = this.deps.channels.get(channelId)
 

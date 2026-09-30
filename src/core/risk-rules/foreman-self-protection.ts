@@ -1,4 +1,5 @@
 import { homedir } from 'node:os'
+import { parse as parseShell } from 'shell-quote'
 import { getForemanPaths } from '../../utils/config.js'
 import { isUntrustedSource } from '../agent-identity.js'
 import { shortFingerprint } from './secret-patterns.js'
@@ -151,8 +152,9 @@ export const foremanSelfProtectionRule: RiskRule = {
       })
     }
 
-    const reveal = SECRET_REVEAL.exec(text)
-    const mutating = reveal ?? MUTATING_FOREMAN_CLI.exec(text)
+    const cliText = foremanCliText(tool, req.args, text)
+    const reveal = cliText === null ? null : SECRET_REVEAL.exec(cliText)
+    const mutating = reveal ?? (cliText === null ? null : MUTATING_FOREMAN_CLI.exec(cliText))
     if (mutating) {
       factors.push({
         rule: 'foreman_cli_tamper',
@@ -166,6 +168,69 @@ export const foremanSelfProtectionRule: RiskRule = {
     }
     return factors
   },
+}
+
+/** Tools whose args carry file content, which nothing runs. */
+const CONTENT_TOOLS = new Set(['write', 'edit', 'multiedit', 'notebookedit', 'file_write', 'write_file', 'edit_file', 'create_file'])
+const CONTENT_FIELDS = new Set(['content', 'new_string', 'old_string', 'edits', 'new_source', 'text', 'body'])
+
+/** Command words that run text they are given (`sh -c`, `eval`, `xargs`,
+ *  interpreters): a `foreman …` anywhere near them may be run. */
+const RUNS_TEXT = /^(sh|bash|zsh|dash|ksh|fish|eval|source|\.|exec|xargs|env|sudo|doas|nohup|time|nice|command|builtin|watch|timeout|script|osascript|python[\d.]*|node|deno|bun|perl|ruby|php|lua|awk|gawk|find|parallel|ssh)$/
+
+/**
+ * The part of a call where `foreman <verb>` would be a command that runs,
+ * or null when there is none (2.3.0 real test, finding 18: a commit
+ * message or a PR body that mentions a Foreman command was blocked as if
+ * it ran it):
+ *   - file content (Write, Edit) is never run: only the other args count;
+ *   - a shell command counts only where `foreman` is a command word. When
+ *     anything in it can run text (a shell, `eval`, `xargs`, `$(…)`,
+ *     backticks, a heredoc) or it can't be parsed, the whole command counts,
+ *     as before.
+ */
+function foremanCliText(tool: string, args: unknown, fullText: string): string | null {
+  if (CONTENT_TOOLS.has(tool) && args && typeof args === 'object' && !Array.isArray(args)) {
+    const rest = Object.fromEntries(Object.entries(args as Record<string, unknown>).filter(([k]) => !CONTENT_FIELDS.has(k)))
+    return JSON.stringify(rest)
+  }
+  const command =
+    (tool === 'bash' || tool === 'shell_exec' || tool === 'execute_command' || tool === 'run_command') &&
+    args &&
+    typeof args === 'object' &&
+    typeof (args as { command?: unknown }).command === 'string'
+      ? (args as { command: string }).command
+      : null
+  if (command === null) return fullText
+  // From here, a fallback reads the raw command: in JSON a line break is
+  // `\n`, which hid a `foreman` at the start of a heredoc line.
+  if (/\$\(|`|<<|<\(|>\(/.test(command)) return command
+  // Quotes can split the word (`"fore"man`): parse even when the text
+  // doesn't spell it out.
+  if (!/foreman/i.test(command) && !/["'\\]/.test(command)) return null
+  let parsed: ReturnType<typeof parseShell>
+  try {
+    parsed = parseShell(command)
+  } catch {
+    return command
+  }
+  const commands: string[][] = [[]]
+  for (const token of parsed) {
+    if (typeof token === 'string') commands[commands.length - 1]!.push(token)
+    else if ('op' in token && token.op !== 'glob') commands.push([])
+    else if ('op' in token && token.op === 'glob') commands[commands.length - 1]!.push(token.pattern)
+    else return command // comments and anything else shell-quote can't flatten
+  }
+  const found: string[] = []
+  for (const argv of commands) {
+    const start = argv.findIndex((w) => !/^[A-Za-z_]\w*=/.test(w))
+    if (start < 0) continue
+    const word = (argv[start]!.split('/').pop() ?? '').toLowerCase()
+    if (RUNS_TEXT.test(word)) return command
+    // By any path (`/usr/local/bin/foreman policy …`): named as `foreman`.
+    if (word === 'foreman') found.push(['foreman', ...argv.slice(start + 1)].join(' '))
+  }
+  return found.length > 0 ? found.join('\n') : null
 }
 
 function matchForemanState(text: string): { reason: string; match: string } | null {

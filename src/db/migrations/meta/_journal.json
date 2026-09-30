@@ -211,6 +211,13 @@
       "when": 1783400000000,
       "tag": "0029_approval_resolved_user",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "5",
+      "when": 1783500000000,
+      "tag": "0030_delegation_loop",
+      "breakpoints": true
     }
   ]
 }

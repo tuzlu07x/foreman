@@ -18,12 +18,19 @@ import { KEY_SETTLE_MS, PTY_AVAILABLE, PTY_SKIP_REASON, Tui } from '../support/t
 // Claude Code and Codex take a task on the command line, and each one does
 // what the playbook below says, handing work on with `foreman write` as
 // itself. The background service's gateway runs the work, with no TUI.
+// When the work an agent handed off is back, Foreman launches it again with
+// the results (delegation-loop.ts), so the chain unwinds up to the CEO.
 
 const AGENT_JS = join(dirname(fileURLToPath(import.meta.url)), '..', 'support', 'company-agent.cjs')
+
+/** A wake (results back) starts with this line; wake rules come first, as
+ *  a wake repeats the original task that the other rules match. */
+const WAKE = 'the work you handed off is back'
 
 /** What each stand-in does with a task (first matching `when`). */
 const PLAYBOOK = {
   hermes: [
+    { when: WAKE, reply: 'Launch on track: the login page is built and tested, the announcement is drafted.' },
     {
       when: 'launch',
       reply: 'Plan: the CTO builds it, the CMO announces it.',
@@ -34,9 +41,11 @@ const PLAYBOOK = {
     },
   ],
   'claude-code': [
+    { when: WAKE, reply: 'Login page built; the engineer wrote its tests.' },
     { when: 'login page', reply: 'Building the login page; the engineer writes the tests.', delegate: [['codex', 'Write tests for the login page']] },
   ],
   openclaw: [
+    { when: WAKE, reply: 'Announcement ready with the launch banner.' },
     { when: 'announce', reply: 'Announcement drafted for Friday.', delegate: [['claude-code', 'Add a launch banner to the site']] },
   ],
   // Finance reaches past the engineering head: the chart must stop it.
@@ -143,7 +152,13 @@ it('A company of agents: goals flow down the chart, agents talk, the chart and y
     expect(out).toContain('hermes')
     ev(`foreman org assign ceo "Launch the login feature by Friday": "${out.trim().split('\n')[0]}"`)
     // CEO → CTO and CMO; CTO → engineer; CMO → CTO (heads coordinate).
-    const rows = await waitFor('five hand-offs to finish', () => (finished().length >= 5 ? finished() : null), { timeoutMs: 90_000, intervalMs: 300 })
+    // Then the results come back: CTO and CMO are woken with theirs, and
+    // once both are done, the CEO with both.
+    const all = await waitFor('five hand-offs and three wakes to finish', () => (finished().length >= 8 ? finished() : null), {
+      timeoutMs: 120_000,
+      intervalMs: 300,
+    })
+    const rows = all.filter((r) => r.source_agent !== 'foreman:delegation')
     expect(rows.map(handoff).sort()).toEqual(
       [
         'cli → hermes: Launch the login feature by Friday',
@@ -162,10 +177,23 @@ it('A company of agents: goals flow down the chart, agents talk, the chart and y
     expect(byTask('Build the login page')).toMatchObject({ agent: 'claude-code', spawnedBy: 'claude-code' })
     expect(byTask('Write tests for the login page')).toMatchObject({ agent: 'codex', spawnedBy: 'codex' })
     ev(`the stand-ins received ${tasks.length} tasks, each running as itself (FOREMAN_SPAWNED_BY) — e.g. ${JSON.stringify(byTask('Build the login page'))}`)
+
+    const wakes = all.filter((r) => r.source_agent === 'foreman:delegation')
+    expect(wakes.map((w) => JSON.parse(w.args)[0])).toEqual(['claude-code', 'openclaw', 'hermes'])
+    expect(wakes.every((w) => w.status === 'applied'), JSON.stringify(wakes)).toBe(true)
+    const ceoWake = JSON.parse(wakes[2]!.args)[1] as string
+    expect(ceoWake).toContain('Your task (from the owner):\n    Launch the login feature by Friday')
+    expect(ceoWake).toContain('claude-code finished "Build the login page":\n    Login page built; the engineer wrote its tests.')
+    expect(ceoWake).toContain('openclaw finished "Announce the login feature":\n    Announcement ready with the launch banner.')
+    expect(ceoWake).toContain('report to the owner with org_report')
+    // The CEO (ACP) ran the wake as itself and answered it.
+    const ceoRan = tasks.find((t) => t.agent === 'hermes' && t.task.startsWith('Foreman: the work you handed off is back.'))
+    expect(ceoRan).toMatchObject({ spawnedBy: 'hermes' })
+    ev(`results came back up the chart: foreman:delegation → ${wakes.map((w) => JSON.parse(w.args)[0]).join(' → ')}; the CEO's wake carries the CTO's and the CMO's final answers`)
   })
 
   await j.step("every agent's answer reaches your inbox, the CEO's streamed ACP reply included", async (ev) => {
-    const ceo = await sb.inboxItem('the CEO result', (i) => i.title.startsWith('hermes finished'), 30_000)
+    const ceo = await sb.inboxItem('the CEO result', (i) => i.title.startsWith('hermes finished: Launch'), 30_000)
     // The ACP reply streams in two chunks and ends with { stopReason }: the
     // inbox shows what the CEO said, not {"stopReason": "end_turn"}.
     expect(ceo.body).toContain('Plan: the CTO builds it, the CMO announces it.')
@@ -302,7 +330,8 @@ it('A company of agents: goals flow down the chart, agents talk, the chart and y
   await j.step("the day's report: who did what", async (ev) => {
     const report = sb.ok(['org', 'report', 'today'])
     expect(report).toContain('Acme QA')
-    expect(report).toMatch(/Tasks 6 finished/)
+    // Six tasks, and the three wakes that brought results back up.
+    expect(report).toMatch(/Tasks 9 finished/)
     ev(`foreman org report today: "${report.split('\n').slice(0, 3).join(' | ')}"`)
     const activity = await as('hermes', (a) => a.call('submit_command', { command: 'activity', args: ['10'] }))
     expect(replyText(activity)).toContain('write zeroclaw: Review the launch budget')

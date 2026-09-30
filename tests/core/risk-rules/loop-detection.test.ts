@@ -14,9 +14,11 @@ function seed(
   source: string,
   target: string | null,
   offsetMs: number,
+  sessionId?: string,
 ): void {
   db.insert(requests)
     .values({
+      ...(sessionId ? { sessionId } : {}),
       id: `r-${Math.random().toString(36).slice(2)}`,
       sourceAgent: source,
       targetAgent: target,
@@ -197,6 +199,22 @@ describe('loop-detection — burst', () => {
     }
     const factors = assess(db, { sourceAgent: 'hermes', targetAgent: 'claude' })
     expect(ruleIds(factors)).not.toContain('loop_burst')
+  })
+
+  it('counts a session on its own: many Claude Code sessions at once are not one loop', () => {
+    // 2.3.0 real test: every Claude Code window, subagent and task runs as
+    // `claude-code`; together they tripped the burst rule on a normal day.
+    for (let i = 0; i < LOOP_THRESHOLDS.burstCount; i++) {
+      seed(db, 'claude-code', null, 1_000 + i * 100, `session-${i % 3}`)
+    }
+    expect(ruleIds(assess(db, { sourceAgent: 'claude-code', sessionId: 'session-0' }))).not.toContain('loop_burst')
+    for (let i = 0; i < LOOP_THRESHOLDS.burstCount; i++) {
+      seed(db, 'claude-code', null, 1_000 + i * 50, 'runaway')
+    }
+    const bu = assess(db, { sourceAgent: 'claude-code', sessionId: 'runaway' }).find((f) => f.rule === 'loop_burst')
+    expect(bu?.reason).toContain('claude-code (one session)')
+    // A call with no session still counts every call from that agent.
+    expect(ruleIds(assess(db, { sourceAgent: 'claude-code' }))).toContain('loop_burst')
   })
 
   it('ignores calls older than the burst window', () => {

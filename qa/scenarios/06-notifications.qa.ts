@@ -100,7 +100,7 @@ it('Notifications: signed webhook for a critical approval, outcome in the inbox'
       (x) => x.payload.title === 'Foreman update' && x.payload.body.includes('app/.env'),
     )
     expect(update.signatureValid).toBe(true)
-    expect(update.payload.body).toContain('Denied (timeout default)')
+    expect(update.payload.body).toContain('Denied (timed out: nobody answered in time)')
     ev(`follow-up POST "${update.payload.title}" (signed) ends: "${update.payload.body.trim().split('\n').at(-1) ?? ''}"`)
     ev(`ids: approval payload id=${d.payload.id} requestId=${d.payload.requestId}; follow-up id=${update.payload.id} requestId=${update.payload.requestId}`)
     // #636: the outcome carries the approval's ids, so a receiver can match it.

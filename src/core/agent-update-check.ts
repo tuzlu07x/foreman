@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { getForemanPaths } from "../utils/config.js";
+import { installedAgent } from "./agent-runtime-info.js";
 import {
   findAgent,
   type AgentEntry,
@@ -108,9 +109,11 @@ async function checkSingleAgent(
   if (!entry.install.npm) return { ...base, error: "no-npm-pkg" };
   base.npmPackage = entry.install.npm;
 
-  const resolveVersion =
-    options.resolveInstalledVersion ?? getInstalledNpmVersion;
-  const current = resolveVersion(entry.install.npm);
+  // The copy Foreman launches first (it may belong to another Node's npm
+  // than the one on PATH), then the PATH npm's global packages.
+  const current = options.resolveInstalledVersion
+    ? options.resolveInstalledVersion(entry.install.npm)
+    : (installedAgent(entry.install)?.version ?? getInstalledNpmVersion(entry.install.npm));
   base.current = current;
 
   const cached = readCache(agent.id, options);
@@ -154,6 +157,12 @@ function finalize(
     hasUpdate: isNewer(latest, current),
     isOvershoot: isOvershoot(current, base.supportedRange),
   };
+}
+
+/** The newest version the last check saw for `agentId`, from the cache
+ *  only (no network): null when there is none or it is too old. */
+export function cachedLatestVersion(agentId: string, options: AgentUpdateCheckOptions = {}): string | null {
+  return readCache(agentId, options)?.latest ?? null;
 }
 
 interface CacheBody {

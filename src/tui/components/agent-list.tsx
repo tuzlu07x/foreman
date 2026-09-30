@@ -15,7 +15,7 @@ export function AgentList({ width, compact }: AgentListProps): JSX.Element {
 
   if (compact) {
     return (
-      <Box borderStyle={roundBorder()} borderDimColor paddingX={1}>
+      <Box borderStyle={roundBorder()} borderDimColor paddingX={1} flexShrink={0}>
         <Text color={theme.accent.primary}>Agents </Text>
         {agents.length === 0 ? (
           <Text color={theme.fg.muted}>(none registered)</Text>
@@ -42,26 +42,31 @@ export function AgentList({ width, compact }: AgentListProps): JSX.Element {
       borderStyle={roundBorder()}
       borderDimColor
       paddingX={1}
+      overflow="hidden"
     >
-      <Text color={theme.accent.primary}>Agents</Text>
-      {agents.length === 0 ? (
-        <Box flexDirection="column">
-          <Text color={theme.fg.muted}>No agents yet.</Text>
-          <Text color={theme.fg.muted}>Connect one from a shell:</Text>
-          <Text color={theme.fg.default} wrap="truncate-end">
-            foreman agent add claude-code
-          </Text>
-        </Box>
-      ) : (
-        agents.map((agent) => (
-          <AgentRow
-            key={agent.id}
-            agent={agent}
-            count={perAgentToday[agent.id] ?? 0}
-            blinkOn={blinkOn}
-          />
-        ))
-      )}
+      {/* A long list is clipped at the bottom of the page, not squeezed
+          into rows drawn over each other (see ActivityFeed). */}
+      <Box flexDirection="column" flexShrink={0}>
+        <Text color={theme.accent.primary}>Agents</Text>
+        {agents.length === 0 ? (
+          <Box flexDirection="column">
+            <Text color={theme.fg.muted}>No agents yet.</Text>
+            <Text color={theme.fg.muted}>Connect one from a shell:</Text>
+            <Text color={theme.fg.default} wrap="truncate-end">
+              foreman agent add claude-code
+            </Text>
+          </Box>
+        ) : (
+          agents.map((agent) => (
+            <AgentRow
+              key={agent.id}
+              agent={agent}
+              count={perAgentToday[agent.id] ?? 0}
+              blinkOn={blinkOn}
+            />
+          ))
+        )}
+      </Box>
     </Box>
   );
 }
@@ -75,10 +80,10 @@ interface AgentRowProps {
 function AgentRow({ agent, count, blinkOn }: AgentRowProps): JSX.Element {
   return (
     <Box flexDirection="column" marginBottom={0}>
-      <Text>
+      <Text wrap="truncate-end">
         <Dot active={agent.status === "active"} blinkOn={blinkOn} /> {agent.id}
       </Text>
-      <Text color={theme.fg.muted}>
+      <Text color={theme.fg.muted} wrap="truncate-end">
         {"  "}
         {agent.status} · {count} req
       </Text>
