@@ -199,20 +199,28 @@ function burst(
   now: number,
 ): RiskFactor | null {
   const cutoff = now - LOOP_THRESHOLDS.burstWindowMs
+  // A call that names its session (Claude Code's hook passes session_id)
+  // counts against that session only: every Claude Code window and task
+  // runs as `claude-code`, and together they aren't one runaway loop.
   const rows = ctx.db
     .select({ id: requests.id })
     .from(requests)
     .where(
-      and(eq(requests.sourceAgent, req.sourceAgent), gte(requests.createdAt, cutoff)),
+      and(
+        eq(requests.sourceAgent, req.sourceAgent),
+        gte(requests.createdAt, cutoff),
+        ...(req.sessionId ? [eq(requests.sessionId, req.sessionId)] : []),
+      ),
     )
     .all()
   const count = rows.length + 1 // include the in-flight call
   if (count < LOOP_THRESHOLDS.burstCount) return null
+  const who = req.sessionId ? `${req.sourceAgent} (one session)` : req.sourceAgent
   return {
     rule: 'loop_burst',
     category: 'loop',
     points: POINTS.burst,
-    reason: `${count} calls from ${req.sourceAgent} in last ${LOOP_THRESHOLDS.burstWindowMs / 1000}s`,
+    reason: `${count} calls from ${who} in last ${LOOP_THRESHOLDS.burstWindowMs / 1000}s`,
     evidence: `${count} calls / ${LOOP_THRESHOLDS.burstWindowMs / 1000}s`,
   }
 }
