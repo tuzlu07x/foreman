@@ -55,6 +55,8 @@ export interface NotificationBridgeOptions {
 }
 
 export class NotificationBridge {
+  /** Sessions of tasks Foreman handed out: their result message says it all. */
+  private readonly quietSessions = new Set<string>()
   private readonly bus: EventBus<ForemanEventMap>
   private readonly onChannelDecision: NotificationBridgeOptions['onChannelDecision']
   private readonly getState: () => NotifyState
@@ -142,17 +144,27 @@ export class NotificationBridge {
     //    sees "started / progress / completed" in the same channel as
     //    approvals. Routed via `session_lifecycle` (separate route key so
     //    power users can mute it without losing the approval pipeline).
+    //    A task Foreman hands out already says "handed to …" and sends
+    //    its result (2.3.1: two messages per task, not five), so its
+    //    session stays quiet here.
     this.offSessionStarted = this.bus.on('session:started', (e) => {
+      if (isTaskTrigger(e.trigger)) {
+        this.quietSessions.add(e.sessionId)
+        if (this.quietSessions.size > 500) this.quietSessions.delete(this.quietSessions.values().next().value!)
+        return
+      }
       this.handleSessionLifecycle(renderSessionStarted(e)).catch(() => {
         // best-effort — lifecycle pushes are informational
       })
     })
     this.offSessionProgress = this.bus.on('session:progress', (e) => {
+      if (this.quietSessions.has(e.sessionId)) return
       this.handleSessionLifecycle(renderSessionProgress(e)).catch(() => {
         // best-effort
       })
     })
     this.offSessionCompleted = this.bus.on('session:completed', (e) => {
+      if (this.quietSessions.delete(e.sessionId)) return
       this.handleSessionLifecycle(renderSessionCompleted(e)).catch(() => {
         // best-effort
       })
@@ -481,4 +493,10 @@ function channelToVia(
     default:
       return undefined
   }
+}
+
+/** A session opened for a task Foreman hands out (`foreman write`,
+ *  assign, a wake): its outcome is the task's own result message. */
+export function isTaskTrigger(trigger: string): boolean {
+  return trigger.startsWith('user_command:write')
 }

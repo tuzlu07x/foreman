@@ -675,13 +675,22 @@ describe('NotificationBridge — session lifecycle dispatch (#523)', () => {
     bus.emit('session:started', {
       sessionId: 'sess-1',
       participants: ['openclaw', 'hermes'],
-      trigger: 'user_command:write',
+      trigger: 'mcp:session',
       startedAt: Date.now(),
     })
     await tick()
     expect(channel.sendCalls).toHaveLength(1)
     expect(channel.sendCalls[0]!.level).toBe('session_lifecycle')
     expect(channel.sendCalls[0]!.body).toContain('▶️ openclaw + hermes')
+  })
+
+  it('stays quiet for a task Foreman handed out: its result message is the one that counts (2.3.1)', async () => {
+    await bridge.start()
+    bus.emit('session:started', { sessionId: 'task-1', participants: ['backend'], trigger: 'user_command:write', startedAt: Date.now() })
+    bus.emit('session:progress', { sessionId: 'task-1', turnCount: 3, tokenCount: 10, recentDecisions: [], elapsedMs: 1000, emittedAt: Date.now() })
+    bus.emit('session:completed', { sessionId: 'task-1', outcome: 'success', turnCount: 3, durationMs: 1000, costUsd: 0, completedAt: Date.now() } as never)
+    await tick()
+    expect(channel.sendCalls).toHaveLength(0)
   })
 
   it('dispatches session:progress with turn / token / recent action', async () => {

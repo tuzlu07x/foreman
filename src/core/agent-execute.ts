@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import { runAcpMediatedTask } from "./acp-mediated-task.js";
+import { explainTaskFailure, taskLanguage } from "./task-failure-hints.js";
 import {
   type SpawnAgentTaskOutcome,
   spawnAgentTask,
@@ -634,11 +635,11 @@ function renderSpawnStdout(spawn: SpawnAgentTaskOutcome): string {
 }
 
 /**
- * Build the Telegram message body that delivers the spawned agent's
- * output back to the user. Includes a short header showing which
- * agent ran + the spawn outcome (success/timeout/etc), then the
- * captured stdout (truncated if very long), then a stderr block when
- * present. Pure for tests.
+ * The one message that brings a task's result back (2.3.1: the task sends
+ * two, "handed to …" and this). Success: who did it, the task, and the
+ * agent's answer, cut to fit. Failure: the reason in one line and what to
+ * do in the next (task-failure-hints.ts), never the agent's stderr. In
+ * Turkish when the task was written in Turkish. Pure for tests.
  */
 export function renderOutputText(
   input: ExecuteDirectiveInput,
@@ -646,61 +647,38 @@ export function renderOutputText(
   maxLength: number = DEFAULT_MAX_OUTPUT,
 ): string {
   const agentName = taskAgentLabel(input);
-  // A failed run must not read as "finished": say so, and lead with the
-  // reason (e.g. "Failed to authenticate. API Error: 401") before the task.
-  const failure = spawnFailureLine(spawn);
-  const header =
-    failure === null
-      ? `📨 *${escapeMd(agentName)}* finished your task`
-      : `📨 *${escapeMd(agentName)}* couldn't finish your task\n${escapeMd(failure)}`;
-  let body: string;
-  let tail = "";
-  switch (spawn.kind) {
-    case "ok": {
-      // QA17 — Wrap stdout in a MarkdownV2 ``` code block so reserved
-      // chars (`.`, `!`, `-`, `(`, `_`, …) in the agent's response
-      // don't break the entire message. Inside a `pre`/`code` block
-      // only `` ` `` and `\` need escaping per Telegram docs. Before
-      // this fix the raw stdout caused HTTP 400 from sendMessage and
-      // the user saw NOTHING — the spawn succeeded but the post was
-      // dropped silently.
-      body = wrapCodeBlock(spawn.stdout || "(no output)", maxLength);
-      if (spawn.stderr.trim()) {
-        tail = `\n\n_stderr:_\n${wrapCodeBlock(spawn.stderr, 800)}`;
-      }
-      break;
-    }
-    case "failed": {
-      body =
-        `⚠ Exit code: ${spawn.exitCode}\n\n` +
-        (spawn.stderr.trim()
-          ? `_stderr:_\n${wrapCodeBlock(spawn.stderr, 1500)}`
-          : "\\(no stderr\\)");
-      if (spawn.stdout.trim()) {
-        tail = `\n\n_stdout:_\n${wrapCodeBlock(spawn.stdout, 1500)}`;
-      }
-      break;
-    }
-    case "timeout": {
-      body =
-        `⏱ Timed out after ${escapeMd((spawn.timeoutMs / 1000).toFixed(0))}s\\.\n\n` +
-        (spawn.stdout.trim() || spawn.stderr.trim()
-          ? `_partial output:_\n${wrapCodeBlock(
-              spawn.stdout || spawn.stderr,
-              1500,
-            )}`
-          : "\\(no output captured before timeout\\)");
-      break;
-    }
-    case "unsupported":
-      body = `⚠ Cannot spawn ${escapeMd(input.agentId)}: ${escapeMd(spawn.reason)}`;
-      break;
-    case "spawn-error":
-      body = `✗ Spawn error: ${escapeMd(spawn.error)}`;
-      break;
+  const lang = taskLanguage(input.message);
+  const tr = lang === "tr";
+  const failure = explainTaskFailure(
+    spawn,
+    { runtime: input.entry.id, program: input.entry.name.trim() || input.agentId, agentId: input.agentId },
+    lang,
+  );
+  const task = `_${tr ? "Görev" : "Task"}:_ ${escapeMd(truncateForTelegram(input.message, 200))}`;
+  if (failure === null) {
+    const header = `📨 *${escapeMd(agentName)}* ${tr ? "görevini bitirdi" : "finished your task"}`;
+    const answer = spawn.kind === "ok" ? spawn.stdout.trim() : "";
+    const body = answer
+      ? wrapCodeBlock(answer, maxLength)
+      : escapeMd(tr ? "(yazılı bir cevap vermedi)" : "(it gave no written answer)");
+    return `${header}\n\n${task}\n\n${body}`;
   }
-  const taskExcerpt = truncateForTelegram(input.message, 200);
-  return `${header}\n\n_Task:_ ${escapeMd(taskExcerpt)}\n\n${body}${tail}`;
+  const header = `📨 *${escapeMd(agentName)}* ${tr ? "görevini bitiremedi" : "couldn't finish your task"}\n${escapeMd(failure.reason)}`;
+  const fix = failure.fix ? `\n${escapeMd(tr ? "Ne yapmalı: " : "What to do: ")}${escapeMdKeepCode(failure.fix)}` : "";
+  // What a timed-out agent had so far can still be useful; nothing else.
+  const partial =
+    spawn.kind === "timeout" && spawn.stdout.trim()
+      ? `\n\n_${tr ? "O ana kadar" : "What it had so far"}:_\n${wrapCodeBlock(spawn.stdout.trim(), 800)}`
+      : "";
+  return `${header}${fix}\n\n${task}${partial}`;
+}
+
+/** MarkdownV2 text where `code` spans stay code. */
+function escapeMdKeepCode(text: string): string {
+  return text
+    .split(/(`[^`]*`)/)
+    .map((part) => (part.startsWith("`") && part.endsWith("`") && part.length > 1 ? `\`${part.slice(1, -1).replace(/[\\`]/g, (m) => `\\${m}`)}\`` : escapeMd(part)))
+    .join("");
 }
 
 /** Who ran the task: the agent id (the role instance, e.g. "manager") with
