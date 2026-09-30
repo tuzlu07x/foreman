@@ -1,5 +1,6 @@
 import { catalogEntryFor, isInstance, supportsInstances } from "../core/agent-instance.js";
 import { loadOrg, type RoleCapability } from "../core/org/org.js";
+import { installedAgent, updateCommandFor } from "../core/agent-runtime-info.js";
 import { claudeHookInstalled, taskPermissions } from "../core/task-permissions.js";
 import { existsSync, writeFileSync } from "node:fs";
 import { Command, Option } from "commander";
@@ -47,6 +48,7 @@ import {
   detectInstall,
   preferredUninstallCommand,
   runInstall,
+  runShell,
   runUninstall,
 } from "../core/agent-install.js";
 import {
@@ -1362,11 +1364,15 @@ async function runAgentUpdateOne(
     return 1;
   }
 
-  console.log(orange(`updating ${agent.id} (${entry.install.npm})…`));
-  const result = await runInstall({
-    install: entry.install,
-    onLine: (line) => console.log(`  ${dim(line)}`),
-  });
+  // Update the copy Foreman launches, with the npm (or brew) that
+  // installed it: another Node's npm would add a second copy the old one
+  // keeps shadowing on PATH.
+  const installed = installedAgent(entry.install);
+  const inPlace = installed ? updateCommandFor(installed, entry.install.npm) : null;
+  console.log(orange(`updating ${agent.id} (${entry.install.npm ?? entry.install.brew})…`));
+  if (installed) console.log(`  ${dim("found")}     ${installed.binPath}${installed.version ? ` (v${installed.version})` : ""}`);
+  const onLine = (line: string): void => console.log(`  ${dim(line)}`);
+  const result = inPlace ? await runShell(inPlace, onLine) : await runInstall({ install: entry.install, onLine });
   if (!result.ok) {
     console.error(
       red("error: ") +
@@ -1374,7 +1380,8 @@ async function runAgentUpdateOne(
     );
     return 1;
   }
-  console.log(`${green("✓")} ${agent.id} updated`);
+  const after = installedAgent(entry.install);
+  console.log(`${green("✓")} ${agent.id} updated${after?.version ? ` to v${after.version}` : ""}`);
   return 0;
 }
 

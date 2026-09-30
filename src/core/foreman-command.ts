@@ -41,6 +41,9 @@ import {
 import { SecretNotFoundError } from "./secret-store.js";
 import { loadActiveRegistry } from "./registry-catalog.js";
 import { catalogEntryFor } from "./agent-instance.js";
+import { agentDefaultModel, installedAgent, type InstalledAgent } from "./agent-runtime-info.js";
+import { cachedLatestVersion } from "./agent-update-check.js";
+import { isNewer } from "./update-check.js";
 import type { RegistryService } from "./registry.js";
 import { clipForSurface, integrationChat, isIntegrationChange } from "./integrations/chat.js";
 import type { ConfirmationStore } from "./integrations/confirmations.js";
@@ -925,17 +928,54 @@ function modelStatusReply(ctx: ForemanCommandContext): ForemanCommandResult {
   } catch {
     lines.push("Foreman LLM: (could not read llm.yaml)");
   }
-  // Per-agent (current state)
+  // Per-agent: what runs it, which version, and the model it really uses
+  // (Foreman's override, else the agent's own config), on every chat app.
   const agents = ctx.registry.listAll();
-  const overridableAgents: string[] = [];
+  const byRuntime = new Map<string, string[]>();
+  const updates: string[] = [];
   if (agents.length > 0) {
     lines.push("");
     lines.push("Agents:");
-    for (const a of agents) {
-      const override = a.modelVersion ? `\`${a.modelVersion}\`` : "(agent default)";
-      lines.push(`  ${a.id} — ${override}`);
-      if (AGENT_PROVIDER[a.id]) overridableAgents.push(a.id);
+    const seen = new Map<string, InstalledAgent | null>();
+    let doc: ReturnType<typeof loadActiveRegistry>["doc"] | null = null;
+    try {
+      doc = loadActiveRegistry().doc;
+    } catch {
+      doc = null;
     }
+    for (const a of agents) {
+      const entry = doc ? catalogEntryFor(doc, a.id, a) : undefined;
+      const runtime = entry?.id ?? a.id;
+      if (AGENT_PROVIDER[runtime]) byRuntime.set(runtime, [...(byRuntime.get(runtime) ?? []), a.id]);
+      if (entry && !seen.has(runtime)) {
+        let found: InstalledAgent | null = null;
+        try {
+          found = installedAgent(entry.install);
+        } catch {
+          found = null;
+        }
+        seen.set(runtime, found);
+        const latest = found?.version ? cachedLatestVersion(runtime) ?? cachedLatestVersion(a.id) : null;
+        if (found?.version && latest && isNewer(latest, found.version)) {
+          updates.push(`  ${entry.name} ${latest} is out (you have ${found.version}): \`foreman agent update ${runtime}\``);
+        }
+      }
+      const program = entry ? `${entry.name}${seen.get(runtime)?.version ? ` ${seen.get(runtime)!.version}` : ""}` : a.displayName;
+      const own = entry ? agentDefaultModel(runtime) : null;
+      const model = a.modelVersion
+        ? `\`${a.modelVersion}\` (set in Foreman)`
+        : own
+          ? `\`${own}\` (${entry!.name}'s own setting)`
+          : AGENT_PROVIDER[runtime]
+            ? `${entry?.name ?? a.id}'s default model`
+            : `model set in ${entry?.name ?? a.id}`;
+      lines.push(`  ${a.id} — ${program} · ${model}`);
+    }
+  }
+  if (updates.length > 0) {
+    lines.push("");
+    lines.push("Updates:");
+    for (const u of updates) lines.push(u);
   }
   // OAuth / API-key auth state per provider (#512 / Faz 4b). Skipped silently
   // when no secretStore was wired into ctx (test ergonomics — keeps existing
@@ -954,14 +994,20 @@ function modelStatusReply(ctx: ForemanCommandContext): ForemanCommandResult {
       }
     }
   }
-  // Quick switches per overridable agent (codex / claude-code)
-  for (const agentId of overridableAgents) {
-    const providerForAgent = AGENT_PROVIDER[agentId];
+  // Quick switches per agent program (Codex / Claude Code): one block each,
+  // shown for its first agent, however many roles run on it.
+  for (const [runtime, ids] of byRuntime) {
+    const providerForAgent = AGENT_PROVIDER[runtime];
     if (!providerForAgent) continue;
     const models = quickModels(providerForAgent);
     if (!models || models.length === 0) continue;
+    const agentId = ids[0]!;
     lines.push("");
-    lines.push(`Tap to switch ${agentId} (${providerForAgent}):`);
+    lines.push(
+      ids.length > 1
+        ? `Tap to switch ${agentId} (${providerForAgent}; any of ${ids.join(", ")} the same way):`
+        : `Tap to switch ${agentId} (${providerForAgent}):`,
+    );
     for (const m of models) {
       lines.push(`  \`foreman model ${agentId} ${m.id}\` — ${m.hint}`);
     }

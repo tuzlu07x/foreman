@@ -478,18 +478,21 @@ const INSTALL_IDLE_TIMEOUT_MS = 90_000;
 const INSTALL_WATCHDOG_TICK_MS = 5_000;
 
 export function runShell(
-  command: string,
+  command: string | string[],
   onLine?: (line: string) => void,
 ): Promise<InstallResult> {
+  const shown = Array.isArray(command) ? quoteArgv(command) : command;
   return new Promise<InstallResult>((resolveResult) => {
-    // Pipes (`curl … | bash`) need a real shell to interpret them.
-    const needsShell = command.includes("|");
-    const child = needsShell
-      ? spawn("bash", ["-c", command], { stdio: ["ignore", "pipe", "pipe"] })
-      : (() => {
-          const [cmd, ...args] = command.split(" ");
-          return spawn(cmd!, args, { stdio: ["ignore", "pipe", "pipe"] });
-        })();
+    // An argv runs as given (paths may hold spaces); a string with a pipe
+    // (`curl … | bash`) needs a real shell to interpret it.
+    const child = Array.isArray(command)
+      ? spawn(command[0]!, command.slice(1), { stdio: ["ignore", "pipe", "pipe"] })
+      : command.includes("|")
+        ? spawn("bash", ["-c", command], { stdio: ["ignore", "pipe", "pipe"] })
+        : (() => {
+            const [cmd, ...args] = command.split(" ");
+            return spawn(cmd!, args, { stdio: ["ignore", "pipe", "pipe"] });
+          })();
     let lastOutputAt = Date.now();
     let killedForIdle = false;
     const watchdog = setInterval(() => {
@@ -514,7 +517,7 @@ export function runShell(
     child.stderr.on("data", onChunk);
     child.on("error", () => {
       clearInterval(watchdog);
-      resolveResult({ ok: false, exitCode: -1, manualCommand: command });
+      resolveResult({ ok: false, exitCode: -1, manualCommand: shown });
     });
     child.on("close", (code) => {
       clearInterval(watchdog);
@@ -525,14 +528,14 @@ export function runShell(
           manualCommand:
             `(install timed out — no output for ${Math.round(
               INSTALL_IDLE_TIMEOUT_MS / 1000,
-            )}s, likely stuck on an interactive prompt. Run manually: ${command})`,
+            )}s, likely stuck on an interactive prompt. Run manually: ${shown})`,
         });
         return;
       }
       resolveResult({
         ok: code === 0,
         exitCode: code ?? -1,
-        manualCommand: command,
+        manualCommand: shown,
       });
     });
   });
@@ -575,4 +578,9 @@ function readNpmPrefix(): string | null {
   } catch {
     return null;
   }
+}
+
+/** An argv as one line a person can paste into a shell. */
+function quoteArgv(argv: string[]): string {
+  return argv.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, "'\\''")}'`)).join(" ");
 }

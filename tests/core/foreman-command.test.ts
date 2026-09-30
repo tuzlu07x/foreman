@@ -845,6 +845,28 @@ describe("ForemanCommandRouter (#431)", () => {
       expect(result.text).toContain("foreman model");
     });
 
+    it("0 args: shows what really runs each role and its model, one quick-switch block per program", async () => {
+      const codexHome = mkdtempSync(join(tmpdir(), "foreman-model-codex-"));
+      const before = process.env.CODEX_HOME;
+      process.env.CODEX_HOME = codexHome;
+      try {
+        writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-6-luna"\n');
+        registry.register({ id: "backend-developer", displayName: "backend-developer", transport: "stdio", metadata: { registryId: "codex" } });
+        registry.register({ id: "frontend-developer", displayName: "frontend-developer", transport: "stdio", metadata: { registryId: "codex" } });
+        registry.setModelVersion("frontend-developer", "gpt-6-astra");
+        const result = await router.dispatch("model", [], ctx);
+        expect(result.text).toMatch(/backend-developer — Codex[^\n]* · `gpt-6-luna` \(Codex's own setting\)/);
+        expect(result.text).toMatch(/frontend-developer — Codex[^\n]* · `gpt-6-astra` \(set in Foreman\)/);
+        expect(result.text).not.toContain("(agent default)");
+        expect(result.text).toContain("Tap to switch codex (openai; any of codex, backend-developer, frontend-developer the same way):");
+        expect(result.text.match(/Tap to switch /g)).toHaveLength(3);
+      } finally {
+        if (before === undefined) delete process.env.CODEX_HOME;
+        else process.env.CODEX_HOME = before;
+        rmSync(codexHome, { recursive: true, force: true });
+      }
+    });
+
     it("0 args: includes tap-to-copy quick-switch commands per provider", async () => {
       const result = await router.dispatch("model", [], ctx);
       expect(result.ok).toBe(true);
