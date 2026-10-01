@@ -1,12 +1,20 @@
 version: 2
 updates:
+  # Major versions break the build (zod 4, TypeScript 7 and ulid 3 did on
+  # 2026-10-01): they are upgraded by hand, in their own PR, not by a bot.
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
