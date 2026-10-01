@@ -6,8 +6,23 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-09-30
+
 ### Added
 
+- **Ask Foreman for work in plain words, and approve the plan once.**
+  "Analyse github.com/x/y as a team" in Telegram, Slack, Discord or the
+  TUI chat gets an answer like a colleague's: who does what, from your org
+  chart, what runs each role and what the team did lately. Foreman sends
+  the whole plan as one approval; on Allow each part is assigned as yours,
+  exactly like `/foreman assign`, and "Plan handed out" comes back where
+  you asked. Nothing starts before you allow it, and agents relaying the
+  chat never get plans. The chat remembers the last few messages for 30
+  minutes and can quote or summarise the latest reports.
+- **Open one role yourself** (`open <role>` in the CLI): the role's
+  Claude Code or Codex starts in your terminal as that role, with its own
+  Foreman identity, its role and its model, and Foreman's hook holds it
+  to the role's permissions.
 - **The Team page is managed by department.** Roles are listed under
   their departments (fold one with `←→` or Enter), with the roles in no
   department last, and each row shows the role's title, id, what runs it
@@ -42,6 +57,28 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Changed
 
+- **Two short messages per task.** A task says "handed to …" and then
+  its result, nothing else: no started / progress / "✓ 01M3QR success"
+  pushes, and never the agent's error output (it reached 50 000
+  characters). A failure says the reason in one line and what to do in
+  the next, for sign-in (401), usage limits, a model the version or
+  account can't use, Codex's trusted-folder check, a permission prompt
+  nobody can answer, a missing program and timeouts. In Turkish when you
+  wrote the task in Turkish.
+- **`/foreman model` shows what really runs.** Each role with its
+  program, version and model (set in Foreman, or the agent's own
+  setting, instead of "(agent default)"), the updates the last check
+  found, and one quick-switch block per program, on every chat app.
+- **Trusting an agent is safer.** A trusted Codex role may write in its
+  folder, still sandboxed, with the network only when its role allows
+  it; it never runs without Codex's sandbox. A Claude Code role skips
+  Claude Code's own prompts when Foreman's hook guards it. Trust and
+  untrust now say what the role may do.
+- **Each role works in its own folder** (`~/foreman-work/<role>`) when a
+  task names none.
+- **A greeting gets a short hello**, and the same failure isn't repeated
+  in full on every message. "Write the notes as a team" is read as a
+  sentence, not as a hand-off to an agent called "the".
 - **The setup wizard says which value you pasted.** Slack and Discord
   settings pages show several look-alike values. Pasting Slack's
   app-level token (`xapp-…`), Discord's Application ID, Public Key or
@@ -64,6 +101,32 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Fixed
 
+- **A Codex role runs as itself.** Codex merges `-c` settings into its
+  own `config.toml`, so a Codex role presented plain Codex's identity
+  token and ran as `untrusted:<role>`: its reports went to you instead of
+  its lead. It now proves its own identity.
+- **Codex and Claude Code roles can hand work on and report.** Claude
+  Code refused Foreman's own tools in a task, and a sandboxed Codex
+  refused them as needing an approval nobody could give. Both now use
+  Foreman's tools without asking; Foreman mediates each call itself.
+- **Reports to you reach Telegram, Slack and Discord**, not only the TUI
+  inbox. An unverified sender is labelled as unverified.
+- **Agent updates use the npm that installed the agent.** A Codex
+  installed by Homebrew's Node is updated in place instead of a second
+  copy under nvm's npm that the old one kept shadowing, and its version
+  is read from the copy Foreman runs.
+- **No API key on a subscription.** Foreman no longer writes the
+  Anthropic key into Claude Code's settings when you picked the Claude
+  subscription, and removes the one it wrote before.
+- **Fewer false alarms.** Several Claude Code windows at once no longer
+  count as one runaway loop, and a commit message, PR body or file that
+  mentions a Foreman command is no longer treated as running it (one
+  hidden in a heredoc now is).
+- **Installing or removing the hook says** that open Claude Code
+  sessions keep their old hooks until you reopen them.
+- **Telegram messages sent while Foreman was off are not acted on**; one
+  note says how many were skipped. Command replies no longer open a
+  link-preview card for every URL.
 - **Work an agent hands off comes back to it.** Headless agents run once
   per task, so a lead that delegated had finished by the time its
   delegate reported, and the chain stopped there: nobody compiled the
@@ -127,9 +190,6 @@ All notable changes to Foreman are documented here. The format follows
   Rows are measured in terminal columns (an emoji or a CJK character takes
   two), and a line break in an agent's message, an inbox notice or a
   role's instructions shows as ⏎ instead of starting a new line.
-
-### Fixed
-
 - **An API key in Claude Code's settings no longer hides behind your
   subscription.** An `env.ANTHROPIC_API_KEY` in Claude Code's
   `settings.json` wins over the Claude subscription you chose for it, so a
