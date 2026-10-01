@@ -6,6 +6,17 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.3.2] - 2026-10-01
+
+### Fixed
+
+- **2.3.1 as published to npm was broken; 2.3.2 is what 2.3.1 should
+  have been.** Major dependency upgrades (zod 4, ulid 3, TypeScript 7)
+  were merged after the 2.3.1 release commit and the package was built
+  from them: zod 4 reads Foreman's settings differently, and much of
+  Foreman failed. 2.3.2 is built from the 2.3.1 code with the
+  dependencies it was tested with. Upgrade from 2.3.1 right away.
+
 ## [2.3.1] - 2026-09-30
 
 ### Added
