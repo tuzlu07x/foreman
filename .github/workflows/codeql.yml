@@ -33,4 +33,4 @@ jobs:
         with:
           languages: javascript-typescript
           queries: security-extended
-      - uses: github/codeql-action/analyze@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.38.2
+      - uses: github/codeql-action/analyze@ce5e7eeac396d720fe2d802714996c8ce561e311 # v3.39.0
