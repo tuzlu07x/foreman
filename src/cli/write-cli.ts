@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { DbApprovalService } from "../core/approval.js";
 import { AuditLogger } from "../core/audit.js";
 import { ControlChannel } from "../core/control-channel.js";
+import { DelegationTracker } from "../core/delegation-tracker.js";
 import { DELEGATION_TOOL } from "../core/foreman-command.js";
 import { createMediatorStack } from "../core/mediator-stack.js";
 import type { JSONRPCMessage } from "../mcp/types.js";
@@ -75,6 +76,15 @@ export async function runWrite(
     // An agent Foreman spawned runs with FOREMAN_SPAWNED_BY set; when it
     // shells out to `foreman write` it is delegating, not the human.
     const source = cliDelegationSource();
+    // An agent handing work to itself would only start itself again, and
+    // that run could do the same: the chat path refuses this too.
+    if (!isHumanSource(source) && source.trim().toLowerCase() === targetAgent) {
+      console.error(
+        red("error: ") +
+          `${targetAgent} can't hand work to itself: do it in this run, or hand it to a colleague.`,
+      );
+      return 2;
+    }
     const verdict = orgDelegationVerdict(paths.orgConfigPath, source, targetAgent);
     if (verdict && !verdict.allowed) {
       console.error(
@@ -88,6 +98,13 @@ export async function runWrite(
       const overBudget = orgBudgetBlock(db, paths.orgConfigPath, targetAgent);
       if (overBudget) {
         console.error(red("error: ") + `paused by budget: ${overBudget}. Ask the user to raise it (foreman org budget).`);
+        return 2;
+      }
+      // The same runaway guard as the chat path: an agent firing hand-offs
+      // at one target without closing the earlier ones is stuck.
+      const runaway = new DelegationTracker({ db }).checkRunawayLoop(source, targetAgent);
+      if (!runaway.ok) {
+        console.error(red("error: ") + runaway.reason);
         return 2;
       }
       // The hand-off is a call from one agent to another (#656):

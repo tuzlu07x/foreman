@@ -6,6 +6,16 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **An agent can no longer start itself over and over.** `foreman write`
+  run from an agent's shell had neither the self check nor the runaway
+  guard the chat path has, so a role handing work to itself ran until
+  Foreman was stopped, spending tokens on every run. It is refused now,
+  and `foreman org check` says so. One piece of work is also bounded as a
+  whole, however its hand-offs nest: 8 levels deep and 100 runs in all,
+  wakes included. Past that the agent hears why and you get one message.
+
 ## [2.3.2] - 2026-10-01
 
 ### Fixed

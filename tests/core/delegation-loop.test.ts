@@ -9,6 +9,8 @@ import {
   composeOwedEscalation,
   composeWakeTask,
   DelegationLoop,
+  MAX_CHAIN_DEPTH,
+  MAX_CHAIN_RUNS,
   MAX_WAKES_PER_THREAD,
   WAKE_SOURCE,
 } from "../../src/core/delegation-loop.js";
@@ -152,6 +154,12 @@ describe("DelegationLoop", () => {
         return;
       }
       const link = loop.linkFor(row);
+      const refused = loop.chainRefusal(link, row.sourceAgent, agent);
+      if (refused) {
+        runId = loop.recordUnrun({ row, initiator: row.sourceAgent, target: agent, task, link, outcome: "blocked", reason: refused });
+        db.update(controlCommands).set({ status: "failed" }).where(eq(controlCommands.id, row.id)).run();
+        return;
+      }
       runId = tracker.recordDelegation({
         initiatorAgent: row.sourceAgent,
         targetAgent: agent,
@@ -332,6 +340,82 @@ describe("DelegationLoop", () => {
     // Nothing is left queued, and nobody else was woken.
     expect(pending()).toEqual([]);
     expect(writes().filter((r) => r.sourceAgent === WAKE_SOURCE).every((r) => argsOf(r)[0] === "manager")).toBe(true);
+  });
+
+  // ---------------------------------------------------------------------------
+  // One piece of work is bounded as a whole
+  // ---------------------------------------------------------------------------
+
+  /** A straight chain: each agent hands the task on once, and stops. */
+  function chainOf(length: number): void {
+    const agents = Array.from({ length }, (_, i) => `a${i}`);
+    agents.forEach((a, i) => {
+      const next = agents[i + 1];
+      scripts[a] = (task) => (next && !task.startsWith("Foreman:") ? { handOff: [[next, "Go on"]] } : { out: "Done." });
+    });
+    enqueue("a0", "Go on", "cli");
+  }
+
+  it(`a chain of ${MAX_CHAIN_DEPTH} hand-offs runs: a real chart needs no more`, () => {
+    chainOf(MAX_CHAIN_DEPTH + 1);
+    drain(200);
+    expect(writes().filter((r) => r.status === "failed")).toEqual([]);
+    expect(escalations).toEqual([]);
+  });
+
+  it("stops a chain one hand-off deeper, tells the sender why and the owner once", () => {
+    chainOf(MAX_CHAIN_DEPTH + 2);
+    drain(200);
+    const refused = writes().filter((r) => r.status === "failed");
+    expect(refused).toHaveLength(1);
+    expect(argsOf(refused[0]!)[0]).toBe(`a${MAX_CHAIN_DEPTH + 1}`);
+    // The last agent never ran, and the agent that tried hears why.
+    expect(calls.has(`a${MAX_CHAIN_DEPTH + 1}`)).toBe(false);
+    const wake = wakesFor(`a${MAX_CHAIN_DEPTH}`)[0];
+    expect(wake).toContain("Foreman stopped this hand-off");
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0]).toMatchObject({ title: "Foreman stopped a chain of hand-offs", agentId: `a${MAX_CHAIN_DEPTH}` });
+    expect(audits.filter((a) => a.event === "delegation_chain_limit")).toHaveLength(1);
+    // The results still unwind to the top.
+    expect(wakesFor("a0")).toHaveLength(1);
+  });
+
+  it("two agents passing work back and forth, rewording it each time, stop on their own", () => {
+    let n = 0;
+    scripts.manager = () => ({ handOff: [["backend", `Please look at this (${++n})`]] });
+    scripts.backend = () => ({ handOff: [["manager", `Over to you (${++n})`]] });
+    enqueue("manager", "Fix the login page", "cli");
+    const ran = drain(MAX_CHAIN_RUNS * 3);
+    expect(pending()).toEqual([]);
+    expect(ran).toBeLessThan(MAX_CHAIN_RUNS * 2);
+    expect(escalations).toHaveLength(1);
+  });
+
+  it("an agent that fans out without end stops at the run limit, wakes included", () => {
+    loop = makeLoop({ maxChainRuns: 12 });
+    let n = 0;
+    scripts.manager = () => ({ handOff: [["backend", `Task ${++n}`], ["dev", `Task ${++n}`]] });
+    scripts.backend = () => ({ handOff: [["manager", `Task ${++n}`]] });
+    scripts.dev = () => ({ out: "Done." });
+    enqueue("manager", "Plan the release", "cli");
+    const ran = drain(500);
+    expect(pending()).toEqual([]);
+    expect(ran).toBeLessThan(40);
+    expect(escalations).toHaveLength(1);
+    expect(audits.some((a) => a.event === "delegation_wake_skipped" && a.data.reason === "chain-limit")).toBe(true);
+  });
+
+  it("your own tasks and Foreman's wakes are never refused by the chain limit", () => {
+    loop = makeLoop({ maxChainDepth: 0, maxChainRuns: 0 });
+    scripts.manager = (task) => (task.startsWith("Foreman:") ? { out: "Done." } : { handOff: [["backend", "Do it"]] });
+    enqueue("manager", "One", "cli");
+    const [first] = pending();
+    runOne(first!);
+    // The owner's task ran; the agent's hand-off is what the limit stops.
+    expect(calls.get("manager")).toBe(1);
+    const [handOff] = pending();
+    runOne(handOff!);
+    expect(calls.has("backend")).toBe(false);
   });
 
   it("never wakes the human, Foreman, an unverified source, or an agent it can't launch", () => {
