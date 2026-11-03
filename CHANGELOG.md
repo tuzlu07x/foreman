@@ -19,6 +19,11 @@ All notable changes to Foreman are documented here. The format follows
   an agent with results, that run stayed `awaiting` in `foreman delegations`
   and on the Delegations page after the task was done. It closes with its
   task now, and the rows earlier versions left behind are cleaned up.
+- **You can build a team from nothing on the command line.** `foreman org
+  add-role` and `add-department` start `org.yaml` themselves; before, they
+  stopped with "no org.yaml yet" and a file you started by hand was refused
+  until it had a role. A new role or department head now reports to your
+  Manager when you have one, as in the setup wizard and on the Team page.
 
 ## [2.3.2] - 2026-10-01
 

@@ -13,6 +13,7 @@ import {
   buildTree,
   checkDelegation,
   escalatesViaManager,
+  HUMAN,
   HUMAN_SOURCES,
   loadOrg,
   OrgValidationError,
@@ -58,6 +59,8 @@ import { runWrite } from "./write-cli.js";
 // enforces the chart: delegation follows reporting lines, each department
 // only sees the MCP servers it needs, and approvals always come to you.
 
+const DEFAULT_COMPANY = "My Company";
+
 export const orgCommand = new Command("org").description(
   "Foreman Org — departments, roles and reporting lines for your agents",
 );
@@ -75,7 +78,7 @@ orgCommand
   .command("init")
   .description("Create org.yaml from a template")
   .option("--template <id>", "startup | software-team | solo", "startup")
-  .option("--company <name>", "company name", "My Company")
+  .option("--company <name>", "company name", DEFAULT_COMPANY)
   .option("--force", "overwrite an existing org.yaml")
   .action((opts: { template: string; company: string; force?: boolean }) => {
     requireInitialised();
@@ -390,26 +393,27 @@ orgCommand
   .option("--name <name>", "display name, e.g. Marketing")
   .option("--title <title>", "the head's title, e.g. Chief Marketing Officer")
   .option("--agent <agent>", "agent that fills the head role (needed when the role is new)")
-  .option("--reports-to <role>", "who the head reports to", "human")
+  .option("--reports-to <role>", "who the head reports to (default: the Manager, else you)")
   .option("--description <text>", "what the department does")
+  .option("--company <name>", "company name, when this starts org.yaml", DEFAULT_COMPANY)
   .action(
     (
       rawId: string,
-      opts: { head: string; name?: string; title?: string; agent?: string; reportsTo: string; description?: string },
+      opts: { head: string; name?: string; title?: string; agent?: string; reportsTo?: string; description?: string; company: string },
     ) => {
-      const org = requireOrg();
+      const org = orgOrNone();
       const id = rawId.toLowerCase();
       const head = opts.head.toLowerCase();
-      if (Object.hasOwn(org.departments, id)) fail(`department '${id}' already exists`);
+      if (org && Object.hasOwn(org.departments, id)) fail(`department '${id}' already exists`);
       const paths = getForemanPaths();
-      const doc = parseDocument(readFileSync(paths.orgConfigPath, "utf-8"));
-      if (!Object.hasOwn(org.roles, head)) {
+      const doc = parseDocument(org ? readFileSync(paths.orgConfigPath, "utf-8") : newOrgText(opts.company));
+      if (!org || !Object.hasOwn(org.roles, head)) {
         if (!opts.agent) fail(`role '${head}' is new — say which agent fills it: --agent claude-code`);
         doc.setIn(["roles", head], {
           title: opts.title ?? `Head of ${opts.name ?? titleCase(id)}`,
           agent: opts.agent,
           department: id,
-          reports_to: opts.reportsTo,
+          reports_to: opts.reportsTo?.toLowerCase() ?? defaultBoss(org, head),
         });
       } else {
         doc.setIn(["roles", head, "department"], id);
@@ -460,9 +464,10 @@ orgCommand
   .option("--can <list>", "what its agent may do: read,write,shell,network (comma-separated)")
   .option("--title <title>", "job title")
   .option("--department <id>", "department it belongs to")
-  .option("--reports-to <role>", "manager role (default: the department head, else human)")
+  .option("--reports-to <role>", "manager role (default: the department head, else the Manager, else you)")
   .option("--responsibility <text>", "what this role is for, in one line")
   .option("--model <model>", "model override for this role (a cheaper model for routine work)")
+  .option("--company <name>", "company name, when this starts org.yaml", DEFAULT_COMPANY)
   .action(
     async (
       rawId: string,
@@ -477,20 +482,21 @@ orgCommand
         reportsTo?: string;
         responsibility?: string;
         model?: string;
+        company: string;
       },
     ) => {
-      const org = requireOrg();
+      const org = orgOrNone();
       const id = rawId.toLowerCase();
-      if (Object.hasOwn(org.roles, id)) fail(`role '${id}' already exists`);
+      if (org && Object.hasOwn(org.roles, id)) fail(`role '${id}' already exists`);
       const preset = opts.preset ? findRolePreset(opts.preset.toLowerCase()) : undefined;
       if (opts.preset && !preset) fail(`no ready-made role '${opts.preset}' — see \`foreman org roles\``);
       if (opts.agent && opts.runsOn) fail("pass --agent (an agent you registered) or --runs-on (a new one), not both");
       const can = opts.can !== undefined ? parseCan(opts.can) : preset?.can;
       const dept = opts.department?.toLowerCase();
-      if (dept && !Object.hasOwn(org.departments, dept)) {
+      if (dept && !org?.departments[dept]) {
         fail(`no department '${dept}' — add it first: foreman org add-department ${dept} --head <role>`);
       }
-      const reportsTo = opts.reportsTo?.toLowerCase() ?? (dept ? org.departments[dept]!.head : "human");
+      const reportsTo = opts.reportsTo?.toLowerCase() ?? (dept ? org!.departments[dept]!.head : defaultBoss(org, id));
       // Who fills it: a registered agent, or a new instance named after the role.
       const runsOn = opts.agent ? null : (opts.runsOn ?? preset?.runsOn ?? null);
       if (!opts.agent && !runsOn) fail("say who fills the role: --agent <registered agent> or --runs-on <claude-code|codex|…>");
@@ -506,7 +512,7 @@ orgCommand
         if (code !== 0) fail(`couldn't add ${agent} (${runsOn}) for the role`);
       }
       const paths = getForemanPaths();
-      const doc = parseDocument(readFileSync(paths.orgConfigPath, "utf-8"));
+      const doc = parseDocument(org ? readFileSync(paths.orgConfigPath, "utf-8") : newOrgText(opts.company));
       const instructions = opts.describe ?? preset?.instructions;
       doc.setIn(["roles", id], {
         title: opts.title ?? preset?.title ?? titleCase(id),
@@ -732,16 +738,31 @@ function policyHandoffVerdict(from: string, to: string): { effect: "allow" | "de
 }
 
 function requireOrg(): OrgDoc {
+  const org = orgOrNone();
+  if (!org) fail("no org.yaml yet — add your first role (foreman org add-role <id> --preset manager) or start from a template (foreman org init --template startup)");
+  return org;
+}
+
+/** The chart, or null when there is none yet. */
+function orgOrNone(): OrgDoc | null {
   requireInitialised();
-  const paths = getForemanPaths();
-  let org: OrgDoc | null = null;
   try {
-    org = loadOrg(paths.orgConfigPath);
+    return loadOrg(getForemanPaths().orgConfigPath);
   } catch (err) {
     reportInvalid(err);
   }
-  if (!org) fail("no org.yaml yet — run `foreman org init --template startup`");
-  return org;
+}
+
+/** Where a chart built role by role starts: the first `add-role` or
+ *  `add-department` fills it in, so it is only saved with a role in it. */
+function newOrgText(company: string): string {
+  return `# Foreman Org — who does what, who reports to whom. Docs: docs/org.md\nversion: 1\ncompany: ${JSON.stringify(company)}\nhuman:\n  title: Founder\n`;
+}
+
+/** Whom a new role reports to when nobody says: the team's Manager, as in
+ *  the setup wizard and on the Team page, else you. */
+function defaultBoss(org: OrgDoc | null, roleId: string): string {
+  return org && roleId !== "manager" && Object.hasOwn(org.roles, "manager") ? "manager" : HUMAN;
 }
 
 function reportInvalid(err: unknown): never {

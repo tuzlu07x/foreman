@@ -158,8 +158,10 @@ foreman org add-role analyst --agent claude-code --department sales --model clau
 foreman org show
 ```
 
-A new role reports to its department head unless you say otherwise
-(`--reports-to`). Both commands check the whole chart before saving, and
+A new role reports to its department head, else to the role called `manager`
+if there is one, else to you, unless you say otherwise (`--reports-to`). You
+don't need a template: on a machine with no `org.yaml`, the first `add-role`
+or `add-department` starts one (`--company` names it). Both commands check the whole chart before saving, and
 they keep the comments in `org.yaml`. You can still edit the file by hand;
 it's read again on every delegation, so no restart is needed.
 
