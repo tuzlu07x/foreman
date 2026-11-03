@@ -15,6 +15,10 @@ All notable changes to Foreman are documented here. The format follows
   and `foreman org check` says so. One piece of work is also bounded as a
   whole, however its hand-offs nest: 8 levels deep and 100 runs in all,
   wakes included. Past that the agent hears why and you get one message.
+- **Finished work no longer shows as "awaiting".** Each time Foreman woke
+  an agent with results, that run stayed `awaiting` in `foreman delegations`
+  and on the Delegations page after the task was done. It closes with its
+  task now, and the rows earlier versions left behind are cleaned up.
 
 ## [2.3.2] - 2026-10-01
 

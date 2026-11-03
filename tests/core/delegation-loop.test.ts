@@ -17,7 +17,7 @@ import {
 import { DelegationTracker } from "../../src/core/delegation-tracker.js";
 import { isHumanSource } from "../../src/core/org/guard.js";
 import { createInMemoryDb, type ForemanDb } from "../../src/db/client.js";
-import { controlCommands, delegationFollowups, orgMessages, type ControlCommand } from "../../src/db/schema.js";
+import { controlCommands, delegationFollowups, delegations, orgMessages, type ControlCommand } from "../../src/db/schema.js";
 
 // =============================================================================
 // The delegation loop (findings 24 and 26): results go back to the agent
@@ -230,6 +230,26 @@ describe("DelegationLoop", () => {
     // The manager ran twice (task + wake); nobody else was woken.
     expect(calls.get("manager")).toBe(2);
     expect(escalations).toEqual([]);
+  });
+
+  it("a finished thread leaves nothing awaiting: its wake closes with it", () => {
+    scripts.manager = (task) =>
+      task.startsWith("Foreman: the work you handed off is back.") ? { out: "Final report sent." } : { handOff: [["backend", "Analyse it"]] };
+    enqueue("manager", "Analyse the repo", "cli");
+    drain();
+    const rows = db.select().from(delegations).all();
+    expect(rows).toHaveLength(3); // the task, the hand-off, the wake
+    expect(rows.map((r) => r.status)).toEqual(["closed", "closed", "closed"]);
+  });
+
+  it("the watchdog closes wake runs an earlier version left awaiting", () => {
+    scripts.manager = (task) => (task.startsWith("Foreman:") ? { out: "Done." } : { handOff: [["backend", "Analyse it"]] });
+    enqueue("manager", "Analyse the repo", "cli");
+    drain();
+    const wake = db.select().from(delegations).all().find((r) => r.initiatorAgent === WAKE_SOURCE)!;
+    db.update(delegations).set({ status: "awaiting", followUpAt: null }).where(eq(delegations.id, wake.id)).run();
+    loop.watchdog();
+    expect(db.select().from(delegations).where(eq(delegations.id, wake.id)).get()?.status).toBe("closed");
   });
 
   it("batches: hand-offs from the same run wake the lead once, after the last one is back", () => {

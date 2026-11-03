@@ -354,6 +354,7 @@ export class DelegationLoop {
       .set({ settledAt: now, ...(root.followUpAt === null ? { followUpAt: now } : {}), status: "closed" })
       .where(eq(delegations.id, root.id))
       .run();
+    this.closeSettledRuns();
     if (root.parentThreadId) {
       this.reconcile(root.parentThreadId, depth + 1);
     } else if (root.wokenAt === null) {
@@ -362,6 +363,17 @@ export class DelegationLoop {
       const settled = this.tracker.find(root.id);
       if (settled) this.wake(root.initiatorAgent, null, [settled]);
     }
+  }
+
+  /** A settled thread waits for nothing, and neither do its wakes: without
+   *  this each one stayed `awaiting` in `foreman delegations` for good. */
+  private closeSettledRuns(): void {
+    const settled = this.db.select({ id: delegations.id }).from(delegations).where(isNotNull(delegations.settledAt));
+    this.db
+      .update(delegations)
+      .set({ followUpAt: this.now(), status: "closed" })
+      .where(and(isNull(delegations.followUpAt), ne(delegations.status, "closed"), inArray(delegations.threadId, settled)))
+      .run();
   }
 
   /** Launch `agent` with the results of `rows` (its hand-offs), as the
@@ -579,6 +591,7 @@ export class DelegationLoop {
   /** One pass: re-prompt agents that owe an answer, and tell the owner once
    *  when that didn't help (or can't be done). */
   watchdog(): WatchdogTickResult {
+    this.closeSettledRuns();
     const now = this.now();
     const cutoff = now - this.answerTimeoutMs;
     let nudged = 0;
