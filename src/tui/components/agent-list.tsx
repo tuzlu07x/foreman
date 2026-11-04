@@ -16,21 +16,22 @@ export function AgentList({ width, compact }: AgentListProps): JSX.Element {
   if (compact) {
     return (
       <Box borderStyle={roundBorder()} borderDimColor paddingX={1} flexShrink={0}>
-        <Text color={theme.accent.primary}>Agents </Text>
-        {agents.length === 0 ? (
-          <Text color={theme.fg.muted}>(none registered)</Text>
-        ) : (
-          agents.map((agent, i) => (
-            <Text key={agent.id}>
-              {i > 0 ? "   " : ""}
-              <Dot active={agent.status === "active"} blinkOn={blinkOn} />{" "}
-              {agent.id}{" "}
-              <Text color={theme.fg.muted}>
-                ({perAgentToday[agent.id] ?? 0})
+        {/* One text: side by side, Ink squeezed each agent into a narrow
+            column and the names broke across lines. */}
+        <Text wrap="truncate-end">
+          <Text color={theme.accent.primary}>Agents </Text>
+          {agents.length === 0 ? (
+            <Text color={theme.fg.muted}>(none registered)</Text>
+          ) : (
+            agents.map((agent, i) => (
+              <Text key={agent.id}>
+                {i > 0 ? "   " : ""}
+                <Dot active={agent.status === "active"} blinkOn={blinkOn} /> {agent.id}{" "}
+                <Text color={theme.fg.muted}>({perAgentToday[agent.id] ?? 0})</Text>
               </Text>
-            </Text>
-          ))
-        )}
+            ))
+          )}
+        </Text>
       </Box>
     );
   }

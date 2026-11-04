@@ -226,6 +226,28 @@ export class DelegationLoop {
     return run?.threadId ?? null;
   }
 
+  /** Is this run a step inside work someone else is waiting on: a hand-off
+   *  from inside a run, or the wake of one? */
+  isStep(link: DelegationLink): boolean {
+    if (link.parentThreadId) return true;
+    const thread = link.followup && link.threadId ? this.tracker.find(link.threadId) : null;
+    return thread?.parentThreadId != null;
+  }
+
+  /** Did this run end with work out to others? It hasn't finished: it
+   *  comes back when that work does. */
+  handedOn(runId: string): boolean {
+    const run = this.tracker.find(runId);
+    return run?.threadId ? this.queuedHandOffs(run.targetAgent, run.threadId) > 0 : false;
+  }
+
+  /** The task a wake is the continuation of, or null for any other run. */
+  wakeTask(link: DelegationLink): string | null {
+    if (link.followup?.kind !== "wake" || !link.threadId) return null;
+    const thread = this.tracker.find(link.threadId);
+    return thread ? this.taskOf(thread) : null;
+  }
+
   /** Why the drain must not start this hand-off, or null: the work it
    *  belongs to has been handed on too deep or too often. Only a hand-off
    *  made inside a run has a chain; yours and Foreman's own wakes pass. The

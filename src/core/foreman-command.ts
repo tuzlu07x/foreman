@@ -298,6 +298,9 @@ export class ForemanCommandRouter {
       }
       return rendered;
     }
+    const about = askedAbout([command, ...args].join(" "));
+    const report = about ? orgReport([about, "today"], ctx, false) : null;
+    if (report) return report;
     return {
       ok: false,
       text:
@@ -306,6 +309,15 @@ export class ForemanCommandRouter {
       errorCode: "UNKNOWN_COMMAND",
     };
   }
+}
+
+/** Who `what is backend doing?` asks about (English or Turkish), or null. The
+ *  question needs no LLM: today's report on them answers it. */
+export function askedAbout(text: string): string | null {
+  const line = text.trim().replace(/[?.!\s]+$/, "");
+  const match =
+    /^what(?:'s| is|s)\s+(?:the\s+)?(\S+)\s+(?:doing|up to|working on)$/i.exec(line) ?? /^(\S+)\s+ne\s+yap[ıi]yor$/i.exec(line);
+  return match?.[1]?.toLowerCase() ?? null;
 }
 
 // =============================================================================

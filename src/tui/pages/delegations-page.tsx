@@ -203,7 +203,7 @@ function DelegationRow({
         </Cell>
         <Cell width={COLS.nudges}>{String(row.nudgeCount)}</Cell>
         <Box flexGrow={1} flexShrink={1}>
-          <Text wrap="truncate-end">{safe(row.promptSummary)}</Text>
+          <Text wrap="truncate-end">{safe(row.promptSummary.replace(/\s+/g, " "))}</Text>
         </Box>
       </Box>
       {expanded && (

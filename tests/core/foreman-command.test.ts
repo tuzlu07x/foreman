@@ -9,6 +9,7 @@ import {
   type ForemanEventMap,
 } from "../../src/core/event-bus.js";
 import {
+  askedAbout,
   ForemanCommandRouter,
   greetingReply,
   planApprovalNote,
@@ -2156,5 +2157,22 @@ describe("plain text in chat (#716)", () => {
     // `<agent> <task>` hands out work: a command too.
     const withAgent = { findByCommandToken: () => ({ kind: "match" as const, agent: { id: "codex" } }) };
     expect(plainTextRefusal(router, withAgent as never, "codex", ["fix", "the", "tests"])).not.toBeNull();
+  });
+});
+
+describe("askedAbout", () => {
+  it.each([
+    ["what is backend-developer doing?", "backend-developer"],
+    ["What's codex up to", "codex"],
+    ["whats the manager working on?", "manager"],
+    ["backend ne yapıyor?", "backend"],
+    ["backend ne yapiyor", "backend"],
+  ])("%s", (text, who) => {
+    expect(askedAbout(text)).toBe(who);
+  });
+
+  it("leaves anything else alone", () => {
+    expect(askedAbout("what is the plan for today")).toBeNull();
+    expect(askedAbout("deploy the site")).toBeNull();
   });
 });

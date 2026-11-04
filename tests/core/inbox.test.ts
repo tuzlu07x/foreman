@@ -333,4 +333,21 @@ describe('recordDelegationOutcome', () => {
     ])
     expect(inbox.list()).toHaveLength(2)
   })
+
+  it('a step that went fine is kept but not new; a step that failed is', () => {
+    const ok = { kind: 'ok', stdout: 'Done.' } as const
+    recordDelegationOutcome(inbox, { controlId: 1, agentId: 'dev', task: 'Write tests', spawn: ok, step: true })
+    expect(inbox.unreadCount()).toBe(0)
+    expect(inbox.list({ limit: 5 })).toHaveLength(1)
+    recordDelegationOutcome(inbox, { controlId: 2, agentId: 'dev', task: 'Write tests', step: true, spawn: { kind: 'timeout', timeoutMs: 1000 } })
+    expect(inbox.unreadCount()).toBe(1)
+    recordDelegationOutcome(inbox, { controlId: 3, agentId: 'manager', task: 'Ship it', spawn: ok })
+    expect(inbox.unreadCount()).toBe(2)
+  })
+
+  it("a run that left work with others says so: it hasn't finished", () => {
+    const item = recordDelegationOutcome(inbox, { controlId: 1, agentId: 'manager', task: 'Ship it', handedOn: true, spawn: { kind: 'ok', stdout: 'Plan.' } })
+    expect(item?.title).toBe('manager handed it on: Ship it')
+    expect(inbox.unreadCount()).toBe(0)
+  })
 })
