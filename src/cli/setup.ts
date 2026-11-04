@@ -1,3 +1,4 @@
+import { firstRunAgents } from "../tui/setup-wizard/shared.js";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { render } from "ink";
@@ -100,6 +101,7 @@ export const setupCommand = new Command("setup")
           notifyConfigPath: paths.notifyConfigPath,
           voiceConfigPath: paths.voiceConfigPath,
           launchEditor,
+          firstRunAgents: firstRunAgents(loadActiveRegistry().doc.agents),
           requestOauthRun: (steps) => {
             oauthQueue.push(...steps);
           },

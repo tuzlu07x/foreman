@@ -1,3 +1,5 @@
+import { startingVariant } from "../../src/tui/setup-wizard/agents-logic.js";
+import { firstRunAgents } from "../../src/tui/setup-wizard/shared.js";
 import { describe, expect, it } from "vitest";
 import {
   applyAgentConfigSubmit,
@@ -531,5 +533,38 @@ describe("findSiblingCredHint (#469)", () => {
     );
     expect(result).not.toBeNull();
     expect(result).toMatch(/(x-key|y-key)/);
+  });
+});
+
+describe("startingVariant", () => {
+  const claude = { preferred: "direct", variants: { direct: { required_secret: "anthropic-key" }, oauth: { required_secret: null } } };
+
+  it("starts on the subscription you chose in Step 1, not the API key", () => {
+    expect(startingVariant(claude, "anthropic", ["anthropic"])).toBe("oauth");
+  });
+
+  it("keeps the catalog's route otherwise", () => {
+    expect(startingVariant(claude, "anthropic", [])).toBe("direct");
+    expect(startingVariant(claude, "anthropic", ["openai"])).toBe("direct");
+  });
+
+  it("keeps it when no route goes without a key", () => {
+    const keysOnly = { preferred: "direct", variants: { direct: { required_secret: "anthropic-key" } } };
+    expect(startingVariant(keysOnly, "anthropic", ["anthropic"])).toBe("direct");
+  });
+});
+
+describe("firstRunAgents", () => {
+  const install = (binary: string) => ({ npm: null, brew: null, binary }) as never;
+  const catalog = [{ id: "hermes", install: install("hermes") }, { id: "claude-code", install: install("claude") }, { id: "codex", install: install("codex") }];
+  const has = (...bins: string[]) => (spec: { binary?: string | null }) => bins.includes(spec.binary ?? "");
+
+  it("pre-checks the coding agents this machine has", () => {
+    expect(firstRunAgents(catalog, has("codex"))).toEqual(["codex"]);
+    expect(firstRunAgents(catalog, has("claude", "codex", "hermes"))).toEqual(["claude-code", "codex"]);
+  });
+
+  it("falls back to Claude Code on a machine with neither", () => {
+    expect(firstRunAgents(catalog, has())).toEqual(["claude-code"]);
   });
 });

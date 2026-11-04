@@ -24,6 +24,12 @@ All notable changes to Foreman are documented here. The format follows
   stopped with "no org.yaml yet" and a file you started by hand was refused
   until it had a role. A new role or department head now reports to your
   Manager when you have one, as in the setup wizard and on the Team page.
+- **Setup is easier to finish.** Leaving the wizard halfway no longer
+  drops you on an empty dashboard: `foreman start` offers to continue it.
+  Choosing your Claude or ChatGPT subscription in Step 1 now carries over
+  to the agent, which used to ask for an API key and then report that it
+  had none. Step 1 says Claude Code and Codex need a provider, and the
+  agent step pre-checks the ones this machine has.
 
 ## [2.3.2] - 2026-10-01
 

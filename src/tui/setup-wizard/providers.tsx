@@ -69,10 +69,9 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
             Stating this up front avoids the "I pasted a key, why is
             Hermes still saying auth failed?" rabbit hole. */}
         <Text color={theme.accent.warning}>
-          ⓘ Keys here power Foreman's OWN LLM brain (Step 2). Agents
-          (Step 3) have their own credentials — Hermes / Claude Code /
-          Codex may use OpenRouter, OAuth subscriptions, or these same
-          keys depending on the variant you pick later.
+          ⓘ Agents in Step 3 need a provider from here: Claude Code needs
+          Anthropic, Codex needs OpenAI (an API key or your subscription
+          both work). These also power Foreman's own LLM brain in Step 2.
         </Text>
         <MultiSelect
           options={options}
@@ -300,8 +299,8 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
           </Box>
         ) : providersSignedIn.length === 0 ? (
           <Text color={theme.fg.muted}>
-            (no providers configured — you can add them later from the LLM
-            Providers page)
+            No providers picked, so Step 3 can't offer Claude Code or Codex.
+            [n] goes back; a subscription works too, no API key needed.
           </Text>
         ) : null}
         {/* The last prompt's paste warning would otherwise never show. */}

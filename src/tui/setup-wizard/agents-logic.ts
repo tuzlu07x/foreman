@@ -91,6 +91,19 @@ export function buildAgentConfigPromptList(
   return prompts;
 }
 
+/** The route an agent starts on for `provider`: the one that needs no key
+ *  when you chose that provider's subscription in Step 1 (it would otherwise
+ *  ask for the API key you said you don't use), else the catalog's. */
+export function startingVariant(
+  mapping: { preferred: string; variants: Record<string, { required_secret?: string | null }> },
+  provider: string,
+  signedIn: readonly string[],
+): string {
+  if (!signedIn.includes(provider)) return mapping.preferred;
+  const free = Object.entries(mapping.variants).find(([, v]) => !v.required_secret);
+  return free ? free[0] : mapping.preferred;
+}
+
 /**
  * #471 — For each agent currently in the per-agent-config queue, return
  * the implicit llmProvider when (a) cfg.llmProvider isn't already set AND
