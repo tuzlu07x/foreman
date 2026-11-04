@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -14,6 +14,7 @@ import {
   classifySetupOutput,
   classifyVerifyOutput,
   isHeadlessEnvironment,
+  ownForemanCommand,
   rewriteForHeadless,
   runOauthFlows,
 } from "../../src/cli/run-oauth-flow.js";
@@ -107,6 +108,27 @@ describe("rewriteForHeadless", () => {
   });
 });
 
+describe("ownForemanCommand", () => {
+  const argv = ["/opt/my node/node", "/opt/foreman/dist/cli/index.js"];
+
+  it("runs a foreman command through this binary", () => {
+    expect(ownForemanCommand("foreman llm login anthropic", argv, "darwin")).toBe(
+      "'/opt/my node/node' /opt/foreman/dist/cli/index.js llm login anthropic",
+    );
+  });
+
+  it("quotes for cmd.exe on Windows", () => {
+    expect(ownForemanCommand("foreman llm login openai", ["C:\\my node\\foreman.exe"], "win32")).toBe(
+      '"C:\\my node\\foreman.exe" llm login openai',
+    );
+  });
+
+  it("leaves every other command as it is", () => {
+    expect(ownForemanCommand("codex login", argv, "darwin")).toBe("codex login");
+    expect(ownForemanCommand("foremanish login", argv, "darwin")).toBe("foremanish login");
+  });
+});
+
 describe("runOauthFlows", () => {
   let tmp: string;
   let writeSpy: MockInstance;
@@ -138,6 +160,28 @@ describe("runOauthFlows", () => {
       ...overrides,
     };
   }
+
+  it("signs in with no foreman on PATH", () => {
+    const seen = join(tmp, "seen");
+    const entry = makeScript(
+      "cli.cjs",
+      `require("node:fs").writeFileSync(${JSON.stringify(seen)}, process.argv.slice(2).join(" "))`,
+    );
+    const [argv1, path] = [process.argv[1], process.env.PATH];
+    process.argv[1] = entry;
+    process.env.PATH = "/usr/bin:/bin";
+    try {
+      const [result] = runOauthFlows([step({ command: "foreman llm login anthropic" })]);
+      expect(result?.succeeded).toBe(true);
+    } finally {
+      process.argv[1] = argv1 as string;
+      process.env.PATH = path;
+    }
+    expect(readFileSync(seen, "utf-8")).toBe("llm login anthropic");
+    const printed = writeSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("");
+    expect(printed).toContain("foreman llm login anthropic");
+    expect(printed).not.toContain(entry);
+  });
 
   it("returns [] for an empty queue without writing any output", () => {
     const result = runOauthFlows([]);
