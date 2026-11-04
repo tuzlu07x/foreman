@@ -176,10 +176,15 @@ export class JsonRpcStdioBridge<TApprovalRequest = unknown, TApprovalResponse = 
       const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8')
       this.handleData(text)
     })
-    this.opts.input.on('error', (err: Error) => {
+    const onStreamError = (err: Error): void => {
       this.opts.hooks?.onTransportError?.(err)
       this.failAllPending(err)
-    })
+    }
+    this.opts.input.on('error', onStreamError)
+    // An agent that dies leaves a closed pipe: the next write fails with
+    // EPIPE, as an 'error' event and not a throw. With no listener that
+    // takes the whole gateway down, and every approval with it.
+    this.opts.output.on('error', onStreamError)
     this.opts.input.on('end', () => {
       this.failAllPending(new Error(`${this.label} stream ended`))
     })
