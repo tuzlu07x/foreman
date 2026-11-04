@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 import {
+  connectClaudeCode,
   describeAuthMode,
   performOAuthLogin,
   performOAuthLogout,
@@ -14,6 +15,7 @@ import {
 import {
   defaultLlmConfig,
   LlmConfigSchema,
+  loadLlmConfig,
   saveLlmConfig,
   type LlmConfig,
 } from '../../src/core/llm/config.js'
@@ -26,6 +28,7 @@ import {
   saveOAuthTokens,
 } from '../../src/core/llm/oauth/token-store.js'
 import type { OAuthTokens } from '../../src/core/llm/oauth/oauth-flow.js'
+import { ClaudeCodeNotReadyError } from '../../src/core/llm/providers/claude-code.js'
 import { SecretStore } from '../../src/core/secret-store.js'
 import { createInMemoryDb, type ForemanDb } from '../../src/db/client.js'
 import { generateMasterKey } from '../../src/identity/encryption.js'
@@ -36,6 +39,15 @@ import { generateMasterKey } from '../../src/identity/encryption.js'
 // Tests the testable helpers, not the commander glue: they cover the actual
 // state transitions (tokens persisted, llm.yaml flipped, deps wired through).
 // =============================================================================
+
+const pong = {
+  text: 'pong',
+  inputTokens: 1,
+  outputTokens: 1,
+  costUsd: 0,
+  durationMs: 1,
+  cacheHit: false,
+}
 
 describe('setAuthMode', () => {
   it('flips auth_mode while preserving secret_name + other fields', () => {
@@ -111,25 +123,32 @@ describe('describeAuthMode', () => {
 
   it('warns "(not signed in)" when auth_mode is oauth but no tokens stored', () => {
     const config = LlmConfigSchema.parse({
-      credentials: { anthropic: { auth_mode: 'oauth' } },
+      credentials: { openai: { auth_mode: 'oauth' } },
     })
-    const out = describeAuthMode(config, store, 'anthropic')
+    const out = describeAuthMode(config, store, 'openai')
     expect(out).toContain('not signed in')
-    expect(out).toContain('foreman llm login anthropic')
+    expect(out).toContain('foreman llm login openai')
   })
 
-  it('omits "account" suffix when the bundle has no accountId (Anthropic)', () => {
+  it('omits "account" suffix when the bundle has no accountId', () => {
     const config = LlmConfigSchema.parse({
-      credentials: { anthropic: { auth_mode: 'oauth' } },
+      credentials: { openai: { auth_mode: 'oauth' } },
     })
-    saveOAuthTokens(store, 'anthropic', {
+    saveOAuthTokens(store, 'openai', {
       accessToken: 'A',
       refreshToken: 'R',
       expiresAt: Date.now() + 60_000,
     })
-    const out = describeAuthMode(config, store, 'anthropic')
+    const out = describeAuthMode(config, store, 'openai')
     expect(out).toContain('signed in')
     expect(out).not.toContain('account')
+  })
+
+  it('names Claude Code for anthropic in claude_code mode', () => {
+    const config = LlmConfigSchema.parse({
+      credentials: { anthropic: { auth_mode: 'claude_code' } },
+    })
+    expect(describeAuthMode(config, store, 'anthropic')).toContain('Claude Code')
   })
 })
 
@@ -214,7 +233,7 @@ describe('performOAuthLogin', () => {
       expiresAt: Date.now() + 60_000,
     })
     await performOAuthLogin(
-      getOAuthProvider('anthropic'),
+      getOAuthProvider('openai'),
       { headless: false },
       { llmConfigPath },
       store,
@@ -232,7 +251,7 @@ describe('performOAuthLogin', () => {
       expiresAt: Date.now() + 60_000,
     })
     await performOAuthLogin(
-      getOAuthProvider('anthropic'),
+      getOAuthProvider('openai'),
       { headless: true },
       { llmConfigPath },
       store,
@@ -243,14 +262,14 @@ describe('performOAuthLogin', () => {
     expect(typeof io.readPastedCode).toBe('function')
   })
 
-  it('omits accountId from the result when the token bundle has none (Anthropic)', async () => {
+  it('omits accountId from the result when the token bundle has none', async () => {
     const deps = fakeDeps({
       accessToken: 'a',
       refreshToken: 'r',
       expiresAt: Date.now() + 60_000,
     })
     const result = await performOAuthLogin(
-      getOAuthProvider('anthropic'),
+      getOAuthProvider('openai'),
       { headless: false },
       { llmConfigPath },
       store,
@@ -324,15 +343,53 @@ describe('performOAuthLogout', () => {
       performOAuthLogout('openai', { llmConfigPath }, store),
     ).not.toThrow()
   })
+})
 
-  it('only touches the requested provider — leaves others untouched', () => {
-    saveOAuthTokens(store, 'anthropic', {
-      accessToken: 'A2',
-      refreshToken: 'R2',
-      expiresAt: Date.now() + 60_000,
-    })
-    const otherProvider: OAuthProviderId = 'openai'
-    performOAuthLogout(otherProvider, { llmConfigPath }, store)
-    expect(loadOAuthTokens(store, 'anthropic')).not.toBeNull()
+describe('connectClaudeCode', () => {
+  let dir: string
+  let llmConfigPath: string
+  const notSignedIn = new ClaudeCodeNotReadyError('signed-out', 'Claude Code is not signed in')
+  const mode = () => loadLlmConfig(llmConfigPath).credentials.anthropic?.auth_mode
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'foreman-claude-connect-'))
+    llmConfigPath = join(dir, 'llm.yaml')
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  it('needs no sign-in when Claude Code already answers', async () => {
+    const login = vi.fn(() => true)
+    await connectClaudeCode(llmConfigPath, { ping: vi.fn(async () => pong) }, login)
+    expect(login).not.toHaveBeenCalled()
+    expect(mode()).toBe('claude_code')
+  })
+
+  it("starts Claude Code's own sign-in when a real call says signed out", async () => {
+    const ping = vi.fn(async () => pong).mockRejectedValueOnce(notSignedIn)
+    const login = vi.fn(() => true)
+    await connectClaudeCode(llmConfigPath, { ping }, login)
+    expect(login).toHaveBeenCalledOnce()
+    expect(ping).toHaveBeenCalledTimes(2)
+    expect(mode()).toBe('claude_code')
+  })
+
+  it('saves nothing when the sign-in fails', async () => {
+    const ping = vi.fn(async () => pong).mockRejectedValue(notSignedIn)
+    await expect(connectClaudeCode(llmConfigPath, { ping }, () => false)).rejects.toThrow('not signed in')
+    expect(mode()).toBe('api_key')
+  })
+
+  it('offers no sign-in when `claude` is not installed', async () => {
+    const missing = new ClaudeCodeNotReadyError('missing', 'Claude Code is not installed')
+    const login = vi.fn(() => true)
+    await expect(
+      connectClaudeCode(llmConfigPath, { ping: vi.fn().mockRejectedValue(missing) }, login),
+    ).rejects.toThrow('not installed')
+    expect(login).not.toHaveBeenCalled()
+    expect(mode()).toBe('api_key')
   })
 })

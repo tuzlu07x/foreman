@@ -27,10 +27,10 @@ export interface BuildLlmConfigInput {
   existing: LlmConfig;
   /** Faz 4b-3 / #512 — providers the user picked "sign in with subscription"
    *  for in the providers step. No API key is pasted for them; instead the
-   *  wizard sets `auth_mode: oauth` so the factory dispatches to the OAuth
-   *  client + queues a post-wizard `foreman llm login <provider>` to actually
-   *  obtain the tokens. Limited to `anthropic` + `openai` (the OAuth-capable
-   *  providers) — other ids are ignored. */
+   *  wizard sets `auth_mode` so the factory picks the right client (`oauth`
+   *  for ChatGPT, `claude_code` for Claude) + queues a post-wizard
+   *  `foreman llm login <provider>` to finish connecting. Limited to
+   *  `anthropic` + `openai` — other ids are ignored. */
   signedInProviders?: ("anthropic" | "openai")[];
 }
 
@@ -117,7 +117,7 @@ export function buildLlmConfigFromWizard(
     {
       secret_name?: string | null;
       endpoint_secret?: string;
-      auth_mode?: "api_key" | "oauth";
+      auth_mode?: "api_key" | "oauth" | "claude_code";
     }
   > = {};
 
@@ -145,17 +145,16 @@ export function buildLlmConfigFromWizard(
     credentialsUpdate[providerId] = slot;
   }
 
-  // Faz 4b-3 — providers the user chose subscription sign-in for in the
-  // wizard. Flip auth_mode: oauth so the factory dispatches to the OAuth
-  // client. The actual token-store population happens post-wizard when the
-  // queued `foreman llm login <provider>` runs (see setup-wizard.tsx's
-  // Done-screen handler + requestOauthRun callback).
+  // Faz 4b-3 — providers the user chose a subscription for in the wizard.
+  // Flip auth_mode so the factory picks the right client. The rest happens
+  // post-wizard when the queued `foreman llm login <provider>` runs (see
+  // setup-wizard.tsx's Done-screen handler + requestOauthRun callback).
   for (const signedInId of input.signedInProviders ?? []) {
     // A key saved in the same run wins: no browser sign-in on top of it.
     if (credentialsUpdate[signedInId]?.secret_name) continue;
     if (!wired.includes(signedInId)) wired.push(signedInId);
     const slot = credentialsUpdate[signedInId] ?? {};
-    slot.auth_mode = "oauth";
+    slot.auth_mode = signedInId === "anthropic" ? "claude_code" : "oauth";
     credentialsUpdate[signedInId] = slot;
   }
 
@@ -224,7 +223,7 @@ function mergeCredentials(
     {
       secret_name?: string | null;
       endpoint_secret?: string;
-      auth_mode?: "api_key" | "oauth";
+      auth_mode?: "api_key" | "oauth" | "claude_code";
     }
   >,
 ): LlmConfig["credentials"] {

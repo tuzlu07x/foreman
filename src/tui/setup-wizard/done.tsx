@@ -491,7 +491,10 @@ export function renderDoneStep(ctx: WizardContext): JSX.Element {
                 ▸ foreman llm login {pid}
               </Text>
               <Text color={theme.fg.muted}>
-                {"  "}sign in to {pid} with your subscription
+                {"  "}
+                {pid === "anthropic"
+                  ? "use Claude Code on this computer"
+                  : `sign in to ${pid} with your subscription`}
               </Text>
             </Box>
           ))}

@@ -270,7 +270,7 @@ describe("buildLlmConfigFromWizard — merge semantics", () => {
 // ---------- Faz 4b-3 / #512 — wizard "Sign in with subscription" option ----
 
 describe("buildLlmConfigFromWizard — signedInProviders (Faz 4b-3)", () => {
-  it("flips auth_mode: oauth for a provider the user signed in to", () => {
+  it("flips auth_mode for a subscription the user chose: Claude Code for Claude", () => {
     const result = buildLlmConfigFromWizard({
       savedStorageNames: [],
       signedInProviders: ["anthropic"],
@@ -280,9 +280,9 @@ describe("buildLlmConfigFromWizard — signedInProviders (Faz 4b-3)", () => {
     expect(result.wiredProviders).toEqual(["anthropic"]);
     expect(result.next.enabled).toBe(true);
     expect(result.next.provider).toBe("anthropic");
-    expect(result.next.credentials.anthropic?.auth_mode).toBe("oauth");
+    expect(result.next.credentials.anthropic?.auth_mode).toBe("claude_code");
     // No secret_name is forced — `foreman llm login` runs post-wizard to
-    // populate the dedicated `llm-oauth-anthropic` store slot.
+    // finish connecting.
     expect(result.next.credentials.anthropic?.secret_name).toBe(
       "anthropic-key", // preserved from defaultLlmConfig — switching modes shouldn't lose it
     );
@@ -297,7 +297,7 @@ describe("buildLlmConfigFromWizard — signedInProviders (Faz 4b-3)", () => {
     });
     expect(result.wiredProviders).toContain("anthropic");
     expect(result.wiredProviders).toContain("openai");
-    expect(result.next.credentials.anthropic?.auth_mode).toBe("oauth");
+    expect(result.next.credentials.anthropic?.auth_mode).toBe("claude_code");
     expect(result.next.credentials.openai?.auth_mode).toBe("oauth");
   });
 
@@ -312,7 +312,7 @@ describe("buildLlmConfigFromWizard — signedInProviders (Faz 4b-3)", () => {
     expect(result.next.credentials.openai?.auth_mode ?? "api_key").toBe(
       "api_key",
     );
-    expect(result.next.credentials.anthropic?.auth_mode).toBe("oauth");
+    expect(result.next.credentials.anthropic?.auth_mode).toBe("claude_code");
   });
 
   it("a key saved in the same run wins over a sign-in for that provider (real-services test)", () => {

@@ -51,32 +51,28 @@ describe('resolveBrainModelSource', () => {
 
   const farFuture = Date.now() + 24 * 60 * 60 * 1000
 
-  it('explains a sign-in that only happens after the wizard instead of "No anthropic-key"', () => {
+  it('explains that Claude Code has no list here instead of "No anthropic-key"', () => {
     const source = resolveBrainModelSource('anthropic', store, ['anthropic'])
     expect(source.kind).toBe('no-listing')
     if (source.kind !== 'no-listing') return
-    expect(source.message).toContain('Claude subscription')
-    expect(source.message).toContain('foreman llm login anthropic')
+    expect(source.message).toContain('Claude Code')
     expect(source.message).toContain('claude-haiku-5-5')
     expect(source.message).not.toContain('No anthropic-key')
+  })
+
+  it('explains a sign-in that only happens after the wizard', () => {
+    const source = resolveBrainModelSource('openai', store, ['openai'])
+    expect(source.kind).toBe('no-listing')
+    if (source.kind !== 'no-listing') return
+    expect(source.message).toContain('ChatGPT subscription')
+    expect(source.message).toContain('foreman llm login openai')
+    expect(source.message).not.toContain('No openai-key')
   })
 
   it('uses an API key when one is stored', () => {
     store.add('openai-key', 'sk-fake-openai-000')
     const source = resolveBrainModelSource('openai', store, [])
     expect(source).toEqual({ kind: 'api-key', apiKey: 'sk-fake-openai-000' })
-  })
-
-  it('lists Anthropic models with stored Claude sign-in tokens', async () => {
-    saveOAuthTokens(store, 'anthropic', {
-      accessToken: 'fake-access-token',
-      refreshToken: 'fake-refresh-token',
-      expiresAt: farFuture,
-    })
-    const source = resolveBrainModelSource('anthropic', store, [])
-    expect(source.kind).toBe('oauth')
-    if (source.kind !== 'oauth') return
-    await expect(source.accessToken()).resolves.toBe('fake-access-token')
   })
 
   it('says a ChatGPT sign-in has no model list', () => {
@@ -95,7 +91,7 @@ describe('resolveBrainModelSource', () => {
     const anthropic = resolveBrainModelSource('anthropic', store, [])
     expect(anthropic).toMatchObject({ kind: 'missing' })
     if (anthropic.kind === 'missing') {
-      expect(anthropic.message).toContain('Claude sign-in')
+      expect(anthropic.message).toContain('Claude Code connection')
     }
     const gemini = resolveBrainModelSource('gemini', store, [])
     expect(gemini).toMatchObject({ kind: 'missing' })

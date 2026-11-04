@@ -20,6 +20,7 @@ import {
   saveLlmConfig,
   setAuthMode,
   type LlmConfig,
+  type AuthModeProviderId,
 } from "./llm/config.js";
 import {
   buildAuthorizeUrl,
@@ -1057,11 +1058,8 @@ export const AGENT_PROVIDER: Readonly<Record<string, string>> = {
   "gemini-cli": "gemini",
 };
 
-// Providers for which Foreman supports subscription sign-in (alongside
-// API-key auth). Mirrors the OAuth catalog in `oauth-providers.ts` — kept as
-// a local literal so this file doesn't reach across the LLM module just to
-// enumerate them.
-const OAUTH_CAPABLE: readonly OAuthProviderId[] = ["anthropic", "openai"];
+// Providers a subscription can connect (alongside API-key auth).
+const SUBSCRIPTION_PROVIDERS: readonly AuthModeProviderId[] = ["anthropic", "openai"];
 
 /** Push an `Auth:` block onto `lines` describing how each OAuth-capable
  *  provider is currently authenticating. Mirrors the `foreman llm status`
@@ -1072,9 +1070,11 @@ function appendAuthLines(
   store: SecretStore,
 ): void {
   const rows: string[] = [];
-  for (const pid of OAUTH_CAPABLE) {
+  for (const pid of SUBSCRIPTION_PROVIDERS) {
     const cred = cfg.credentials[pid];
-    if (cred?.auth_mode === "oauth") {
+    if (cred?.auth_mode === "claude_code") {
+      rows.push(`  ${pid} — Claude Code`);
+    } else if (pid === "openai" && cred?.auth_mode === "oauth") {
       const tokens = loadOAuthTokens(store, pid);
       if (tokens) {
         const account = tokens.accountId ? ` · ${tokens.accountId}` : "";
@@ -1772,15 +1772,23 @@ function llmLoginChatHandler(
     return {
       ok: false,
       text:
-        "Usage: `/foreman llm login <anthropic|openai>`. " +
+        "Usage: `/foreman llm login openai`. " +
         "Step 1 of 2 — I'll send you a URL to open in your browser.",
       errorCode: "UNKNOWN_SUBCOMMAND",
+    };
+  }
+  if (providerArg === "anthropic") {
+    return {
+      ok: false,
+      text:
+        "Claude connects through Claude Code, so there is nothing to sign in to here. " +
+        "On the Foreman host, run `foreman llm login anthropic`.",
     };
   }
   if (!isOAuthProviderId(providerArg)) {
     return {
       ok: false,
-      text: `Unknown OAuth provider \`${providerArg}\`. Available: anthropic, openai.`,
+      text: `Unknown OAuth provider \`${providerArg}\`. Available: openai.`,
       errorCode: "UNKNOWN_SUBCOMMAND",
     };
   }
@@ -1855,7 +1863,7 @@ async function llmCallbackChatHandler(
       ok: false,
       text:
         "No pending OAuth login (or it expired). Start with " +
-        "`/foreman llm login <anthropic|openai>`.",
+        "`/foreman llm login openai`.",
     };
   }
   let parsed: { code: string; state?: string };

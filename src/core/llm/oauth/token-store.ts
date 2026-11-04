@@ -42,6 +42,15 @@ export function clearOAuthTokens(
   if (store.exists(name)) store.remove(name);
 }
 
+/** Claude tokens from when Foreman offered that sign-in itself. Nothing reads
+ *  them any more and Foreman must not keep them. */
+export function removeLegacyClaudeTokens(store: Pick<SecretStore, "exists" | "remove">): boolean {
+  const name = "llm-oauth-anthropic";
+  if (!store.exists(name)) return false;
+  store.remove(name);
+  return true;
+}
+
 function parseTokens(json: string): OAuthTokens {
   let raw: unknown;
   try {

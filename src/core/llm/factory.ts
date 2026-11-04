@@ -10,6 +10,7 @@ import type { OAuthProviderId } from './oauth/oauth-providers.js'
 import { makeAccessTokenProvider } from './oauth/token-refresh.js'
 import { loadOAuthTokens } from './oauth/token-store.js'
 import { AnthropicLlmClient } from './providers/anthropic.js'
+import { ClaudeCodeLlmClient } from './providers/claude-code.js'
 import { CodexLlmClient } from './providers/codex.js'
 import { GeminiLlmClient } from './providers/gemini.js'
 import { OpenAILlmClient } from './providers/openai.js'
@@ -96,8 +97,10 @@ export function buildLlmClient(
 ): LlmClient {
   switch (config.provider) {
     case 'anthropic': {
-      if (config.credentials.anthropic?.auth_mode === 'oauth') {
-        return buildOAuthClient('anthropic', config.model, secretStore)
+      // Not validated here: whether `claude` can answer is only known by
+      // calling it, and that fails with a plain LlmProviderError.
+      if (config.credentials.anthropic?.auth_mode === 'claude_code') {
+        return new ClaudeCodeLlmClient({ model: config.model })
       }
       const apiKey = resolveSecret(
         config,
@@ -178,12 +181,9 @@ function buildOAuthClient(
     throw new LlmOAuthLoginRequiredError(providerId)
   }
   const tokenProvider = makeAccessTokenProvider(store, providerId)
-  if (providerId === 'anthropic') {
-    return new AnthropicLlmClient({ tokenProvider, model })
-  }
-  // providerId === 'openai' → Codex (ChatGPT backend Responses API). Same
-  // logical provider id from the factory's POV; OAuth-vs-API-key dispatches
-  // to a different concrete client because the wire shape is different.
+  // Codex (ChatGPT backend Responses API). Same logical provider id from the
+  // factory's POV; OAuth-vs-API-key dispatches to a different concrete client
+  // because the wire shape is different.
   return new CodexLlmClient({ tokenProvider, model })
 }
 

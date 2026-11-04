@@ -65,7 +65,7 @@ Keys on each page:
 | Team | Roles grouped by department (a header with the name, role count, lead and runtime; roles with no department come last under **No department**), each on one line: title, role id, runtime (Claude Code, Codex, or `not registered`) and model (`gpt-6-sol (set here)`, `gpt-6-luna (Codex's setting)` or `default model`). `↑↓` select; `←→` or `Enter` fold a department (`←` on a role goes to its department); `Enter` on a role shows all of it. On a role: `x` removes it (asks first; whoever reported to it reports to its manager, and if it led its department the next role leads; its own instance is unregistered), `r` switches it between Claude Code and Codex (its own instance is re-registered on the other one; a role on Claude Code or Codex itself gets a new instance named after it), `m` picks its model (the agent's own setting, the provider's usual models, or one you type). On a department's header the same keys act on all its roles and ask first. `n` add a role: a ready-made one or your own (title, what it does, what it may do), `r` switches it between Claude Code and Codex; `d` add a department (IT, Marketing, Customer Support or your own) with all its roles at once, on the agent you pick, led by its first role. See [`org.md`](org.md#ready-made-departments). |
 | Chat | Type to Foreman: plain questions (`report me`, `what is claude-code doing?`) or commands (`write`, `assign`, `approve`, `help`). The same as the `:` console, as a page. `Esc` leaves. |
 | Secrets | `↑↓` select, `Enter` details, `n` new secret, `v` reveal, `r` rotate, `d` delete |
-| Providers | `↑↓` select, `Enter` details, `n` configure the selected one, `r` rotate, `d` remove (asks first), `s` show the value for 10 s, `o` sign in with a Claude / ChatGPT subscription |
+| Providers | `↑↓` select, `Enter` details, `n` configure the selected one, `r` rotate, `d` remove (asks first), `s` show the value for 10 s, `o` use Claude Code, or sign in with a ChatGPT subscription |
 | Services | `↑↓` select, `Enter` details, `n` set up the selected chat app, step by step, ending with a test message; `t` send a test, `w` the guide, `r` replace the token, `d` remove (asks first; Foreman stops using the app), `s` show the token for 10 s |
 | Integrations | `↑↓` select, `Enter` details (credentials, sign-in, which agents may use it), `n` add (variant, access level, who, token or browser sign-in, then review and enable), `space` enable / disable, `e` edit (access level, who, replace a credential, sign in again), `t` tools (`←→` sets a per-tool rule), `r` review, `o` sign in, `d` remove (asks first; `Enter` cancels) |
 | Settings | `↑↓` select, `Enter` open, `e` edit `SOUL.md`, `p` edit `policy.yaml`, `P` Policy page, `m` pick Foreman's model (the registry's fast / balanced / strongest, plus the provider's live list when a key is stored), `w` how to re-run the wizard |
@@ -77,7 +77,7 @@ What some pages show:
   before reading secret files (.env, *.key, SSH keys, …)", followed by the
   agent and tool it applies to. `Enter` shows the raw pattern.
 - **Providers** says how each LLM provider is connected: an API key, a
-  Claude / ChatGPT subscription sign-in, or an endpoint (Ollama,
+  Claude Code, a ChatGPT subscription sign-in, or an endpoint (Ollama,
   OpenAI-compatible). Secret values only show when you press `s`.
 - **Services** lists the chat apps and how each is set up in
   [`notify.yaml`](notifications.md): Telegram as *one bot* (Foreman reads

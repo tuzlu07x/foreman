@@ -1083,33 +1083,23 @@ credentials:
         expect(result.text).toContain("openai — api key (`openai-key`)");
       });
 
-      it("shows `OAuth (signed in)` with no account suffix (Anthropic)", async () => {
+      it("names Claude Code for anthropic in claude_code mode", async () => {
         writeFileSync(
           llmConfigPath,
           `enabled: true
 provider: anthropic
-model: claude-opus-4-7
+model: claude-haiku-5-5
 credentials:
   anthropic:
-    auth_mode: oauth
+    auth_mode: claude_code
 `,
           "utf-8",
         );
-        const store = new SecretStore(db, generateMasterKey());
-        store.add(
-          "llm-oauth-anthropic",
-          JSON.stringify({
-            accessToken: "sk-ant-oat01-x",
-            refreshToken: "rt",
-            expiresAt: Date.now() + 60_000,
-          }),
-        );
         const result = await router.dispatch("model", [], {
           ...ctx,
-          secretStore: store,
+          secretStore: new SecretStore(db, generateMasterKey()),
         });
-        expect(result.text).toContain("anthropic — OAuth (signed in)");
-        expect(result.text).not.toMatch(/anthropic — OAuth \(signed in ·/);
+        expect(result.text).toContain("anthropic — Claude Code");
       });
 
       it("shows `OAuth (signed in · <account>)` when Codex tokens carry an accountId", async () => {
@@ -1147,10 +1137,10 @@ credentials:
         writeFileSync(
           llmConfigPath,
           `enabled: true
-provider: anthropic
-model: claude-haiku-4-5
+provider: openai
+model: gpt-5.4
 credentials:
-  anthropic:
+  openai:
     auth_mode: oauth
 `,
           "utf-8",
@@ -1161,7 +1151,7 @@ credentials:
           secretStore: store,
         });
         expect(result.text).toContain(
-          "anthropic — OAuth (not signed in) → `foreman llm login anthropic`",
+          "openai — OAuth (not signed in) → `foreman llm login openai`",
         );
       });
 
@@ -1337,10 +1327,10 @@ credentials:
 
     it("`llm login <provider>` emits the authorize URL + paste-back instructions", async () => {
       const { ctx: c } = ctxWithStore();
-      const result = await router.dispatch("llm", ["login", "anthropic"], c);
+      const result = await router.dispatch("llm", ["login", "openai"], c);
       expect(result.ok).toBe(true);
-      expect(result.text).toMatch(/Sign in to Claude/);
-      expect(result.text).toContain("claude.ai/oauth/authorize");
+      expect(result.text).toMatch(/Sign in to Codex/);
+      expect(result.text).toContain("auth.openai.com/oauth/authorize");
       expect(result.text).toContain("code_challenge=");
       expect(result.text).toContain("/foreman llm callback");
       expect(result.text).toMatch(/expires in 10 minutes/);
@@ -1350,7 +1340,17 @@ credentials:
       const { ctx: c } = ctxWithStore();
       const result = await router.dispatch("llm", ["login", "gemini"], c);
       expect(result.ok).toBe(false);
-      expect(result.text).toMatch(/Available: anthropic, openai/);
+      expect(result.text).toMatch(/Available: openai\./);
+    });
+
+    it("offers no Claude sign-in: it points to Claude Code on the host", async () => {
+      const { ctx: c, store } = ctxWithStore();
+      const result = await router.dispatch("llm", ["login", "anthropic"], c);
+      expect(result.ok).toBe(false);
+      expect(result.text).toContain("Claude Code");
+      expect(result.text).toContain("foreman llm login anthropic");
+      expect(result.text).not.toContain("claude.ai");
+      expect(store.exists("oauth-pending-telegram-user-42")).toBe(false);
     });
 
     it("login refuses without sourceUser (can't key per-user pending state)", async () => {
@@ -1365,7 +1365,7 @@ credentials:
       // Step 1 — login. Persists pending PKCE state in the store.
       const login = await router.dispatch(
         "llm",
-        ["login", "anthropic"],
+        ["login", "openai"],
         c0,
       );
       expect(login.ok).toBe(true);
@@ -1376,26 +1376,26 @@ credentials:
       const pendingJson = store.get("oauth-pending-telegram-user-42");
       const pending = JSON.parse(pendingJson) as { state: string };
       const tokenFetch = makeOauthFetch({
-        access_token: "sk-ant-oat01-test",
+        access_token: "fake-access-test",
         refresh_token: "rt-xyz",
         expires_in: 3600,
       });
       const c = { ...c0, oauthFetch: tokenFetch.fetchImpl } as ForemanCommandContext;
 
       // Paste the redirect URL with the matching state.
-      const pastedUrl = `http://localhost:53692/callback?code=ABC123&state=${pending.state}`;
+      const pastedUrl = `http://localhost:1455/auth/callback?code=ABC123&state=${pending.state}`;
       const result = await router.dispatch(
         "llm",
         ["callback", pastedUrl],
         c,
       );
       expect(result.ok).toBe(true);
-      expect(result.text).toMatch(/Signed in to anthropic/);
+      expect(result.text).toMatch(/Signed in to openai/);
 
       // Tokens persisted in the OAuth slot.
-      const tokensJson = store.get("llm-oauth-anthropic");
+      const tokensJson = store.get("llm-oauth-openai");
       const tokens = JSON.parse(tokensJson) as { accessToken: string };
-      expect(tokens.accessToken).toBe("sk-ant-oat01-test");
+      expect(tokens.accessToken).toBe("fake-access-test");
 
       // Pending state cleared.
       expect(store.exists("oauth-pending-telegram-user-42")).toBe(false);
@@ -1418,13 +1418,13 @@ credentials:
 
     it("callback rejects on state mismatch", async () => {
       const { ctx: c0, store } = ctxWithStore();
-      await router.dispatch("llm", ["login", "anthropic"], c0);
+      await router.dispatch("llm", ["login", "openai"], c0);
       // Paste a URL with the WRONG state.
       const result = await router.dispatch(
         "llm",
         [
           "callback",
-          "http://localhost:53692/callback?code=ABC&state=NOT_THE_REAL_STATE",
+          "http://localhost:1455/auth/callback?code=ABC&state=NOT_THE_REAL_STATE",
         ],
         c0,
       );
@@ -1440,7 +1440,7 @@ credentials:
       store.add(
         "oauth-pending-telegram-user-42",
         JSON.stringify({
-          providerId: "anthropic",
+          providerId: "openai",
           verifier: "v",
           state: "s",
           createdAt: Date.now() - 11 * 60_000,

@@ -116,7 +116,7 @@ Foreman LLM features
   budget              $0.32 / $5.00 (6%) — resets in 18 days
 
   Auth:
-    anthropic            OAuth (signed in)
+    anthropic            Claude Code (its own sign-in)
     openai               api key (openai-key)
 
   Features:
@@ -127,71 +127,87 @@ Foreman LLM features
 
 ---
 
-## Subscription OAuth (Claude + Codex)
+## Subscriptions (Claude Code + ChatGPT)
 
-Foreman can authenticate to its own orchestrator LLM either with an **API key** (the historical path) or with a **subscription sign-in (OAuth)** — your Claude Pro / Max account or your ChatGPT account, the same way the official Claude Code / Codex CLIs sign in.
+Foreman's own LLM can use an **API key** (the historical path) or a **subscription**:
+
+- **Claude:** Foreman runs your own, unmodified `claude` command, with your own Claude Code sign-in. Foreman never sees that sign-in.
+- **ChatGPT:** you sign in with your ChatGPT account through `foreman llm login openai`.
 
 ### Why pick which
 
-|                    | API key                            | OAuth (subscription)               |
+|                    | API key                            | Subscription                       |
 | ------------------ | ---------------------------------- | ---------------------------------- |
 | Who pays           | Your Anthropic / OpenAI API budget | Your Claude / ChatGPT subscription |
 | Rate limits        | Standard per-API-key tier          | Your subscription's plan limits    |
-| Setup              | Paste a key                        | Sign in once with a browser        |
+| Setup              | Paste a key                        | Claude Code, or a browser sign-in  |
 | `costUsd` in usage | Real $/token                       | `0` (subscription billing)         |
 
-If you already have a Claude Max or ChatGPT Pro/Plus plan, OAuth lets Foreman draw from that plan instead of asking you to top up a separate API credit balance.
+If you already have a Claude or ChatGPT plan, this lets Foreman draw from it instead of asking you to top up a separate API credit balance. Budget alerts only fire for API-key spend, by design.
 
 ### Commands
 
 ```bash
-foreman llm login anthropic              # Sign in with your Claude account
+foreman llm login anthropic              # Use Claude Code on this computer
 foreman llm login openai                 # Sign in with your ChatGPT account (Codex)
 foreman llm login openai --headless      # SSH / remote shell — paste back the redirect URL
 foreman llm logout anthropic
 foreman llm logout openai
 ```
 
-Each command flips `credentials.<provider>.auth_mode` in `llm.yaml` accordingly (no manual edit needed), so the next LLM call goes through the OAuth-aware client.
+Each command flips `credentials.<provider>.auth_mode` in `llm.yaml` accordingly (no manual edit needed), so the next LLM call goes through the matching client.
 
-### Loopback vs `--headless`
+### Claude Code
 
-- **Default (loopback):** Foreman opens your default browser, then runs a one-shot HTTP server on the redirect port the public OAuth client is registered for (`127.0.0.1:1455` for Codex, `:53692` for Anthropic). The browser redirects there with the authorization code; Foreman captures it. Works when you're sitting at the machine running Foreman.
-- **`--headless`:** Foreman skips the loopback server. You see the authorize URL, open it on your laptop / phone, complete sign-in. The browser tries to redirect to `localhost:<port>` and fails to load (your local machine isn't running Foreman) — copy the **full URL from the address bar** and paste it back into the terminal. Use this whenever you're on SSH or any host where the user's browser can't reach Foreman's localhost.
+`foreman llm login anthropic` makes a real call through `claude`. If Claude Code isn't signed in, it starts Claude Code's own `claude auth login`, and tries again. Then it sets `auth_mode: claude_code`. Install Claude Code first if `claude` isn't on your PATH.
 
-### What gets stored
+Foreman doesn't offer its own Claude sign-in, because Anthropic [does not permit](https://code.claude.com/docs/en/legal-and-compliance) third-party apps to do so or to hold Claude.ai tokens. If you signed in that way on an older version, `llm.yaml` moves to `claude_code` by itself, and `foreman start` deletes the stored tokens.
 
-The OAuth token bundle (access token + refresh token + expiry + optional ChatGPT account id) lives in the same AES-256-GCM encrypted SQLite secret store as your API keys, under a dedicated `llm-oauth-<provider>` slot. `llm.yaml` only carries `auth_mode: oauth` — never a literal token.
+A prompt can hold text from agents and chat users, so each call can only answer:
 
-### Token refresh
+- no tools, no MCP servers, no hooks or settings, no slash commands, and no session saved to disk
+- a neutral working directory, so no project's instructions load
+- the prompt on stdin, not in the command line, where `ps` would show it
+- `FOREMAN_AGENT_TOKEN`, `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` removed from its environment, so usage goes to your plan and not to an API budget Foreman can't see
+
+`temperature` has no flag in Claude Code and is ignored. There is no model list here: `model:` in `llm.yaml` stays as it is, and is passed to `claude --model`.
+
+### ChatGPT
+
+#### Loopback vs `--headless`
+
+- **Default (loopback):** Foreman opens your default browser, then runs a one-shot HTTP server on the redirect port the public OAuth client is registered for (`127.0.0.1:1455`). The browser redirects there with the authorization code; Foreman captures it. Works when you're sitting at the machine running Foreman.
+- **`--headless`:** Foreman skips the loopback server. You see the authorize URL, open it on your laptop / phone, complete sign-in. The browser tries to redirect to `localhost:<port>` and fails to load (your local machine isn't running Foreman) — copy the **full URL from the address bar** and paste it back into the terminal. Use this whenever you're on SSH or any host where the user's browser can't reach Foreman's loopback server.
+
+#### What gets stored
+
+The OAuth token bundle (access token + refresh token + expiry + optional ChatGPT account id) lives in the same AES-256-GCM encrypted SQLite secret store as your API keys, under a dedicated `llm-oauth-openai` slot. `llm.yaml` only carries `auth_mode: oauth` — never a literal token.
+
+#### Token refresh
 
 Refresh happens **lazily, on each call**: the provider client asks the token store for a fresh access token right before the HTTP request; if the stored token is past its (safety-margined) expiry, Foreman trades the refresh token at the provider's token endpoint and persists the new bundle. A **5-minute safety margin** is baked into the stored expiry so tokens never expire mid-request.
 
-### Provider quirks (we handle these for you)
+#### Wire shape
 
-- **Claude:** OAuth tokens still hit `api.anthropic.com/v1/messages`, but with a `Bearer` token (not `x-api-key`), a `claude-code-20250219,oauth-2025-04-20` beta header pair, a spoofed `claude-cli/<version>` user-agent, and a mandatory `system` block prefix of `"You are Claude Code, Anthropic's official CLI for Claude."`. Without the identity prefix Anthropic intermittently 500s OAuth traffic — Foreman always sends it for you.
-- **Codex (ChatGPT):** ChatGPT-account tokens do **not** work against `api.openai.com`. Foreman talks to the ChatGPT backend Responses API at `https://chatgpt.com/backend-api/codex/responses` with `chatgpt-account-id` (decoded from the access-token JWT) + `originator: codex_cli_rs` + `OpenAI-Beta: responses=experimental`. Model IDs use **dots**, not dashes (`gpt-5.4`, not `gpt-5-4`).
-- **Both:** `costUsd` is reported as `0` in OAuth mode because usage goes against your subscription, not an API budget. Budget alerts only fire for API-key spend, by design.
+ChatGPT-account tokens do **not** work against `api.openai.com`. Foreman talks to the ChatGPT backend Responses API at `https://chatgpt.com/backend-api/codex/responses` with `chatgpt-account-id` (decoded from the access-token JWT) + `originator: codex_cli_rs` + `OpenAI-Beta: responses=experimental`. Model IDs use **dots**, not dashes (`gpt-5.4`, not `gpt-5-4`).
 
 ### Switching back
 
 ```bash
-foreman llm logout anthropic              # clears tokens, flips auth_mode → api_key
+foreman llm logout anthropic              # flips auth_mode → api_key; Claude Code's own sign-in stays
+foreman llm logout openai                 # clears tokens, flips auth_mode → api_key
 ```
 
-The credential block's `secret_name` is preserved across modes — switch back to OAuth later with `foreman llm login` and the API-key fallback stays configured.
+The credential block's `secret_name` is preserved across modes, so the API-key fallback stays configured.
 
 ### Doctor
 
 `foreman doctor` checks the active provider's auth state:
 
+- `auth_mode: claude_code` → asks `claude auth status`. That can't see a revoked token; `foreman llm test` makes a real call.
 - `auth_mode: oauth` + tokens stored → ok, surfaces the ChatGPT account id when present.
-- `auth_mode: oauth` + no tokens → warn with `foreman llm login <provider>` hint.
+- `auth_mode: oauth` + no tokens → warn with `foreman llm login openai` hint.
 - `auth_mode: oauth` on Gemini (no subscription OAuth equivalent) → warn that the setting is being ignored.
-
-### Where the wire-shape facts came from
-
-The OAuth client IDs, endpoints, headers, and the mandatory Claude Code identity prefix are all mirrored from `@earendil-works/pi-ai` (the library behind OpenClaw), cross-verified against Hermes (`NousResearch/hermes-agent`). When a future OpenAI / Anthropic change breaks the OAuth flow, the fix surfaces upstream first — track those repos.
 
 ---
 

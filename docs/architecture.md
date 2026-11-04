@@ -204,7 +204,7 @@ Pages with sub-input modes (Secrets page rotate, Chat page input) use the same s
 ### Setup wizard
 The same Ink tree used both by `foreman setup` and `foreman start` (when `looksLikeFreshInstall()` returns true). The root is `src/tui/setup-wizard.tsx`; each step lives in `src/tui/setup-wizard/`. A Welcome screen previews five numbered steps (`WELCOME_STEPS` in `welcome.tsx`), and every screen's "Step N of 5" progress bar is derived from that list (`progress.ts`):
 
-1. **LLM Providers** (`providers`) — pick the LLM providers your agents use and paste their keys; Anthropic and OpenAI also offer a subscription (OAuth) sign-in.
+1. **LLM Providers** (`providers`) — pick the LLM providers your agents use and paste their keys; Anthropic can also go through Claude Code, and OpenAI through a ChatGPT sign-in.
 2. **Foreman's brain** (`foreman-llm`) — pick the LLM Foreman itself uses to verify risky calls and write summaries (a cloud model or a local one). This is Foreman's own usage, separate from the agents' providers.
 3. **Agents** (`agents`) — pick which agents to install, then set each one's LLM provider, model and responsibility note, and confirm.
 4. **Services** (`services`, optional) — pick services (Telegram, Discord, Slack, GitHub, Atlassian, Notion) and paste their secrets. The **chat-primary** sub-screen follows when two or more selected chat-capable agents share a messaging channel (Telegram, Discord, Slack): you pick which agent answers on it. Otherwise it is skipped.

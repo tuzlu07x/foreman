@@ -10,9 +10,11 @@ import {
   loadActiveProviders,
   type ProviderEntry,
 } from "../../core/registry-catalog.js";
+import { isSubscriptionProvider, usesClaudeCode } from "../../core/llm/config.js";
 import { isOAuthProviderId } from "../../core/llm/oauth/oauth-providers.js";
 import { oauthSecretName } from "../../core/llm/oauth/token-store.js";
 import type { SecretStore } from "../../core/secret-store.js";
+import { getForemanPaths } from "../../utils/config.js";
 import { useDashboardServices } from "../dashboard-context.js";
 import { roundBorder, theme } from "../theme.js";
 import { PageHeader } from "../components/typography.js";
@@ -27,24 +29,26 @@ interface Row {
   connections: ProviderConnection[];
 }
 
-/** How a provider is connected: a stored API key, a Claude / ChatGPT
- *  subscription sign-in (`foreman llm login`), or an endpoint (Ollama,
- *  OpenAI-compatible). */
+/** How a provider is connected: a stored API key, a subscription (ChatGPT
+ *  sign-in, or Claude Code for Claude; `foreman llm login`), or an endpoint
+ *  (Ollama, OpenAI-compatible). */
 export type ProviderConnection = "api-key" | "subscription" | "endpoint";
 
 /** Read from the secret store's names only, never its values. */
 export function providerConnections(
   provider: Pick<ProviderEntry, "id" | "secret_name">,
   has: (secretName: string) => boolean,
+  claudeCode = false,
 ): ProviderConnection[] {
   const out: ProviderConnection[] = [];
   if (has(`${provider.id}-endpoint`)) out.push("endpoint");
   if (provider.secret_name && has(provider.secret_name)) out.push("api-key");
   if (isOAuthProviderId(provider.id) && has(oauthSecretName(provider.id))) out.push("subscription");
+  if (provider.id === "anthropic" && claudeCode) out.push("subscription");
   return out;
 }
 
-/** "API key", "Claude subscription sign-in", "endpoint + API key", … */
+/** "API key", "Claude Code", "endpoint + API key", … */
 export function describeConnections(
   providerId: string,
   connections: ProviderConnection[],
@@ -53,7 +57,7 @@ export function describeConnections(
     .map((c) => {
       if (c === "api-key") return "API key";
       if (c === "endpoint") return providerId === "ollama" ? "local endpoint" : "endpoint";
-      return `${providerId === "anthropic" ? "Claude" : "ChatGPT"} subscription sign-in`;
+      return providerId === "anthropic" ? "Claude Code" : "ChatGPT subscription sign-in";
     })
     .join(" + ");
 }
@@ -61,6 +65,9 @@ export function describeConnections(
 /** What an unconnected provider offers. */
 function connectHint(provider: ProviderEntry): string {
   if (!provider.secret_name) return "not connected — [n] set its endpoint";
+  if (provider.id === "anthropic") {
+    return "not connected — [n] add an API key or [o] use Claude Code";
+  }
   if (isOAuthProviderId(provider.id)) {
     return "not connected — [n] add an API key or [o] sign in with your subscription";
   }
@@ -208,7 +215,7 @@ export function ProvidersPage({ onLeave, onEditingChange }: ProvidersPageProps):
       }
       return;
     }
-    if (input === "o" && isOAuthProviderId(selectedRow.provider.id)) {
+    if (input === "o" && isSubscriptionProvider(selectedRow.provider.id)) {
       if (!runInteractiveLogin) {
         setNotice("interactive login is only available inside the TUI");
         return;
@@ -220,14 +227,19 @@ export function ProvidersPage({ onLeave, onEditingChange }: ProvidersPageProps):
           command: `foreman llm login ${providerId}`,
           verify: null,
           mandatory: false,
-          reason: `Sign in to ${selectedRow.provider.name} so Foreman uses your subscription`,
+          reason:
+            providerId === "anthropic"
+              ? "Connect Claude Code so Foreman uses your Claude plan"
+              : `Sign in to ${selectedRow.provider.name} so Foreman uses your subscription`,
         },
       ]);
       const ok = results.every((r) => r.succeeded);
       setRows(buildRows(catalog, secretStore));
       setNotice(
         ok
-          ? `✓ signed in to ${selectedRow.provider.name} — Foreman calls it with your subscription`
+          ? providerId === "anthropic"
+            ? "✓ connected — Foreman uses Claude Code on this computer"
+            : `✓ signed in to ${selectedRow.provider.name} — Foreman calls it with your subscription`
           : `login did not complete — run 'foreman doctor' or retry [o]`,
       );
       return;
@@ -346,6 +358,7 @@ export function ProvidersPage({ onLeave, onEditingChange }: ProvidersPageProps):
 }
 
 function buildRows(catalog: ProviderEntry[], secretStore: SecretStore): Row[] {
+  const claudeCode = usesClaudeCode(getForemanPaths().llmConfigPath);
   return catalog.map((p) => {
     const configured = p.secret_name
       ? secretStore.exists(p.secret_name)
@@ -353,7 +366,7 @@ function buildRows(catalog: ProviderEntry[], secretStore: SecretStore): Row[] {
     return {
       provider: p,
       configured,
-      connections: providerConnections(p, (name) => secretStore.exists(name)),
+      connections: providerConnections(p, (name) => secretStore.exists(name), claudeCode),
     };
   });
 }
@@ -443,7 +456,11 @@ function ProviderRow({
             {row.configured
               ? "[s] show · [r] rotate · [d] remove"
               : "[n] configure"}
-            {isOAuthProviderId(row.provider.id) ? " · [o] sign in with your subscription" : ""}
+            {row.provider.id === "anthropic"
+              ? " · [o] use Claude Code"
+              : isOAuthProviderId(row.provider.id)
+                ? " · [o] sign in with your subscription"
+                : ""}
           </Text>
         </Box>
       ) : null}

@@ -117,8 +117,7 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
       !authModeAsked.includes(prompt.providerId)
     ) {
       const providerLabel = provider.name;
-      const subscriptionLabel =
-        prompt.providerId === "anthropic" ? "Claude" : "ChatGPT";
+      const viaClaudeCode = prompt.providerId === "anthropic";
       const oauthProviderId = prompt.providerId;
       return (
         <Box flexDirection="column" gap={1} paddingY={1}>
@@ -135,16 +134,18 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
             ?
           </Text>
           <Text color={theme.fg.muted}>
-            An API key is billed per use. With a {subscriptionLabel} subscription
-            you sign in through your browser once setup ends, and Foreman uses
-            your plan instead.
+            {viaClaudeCode
+              ? "An API key is billed per use. With a Claude plan, Foreman runs Claude Code on this computer with your own sign-in, and uses your plan instead."
+              : "An API key is billed per use. With a ChatGPT subscription you sign in through your browser once setup ends, and Foreman uses your plan instead."}
           </Text>
           <Select
             key={`auth:${oauthProviderId}`}
             options={[
               { label: "API key — paste it on the next screen", value: "key" },
               {
-                label: `${subscriptionLabel} subscription — sign in in the browser after setup`,
+                label: viaClaudeCode
+                  ? "Claude Code — use your Claude plan through the claude command"
+                  : "ChatGPT subscription — sign in in the browser after setup",
                 value: "subscription",
               },
             ]}
@@ -310,7 +311,7 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
         {providersSignedIn.length > 0 && (
           <Box flexDirection="column">
             <Text color={theme.accent.primary}>
-              ⚿ Will sign in with your subscription when setup ends:
+              ⚿ Will connect your subscription when setup ends:
             </Text>
             {providersSignedIn.map((id) => (
               <Text key={`signin:${id}`} color={theme.fg.muted}>

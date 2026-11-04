@@ -150,16 +150,10 @@ export function handleForemanLlmInput(
               return;
             }
             try {
-              const models =
-                source.kind === "api-key"
-                  ? await discoverModels(chosen, { apiKey: source.apiKey })
-                  : await discoverModels(chosen, {
-                      apiKey: await source.accessToken(),
-                      auth: "oauth",
-                    });
+              const models = await discoverModels(chosen, { apiKey: source.apiKey });
               if (models.length === 0) {
                 setCloudModelError(
-                  `${chosen} returned no chat-capable models for this ${source.kind === "api-key" ? "key" : "sign-in"}.`,
+                  `${chosen} returned no chat-capable models for this key.`,
                 );
               }
               setCloudModelOptions(models);
@@ -171,9 +165,7 @@ export function handleForemanLlmInput(
                     ? err.message
                     : String(err);
               setCloudModelError(
-                source.kind === "oauth"
-                  ? `Couldn't list models with your Claude sign-in (${msg}). Press [Enter] to use the default model (${BRAIN_DEFAULT_MODELS[chosen]}).`
-                  : classifyModelDiscoveryError(msg, chosen),
+                classifyModelDiscoveryError(msg, chosen),
               );
               setCloudModelOptions([]);
             }

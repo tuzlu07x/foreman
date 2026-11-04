@@ -1,4 +1,9 @@
-import { loadLlmConfig, saveLlmConfig } from "../../core/llm/config.js";
+import {
+  isSubscriptionProvider,
+  loadLlmConfig,
+  saveLlmConfig,
+  type AuthModeProviderId,
+} from "../../core/llm/config.js";
 import {
   checkLlmBaseUrl,
   OLLAMA_DEFAULT_BASE_URL,
@@ -9,11 +14,7 @@ import {
 } from "../../core/llm/models-discovery.js";
 import type { LlmPreset } from "../../core/llm-provider-presets.js";
 import type { MachineCapability } from "../../core/machine-capability.js";
-import {
-  isOAuthProviderId,
-  type OAuthProviderId,
-} from "../../core/llm/oauth/oauth-providers.js";
-import { makeAccessTokenProvider } from "../../core/llm/oauth/token-refresh.js";
+import { isOAuthProviderId } from "../../core/llm/oauth/oauth-providers.js";
 import { loadOAuthTokens } from "../../core/llm/oauth/token-store.js";
 import {
   canRunModel,
@@ -106,62 +107,60 @@ function registryDefault(provider: string, fallback: string): string {
   return id === "default" ? fallback : id;
 }
 
-const SUBSCRIPTION_LABEL: Record<OAuthProviderId, string> = {
-  anthropic: "Claude",
+const SUBSCRIPTION_LABEL: Record<AuthModeProviderId, string> = {
+  anthropic: "Claude Code",
   openai: "ChatGPT",
 };
 
 /**
  * #575 follow-up — how the brain step can list models for a cloud provider.
  * A provider shows up as usable in the picker when it has an API key, a
- * sign-in chosen this wizard run, or OAuth tokens from an earlier
+ * subscription chosen this wizard run, or OAuth tokens from an earlier
  * `foreman llm login` (`configuredBrainProviderIds`); model discovery has to
  * honour the same three sources instead of insisting on `<provider>-key`.
  *
- * - `api-key` / `oauth`: list models with that credential. Only Anthropic
- *   accepts a subscription token for listing.
+ * - `api-key`: list models with that key.
  * - `no-listing`: the provider is usable but there is nothing to list with
- *   (sign-in still pending until after the wizard, or a ChatGPT sign-in,
- *   whose backend has no model list). Enter keeps the default model.
+ *   (a sign-in still pending until after the wizard, Claude Code, or a
+ *   ChatGPT sign-in, whose backend has no model list). Enter keeps the
+ *   default model.
  * - `missing`: nothing configured at all.
  */
 export type BrainModelSource =
   | { kind: "api-key"; apiKey: string }
-  | { kind: "oauth"; accessToken: () => Promise<string> }
   | { kind: "no-listing"; message: string }
   | { kind: "missing"; message: string };
 
 export function resolveBrainModelSource(
   provider: BrainCloudProvider,
   secretStore: SecretStore,
-  signedInThisSession: readonly OAuthProviderId[],
+  signedInThisSession: readonly AuthModeProviderId[],
 ): BrainModelSource {
   const keySecret = `${provider}-key`;
   const defaultModel = BRAIN_DEFAULT_MODELS[provider];
   const keepDefault = `Press [Enter] to use the default model (${defaultModel}); change \`model:\` in llm.yaml any time.`;
-  const oauthId = isOAuthProviderId(provider) ? provider : null;
+  const subscriptionId = isSubscriptionProvider(provider) ? provider : null;
   const hasTokens =
-    oauthId !== null && loadOAuthTokens(secretStore, oauthId) !== null;
+    isOAuthProviderId(provider) && loadOAuthTokens(secretStore, provider) !== null;
 
-  if (oauthId && signedInThisSession.includes(oauthId) && !hasTokens) {
+  if (subscriptionId === "anthropic" && signedInThisSession.includes("anthropic")) {
+    return {
+      kind: "no-listing",
+      message: `Foreman will use Claude Code on this computer, which doesn't offer a model list here. ${keepDefault}`,
+    };
+  }
+  if (subscriptionId === "openai" && signedInThisSession.includes("openai") && !hasTokens) {
     return {
       kind: "no-listing",
       message:
-        `You'll sign in with your ${SUBSCRIPTION_LABEL[oauthId]} subscription after setup ` +
-        `(\`foreman llm login ${oauthId}\`), so there is no model list to show yet. ${keepDefault}`,
+        `You'll sign in with your ${SUBSCRIPTION_LABEL.openai} subscription after setup ` +
+        `(\`foreman llm login openai\`), so there is no model list to show yet. ${keepDefault}`,
     };
   }
   if (secretStore.exists(keySecret)) {
     return { kind: "api-key", apiKey: secretStore.get(keySecret) };
   }
-  if (oauthId === "anthropic" && hasTokens) {
-    const tokens = makeAccessTokenProvider(secretStore, "anthropic");
-    return {
-      kind: "oauth",
-      accessToken: async () => (await tokens()).accessToken,
-    };
-  }
-  if (oauthId === "openai" && hasTokens) {
+  if (hasTokens) {
     return {
       kind: "no-listing",
       message: `Your ChatGPT sign-in doesn't offer a model list. ${keepDefault}`,
@@ -170,8 +169,8 @@ export function resolveBrainModelSource(
   return {
     kind: "missing",
     message:
-      oauthId !== null
-        ? `No ${keySecret} and no ${SUBSCRIPTION_LABEL[oauthId]} sign-in — go back, add one in Step 1, then return here.`
+      subscriptionId !== null
+        ? `No ${keySecret} and no ${SUBSCRIPTION_LABEL[subscriptionId]} connection — go back, add one in Step 1, then return here.`
         : `No ${keySecret} in the secret store — go back, set it in Step 1, then return here.`,
   };
 }

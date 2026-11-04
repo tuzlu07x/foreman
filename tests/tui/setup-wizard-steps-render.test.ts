@@ -585,9 +585,9 @@ describe('providers step', () => {
     await w.pressInList(SPACE)
     await w.press(ENTER, 'How do you want to connect')
     await w.until('API key — paste it on the next screen')
-    await w.until('Claude subscription — sign in in the browser after setup')
+    await w.until('Claude Code — use your Claude plan through the claude command')
     await w.press(DOWN)
-    await w.press(ENTER, 'Will sign in with your subscription')
+    await w.press(ENTER, 'Will connect your subscription')
     await w.until('runs `foreman llm login anthropic`')
   })
 
@@ -603,7 +603,7 @@ describe('providers step', () => {
     await w.type('sk-ant-fake-key-000')
     await w.press(ENTER, 'LLM Providers ▸ summary')
     await w.until('anthropic-key')
-    expect(w.frame()).not.toContain('Will sign in with your subscription')
+    expect(w.frame()).not.toContain('Will connect your subscription')
     expect(w.secretStore.get('anthropic-key')).toBe('sk-ant-fake-key-000')
   })
 
@@ -613,7 +613,7 @@ describe('providers step', () => {
     await w.pressInList(SPACE)
     await w.press(ENTER, 'How do you want to connect')
     await w.press(DOWN)
-    await w.press(ENTER, 'Will sign in with your subscription')
+    await w.press(ENTER, 'Will connect your subscription')
     // The confirm prompt subscribes to keys in an effect after the frame
     // that shows it: a key sent at once was lost on a loaded machine.
     await sleep(150)
@@ -1719,7 +1719,7 @@ describe('foreman-llm step with a subscription sign-in (#575 follow-up)', () => 
     await w.pressInList(SPACE)
     await w.press(ENTER, 'How do you want to connect')
     await w.press(DOWN)
-    await w.press(ENTER, 'Will sign in with your subscription')
+    await w.press(ENTER, 'Will connect your subscription')
     await w.press('y', "Foreman's brain ▸ pick an LLM")
     await w.until('❯ ✓ Anthropic')
     await w.press(ENTER, 'Anthropic ▸ default model')
@@ -1727,33 +1727,14 @@ describe('foreman-llm step with a subscription sign-in (#575 follow-up)', () => 
     // say "No anthropic-key in the secret store".
     expect(w.frame()).not.toContain('Ollama not detected')
     expect(w.frame()).not.toContain('No anthropic-key')
-    await w.until('foreman llm login anthropic')
+    await w.until("doesn't offer a model list")
     await w.press(ENTER, 'Agents ▸ pick which to install')
     const llmYaml = readFileSync(w.services.llmConfigPath, 'utf-8')
     expect(llmYaml).toContain('provider: anthropic')
-    expect(llmYaml).toMatch(/anthropic:\n\s+auth_mode: oauth/)
+    expect(llmYaml).toMatch(/anthropic:\n\s+auth_mode: claude_code/)
     // Real-services test (2.3.0): with no key stored yet, the picker hid
     // Claude Code (it needs Anthropic) and showed only Generic MCP.
     await w.until('Claude Code')
-  })
-
-  it('lists models with stored Claude sign-in tokens', async () => {
-    const w = await mount('foreman-llm')
-    saveOAuthTokens(w.secretStore, 'anthropic', {
-      accessToken: 'fake-oauth-access-token',
-      refreshToken: 'fake-oauth-refresh-token',
-      expiresAt: Date.now() + 24 * 60 * 60 * 1000,
-    })
-    // Move off and back so the picker re-renders with the new token slot.
-    await w.press(DOWN)
-    await w.press('\u001B[A')
-    await w.until('❯ ✓ Anthropic')
-    await w.press(ENTER, 'pick a Anthropic model')
-    await w.until('anthropic-fake-large')
-    expect(vi.mocked(discoverModels)).toHaveBeenLastCalledWith('anthropic', {
-      apiKey: 'fake-oauth-access-token',
-      auth: 'oauth',
-    })
   })
 })
 
