@@ -22,6 +22,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "qa": "npm run build && vitest run --config qa/vitest.config.ts",
+    "qa:real": "npm run build && node qa/real/smoke.mjs",
     "lint": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:check": "drizzle-kit check"

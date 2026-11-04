@@ -15,6 +15,21 @@ npm run qa
 The report is written to `qa/out/qa-report.md` (gitignored): every scenario
 with its result, duration, steps and the evidence each step checked.
 
+## Before a release: the real test
+
+`npm run qa` uses stand-in agents, so it can't see what only a real agent shows.
+Before every release, also run:
+
+```bash
+npm run qa:real
+```
+
+It runs a three-role company on the real Claude Code in a temporary Foreman home
+and checks that two roles work at the same time, that writes go through Foreman
+under the role's own name, that a read-only role can't write, that `.env` stays
+closed, and that your real agent configs don't change. It needs a signed-in
+`claude`, takes about two minutes and uses your Claude plan.
+
 ## Scenarios
 
 | # | Journey | Needs a pty |

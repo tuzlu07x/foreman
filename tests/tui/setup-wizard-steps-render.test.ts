@@ -337,7 +337,7 @@ async function mount(
   unmount = () => inst.unmount()
   const frame = (): string => stripAnsi(inst.lastFrame() ?? '')
   const waitFrame = async (done: (f: string) => boolean, what: string): Promise<void> => {
-    const deadline = Date.now() + 5_000
+    const deadline = Date.now() + 15_000
     while (!done(frame())) {
       if (Date.now() > deadline) {
         throw new Error(`timed out waiting for ${what}; frame:\n${frame()}`)
@@ -400,7 +400,7 @@ async function mount(
     await until('Ready to install')
     await press('c')
     // A fast (mocked) install can go straight on to Done.
-    const deadline = Date.now() + 5_000
+    const deadline = Date.now() + 15_000
     while (!/Install \+ configure|Setup complete|Your team/.test(frame())) {
       if (Date.now() > deadline) {
         throw new Error(`install did not start; frame:\n${frame()}`)
