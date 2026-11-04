@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { Command } from "commander";
 import { loadActiveRegistry } from "../core/registry-catalog.js";
+import { isInstance } from "../core/agent-instance.js";
 import { applyForemanSoul } from "../core/foreman-soul.js";
 import { RegistryService } from "../core/registry.js";
 import { closeDb, getDb } from "../db/client.js";
@@ -104,7 +105,9 @@ function pushToAgents(soulPath: string): void {
       const entry = registryId
         ? doc.agents.find((a) => a.id === registryId) ?? null
         : null;
-      if (!entry || !entry.identity_path) {
+      // An instance gets its identity with each launch; the file belongs to
+      // the agent itself.
+      if (!entry || !entry.identity_path || isInstance(agent.id, entry)) {
         skipped += 1;
         continue;
       }
