@@ -122,7 +122,7 @@ const SUBSCRIPTION_LABEL: Record<AuthModeProviderId, string> = {
  * - `api-key`: list models with that key.
  * - `no-listing`: the provider is usable but there is nothing to list with
  *   (a sign-in still pending until after the wizard, Claude Code, or a
- *   ChatGPT sign-in, whose backend has no model list). Enter keeps the
+ *   ChatGPT sign-in, which lists no models here). Enter keeps the
  *   default model.
  * - `missing`: nothing configured at all.
  */

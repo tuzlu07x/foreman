@@ -93,7 +93,7 @@ export function configuredProviderIds(
  *
  * A user with a ChatGPT or Claude subscription can run Foreman's brain with
  * no API key at all: `openai` + `auth_mode: oauth` routes to the Codex client
- * (chatgpt.com/backend-api), `anthropic` + `auth_mode: claude_code` to the
+ * (the public Responses API), `anthropic` + `auth_mode: claude_code` to the
  * user's own `claude` binary — see `src/core/llm/factory.ts`. The brain picker used
  * to gate on API-key secret slots only (`configuredProviderIds`), so a
  * subscription-only user saw OpenAI/Anthropic greyed out even though those

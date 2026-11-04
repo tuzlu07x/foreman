@@ -10,7 +10,7 @@ import { LlmConfigSchema, defaultLlmConfig } from '../../../src/core/llm/config.
 import { SecretNotFoundError } from '../../../src/core/secret-store.js'
 import { AnthropicLlmClient } from '../../../src/core/llm/providers/anthropic.js'
 import { ClaudeCodeLlmClient } from '../../../src/core/llm/providers/claude-code.js'
-import { CodexLlmClient } from '../../../src/core/llm/providers/codex.js'
+import { ChatgptPlanLlmClient } from '../../../src/core/llm/providers/chatgpt-plan.js'
 import { OpenAILlmClient } from '../../../src/core/llm/providers/openai.js'
 import { GeminiLlmClient } from '../../../src/core/llm/providers/gemini.js'
 import { OpenAICompatibleLlmClient } from '../../../src/core/llm/providers/openai-compatible.js'
@@ -299,7 +299,7 @@ describe('buildLlmClient', () => {
     expect(client.providerId).toBe('anthropic')
   })
 
-  it('returns a CodexLlmClient when openai auth_mode = oauth', () => {
+  it('returns a ChatgptPlanLlmClient when openai auth_mode = oauth', () => {
     const config = LlmConfigSchema.parse({
       provider: 'openai',
       model: 'gpt-5.4',
@@ -307,7 +307,7 @@ describe('buildLlmClient', () => {
     })
     const store = new FakeStore(seedOAuthTokens('openai'))
     const client = buildLlmClient(config, store as never)
-    expect(client).toBeInstanceOf(CodexLlmClient)
+    expect(client).toBeInstanceOf(ChatgptPlanLlmClient)
     // Same logical provider id as the API-key OpenAI client — disambiguated
     // by auth_mode in the factory, not by providerId downstream.
     expect(client.providerId).toBe('openai')

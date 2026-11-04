@@ -4,6 +4,7 @@ import { SecretStore } from "../../../../src/core/secret-store.js";
 import { createInMemoryDb, type ForemanDb } from "../../../../src/db/client.js";
 import { generateMasterKey } from "../../../../src/identity/encryption.js";
 import {
+  removeLegacyChatgptTokens,
   clearOAuthTokens,
   loadOAuthTokens,
   oauthSecretName,
@@ -31,17 +32,17 @@ describe("OAuth token store", () => {
       accessToken: "access",
       refreshToken: "refresh",
       expiresAt: 12345,
-      accountId: "acc",
+      email: "acc",
     });
     expect(loadOAuthTokens(store, "openai")).toEqual({
       accessToken: "access",
       refreshToken: "refresh",
       expiresAt: 12345,
-      accountId: "acc",
+      email: "acc",
     });
   });
 
-  it("omits accountId on load when none was stored (Anthropic case)", () => {
+  it("omits email on load when none was stored (Anthropic case)", () => {
     saveOAuthTokens(store, "openai", {
       accessToken: "sk-ant-oat",
       refreshToken: "rt",
@@ -53,7 +54,7 @@ describe("OAuth token store", () => {
       refreshToken: "rt",
       expiresAt: 1,
     });
-    expect(loaded?.accountId).toBeUndefined();
+    expect(loaded?.email).toBeUndefined();
   });
 
   it("returns null when no bundle is stored", () => {
@@ -107,5 +108,30 @@ describe("OAuth token store", () => {
   it("throws when stored bundle is missing required fields", () => {
     store.add(oauthSecretName("openai"), '{"accessToken":"only"}');
     expect(() => loadOAuthTokens(store, "openai")).toThrow(/missing fields/);
+  });
+});
+
+describe("removeLegacyChatgptTokens", () => {
+  const seeded = (value: string) => {
+    const data = new Map([["llm-oauth-openai", value]]);
+    return {
+      data,
+      exists: (n: string) => data.has(n),
+      get: (n: string) => data.get(n)!,
+      remove: (n: string) => void data.delete(n),
+    };
+  };
+  const bundle = { accessToken: "A", refreshToken: "R", expiresAt: 1 };
+
+  it("drops tokens from before Foreman had its own registration", () => {
+    const store = seeded(JSON.stringify(bundle));
+    expect(removeLegacyChatgptTokens(store)).toBe(true);
+    expect(store.data.size).toBe(0);
+  });
+
+  it("leaves a current sign-in alone", () => {
+    const store = seeded(JSON.stringify({ ...bundle, clientId: "oaiapp_1" }));
+    expect(removeLegacyChatgptTokens(store)).toBe(false);
+    expect(store.data.size).toBe(1);
   });
 });

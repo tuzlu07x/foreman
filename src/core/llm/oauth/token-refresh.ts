@@ -1,12 +1,21 @@
 import type { SecretStore } from "../../secret-store.js";
 import {
   OAuthError,
+  OAuthSignedOutError,
   refreshTokens,
   type OAuthFetch,
   type OAuthTokens,
 } from "./oauth-flow.js";
 import { getOAuthProvider, type OAuthProviderId } from "./oauth-providers.js";
-import { loadOAuthTokens, saveOAuthTokens } from "./token-store.js";
+import { clearOAuthTokens, loadOAuthTokens, saveOAuthTokens } from "./token-store.js";
+
+/** A refresh running in this process. Refresh tokens rotate, so two at once
+ *  would spend the same one and end the session. */
+const refreshing = new Map<OAuthProviderId, Promise<OAuthTokens>>();
+
+function signInAgain(provider: OAuthProviderId): OAuthError {
+  return new OAuthError(`Your ChatGPT sign-in has ended — run \`foreman llm login ${provider}\``);
+}
 
 export async function getValidOAuthTokens(
   store: SecretStore,
@@ -21,19 +30,25 @@ export async function getValidOAuthTokens(
     );
   }
   if (now < tokens.expiresAt) return tokens;
-
-  const refreshed = await refreshTokens(
-    getOAuthProvider(provider),
-    tokens.refreshToken,
-    fetchImpl,
-  );
-  saveOAuthTokens(store, provider, refreshed);
-  return refreshed;
+  const running = refreshing.get(provider);
+  if (running) return running;
+  const refresh = refreshTokens(getOAuthProvider(provider), tokens, fetchImpl)
+    .then((refreshed) => {
+      saveOAuthTokens(store, provider, refreshed);
+      return refreshed;
+    })
+    .catch((err: unknown) => {
+      if (!(err instanceof OAuthSignedOutError)) throw err;
+      clearOAuthTokens(store, provider);
+      throw signInAgain(provider);
+    })
+    .finally(() => refreshing.delete(provider));
+  refreshing.set(provider, refresh);
+  return refresh;
 }
 
 export interface OAuthCredential {
   accessToken: string;
-  accountId?: string;
 }
 
 export type AccessTokenProvider = () => Promise<OAuthCredential>;
@@ -45,8 +60,6 @@ export function makeAccessTokenProvider(
 ): AccessTokenProvider {
   return async () => {
     const tokens = await getValidOAuthTokens(store, provider, fetchImpl);
-    const cred: OAuthCredential = { accessToken: tokens.accessToken };
-    if (tokens.accountId) cred.accountId = tokens.accountId;
-    return cred;
+    return { accessToken: tokens.accessToken };
   };
 }

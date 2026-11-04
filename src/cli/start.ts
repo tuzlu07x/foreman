@@ -155,7 +155,7 @@ import {
   LlmOAuthLoginRequiredError,
   LlmProviderUnavailableError,
 } from "../core/llm/factory.js";
-import { removeLegacyClaudeTokens } from "../core/llm/oauth/token-store.js";
+import { removeLegacyChatgptTokens, removeLegacyClaudeTokens } from "../core/llm/oauth/token-store.js";
 import { LlmVerifier } from "../core/llm/verifier.js";
 import { BudgetAlertBridge } from "../core/llm/budget-alert-bridge.js";
 import {
@@ -307,6 +307,7 @@ export function startForeman(
   const audit = new AuditLogger(db, bus);
   const secretStore = new SecretStore(db, loadOrCreateSecretsMasterKey());
   removeLegacyClaudeTokens(secretStore);
+  removeLegacyChatgptTokens(secretStore);
   const withTui = options.withTui ?? true;
   // The tasks the headless gateway runs itself (the control drain's ACP /
   // codex spawns) keep their approvals in the database, like an agent's

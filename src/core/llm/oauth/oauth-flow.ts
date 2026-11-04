@@ -1,6 +1,5 @@
 import { createServer } from "node:http";
 import type { OAuthProviderConfig } from "./oauth-providers.js";
-import { generatePkce, generateState } from "./pkce.js";
 
 export interface OAuthFetch {
   (
@@ -13,7 +12,22 @@ export interface OAuthTokens {
   accessToken: string;
   refreshToken: string;
   expiresAt: number;
-  accountId?: string;
+  /** The client id issued for this sign-in. */
+  clientId?: string;
+  /** Granted scopes, space-separated. */
+  scope?: string;
+  idToken?: string;
+  /** The verified account. */
+  sub?: string;
+  email?: string;
+}
+
+/** What the browser hands back. */
+export interface OAuthCallback {
+  code: string;
+  state?: string;
+  /** Issued on a first registration. */
+  clientId?: string;
 }
 
 export class OAuthError extends Error {
@@ -31,6 +45,7 @@ export function buildAuthorizeUrl(
   provider: OAuthProviderConfig,
   challenge: string,
   state: string,
+  extra: Readonly<Record<string, string>> = {},
 ): string {
   const url = new URL(provider.authorizeUrl);
   url.searchParams.set("response_type", "code");
@@ -40,16 +55,13 @@ export function buildAuthorizeUrl(
   url.searchParams.set("code_challenge", challenge);
   url.searchParams.set("code_challenge_method", "S256");
   url.searchParams.set("state", state);
-  for (const [k, v] of Object.entries(provider.extraAuthorizeParams)) {
+  for (const [k, v] of Object.entries({ ...provider.extraAuthorizeParams, ...extra })) {
     url.searchParams.set(k, v);
   }
   return url.toString();
 }
 
-export function parseCallbackInput(input: string): {
-  code: string;
-  state?: string;
-} {
+export function parseCallbackInput(input: string): OAuthCallback {
   const trimmed = input.trim();
   if (trimmed === "") throw new OAuthError("Empty authorization input");
 
@@ -57,7 +69,7 @@ export function parseCallbackInput(input: string): {
     const u = new URL(trimmed);
     const code = u.searchParams.get("code");
     if (!code) throw new OAuthError("No `code` parameter in the pasted URL");
-    return { code, state: u.searchParams.get("state") ?? undefined };
+    return callbackOf(code, u.searchParams);
   }
   if (trimmed.includes("#")) {
     const [code, state] = trimmed.split("#");
@@ -67,28 +79,15 @@ export function parseCallbackInput(input: string): {
   if (trimmed.includes("=")) {
     const params = new URLSearchParams(trimmed);
     const code = params.get("code");
-    if (code) return { code, state: params.get("state") ?? undefined };
+    if (code) return callbackOf(code, params);
   }
   return { code: trimmed };
 }
 
-export function decodeChatgptAccountId(
-  accessToken: string,
-): string | undefined {
-  const segments = accessToken.split(".");
-  if (segments.length < 2) return undefined;
-  try {
-    const payload = JSON.parse(
-      Buffer.from(segments[1]!, "base64url").toString("utf8"),
-    ) as Record<string, unknown>;
-    const auth = payload["https://api.openai.com/auth"] as
-      | Record<string, unknown>
-      | undefined;
-    const id = auth?.["chatgpt_account_id"];
-    return typeof id === "string" ? id : undefined;
-  } catch {
-    return undefined;
-  }
+function callbackOf(code: string, params: URLSearchParams): OAuthCallback {
+  const state = params.get("state");
+  const clientId = params.get("client_id");
+  return { code, ...(state ? { state } : {}), ...(clientId ? { clientId } : {}) };
 }
 
 // ----------------------------------------------------------------------------
@@ -99,10 +98,11 @@ interface RawTokenResponse {
   access_token?: string;
   refresh_token?: string;
   expires_in?: number;
+  scope?: string;
+  id_token?: string;
 }
 
 function tokensFromRaw(
-  provider: OAuthProviderConfig,
   raw: RawTokenResponse,
   previousRefresh: string | undefined,
   now: number,
@@ -121,11 +121,36 @@ function tokensFromRaw(
     refreshToken,
     expiresAt: now + expiresInMs - EXPIRY_SAFETY_MS,
   };
-  if (provider.id === "openai") {
-    const accountId = decodeChatgptAccountId(raw.access_token);
-    if (accountId) tokens.accountId = accountId;
-  }
+  if (raw.scope) tokens.scope = raw.scope;
+  if (raw.id_token) tokens.idToken = raw.id_token;
   return tokens;
+}
+
+/** A sign-in that can't be refreshed: only signing in again helps. */
+export class OAuthSignedOutError extends OAuthError {
+  constructor(public readonly code: string) {
+    super(`Sign-in ended (${code})`);
+    this.name = "OAuthSignedOutError";
+  }
+}
+
+const SIGNED_OUT_ERRORS: ReadonlySet<string> = new Set([
+  "invalid_grant",
+  "invalid_refresh_token",
+  "token_expired",
+  "refresh_token_expired",
+  "refresh_token_invalidated",
+  "refresh_token_reused",
+]);
+
+function tokenErrorCode(text: string): string | null {
+  try {
+    const body = JSON.parse(text) as { error?: string | { code?: string } };
+    const code = typeof body.error === "string" ? body.error : body.error?.code;
+    return typeof code === "string" ? code : null;
+  } catch {
+    return null;
+  }
 }
 
 async function postToken(
@@ -161,8 +186,10 @@ async function postToken(
   }
   const text = await res.text().catch(() => "<no body>");
   if (!res.ok) {
+    const code = tokenErrorCode(text);
+    if (code && SIGNED_OUT_ERRORS.has(code)) throw new OAuthSignedOutError(code);
     throw new OAuthError(
-      `${provider.label} token endpoint returned HTTP ${res.status}: ${text}`,
+      `${provider.label} token endpoint returned HTTP ${res.status}${code ? `: ${code}` : ""}`,
     );
   }
   try {
@@ -175,39 +202,42 @@ async function postToken(
 /** Exchange an authorization code for an access + refresh token bundle. */
 export async function exchangeCodeForTokens(
   provider: OAuthProviderConfig,
-  args: { code: string; verifier: string; state?: string },
+  args: { code: string; verifier: string; state?: string; clientId?: string },
   fetchImpl: OAuthFetch = defaultFetch,
 ): Promise<OAuthTokens> {
   const params: Record<string, string> = {
     grant_type: "authorization_code",
-    client_id: provider.clientId,
+    client_id: args.clientId ?? provider.clientId,
     code: args.code,
     code_verifier: args.verifier,
     redirect_uri: provider.redirectUri,
+    ...(provider.resource ? { resource: provider.resource } : {}),
   };
   if (provider.tokenExchangeIncludesState && args.state) {
     params.state = args.state;
   }
   const raw = await postToken(provider, params, fetchImpl);
-  return tokensFromRaw(provider, raw, undefined, Date.now());
+  return tokensFromRaw(raw, undefined, Date.now());
 }
 
-/** Trade a refresh token for a fresh access + refresh bundle. */
+/** Trade a refresh token for a fresh access + refresh bundle. No scope: that
+ *  keeps the grant as it is. Identity carries over from the sign-in. */
 export async function refreshTokens(
   provider: OAuthProviderConfig,
-  refreshToken: string,
+  previous: OAuthTokens,
   fetchImpl: OAuthFetch = defaultFetch,
 ): Promise<OAuthTokens> {
   const raw = await postToken(
     provider,
     {
       grant_type: "refresh_token",
-      client_id: provider.clientId,
-      refresh_token: refreshToken,
+      client_id: previous.clientId ?? provider.clientId,
+      refresh_token: previous.refreshToken,
+      ...(provider.resource ? { resource: provider.resource } : {}),
     },
     fetchImpl,
   );
-  return tokensFromRaw(provider, raw, refreshToken, Date.now());
+  return { ...previous, ...tokensFromRaw(raw, previous.refreshToken, Date.now()) };
 }
 
 // ----------------------------------------------------------------------------
@@ -228,12 +258,12 @@ const CALLBACK_HTML = (ok: boolean): string =>
 export function waitForLoopbackCallback(
   provider: OAuthProviderConfig,
   opts: { signal?: AbortSignal } = {},
-): Promise<{ code: string; state?: string }> {
+): Promise<OAuthCallback> {
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       const url = new URL(
         req.url ?? "/",
-        `http://localhost:${provider.redirectPort}`,
+        `http://127.0.0.1:${provider.redirectPort}`,
       );
       if (url.pathname !== provider.redirectPath) {
         res.writeHead(404).end("Not found");
@@ -245,7 +275,7 @@ export function waitForLoopbackCallback(
       res.end(CALLBACK_HTML(Boolean(code)));
       server.close();
       if (code) {
-        resolve({ code, state: url.searchParams.get("state") ?? undefined });
+        resolve(callbackOf(code, url.searchParams));
       } else {
         reject(
           new OAuthError(
@@ -268,52 +298,4 @@ export function waitForLoopbackCallback(
     });
     server.listen(provider.redirectPort, "127.0.0.1");
   });
-}
-
-export interface LoginFlowIO {
-  presentAuthUrl: (url: string) => void | Promise<void>;
-  readPastedCode?: () => Promise<string>;
-  useLoopback?: boolean;
-}
-
-export async function runLoginFlow(
-  provider: OAuthProviderConfig,
-  io: LoginFlowIO,
-  fetchImpl: OAuthFetch = defaultFetch,
-): Promise<OAuthTokens> {
-  const { verifier, challenge } = generatePkce();
-  const state =
-    provider.stateMode === "pkce-verifier" ? verifier : generateState();
-  const authUrl = buildAuthorizeUrl(provider, challenge, state);
-
-  await io.presentAuthUrl(authUrl);
-
-  const useLoopback = io.useLoopback !== false;
-  const abort = new AbortController();
-  const racers: Promise<{ code: string; state?: string }>[] = [];
-  if (useLoopback) {
-    racers.push(waitForLoopbackCallback(provider, { signal: abort.signal }));
-  }
-  if (io.readPastedCode) {
-    racers.push(io.readPastedCode().then((raw) => parseCallbackInput(raw)));
-  }
-  if (racers.length === 0) {
-    throw new OAuthError("No way to receive the authorization code");
-  }
-
-  let captured: { code: string; state?: string };
-  try {
-    captured = await Promise.race(racers);
-  } finally {
-    abort.abort();
-  }
-
-  if (captured.state !== undefined && captured.state !== state) {
-    throw new OAuthError("OAuth state mismatch — aborting (possible CSRF)");
-  }
-  return exchangeCodeForTokens(
-    provider,
-    { code: captured.code, verifier, state },
-    fetchImpl,
-  );
 }

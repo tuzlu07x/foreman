@@ -114,7 +114,7 @@ describe('describeAuthMode', () => {
     expect(describeAuthMode(config, store, 'anthropic')).toContain('api key')
   })
 
-  it('renders "OAuth (signed in, account ...)" when tokens are stored', () => {
+  it('renders "Using ChatGPT plan" with the account and a usage link', () => {
     const config = LlmConfigSchema.parse({
       credentials: { openai: { auth_mode: 'oauth' } },
     })
@@ -122,12 +122,12 @@ describe('describeAuthMode', () => {
       accessToken: 'A',
       refreshToken: 'R',
       expiresAt: Date.now() + 60_000,
-      accountId: 'acc-42',
+      email: 'acc-42',
     })
     const out = describeAuthMode(config, store, 'openai')
-    expect(out).toContain('OAuth')
-    expect(out).toContain('signed in')
+    expect(out).toContain('Using ChatGPT plan')
     expect(out).toContain('acc-42')
+    expect(out).toContain('chatgpt.com/settings/usage')
   })
 
   it('warns "(not signed in)" when auth_mode is oauth but no tokens stored', () => {
@@ -139,7 +139,7 @@ describe('describeAuthMode', () => {
     expect(out).toContain('foreman llm login openai')
   })
 
-  it('omits "account" suffix when the bundle has no accountId', () => {
+  it('omits "account" suffix when the bundle has no email', () => {
     const config = LlmConfigSchema.parse({
       credentials: { openai: { auth_mode: 'oauth' } },
     })
@@ -215,7 +215,7 @@ describe('performOAuthLogin', () => {
       accessToken: 'sk-codex-tok',
       refreshToken: 'sk-codex-refresh',
       expiresAt: Date.now() + 60 * 60_000,
-      accountId: 'acc-99',
+      email: 'acc-99',
     }
     const deps = fakeDeps(tokens)
     const provider = getOAuthProvider('openai')
@@ -228,7 +228,7 @@ describe('performOAuthLogin', () => {
       deps,
     )
 
-    expect(result).toEqual({ accountId: 'acc-99' })
+    expect(result).toEqual({ email: 'acc-99' })
     expect(loadOAuthTokens(store, 'openai')).toEqual(tokens)
 
     const yaml = parseYaml(readFileSync(llmConfigPath, 'utf-8')) as LlmConfig
@@ -271,7 +271,7 @@ describe('performOAuthLogin', () => {
     expect(typeof io.readPastedCode).toBe('function')
   })
 
-  it('omits accountId from the result when the token bundle has none', async () => {
+  it('omits email from the result when the token bundle has none', async () => {
     const deps = fakeDeps({
       accessToken: 'a',
       refreshToken: 'r',
@@ -331,7 +331,7 @@ describe('performOAuthLogout', () => {
       accessToken: 'A',
       refreshToken: 'R',
       expiresAt: Date.now() + 60_000,
-      accountId: 'acc-1',
+      email: 'acc-1',
     })
   })
   afterEach(() => {

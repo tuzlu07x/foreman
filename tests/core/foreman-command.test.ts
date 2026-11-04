@@ -1128,7 +1128,7 @@ credentials:
         expect(result.text).toContain("anthropic — Claude Code");
       });
 
-      it("shows `OAuth (signed in · <account>)` when Codex tokens carry an accountId", async () => {
+      it("shows `Using ChatGPT plan · <account>` when signed in", async () => {
         writeFileSync(
           llmConfigPath,
           `enabled: true
@@ -1147,7 +1147,7 @@ credentials:
             accessToken: "A",
             refreshToken: "R",
             expiresAt: Date.now() + 60_000,
-            accountId: "acc-42",
+            email: "a@b.c",
           }),
         );
         const result = await router.dispatch("model", [], {
@@ -1155,7 +1155,7 @@ credentials:
           secretStore: store,
         });
         expect(result.text).toContain(
-          "openai — OAuth (signed in · acc-42)",
+          "openai — Using ChatGPT plan · a@b.c",
         );
       });
 
@@ -1177,7 +1177,7 @@ credentials:
           secretStore: store,
         });
         expect(result.text).toContain(
-          "openai — OAuth (not signed in) → `foreman llm login openai`",
+          "openai — ChatGPT plan (not signed in) → `foreman llm login openai`",
         );
       });
 
@@ -1307,186 +1307,22 @@ credentials:
     });
   });
 
-  // ---------- Faz 4b-2 / #512 — chat-side OAuth login (paste-code) ----------
-
-  describe("llm login / callback (chat-side OAuth)", () => {
-    /** A fake OAuthFetch that resolves with a fixed token-endpoint response.
-     *  Lets us exercise the full login → callback flow without hitting the
-     *  real Anthropic / OpenAI token endpoints. */
-    function makeOauthFetch(body: unknown): {
-      fetchImpl: (
-        url: string,
-        init: RequestInit,
-      ) => Promise<{
-        ok: boolean;
-        status: number;
-        text(): Promise<string>;
-      }>;
-      calls: Array<{ url: string; init: RequestInit }>;
-    } {
-      const calls: Array<{ url: string; init: RequestInit }> = [];
-      return {
-        calls,
-        fetchImpl: async (url, init) => {
-          calls.push({ url, init });
-          return {
-            ok: true,
-            status: 200,
-            text: async () => JSON.stringify(body),
-          };
-        },
-      };
-    }
-
-    function ctxWithStore(extra: Partial<ForemanCommandContext> = {}) {
-      const store = new SecretStore(db, generateMasterKey());
-      return {
-        ctx: {
-          ...ctx,
-          secretStore: store,
-          sourceUser: "telegram-user-42",
-          ...extra,
-        } as ForemanCommandContext,
-        store,
-      };
-    }
-
-    it("`llm login <provider>` emits the authorize URL + paste-back instructions", async () => {
-      const { ctx: c } = ctxWithStore();
-      const result = await router.dispatch("llm", ["login", "openai"], c);
-      expect(result.ok).toBe(true);
-      expect(result.text).toMatch(/Sign in to Codex/);
-      expect(result.text).toContain("auth.openai.com/oauth/authorize");
-      expect(result.text).toContain("code_challenge=");
-      expect(result.text).toContain("/foreman llm callback");
-      expect(result.text).toMatch(/expires in 10 minutes/);
+  describe("llm login from a chat", () => {
+    it("points to the host: a sign-in can't finish in a chat", async () => {
+      const result = await router.dispatch("llm", ["login", "openai"], ctx);
+      expect(result.ok).toBe(false);
+      expect(result.text).toContain("foreman llm login openai");
+      expect(result.text).not.toContain("http");
     });
 
-    it("rejects unknown provider with a clear error", async () => {
-      const { ctx: c } = ctxWithStore();
-      const result = await router.dispatch("llm", ["login", "gemini"], c);
-      expect(result.ok).toBe(false);
-      expect(result.text).toMatch(/Available: openai\./);
-    });
-
-    it("offers no Claude sign-in: it points to Claude Code on the host", async () => {
-      const { ctx: c, store } = ctxWithStore();
-      const result = await router.dispatch("llm", ["login", "anthropic"], c);
-      expect(result.ok).toBe(false);
-      expect(result.text).toContain("Claude Code");
+    it("keeps telling Claude users about Claude Code", async () => {
+      const result = await router.dispatch("llm", ["login", "anthropic"], ctx);
       expect(result.text).toContain("foreman llm login anthropic");
-      expect(result.text).not.toContain("claude.ai");
-      expect(store.exists("oauth-pending-telegram-user-42")).toBe(false);
     });
 
-    it("login refuses without sourceUser (can't key per-user pending state)", async () => {
-      const { ctx: c } = ctxWithStore({ sourceUser: undefined });
-      const result = await router.dispatch("llm", ["login", "openai"], c);
-      expect(result.ok).toBe(false);
-      expect(result.text).toMatch(/per-user identifier/);
-    });
-
-    it("callback completes the flow: exchange + persist + flip llm.yaml", async () => {
-      const { ctx: c0, store } = ctxWithStore();
-      // Step 1 — login. Persists pending PKCE state in the store.
-      const login = await router.dispatch(
-        "llm",
-        ["login", "openai"],
-        c0,
-      );
-      expect(login.ok).toBe(true);
-
-      // Step 2 — callback. Use a stub fetch so the real token endpoint
-      // isn't hit. The state we send back has to match what's stored;
-      // pull it out of the secret slot the login handler wrote.
-      const pendingJson = store.get("oauth-pending-telegram-user-42");
-      const pending = JSON.parse(pendingJson) as { state: string };
-      const tokenFetch = makeOauthFetch({
-        access_token: "fake-access-test",
-        refresh_token: "rt-xyz",
-        expires_in: 3600,
-      });
-      const c = { ...c0, oauthFetch: tokenFetch.fetchImpl } as ForemanCommandContext;
-
-      // Paste the redirect URL with the matching state.
-      const pastedUrl = `http://localhost:1455/auth/callback?code=ABC123&state=${pending.state}`;
-      const result = await router.dispatch(
-        "llm",
-        ["callback", pastedUrl],
-        c,
-      );
-      expect(result.ok).toBe(true);
-      expect(result.text).toMatch(/Signed in to openai/);
-
-      // Tokens persisted in the OAuth slot.
-      const tokensJson = store.get("llm-oauth-openai");
-      const tokens = JSON.parse(tokensJson) as { accessToken: string };
-      expect(tokens.accessToken).toBe("fake-access-test");
-
-      // Pending state cleared.
-      expect(store.exists("oauth-pending-telegram-user-42")).toBe(false);
-
-      // llm.yaml flipped to auth_mode: oauth.
-      const yamlText = readFileSync(c.llmConfigPath, "utf-8");
-      expect(yamlText).toMatch(/auth_mode:\s*oauth/);
-    });
-
-    it("callback rejects when no login is pending", async () => {
-      const { ctx: c } = ctxWithStore();
-      const result = await router.dispatch(
-        "llm",
-        ["callback", "http://localhost:53692/callback?code=x&state=y"],
-        c,
-      );
-      expect(result.ok).toBe(false);
-      expect(result.text).toMatch(/No pending OAuth login/);
-    });
-
-    it("callback rejects on state mismatch", async () => {
-      const { ctx: c0, store } = ctxWithStore();
-      await router.dispatch("llm", ["login", "openai"], c0);
-      // Paste a URL with the WRONG state.
-      const result = await router.dispatch(
-        "llm",
-        [
-          "callback",
-          "http://localhost:1455/auth/callback?code=ABC&state=NOT_THE_REAL_STATE",
-        ],
-        c0,
-      );
-      expect(result.ok).toBe(false);
-      expect(result.text).toMatch(/state mismatch/i);
-      // Pending state still there — user can retry with the right URL.
-      expect(store.exists("oauth-pending-telegram-user-42")).toBe(true);
-    });
-
-    it("expired pending state (>10 min old) is dropped on callback", async () => {
-      const { ctx: c0, store } = ctxWithStore();
-      // Hand-write an expired pending state directly.
-      store.add(
-        "oauth-pending-telegram-user-42",
-        JSON.stringify({
-          providerId: "openai",
-          verifier: "v",
-          state: "s",
-          createdAt: Date.now() - 11 * 60_000,
-        }),
-      );
-      const result = await router.dispatch(
-        "llm",
-        ["callback", "http://localhost:53692/callback?code=x&state=s"],
-        c0,
-      );
-      expect(result.ok).toBe(false);
-      expect(result.text).toMatch(/expired/);
-      // Cleared eagerly.
-      expect(store.exists("oauth-pending-telegram-user-42")).toBe(false);
-    });
-
-    it("llm subverb listing includes login + callback when unknown", async () => {
-      const result = await router.dispatch("llm", ["bogus"], ctx);
-      expect(result.text).toContain("login");
-      expect(result.text).toContain("callback");
+    it("refuses an unknown provider", async () => {
+      const result = await router.dispatch("llm", ["login", "nope"], ctx);
+      expect(result.errorCode).toBe("UNKNOWN_SUBCOMMAND");
     });
   });
 

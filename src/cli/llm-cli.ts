@@ -29,10 +29,11 @@ import {
   recordUsage,
 } from "../core/llm/budget.js";
 import {
-  runLoginFlow,
   type OAuthTokens,
 } from "../core/llm/oauth/oauth-flow.js";
+import { revokeChatgptSession, signInWithChatgpt } from "../core/llm/oauth/chatgpt-signin.js";
 import {
+  CHATGPT_USAGE_URL,
   getOAuthProvider,
   isOAuthProviderId,
   type OAuthProviderConfig,
@@ -331,13 +332,11 @@ llmCommand
         defaultLoginDeps(),
       );
       console.log("");
-      console.log(green("✓ Signed in successfully"));
-      if (result.accountId) {
-        console.log(`  ${dim("account")}    ${result.accountId}`);
-      }
-      console.log(
-        `  ${dim("auth_mode")}  credentials.${provider.id} → oauth (saved to llm.yaml)`,
-      );
+      console.log(green("✓ You're using your ChatGPT plan"));
+      if (result.email) console.log(`  ${dim("account")}    ${result.email}`);
+      console.log("  Foreman's AI requests use your plan, separately from anything else you pay for.");
+      console.log(`  ${dim("manage")}     ${CHATGPT_USAGE_URL}`);
+      console.log(`  ${dim("auth_mode")}  credentials.${provider.id} → oauth (saved to llm.yaml)`);
     } catch (err) {
       console.error(
         red("error: ") +
@@ -354,7 +353,7 @@ llmCommand
   .description(
     "Disconnect a subscription and revert that provider to API-key auth_mode",
   )
-  .action((providerArg: string) => {
+  .action(async (providerArg: string) => {
     requireInitialised();
     if (providerArg !== "anthropic" && !isOAuthProviderId(providerArg)) {
       console.error(
@@ -375,17 +374,24 @@ llmCommand
         );
         return;
       }
-      const hadTokens = loadOAuthTokens(store, providerArg) !== null;
+      const tokens = loadOAuthTokens(store, providerArg);
+      const revoked = tokens ? await revokeChatgptSession(tokens) : false;
       performOAuthLogout(
         providerArg,
         { llmConfigPath: paths.llmConfigPath },
         store,
       );
       console.log(
-        hadTokens
+        tokens
           ? `${green("✓")} Signed out (${providerArg}: tokens cleared, auth_mode → api_key)`
           : `${dim("○")} ${providerArg} was already signed out (auth_mode → api_key)`,
       );
+      if (tokens && !revoked) {
+        console.log(
+          orange("note: ") +
+            "OpenAI didn't confirm the sign-out. You can disconnect Foreman in ChatGPT Settings.",
+        );
+      }
     } finally {
       closeDb();
     }
@@ -689,8 +695,8 @@ function renderBar(pct: number, width = 30): string {
 }
 
 export interface LoginDeps {
-  /** Runs the PKCE flow against the real OAuth servers. Replace in tests. */
-  runLogin: typeof runLoginFlow;
+  /** Runs the sign-in against OpenAI. Replace in tests. */
+  runLogin: typeof signInWithChatgpt;
   openInBrowser: (url: string, autoOpen?: boolean) => void;
   /** Prompts the user to paste the redirect URL / code (headless mode). */
   promptPaste: () => Promise<string>;
@@ -699,7 +705,7 @@ export interface LoginDeps {
 /** Default deps used by the CLI — real fetch, real spawn, real readline. */
 export function defaultLoginDeps(): LoginDeps {
   return {
-    runLogin: runLoginFlow,
+    runLogin: signInWithChatgpt,
     openInBrowser,
     promptPaste: promptForCallback,
   };
@@ -711,8 +717,8 @@ export async function performOAuthLogin(
   paths: { llmConfigPath: string },
   store: SecretStore,
   deps: LoginDeps,
-): Promise<{ accountId?: string }> {
-  const tokens: OAuthTokens = await deps.runLogin(provider, {
+): Promise<{ email?: string }> {
+  const tokens: OAuthTokens = await deps.runLogin(store, {
     presentAuthUrl: (url: string) => deps.openInBrowser(url, !opts.headless),
     useLoopback: !opts.headless,
     ...(opts.headless ? { readPastedCode: deps.promptPaste } : {}),
@@ -720,7 +726,7 @@ export async function performOAuthLogin(
   saveOAuthTokens(store, provider.id, tokens);
   const config = loadLlmConfig(paths.llmConfigPath);
   saveLlmConfig(paths.llmConfigPath, setAuthMode(config, provider.id, "oauth"));
-  return tokens.accountId ? { accountId: tokens.accountId } : {};
+  return tokens.email ? { email: tokens.email } : {};
 }
 
 export function performOAuthLogout(
@@ -783,10 +789,10 @@ export function describeAuthMode(
   if (providerId === "openai" && cred?.auth_mode === "oauth") {
     const tokens = loadOAuthTokens(store, providerId);
     if (!tokens) {
-      return `${orange("OAuth (not signed in)")} — run \`foreman llm login ${providerId}\``;
+      return `${orange("ChatGPT plan (not signed in)")} — run \`foreman llm login ${providerId}\``;
     }
-    const account = tokens.accountId ? `, account ${tokens.accountId}` : "";
-    return `${green("OAuth")} (signed in${account})`;
+    const account = tokens.email ? `, ${tokens.email}` : "";
+    return `${green("Using ChatGPT plan")} (signed in${account}) · manage usage: ${CHATGPT_USAGE_URL}`;
   }
   return cred?.secret_name
     ? `${dim("api key")} (${cred.secret_name})`

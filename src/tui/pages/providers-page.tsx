@@ -57,7 +57,7 @@ export function describeConnections(
     .map((c) => {
       if (c === "api-key") return "API key";
       if (c === "endpoint") return providerId === "ollama" ? "local endpoint" : "endpoint";
-      return providerId === "anthropic" ? "Claude Code" : "ChatGPT subscription sign-in";
+      return providerId === "anthropic" ? "Claude Code" : "ChatGPT plan";
     })
     .join(" + ");
 }
@@ -69,7 +69,7 @@ function connectHint(provider: ProviderEntry): string {
     return "not connected — [n] add an API key or [o] use Claude Code";
   }
   if (isOAuthProviderId(provider.id)) {
-    return "not connected — [n] add an API key or [o] sign in with your subscription";
+    return "not connected — [n] add an API key or [o] continue with ChatGPT";
   }
   return provider.endpoint_required
     ? "not connected — [n] add its endpoint and API key"
@@ -350,7 +350,7 @@ export function ProvidersPage({ onLeave, onEditingChange }: ProvidersPageProps):
         <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>
       </Box>
       <Text color={theme.fg.muted}>
-        [↑↓] move · [n] new (on available) · [o] subscription sign-in (Claude / ChatGPT) ·
+        [↑↓] move · [n] new (on available) · [o] use your plan (Claude Code / ChatGPT) ·
         [r] rotate · [d] remove · [s] show 10s · [Esc] back
       </Text>
     </Box>
@@ -459,7 +459,7 @@ function ProviderRow({
             {row.provider.id === "anthropic"
               ? " · [o] use Claude Code"
               : isOAuthProviderId(row.provider.id)
-                ? " · [o] sign in with your subscription"
+                ? " · [o] continue with ChatGPT"
                 : ""}
           </Text>
         </Box>

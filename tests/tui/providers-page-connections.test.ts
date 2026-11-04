@@ -49,7 +49,7 @@ describe('provider connections', () => {
     expect(describeConnections('anthropic', ['api-key', 'subscription'])).toBe(
       'API key + Claude Code',
     )
-    expect(describeConnections('openai', ['subscription'])).toBe('ChatGPT subscription sign-in')
+    expect(describeConnections('openai', ['subscription'])).toBe('ChatGPT plan')
     expect(describeConnections('ollama', ['endpoint'])).toBe('local endpoint')
     expect(describeConnections('openai-compatible', ['endpoint', 'api-key'])).toBe('endpoint + API key')
   })

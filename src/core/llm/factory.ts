@@ -11,7 +11,7 @@ import { makeAccessTokenProvider } from './oauth/token-refresh.js'
 import { loadOAuthTokens } from './oauth/token-store.js'
 import { AnthropicLlmClient } from './providers/anthropic.js'
 import { ClaudeCodeLlmClient } from './providers/claude-code.js'
-import { CodexLlmClient } from './providers/codex.js'
+import { ChatgptPlanLlmClient } from './providers/chatgpt-plan.js'
 import { GeminiLlmClient } from './providers/gemini.js'
 import { OpenAILlmClient } from './providers/openai.js'
 import { OpenAICompatibleLlmClient } from './providers/openai-compatible.js'
@@ -181,10 +181,9 @@ function buildOAuthClient(
     throw new LlmOAuthLoginRequiredError(providerId)
   }
   const tokenProvider = makeAccessTokenProvider(store, providerId)
-  // Codex (ChatGPT backend Responses API). Same logical provider id from the
-  // factory's POV; OAuth-vs-API-key dispatches to a different concrete client
-  // because the wire shape is different.
-  return new CodexLlmClient({ tokenProvider, model })
+  // The user's ChatGPT plan. Same logical provider id from the factory's POV;
+  // OAuth-vs-API-key picks the client because the request rules differ.
+  return new ChatgptPlanLlmClient({ tokenProvider, model })
 }
 
 function resolveSecret(

@@ -892,9 +892,7 @@ function checkOAuthCredentials(providerId: string): CheckResult {
         remediation: `Run \`foreman llm login ${providerId}\`.`,
       };
     }
-    const accountNote = tokens.accountId
-      ? ` (account ${tokens.accountId})`
-      : "";
+    const accountNote = tokens.email ? ` (${tokens.email})` : "";
     return {
       name: "llm_credentials",
       status: "ok",

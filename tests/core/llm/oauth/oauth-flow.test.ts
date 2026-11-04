@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAuthorizeUrl,
-  decodeChatgptAccountId,
   exchangeCodeForTokens,
   OAuthError,
+  OAuthSignedOutError,
   parseCallbackInput,
   refreshTokens,
   type OAuthFetch,
@@ -72,12 +72,16 @@ describe("buildAuthorizeUrl", () => {
     expect(url.searchParams.get("code")).toBe("true");
   });
 
-  it("includes the codex-cli extras for OpenAI", () => {
+  it("asks OpenAI for plan use, on the public API, as nobody but itself", () => {
     const provider = getOAuthProvider("openai");
-    const url = new URL(buildAuthorizeUrl(provider, "C", "S"));
-    expect(url.searchParams.get("codex_cli_simplified_flow")).toBe("true");
-    expect(url.searchParams.get("id_token_add_organizations")).toBe("true");
-    expect(url.searchParams.get("originator")).toBe("codex_cli_rs");
+    const url = new URL(buildAuthorizeUrl(provider, "C", "S", { nonce: "N" }));
+    expect(url.origin + url.pathname).toBe("https://auth.openai.com/api/accounts/authorize");
+    expect(url.searchParams.get("client_id")).toBe("dynamic_agent_client");
+    expect(url.searchParams.get("scope")).toContain("chatgpt.tokens.use.direct");
+    expect(url.searchParams.get("resource")).toBe("https://api.openai.com/v1");
+    expect(url.searchParams.get("redirect_uri")).toBe("http://127.0.0.1:1455/auth/callback");
+    expect(url.searchParams.get("nonce")).toBe("N");
+    expect(url.searchParams.has("originator")).toBe(false);
   });
 });
 
@@ -108,6 +112,11 @@ describe("parseCallbackInput", () => {
     expect(parseCallbackInput("plain-code")).toEqual({ code: "plain-code" });
   });
 
+  it("reads the client id a first registration comes back with", () => {
+    const parsed = parseCallbackInput("http://127.0.0.1:1455/auth/callback?code=A&state=S&client_id=oaiapp_1");
+    expect(parsed).toEqual({ code: "A", state: "S", clientId: "oaiapp_1" });
+  });
+
   it("throws on empty / whitespace-only input", () => {
     expect(() => parseCallbackInput("   ")).toThrow(OAuthError);
   });
@@ -119,26 +128,8 @@ describe("parseCallbackInput", () => {
   });
 });
 
-describe("decodeChatgptAccountId", () => {
-  it("extracts the chatgpt_account_id claim from a JWT", () => {
-    const jwt = makeJwt({
-      "https://api.openai.com/auth": { chatgpt_account_id: "acc_42" },
-    });
-    expect(decodeChatgptAccountId(jwt)).toBe("acc_42");
-  });
-
-  it("returns undefined for non-JWT input", () => {
-    expect(decodeChatgptAccountId("plain-string")).toBeUndefined();
-    expect(decodeChatgptAccountId("a.b")).toBeUndefined();
-  });
-
-  it("returns undefined when the claim is absent", () => {
-    expect(decodeChatgptAccountId(makeJwt({ sub: "foo" }))).toBeUndefined();
-  });
-});
-
 describe("exchangeCodeForTokens — OpenAI (form encoding, no state echo)", () => {
-  it("sends the correct form body and returns parsed tokens with accountId", async () => {
+  it("sends the correct form body and returns parsed tokens", async () => {
     const provider = getOAuthProvider("openai");
     const access = makeJwt({
       "https://api.openai.com/auth": { chatgpt_account_id: "acc_42" },
@@ -166,11 +157,11 @@ describe("exchangeCodeForTokens — OpenAI (form encoding, no state echo)", () =
     expect(params.get("code")).toBe("CODE");
     expect(params.get("code_verifier")).toBe("VER");
     expect(params.get("redirect_uri")).toBe(provider.redirectUri);
+    expect(params.get("resource")).toBe("https://api.openai.com/v1");
     expect(params.get("state")).toBeNull();
 
     expect(tokens.accessToken).toBe(access);
     expect(tokens.refreshToken).toBe("rt-1");
-    expect(tokens.accountId).toBe("acc_42");
     // 5-min safety margin baked into expiresAt.
     const now = Date.now();
     expect(tokens.expiresAt).toBeGreaterThan(now + 50 * 60 * 1000);
@@ -179,7 +170,7 @@ describe("exchangeCodeForTokens — OpenAI (form encoding, no state echo)", () =
 });
 
 describe("exchangeCodeForTokens — JSON encoding, state echo", () => {
-  it("sends a JSON body that includes state and omits accountId", async () => {
+  it("sends a JSON body that includes state", async () => {
     const provider = jsonProvider;
     const f = makeFetch([
       {
@@ -205,12 +196,12 @@ describe("exchangeCodeForTokens — JSON encoding, state echo", () => {
     expect(parsed.code).toBe("CODE");
     expect(parsed.code_verifier).toBe("VER");
     expect(parsed.state).toBe("STATE");
-    expect(tokens.accountId).toBeUndefined();
   });
 });
 
 describe("refreshTokens", () => {
   const provider = jsonProvider;
+  const bundle = (refreshToken: string) => ({ accessToken: "old", refreshToken, expiresAt: 0 });
 
   it("sends grant_type=refresh_token and parses the new bundle", async () => {
     const f = makeFetch([
@@ -222,7 +213,7 @@ describe("refreshTokens", () => {
         },
       },
     ]);
-    const tokens = await refreshTokens(provider, "rt-old", f.fetchImpl);
+    const tokens = await refreshTokens(provider, bundle("rt-old"), f.fetchImpl);
     const body = JSON.parse(String(f.calls[0]!.init.body)) as Record<
       string,
       unknown
@@ -234,31 +225,51 @@ describe("refreshTokens", () => {
     expect(tokens.refreshToken).toBe("rt-new");
   });
 
+  it("uses the issued client id, sends the resource, asks for no scope, keeps who signed in", async () => {
+    const openai = getOAuthProvider("openai");
+    const f = makeFetch([{ body: { access_token: "new", refresh_token: "rt-2", expires_in: 3600 } }]);
+    const tokens = await refreshTokens(
+      openai,
+      { ...bundle("rt-1"), clientId: "oaiapp_1", sub: "user-1", email: "a@b.c" },
+      f.fetchImpl,
+    );
+    const params = new URLSearchParams(String(f.calls[0]!.init.body));
+    expect(params.get("client_id")).toBe("oaiapp_1");
+    expect(params.get("resource")).toBe("https://api.openai.com/v1");
+    expect(params.has("scope")).toBe(false);
+    expect(tokens).toMatchObject({ accessToken: "new", refreshToken: "rt-2", clientId: "oaiapp_1", sub: "user-1" });
+  });
+
+  it("says when only signing in again can help", async () => {
+    const f = makeFetch([{ status: 400, textBody: '{"error":"refresh_token_reused"}' }]);
+    await expect(refreshTokens(provider, bundle("rt"), f.fetchImpl)).rejects.toThrow(OAuthSignedOutError);
+  });
+
   it("keeps the previous refresh token when the response omits one", async () => {
     const f = makeFetch([
       { body: { access_token: "sk-ant-oat03", expires_in: 600 } },
     ]);
-    const tokens = await refreshTokens(provider, "rt-keep", f.fetchImpl);
+    const tokens = await refreshTokens(provider, bundle("rt-keep"), f.fetchImpl);
     expect(tokens.refreshToken).toBe("rt-keep");
   });
 
   it("throws OAuthError on a non-2xx response", async () => {
     const f = makeFetch([{ status: 401, textBody: '{"error":"bad refresh"}' }]);
-    await expect(refreshTokens(provider, "rt", f.fetchImpl)).rejects.toThrow(
+    await expect(refreshTokens(provider, bundle("rt"), f.fetchImpl)).rejects.toThrow(
       OAuthError,
     );
   });
 
   it("throws OAuthError when the response has no access_token", async () => {
     const f = makeFetch([{ body: { expires_in: 600 } }]);
-    await expect(refreshTokens(provider, "rt", f.fetchImpl)).rejects.toThrow(
+    await expect(refreshTokens(provider, bundle("rt"), f.fetchImpl)).rejects.toThrow(
       /access_token/,
     );
   });
 
   it("throws OAuthError when the response is not JSON", async () => {
     const f = makeFetch([{ textBody: "<html>500</html>" }]);
-    await expect(refreshTokens(provider, "rt", f.fetchImpl)).rejects.toThrow(
+    await expect(refreshTokens(provider, bundle("rt"), f.fetchImpl)).rejects.toThrow(
       /non-JSON/,
     );
   });

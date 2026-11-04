@@ -51,6 +51,20 @@ export function removeLegacyClaudeTokens(store: Pick<SecretStore, "exists" | "re
   return true;
 }
 
+/** ChatGPT tokens from before Foreman had its own registration: they came
+ *  from Codex's client, which Foreman must not use, and can't refresh. */
+export function removeLegacyChatgptTokens(store: Pick<SecretStore, "exists" | "get" | "remove">): boolean {
+  const name = oauthSecretName("openai");
+  if (!store.exists(name)) return false;
+  try {
+    if (parseTokens(store.get(name)).clientId) return false;
+  } catch {
+    // Unreadable is as good as gone.
+  }
+  store.remove(name);
+  return true;
+}
+
 function parseTokens(json: string): OAuthTokens {
   let raw: unknown;
   try {
@@ -71,6 +85,10 @@ function parseTokens(json: string): OAuthTokens {
     refreshToken: t.refreshToken,
     expiresAt: t.expiresAt,
   };
-  if (typeof t.accountId === "string") tokens.accountId = t.accountId;
+  if (typeof t.clientId === "string") tokens.clientId = t.clientId;
+  if (typeof t.scope === "string") tokens.scope = t.scope;
+  if (typeof t.idToken === "string") tokens.idToken = t.idToken;
+  if (typeof t.sub === "string") tokens.sub = t.sub;
+  if (typeof t.email === "string") tokens.email = t.email;
   return tokens;
 }

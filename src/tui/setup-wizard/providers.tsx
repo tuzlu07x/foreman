@@ -136,7 +136,7 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
           <Text color={theme.fg.muted}>
             {viaClaudeCode
               ? "An API key is billed per use. With a Claude plan, Foreman runs Claude Code on this computer with your own sign-in, and uses your plan instead."
-              : "An API key is billed per use. With a ChatGPT subscription you sign in through your browser once setup ends, and Foreman uses your plan instead."}
+              : "An API key is billed per use. With a ChatGPT plan you sign in through your browser once setup ends, and Foreman uses your plan instead."}
           </Text>
           <Select
             key={`auth:${oauthProviderId}`}
@@ -145,7 +145,7 @@ export function renderProvidersStep(ctx: WizardContext): JSX.Element | null {
               {
                 label: viaClaudeCode
                   ? "Claude Code — use your Claude plan through the claude command"
-                  : "ChatGPT subscription — sign in in the browser after setup",
+                  : "Continue with ChatGPT — use your ChatGPT plan, in the browser after setup",
                 value: "subscription",
               },
             ]}

@@ -1,21 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { LlmProviderError } from '../../../src/core/llm/client.js'
 import {
-  CodexLlmClient,
-  parseCodexSseStream,
-  type CodexFetch,
-  type CodexFetchResponse,
-} from '../../../src/core/llm/providers/codex.js'
+  ChatgptPlanLlmClient,
+  parseResponsesStream,
+  type ChatgptPlanFetch,
+  type ChatgptPlanFetchResponse,
+} from '../../../src/core/llm/providers/chatgpt-plan.js'
 
-// =============================================================================
-// Codex (ChatGPT backend Responses API) client — Faz 3 / #506
-//
-// Pins the wire-shape contract pi-ai / Hermes proved: POST to
-// chatgpt.com/backend-api/codex/responses, Bearer + chatgpt-account-id +
-// originator headers, body with `store: false` and the Responses `input[]`
-// shape, SSE response stream with `response.output_text.delta` chunks and a
-// `response.completed` event carrying usage.
-// =============================================================================
+// OpenAI's rules for ChatGPT plan use in open-source apps
+// (developers.openai.com/siwc/token-sharing-open-source/models-and-inference):
+// the public Responses API, `store: false`, `stream: true`, and none of the
+// fields it refuses.
 
 interface MockResp {
   status?: number
@@ -34,16 +29,16 @@ function makeSseStream(events: string[]): ReadableStream<Uint8Array> {
 }
 
 function makeFetch(plan: MockResp[]): {
-  fetchImpl: CodexFetch
+  fetchImpl: ChatgptPlanFetch
   calls: Array<{ url: string; init: RequestInit }>
 } {
   let cursor = 0
   const calls: Array<{ url: string; init: RequestInit }> = []
-  const fetchImpl: CodexFetch = async (url, init) => {
+  const fetchImpl: ChatgptPlanFetch = async (url, init) => {
     calls.push({ url, init })
     const next = plan[cursor++] ?? { status: 200, events: [] }
     const status = next.status ?? 200
-    const res: CodexFetchResponse = {
+    const res: ChatgptPlanFetchResponse = {
       ok: status >= 200 && status < 300,
       status,
       text: async () => next.textBody ?? '',
@@ -74,54 +69,43 @@ const sseCompleted = (
     },
   })}\n\n`
 
-function tokenProvider(
-  accessToken: string,
-  accountId = 'acc-1',
-): () => Promise<{ accessToken: string; accountId: string }> {
-  return async () => ({ accessToken, accountId })
+function tokenProvider(accessToken: string): () => Promise<{ accessToken: string }> {
+  return async () => ({ accessToken })
 }
 
-describe('CodexLlmClient — request shape', () => {
-  it('POSTs to chatgpt.com/backend-api/codex/responses', async () => {
+describe('ChatgptPlanLlmClient — request shape', () => {
+  it('POSTs to the public Responses API, never ChatGPT\'s backend-api', async () => {
     const f = makeFetch([
       { events: [sseDelta('hi'), sseCompleted(10, 2)] },
     ])
-    const client = new CodexLlmClient({
-      tokenProvider: tokenProvider('TOK', 'acc-42'),
+    const client = new ChatgptPlanLlmClient({
+      tokenProvider: tokenProvider('TOK'),
       model: 'gpt-5.4',
       fetchImpl: f.fetchImpl,
     })
     await client.call('say hi', { feature: 'test', maxTokens: 16 })
     expect(f.calls).toHaveLength(1)
-    expect(f.calls[0]!.url).toBe(
-      'https://chatgpt.com/backend-api/codex/responses',
-    )
+    expect(f.calls[0]!.url).toBe('https://api.openai.com/v1/responses')
   })
 
-  it('sends Bearer + chatgpt-account-id + originator + OpenAI-Beta headers', async () => {
+  it('sends the bearer token and presents itself as nothing else', async () => {
     const f = makeFetch([{ events: [sseCompleted(0, 0)] }])
-    const client = new CodexLlmClient({
-      tokenProvider: tokenProvider('TOK', 'acc-42'),
+    const client = new ChatgptPlanLlmClient({
+      tokenProvider: tokenProvider('TOK'),
       model: 'gpt-5.4',
       fetchImpl: f.fetchImpl,
     })
     await client.call('hi', { feature: 'test', maxTokens: 16 })
     const headers = f.calls[0]!.init.headers as Record<string, string>
     expect(headers['authorization']).toBe('Bearer TOK')
-    expect(headers['chatgpt-account-id']).toBe('acc-42')
-    expect(headers['originator']).toBe('codex_cli_rs')
-    expect(headers['OpenAI-Beta']).toBe('responses=experimental')
     expect(headers['accept']).toBe('text/event-stream')
     expect(headers['content-type']).toBe('application/json')
-    expect(headers['session_id']).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-    )
-    expect(headers['x-client-request-id']).toBe(headers['session_id'])
+    expect(Object.keys(headers).sort()).toEqual(['accept', 'authorization', 'content-type'])
   })
 
   it('body has store=false, dotted model, Responses input shape', async () => {
     const f = makeFetch([{ events: [sseCompleted(0, 0)] }])
-    const client = new CodexLlmClient({
+    const client = new ChatgptPlanLlmClient({
       tokenProvider: tokenProvider('TOK'),
       model: 'gpt-5.4',
       fetchImpl: f.fetchImpl,
@@ -134,6 +118,9 @@ describe('CodexLlmClient — request shape', () => {
     expect(body.model).toBe('gpt-5.4')
     expect(body.store).toBe(false)
     expect(body.stream).toBe(true)
+    for (const refused of ['max_output_tokens', 'temperature', 'top_p', 'metadata', 'user']) {
+      expect(body).not.toHaveProperty(refused)
+    }
     expect(body.instructions).toBe('You are a helpful assistant.')
     expect(body.input).toEqual([
       {
@@ -142,19 +129,17 @@ describe('CodexLlmClient — request shape', () => {
         content: [{ type: 'input_text', text: 'hello world' }],
       },
     ])
-    expect(body.include).toEqual(['reasoning.encrypted_content'])
-    expect(typeof body.prompt_cache_key).toBe('string')
   })
 })
 
-describe('CodexLlmClient — response parsing', () => {
+describe('ChatgptPlanLlmClient — response parsing', () => {
   it('extracts text from concatenated output_text.delta events', async () => {
     const f = makeFetch([
       {
         events: [sseDelta('Hel'), sseDelta('lo '), sseDelta('there!'), sseCompleted(10, 3)],
       },
     ])
-    const client = new CodexLlmClient({
+    const client = new ChatgptPlanLlmClient({
       tokenProvider: tokenProvider('TOK'),
       model: 'gpt-5.4',
       fetchImpl: f.fetchImpl,
@@ -168,7 +153,7 @@ describe('CodexLlmClient — response parsing', () => {
     const f = makeFetch([
       { events: [sseDelta('ok'), sseCompleted(100, 5, 30)] },
     ])
-    const client = new CodexLlmClient({
+    const client = new ChatgptPlanLlmClient({
       tokenProvider: tokenProvider('TOK'),
       model: 'gpt-5.4',
       fetchImpl: f.fetchImpl,
@@ -183,7 +168,7 @@ describe('CodexLlmClient — response parsing', () => {
     const f = makeFetch([
       { events: [sseDelta('hi'), sseCompleted(50, 10)] },
     ])
-    const client = new CodexLlmClient({
+    const client = new ChatgptPlanLlmClient({
       tokenProvider: tokenProvider('TOK'),
       model: 'gpt-5.4',
       fetchImpl: f.fetchImpl,
@@ -204,7 +189,7 @@ describe('CodexLlmClient — response parsing', () => {
         ],
       },
     ])
-    const client = new CodexLlmClient({
+    const client = new ChatgptPlanLlmClient({
       tokenProvider: tokenProvider('TOK'),
       model: 'gpt-5.4',
       fetchImpl: f.fetchImpl,
@@ -224,7 +209,7 @@ describe('CodexLlmClient — response parsing', () => {
         ],
       },
     ])
-    const client = new CodexLlmClient({
+    const client = new ChatgptPlanLlmClient({
       tokenProvider: tokenProvider('TOK'),
       model: 'gpt-5.4',
       fetchImpl: f.fetchImpl,
@@ -234,64 +219,59 @@ describe('CodexLlmClient — response parsing', () => {
   })
 })
 
-describe('CodexLlmClient — errors', () => {
-  it('throws a friendly error when the OAuth token has no accountId', async () => {
-    // Token provider that omits accountId entirely — pi-ai keeps it optional
-    // so we have to guard against the case explicitly.
-    const noAccount: () => Promise<{ accessToken: string }> = async () => ({
-      accessToken: 'TOK',
-    })
-    const client = new CodexLlmClient({
-      tokenProvider: noAccount as never,
-      model: 'gpt-5.4',
-      fetchImpl: makeFetch([]).fetchImpl,
-    })
-    await expect(
-      client.call('hi', { feature: 'test', maxTokens: 16 }),
-    ).rejects.toThrow(/account id/i)
+describe('ChatgptPlanLlmClient — errors', () => {
+  const failing = (status: number, code: string): MockResp => ({
+    status,
+    textBody: JSON.stringify({ error: { code, message: 'no' } }),
+  })
+  const client = (f: ReturnType<typeof makeFetch>, wait: (ms: number) => Promise<void> = async () => undefined) =>
+    new ChatgptPlanLlmClient({ tokenProvider: tokenProvider('TOK'), model: 'gpt-5.4', fetchImpl: f.fetchImpl, wait })
+  const ask = { feature: 'test', maxTokens: 16 } as const
+
+  it('sends you to ChatGPT usage settings at the plan limit, without retrying', async () => {
+    const f = makeFetch([failing(429, 'subscription_sharing_usage_limit_exceeded')])
+    await expect(client(f).call('hi', ask)).rejects.toThrow(/chatgpt\.com\/settings\/usage/)
+    expect(f.calls).toHaveLength(1)
   })
 
-  it('surfaces a "usage limit" message on HTTP 429', async () => {
-    const f = makeFetch([
-      {
-        status: 429,
-        textBody: JSON.stringify({
-          error: { code: 'rate_limit_exceeded', message: 'too many' },
-        }),
-      },
-    ])
-    const client = new CodexLlmClient({
-      tokenProvider: tokenProvider('TOK'),
-      model: 'gpt-5.4',
-      fetchImpl: f.fetchImpl,
-    })
-    await expect(
-      client.call('hi', { feature: 'test', maxTokens: 16 }),
-    ).rejects.toThrow(/usage limit/i)
+  it('stops on an ineligible plan and suggests an API key', async () => {
+    const f = makeFetch([failing(403, 'subscription_sharing_user_not_eligible')])
+    await expect(client(f).call('hi', ask)).rejects.toThrow(/API key/)
+    expect(f.calls).toHaveLength(1)
   })
 
-  it('surfaces a "usage limit" message when body says usage_limit_reached', async () => {
-    const f = makeFetch([
-      {
-        status: 403,
-        textBody: JSON.stringify({
-          error: { code: 'usage_limit_reached', plan_type: 'pro' },
-        }),
-      },
-    ])
-    const client = new CodexLlmClient({
-      tokenProvider: tokenProvider('TOK'),
-      model: 'gpt-5.4',
-      fetchImpl: f.fetchImpl,
-    })
-    await expect(
-      client.call('hi', { feature: 'test', maxTokens: 16 }),
-    ).rejects.toThrow(/usage limit/i)
+  it('asks you to sign in again on a 401', async () => {
+    const f = makeFetch([{ status: 401, textBody: '{"detail":"no"}' }])
+    await expect(client(f).call('hi', ask)).rejects.toThrow(/foreman llm login openai/)
+  })
+
+  it('retries a passing outage a bounded number of times', async () => {
+    const waits: number[] = []
+    const f = makeFetch([failing(503, 'subscription_sharing_usage_unavailable'), failing(503, 'subscription_sharing_usage_unavailable'), { events: [sseDelta('ok'), sseCompleted(1, 1)] }])
+    const out = await client(f, async (ms) => void waits.push(ms)).call('hi', ask)
+    expect(out.text).toBe('ok')
+    expect(waits).toEqual([1000, 2000])
+  })
+
+  it('gives up after that', async () => {
+    const f = makeFetch([{ status: 503 }, { status: 503 }, { status: 503 }, { status: 503 }])
+    await expect(client(f).call('hi', ask)).rejects.toThrow(/unavailable/)
+    expect(f.calls).toHaveLength(3)
+  })
+
+  it('does not count a stream as an answer until response.completed', async () => {
+    const f = makeFetch([{ events: [sseDelta('half an ans')] }])
+    await expect(client(f).call('hi', ask)).rejects.toThrow(/ended before/)
+  })
+
+  it('treats response.incomplete as a failure', async () => {
+    const f = makeFetch([{ events: [sseDelta('half'), `data: ${JSON.stringify({ type: 'response.incomplete' })}\n\n`] }])
+    await expect(client(f).call('hi', ask)).rejects.toThrow(/incomplete/)
   })
 
   it('throws LlmProviderError on a generic non-2xx', async () => {
     const f = makeFetch([{ status: 500, textBody: 'kaboom' }])
-    const client = new CodexLlmClient({
+    const client = new ChatgptPlanLlmClient({
       tokenProvider: tokenProvider('TOK'),
       model: 'gpt-5.4',
       fetchImpl: f.fetchImpl,
@@ -310,7 +290,7 @@ describe('CodexLlmClient — errors', () => {
         ],
       },
     ])
-    const client = new CodexLlmClient({
+    const client = new ChatgptPlanLlmClient({
       tokenProvider: tokenProvider('TOK'),
       model: 'gpt-5.4',
       fetchImpl: f.fetchImpl,
@@ -321,14 +301,14 @@ describe('CodexLlmClient — errors', () => {
   })
 })
 
-describe('parseCodexSseStream — direct', () => {
+describe('parseResponsesStream — direct', () => {
   it('returns text + usage from a small stream', async () => {
     const stream = makeSseStream([
       sseDelta('AB'),
       sseDelta('C'),
       sseCompleted(20, 4, 5),
     ])
-    const out = await parseCodexSseStream(stream)
+    const out = await parseResponsesStream(stream)
     expect(out.text).toBe('ABC')
     expect(out.usage).toEqual({
       inputTokens: 15,
@@ -337,22 +317,18 @@ describe('parseCodexSseStream — direct', () => {
     })
   })
 
-  it('returns empty text + zero usage when the stream has no usable events', async () => {
-    const stream = makeSseStream(['data: [DONE]\n\n'])
-    const out = await parseCodexSseStream(stream)
+  it('returns zero usage when response.completed carries none', async () => {
+    const stream = makeSseStream([`data: ${JSON.stringify({ type: 'response.completed' })}\n\n`, 'data: [DONE]\n\n'])
+    const out = await parseResponsesStream(stream)
     expect(out.text).toBe('')
-    expect(out.usage).toEqual({
-      inputTokens: 0,
-      outputTokens: 0,
-      cachedTokens: 0,
-    })
+    expect(out.usage).toEqual({ inputTokens: 0, outputTokens: 0, cachedTokens: 0 })
   })
 })
 
-describe('CodexLlmClient — identity', () => {
+describe('ChatgptPlanLlmClient — identity', () => {
   it('providerId is the literal "openai" (same logical provider as API-key)', async () => {
     const f = makeFetch([{ events: [sseCompleted(0, 0)] }])
-    const client = new CodexLlmClient({
+    const client = new ChatgptPlanLlmClient({
       tokenProvider: tokenProvider('TOK'),
       model: 'gpt-5.4',
       fetchImpl: f.fetchImpl,

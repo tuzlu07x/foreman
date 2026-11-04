@@ -231,7 +231,7 @@ credentials:
       expect(new Set(asked)).toEqual(new Set(['claude auth status']))
     })
 
-    it('ok when auth_mode: oauth and tokens are present (Codex, with accountId)', () => {
+    it('ok when auth_mode: oauth and tokens are present', () => {
       runInit()
       writeOAuthYaml('openai')
       const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
@@ -241,12 +241,12 @@ credentials:
           accessToken: 'A',
           refreshToken: 'R',
           expiresAt: Date.now() + 60 * 60_000,
-          accountId: 'acc-42',
+          email: 'a@b.c',
         }),
       )
       const r = checkLlmCredentials()
       expect(r.status).toBe('ok')
-      expect(r.message).toMatch(/openai OAuth tokens present \(account acc-42\)/)
+      expect(r.message).toMatch(/openai OAuth tokens present \(a@b\.c\)/)
     })
 
     it('warn when a non-OAuth provider (gemini) is configured with auth_mode: oauth', () => {

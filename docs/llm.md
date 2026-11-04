@@ -132,7 +132,7 @@ Foreman LLM features
 Foreman's own LLM can use an **API key** (the historical path) or a **subscription**:
 
 - **Claude:** Foreman runs your own, unmodified `claude` command, with your own Claude Code sign-in. Foreman never sees that sign-in.
-- **ChatGPT:** you sign in with your ChatGPT account through `foreman llm login openai`.
+- **ChatGPT:** you use OpenAI's [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source) through `foreman llm login openai`. Foreman registers itself as its own app and calls the public OpenAI API. Plan use is OpenAI's preview feature for open-source and locally hosted apps.
 
 ### Why pick which
 
@@ -149,7 +149,7 @@ If you already have a Claude or ChatGPT plan, this lets Foreman draw from it ins
 
 ```bash
 foreman llm login anthropic              # Use Claude Code on this computer
-foreman llm login openai                 # Sign in with your ChatGPT account (Codex)
+foreman llm login openai                 # Continue with ChatGPT in your browser
 foreman llm login openai --headless      # SSH / remote shell — paste back the redirect URL
 foreman llm logout anthropic
 foreman llm logout openai
@@ -174,28 +174,40 @@ A prompt can hold text from agents and chat users, so each call can only answer:
 
 ### ChatGPT
 
+The first sign-in registers this computer with OpenAI, under the app name Foreman, and OpenAI issues a client id for it. Later sign-ins reuse that id. You approve plan use in the browser, and without that approval Foreman doesn't use the sign-in. It never falls back to another way of paying.
+
+Eligible requests from Foreman then use your ChatGPT plan, separately from anything else you pay for. See and limit that use in [ChatGPT usage settings](https://chatgpt.com/settings/usage). When you reach a limit, Foreman stops and links you there.
+
+Foreman signs in only on the host: chat apps point you to `foreman llm login openai`.
+
 #### Loopback vs `--headless`
 
-- **Default (loopback):** Foreman opens your default browser, then runs a one-shot HTTP server on the redirect port the public OAuth client is registered for (`127.0.0.1:1455`). The browser redirects there with the authorization code; Foreman captures it. Works when you're sitting at the machine running Foreman.
-- **`--headless`:** Foreman skips the loopback server. You see the authorize URL, open it on your laptop / phone, complete sign-in. The browser tries to redirect to `localhost:<port>` and fails to load (your local machine isn't running Foreman) — copy the **full URL from the address bar** and paste it back into the terminal. Use this whenever you're on SSH or any host where the user's browser can't reach Foreman's loopback server.
+- **Default (loopback):** Foreman listens on `http://127.0.0.1:1455/auth/callback`, then opens your browser.
+- **`--headless`:** Foreman shows the sign-in URL for you to open on another device. The browser can't reach the callback there, so copy the address it ends on and paste it back.
 
 #### What gets stored
 
-The OAuth token bundle (access token + refresh token + expiry + optional ChatGPT account id) lives in the same AES-256-GCM encrypted SQLite secret store as your API keys, under a dedicated `llm-oauth-openai` slot. `llm.yaml` only carries `auth_mode: oauth` — never a literal token.
+The tokens, the issued client id and your account's identity live in the same AES-256-GCM encrypted secret store as your API keys, under `llm-oauth-openai`. They never go to `llm.yaml`. The computer's registration (`llm-oauth-openai-registration`) stays after you sign out, so the next sign-in reuses it.
+
+Before anything is stored, Foreman checks the ID token's signature against OpenAI's published keys, its issuer, audience, expiry and nonce, and that plan use was granted.
 
 #### Token refresh
 
-Refresh happens **lazily, on each call**: the provider client asks the token store for a fresh access token right before the HTTP request; if the stored token is past its (safety-margined) expiry, Foreman trades the refresh token at the provider's token endpoint and persists the new bundle. A **5-minute safety margin** is baked into the stored expiry so tokens never expire mid-request.
+Access tokens last an hour. Foreman refreshes one when it's near expiry, one refresh at a time, because each refresh replaces the refresh token. When OpenAI has ended the session, Foreman clears the tokens and asks you to sign in again. A network failure leaves them in place.
 
-#### Wire shape
+#### Requests
 
-ChatGPT-account tokens do **not** work against `api.openai.com`. Foreman talks to the ChatGPT backend Responses API at `https://chatgpt.com/backend-api/codex/responses` with `chatgpt-account-id` (decoded from the access-token JWT) + `originator: codex_cli_rs` + `OpenAI-Beta: responses=experimental`. Model IDs use **dots**, not dashes (`gpt-5.4`, not `gpt-5-4`).
+`POST https://api.openai.com/v1/responses` with your access token, `store: false` and `stream: true`. OpenAI's rules for plan use refuse some fields, including `max_output_tokens` and `temperature`, so Foreman doesn't send them. An answer counts only once `response.completed` arrives.
+
+#### Upgrading
+
+Foreman used to sign in through Codex's client and call ChatGPT's private backend. OpenAI's guide rules that out for other apps, so `foreman start` deletes those old tokens. Run `foreman llm login openai` once to sign in the new way.
 
 ### Switching back
 
 ```bash
 foreman llm logout anthropic              # flips auth_mode → api_key; Claude Code's own sign-in stays
-foreman llm logout openai                 # clears tokens, flips auth_mode → api_key
+foreman llm logout openai                 # ends the session at OpenAI, clears tokens, flips auth_mode → api_key
 ```
 
 The credential block's `secret_name` is preserved across modes, so the API-key fallback stays configured.
@@ -205,7 +217,7 @@ The credential block's `secret_name` is preserved across modes, so the API-key f
 `foreman doctor` checks the active provider's auth state:
 
 - `auth_mode: claude_code` → asks `claude auth status`. That can't see a revoked token; `foreman llm test` makes a real call.
-- `auth_mode: oauth` + tokens stored → ok, surfaces the ChatGPT account id when present.
+- `auth_mode: oauth` + tokens stored → ok, surfaces the ChatGPT account when present.
 - `auth_mode: oauth` + no tokens → warn with `foreman llm login openai` hint.
 - `auth_mode: oauth` on Gemini (no subscription OAuth equivalent) → warn that the setting is being ignored.
 
