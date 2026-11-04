@@ -26,6 +26,11 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Fixed
 
+- **An agent that dies no longer takes Foreman down with it.** When Foreman
+  wrote to an agent that had just exited (`write EPIPE`), `foreman start`
+  or the background service crashed, and every approval went with it. The
+  task now fails on its own. This affected Hermes, OpenClaw, ZeroClaw and
+  Codex's bridge, and made the QA suite fail on and off.
 - **The inbox counts what's yours.** A task that passed through five roles
   used to leave ten new items. The steps in between are still listed, but
   only a failure among them counts as new. A lead that hands work on says

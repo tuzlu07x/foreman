@@ -270,3 +270,27 @@ describe('JsonRpcStdioBridge — hostile frames', () => {
     bridge.stop()
   })
 })
+
+describe('an agent that dies with a write on its way', () => {
+  it('fails the request and tells the owner of the bridge, and the process survives', async () => {
+    const input = new Readable({ read() {} })
+    // A pipe whose reader is gone: Node reports this as an 'error' event.
+    const output = new Writable({
+      write(_chunk, _enc, cb) {
+        cb(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
+      },
+    })
+    const errors: Error[] = []
+    const bridge = new JsonRpcStdioBridge({
+      input,
+      output,
+      approvalMethods: new Set<string>(),
+      onApprovalRequest: async () => ({}),
+      failClosedReply: () => ({}),
+      hooks: { onTransportError: (err) => errors.push(err) },
+    })
+    bridge.start()
+    await expect(bridge.request('session/prompt', {})).rejects.toThrow('write EPIPE')
+    expect(errors.map((e) => e.message)).toEqual(['write EPIPE'])
+  })
+})
