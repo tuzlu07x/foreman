@@ -309,7 +309,11 @@ export async function runAgentAddScripted(
       installedByForeman,
     });
     handlePrivateKey(result.privateKey, options.keyOut, log);
-    if (entry.identity_path) {
+    // The identity file is the agent's own config (Codex reads it as global
+    // instructions), so the two cases that keep that config as it is keep
+    // this too: --skip-config, and an instance, which gets its identity with
+    // each launch.
+    if (entry.identity_path && !options.skipConfig && !isInstance(agentId, entry)) {
       try {
         // QA round 13: pass responsibility + peer agents so the multi-
         // agent SOUL.md gets the right context. Falls back gracefully
