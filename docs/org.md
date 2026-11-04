@@ -43,6 +43,7 @@ Foreman spawned for it), Foreman checks the chart:
 | colleagues in the same department            | ✅                                 |
 | department head ↔ department head            | ✅ (`cross_department: via_heads`) |
 | anyone else across departments               | ❌ "hand it to your manager"       |
+| an agent → itself                            | ❌ it would only start itself again |
 | you (terminal / owner) → anyone              | ✅ always                          |
 
 `cross_department` can also be `allow` or `deny` (isolated departments).
@@ -334,6 +335,14 @@ done. Foreman closes the loop:
   is an ordinary task from `foreman:delegation`: department budgets, the
   role's identity and every tool call's approval apply as usual, and it is
   audited (`delegation_wake`).
+- **One piece of work is bounded as a whole.** An agent can't hand work to
+  itself. Hand-offs can nest at most 8 levels deep, and one piece of work can
+  start at most 100 runs in all, wakes included. Past either limit Foreman
+  refuses the hand-off, the agent is told why like any failed task, and you
+  get one message for the whole chain (audited as `delegation_chain_limit`).
+  Past the run limit the wakes stop too. Rewording the task doesn't get around
+  it, so agents passing work back and forth stop on their own. The `loop_*`
+  [risk rules](detection.md) usually ask you well before that.
 - **An answer still owed is asked of the agent that owes it.** A task that
   hasn't been answered in 30 minutes (a task relayed to an agent Foreman
   can't launch, or a run lost with a restart) is re-sent to that agent, at

@@ -222,8 +222,8 @@ export class DelegationTracker {
    * against it.
    *
    * The `initiatorAgent` may be the same as `targetAgent` in some
-   * edge cases (self-target) — we still record it; the writeHandler
-   * upstream already blocks the obvious self-write loop.
+   * edge cases (self-target) — we still record it; both hand-off paths
+   * (`/foreman write` and `foreman write`) refuse a self-write first.
    */
   recordDelegation(input: RecordDelegationInput): string {
     const id = ulid();

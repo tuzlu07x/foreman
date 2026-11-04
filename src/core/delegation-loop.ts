@@ -53,6 +53,12 @@ import { isHumanSource } from "./org/guard.js";
 // Guards:
 //   - at most MAX_WAKES_PER_THREAD wakes per thread; past that you are told
 //     once and Foreman stops re-launching that agent for the task.
+//   - one piece of work is bounded as a whole, however its hand-offs nest:
+//     at most MAX_CHAIN_DEPTH hand-offs inside each other and MAX_CHAIN_RUNS
+//     runs in all. Past either limit a hand-off is refused (the sender hears
+//     why, like any failure) and you are told once; past the run limit the
+//     wakes stop too. So agents passing work around stop on their own, even
+//     if they reword the task each time.
 //   - never wakes an agent for its own result, the human, Foreman itself
 //     (`foreman:*`), an unverified source, or an agent Foreman can't launch
 //     (not registered, blocked, disabled, or no non-interactive command).
@@ -76,6 +82,11 @@ import { isHumanSource } from "./org/guard.js";
 export const WAKE_SOURCE = "foreman:delegation";
 /** Wakes per thread before Foreman stops and tells you. */
 export const MAX_WAKES_PER_THREAD = 5;
+/** Hand-offs one piece of work can nest, each inside the last. A real chart
+ *  needs a few: across two departments, up to the heads and down again. */
+export const MAX_CHAIN_DEPTH = 8;
+/** Runs (hand-offs and wakes) one piece of work can start in all. */
+export const MAX_CHAIN_RUNS = 100;
 /** Re-prompts to an agent that owes an answer before telling you. */
 export const MAX_DELEGATE_NUDGES = 2;
 /** How long an answer may be owed before the watchdog steps in. */
@@ -108,6 +119,8 @@ export interface DelegationLoopOptions {
   answerTimeoutMs?: number;
   maxWakesPerThread?: number;
   maxNudges?: number;
+  maxChainDepth?: number;
+  maxChainRuns?: number;
 }
 
 /** Where a control row's run sits in the loop. */
@@ -131,6 +144,8 @@ export class DelegationLoop {
   readonly answerTimeoutMs: number;
   readonly maxWakesPerThread: number;
   readonly maxNudges: number;
+  readonly maxChainDepth: number;
+  readonly maxChainRuns: number;
   /** The control row the drain is running right now: its run is not
    *  "owed", and the row, though still `pending` in the table until the
    *  drain records it, is not waiting either. */
@@ -146,6 +161,8 @@ export class DelegationLoop {
     this.answerTimeoutMs = opts.answerTimeoutMs ?? DEFAULT_ANSWER_TIMEOUT_MS;
     this.maxWakesPerThread = opts.maxWakesPerThread ?? MAX_WAKES_PER_THREAD;
     this.maxNudges = opts.maxNudges ?? MAX_DELEGATE_NUDGES;
+    this.maxChainDepth = opts.maxChainDepth ?? MAX_CHAIN_DEPTH;
+    this.maxChainRuns = opts.maxChainRuns ?? MAX_CHAIN_RUNS;
   }
 
   // ---------------------------------------------------------------------------
@@ -207,6 +224,52 @@ export class DelegationLoop {
       .all()
       .find((r) => r.outputReceivedAt === null || r.outputReceivedAt >= at);
     return run?.threadId ?? null;
+  }
+
+  /** Why the drain must not start this hand-off, or null: the work it
+   *  belongs to has been handed on too deep or too often. Only a hand-off
+   *  made inside a run has a chain; yours and Foreman's own wakes pass. The
+   *  owner hears about it once per chain. */
+  chainRefusal(link: DelegationLink, sender: string, target: string): string | null {
+    if (link.followup || !link.parentThreadId) return null;
+    const chain = this.chainOf(link.parentThreadId);
+    if (!chain.root) return null;
+    const tooDeep = chain.depth > this.maxChainDepth;
+    if (!tooDeep && chain.runs < this.maxChainRuns) return null;
+    const reason = tooDeep
+      ? `this work has already been handed on ${chain.depth - 1} times, one inside the other`
+      : `this work has already started ${chain.runs} runs`;
+    this.opts.audit?.("delegation_chain_limit", { agent: sender, target, thread: chain.root.id, depth: chain.depth, runs: chain.runs });
+    if (chain.root.escalatedAt === null) {
+      this.db.update(delegations).set({ escalatedAt: this.now() }).where(eq(delegations.id, chain.root.id)).run();
+      this.opts.escalate?.({
+        title: "Foreman stopped a chain of hand-offs",
+        text: composeChainLimitText({ sender, target, reason, task: chain.root.promptSummary }),
+        agentId: sender,
+      });
+    }
+    return `Foreman stopped this hand-off: ${reason}. Finish what you can yourself and report back`;
+  }
+
+  /** The chain `threadId` belongs to: the thread at its top, how many
+   *  hand-offs a new one from `threadId` would sit inside, and the runs all
+   *  of its threads have started. */
+  private chainOf(threadId: string): { root: Delegation | null; depth: number; runs: number } {
+    let root: Delegation | null = null;
+    let depth = 0;
+    for (let id: string | null = threadId; id && depth < MAX_CHAIN; depth++) {
+      const row: Delegation | null = this.tracker.find(id);
+      if (!row) break;
+      root = row;
+      id = row.parentThreadId;
+    }
+    let runs = 0;
+    let level = root ? [root.id] : [];
+    for (let i = 0; level.length > 0 && i < MAX_CHAIN; i++) {
+      runs += this.db.select({ id: delegations.id }).from(delegations).where(inArray(delegations.threadId, level)).all().length;
+      level = this.db.select({ id: delegations.id }).from(delegations).where(inArray(delegations.parentThreadId, level)).all().map((r) => r.id);
+    }
+    return { root, depth, runs };
   }
 
   /** A hand-off the drain refused before running it (e.g. the target's
@@ -316,6 +379,17 @@ export class DelegationLoop {
       return false;
     }
     const now = this.now();
+    const chain = thread ? this.chainOf(thread.id) : null;
+    if (chain && chain.runs >= this.maxChainRuns) {
+      // The chain is over its limit and you were told: nothing more starts.
+      this.db
+        .update(delegations)
+        .set({ wokenAt: now, wakeControlId: null })
+        .where(inArray(delegations.id, results.map((r) => r.id)))
+        .run();
+      this.opts.audit?.("delegation_wake_skipped", { agent, reason: "chain-limit", delegations: results.map((r) => r.id) });
+      return false;
+    }
     if (thread) {
       const wakes = this.db
         .select({ id: delegationFollowups.controlCommandId })
@@ -329,8 +403,10 @@ export class DelegationLoop {
           .set({ wokenAt: now, wakeControlId: null })
           .where(inArray(delegations.id, results.map((r) => r.id)))
           .run();
-        if (thread.escalatedAt === null) {
-          this.db.update(delegations).set({ escalatedAt: now }).where(eq(delegations.id, thread.id)).run();
+        // Once per chain: a loop across many threads is one message to you.
+        const top = chain?.root ?? thread;
+        if (top.escalatedAt === null) {
+          this.db.update(delegations).set({ escalatedAt: now }).where(inArray(delegations.id, [top.id, thread.id])).run();
           const text = composeWakeCapText({ agent, wakes, task: thread.promptSummary, results: results.map((r) => r.targetAgent) });
           this.opts.escalate?.({ title: `${agent} keeps getting work back on one task`, text, agentId: agent });
           this.opts.audit?.("delegation_escalated", { reason: "wake-cap", agent, thread: thread.id, wakes });
@@ -655,6 +731,15 @@ export function composeWakeCapText(input: { agent: string; wakes: number; task: 
     `Task: ${oneLine(input.task, 200)}\n` +
     `Waiting for it: results from ${[...new Set(input.results)].join(", ")} (foreman delegations list).\n` +
     `Reply /foreman write ${input.agent} <next step> to continue it yourself.`
+  );
+}
+
+export function composeChainLimitText(input: { sender: string; target: string; reason: string; task: string }): string {
+  return (
+    `${input.sender} tried to hand ${input.target} more work, but ${input.reason}, so I stopped it. The agents may be passing it around.\n` +
+    `Task: ${oneLine(input.task, 200)}\n` +
+    `What happened: foreman delegations list.\n` +
+    `Reply /foreman write ${input.sender} <next step> to continue it yourself.`
   );
 }
 

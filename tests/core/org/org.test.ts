@@ -62,6 +62,12 @@ describe('delegation along the chart (startup template)', () => {
     expect(checkDelegation(org, 'codex', 'some-other-agent')).toBeNull()
   })
 
+  it('an agent in the chart cannot hand work to itself, whatever its roles', () => {
+    const verdict = checkDelegation(org, 'claude-code', 'claude-code')
+    expect(verdict?.allowed).toBe(false)
+    expect(verdict?.reason).toContain("can't hand work to itself")
+  })
+
   it('isolated departments block even heads', () => {
     const isolated = { ...org, delegation: { ...org.delegation, cross_department: 'deny' as const } }
     expect(checkDelegation(isolated, 'claude-code', 'openclaw')?.allowed).toBe(false)

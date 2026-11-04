@@ -1392,6 +1392,17 @@ export function startForeman(
                         },
                       }
                     : undefined;
+                // One piece of work is bounded as a whole, whichever path
+                // queued each hand-off (delegation-loop.ts).
+                const chainLimit = delegationLoop.chainRefusal(
+                  link,
+                  row.sourceAgent ?? "cli",
+                  agentId,
+                );
+                if (chainLimit) {
+                  loopRun.delegationId = recordUnrunHandOff("blocked", chainLimit);
+                  return { status: "failed", error: chainLimit };
+                }
                 // Department budgets, enforced here too: whichever path queued
                 // it (chat, CLI, flow routing, a wake), an agent can't hand work
                 // into a department that has spent its budget.

@@ -442,7 +442,7 @@ export function checkDelegation(
   const fromRoles = rolesForAgent(doc, fromAgent);
   const toRoles = rolesForAgent(doc, toAgent);
   if (fromRoles.length === 0 || toRoles.length === 0) return null;
-  if (fromAgent === toAgent) return { allowed: true, reason: "same agent" };
+  if (fromAgent === toAgent) return { allowed: false, reason: "an agent can't hand work to itself: it would only start itself again" };
 
   let blocked: { from: string; to: string; verdict: DelegationVerdict } | null = null;
   for (const from of fromRoles) {

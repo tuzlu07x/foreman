@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 // =============================================================================
@@ -123,6 +124,33 @@ describe("foreman write — CLI", () => {
     // The tracking-id line still prints — the row IS enqueued, the
     // warning just tells the user nothing will pick it up yet.
     expect(r.stdout).toMatch(/tracking id=\d+/);
+  });
+
+  it("refuses an agent handing work to itself, and queues nothing", () => {
+    const add = runFm(["agent", "add", "codex", "--skip-config"], env);
+    expect(add.exit).toBe(0);
+    const res = runFm(["write", "CODEX", "again"], { ...env, FOREMAN_SPAWNED_BY: "codex" });
+    expect(res.exit).toBe(2);
+    expect(res.stderr).toContain("can't hand work to itself");
+    const db = new Database(join(tmpHome, "foreman.db"), { readonly: true });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM control_commands").get()).toEqual({ n: 0 });
+    db.close();
+    // The person at the keyboard can still write to any agent.
+    expect(runFm(["write", "codex", "by hand"], env).exit).toBe(0);
+  });
+
+  it("the runaway guard holds here too: not only on the chat path", () => {
+    expect(runFm(["agent", "add", "codex", "--skip-config"], env).exit).toBe(0);
+    expect(runFm(["agent", "add", "hermes", "--skip-config"], env).exit).toBe(0);
+    const db = new Database(join(tmpHome, "foreman.db"));
+    const insert = db.prepare(
+      "INSERT INTO delegations (id, initiator_agent, target_agent, prompt_summary, started_at, status) VALUES (?, 'hermes', 'codex', 'x', ?, 'open')",
+    );
+    for (let i = 0; i < 5; i++) insert.run(`d${i}`, Date.now());
+    db.close();
+    const res = runFm(["write", "codex", "again"], { ...env, FOREMAN_SPAWNED_BY: "hermes" });
+    expect(res.exit).toBe(2);
+    expect(res.stderr).toContain("Runaway-loop guard blocked");
   });
 
   it("lower-cases the agent id token (case-insensitive lookup)", () => {
