@@ -35,16 +35,16 @@ Hermes, OpenClaw, ZeroClaw or your own MCP agent (`foreman agent add <id>`, wher
 (`/foreman write <agent> …` from chat, or `foreman write` from a shell
 Foreman spawned for it), Foreman checks the chart:
 
-| From → To                                    | Default                            |
-| -------------------------------------------- | ---------------------------------- |
-| manager → direct report                      | ✅                                 |
-| manager → anyone below (`skip_levels: true`) | ✅                                 |
-| report → own manager                         | ✅                                 |
-| colleagues in the same department            | ✅                                 |
-| department head ↔ department head            | ✅ (`cross_department: via_heads`) |
-| anyone else across departments               | ❌ "hand it to your manager"       |
+| From → To                                    | Default                             |
+| -------------------------------------------- | ----------------------------------- |
+| manager → direct report                      | ✅                                  |
+| manager → anyone below (`skip_levels: true`) | ✅                                  |
+| report → own manager                         | ✅                                  |
+| colleagues in the same department            | ✅                                  |
+| department head ↔ department head            | ✅ (`cross_department: via_heads`)  |
+| anyone else across departments               | ❌ "hand it to your manager"        |
 | an agent → itself                            | ❌ it would only start itself again |
-| you (terminal / owner) → anyone              | ✅ always                          |
+| you (terminal / owner) → anyone              | ✅ always                           |
 
 `cross_department` can also be `allow` or `deny` (isolated departments).
 `foreman org check <from> <to>` explains any decision. Each side can be an
@@ -187,11 +187,11 @@ Codex for each (`r` on its row; the column next to the title says which).
 `foreman org roles` also lists ready-made departments, each a group of
 roles led by its first one:
 
-| Department (id)                       | Roles, the lead first                                    | Runs on     |
-| ------------------------------------- | -------------------------------------------------------- | ----------- |
-| IT (`it`)                             | backend-developer, frontend-developer, devops-engineer   | Codex       |
-| Marketing (`marketing`)               | marketing-manager, content-creator, social-media         | Claude Code |
-| Customer Support (`customer-support`) | support-lead, support-agent                              | Claude Code |
+| Department (id)                       | Roles, the lead first                                  | Runs on     |
+| ------------------------------------- | ------------------------------------------------------ | ----------- |
+| IT (`it`)                             | backend-developer, frontend-developer, devops-engineer | Codex       |
+| Marketing (`marketing`)               | marketing-manager, content-creator, social-media       | Claude Code |
+| Customer Support (`customer-support`) | support-lead, support-agent                            | Claude Code |
 
 In the wizard's **Your team** step, **+ Add a department…** adds one of
 them (or your own: a name, then its roles) and asks which agent runs it,
@@ -349,13 +349,38 @@ done. Foreman closes the loop:
 - **An answer still owed is asked of the agent that owes it.** A task that
   hasn't been answered in 30 minutes (a task relayed to an agent Foreman
   can't launch, or a run lost with a restart) is re-sent to that agent, at
-  most twice. Only then do you get one message: *backend-developer hasn't
+  most twice. Only then do you get one message: _backend-developer hasn't
   answered manager's task for 1 hour; I nudged it twice. Reply /foreman
-  write …*. Nothing else about it reaches your chat.
-- **Memory.** Every launch starts with *What you did recently*: the agent's
+  write …_. Nothing else about it reaches your chat.
+- **Memory.** Every launch starts with _What you did recently_: the agent's
   last 5 tasks with how each ended, and the latest reports and direct
   messages to its role (at most 3,000 characters, secrets redacted), marked
   as information, not instructions.
+
+## Working at the same time
+
+Tasks for different agents run side by side, up to 4 at once. Set
+`FOREMAN_MAX_PARALLEL_TASKS` to change that (`1` runs them one at a time).
+Claude Code and Codex plans have usage limits, so more at once uses them
+faster. One agent's own tasks always run in order, and a command such as
+`/foreman stop` doesn't wait for them.
+
+When Foreman proposes a plan, a step that needs another step's result says so,
+and the plan shows it:
+
+```
+1. backend-developer: Build the API
+2. frontend-developer (after backend-developer): Build the page
+3. tester (after backend-developer, frontend-developer): Test both
+```
+
+Such a step starts once the steps it names have finished. If one of them
+failed, it doesn't start: its work would have nothing to build on, and the
+reason lands in your inbox.
+
+Roles in one project share its folder, so two roles changing the same files at
+once can overwrite each other's work. Give them separate parts of the project,
+or make one wait for the other.
 
 ## Department channels
 
