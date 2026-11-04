@@ -187,7 +187,7 @@ describe("DelegationLoop", () => {
       db.update(controlCommands).set({ status: "applied" }).where(eq(controlCommands.id, row.id)).run();
     } finally {
       loop.afterWrite(row, runId);
-      loop.end();
+      loop.end(row.id);
     }
   }
 
@@ -359,7 +359,7 @@ describe("DelegationLoop", () => {
     });
     db.update(controlCommands).set({ status: "failed" }).where(eq(controlCommands.id, row.id)).run();
     loop.afterWrite(row, id);
-    loop.end();
+    loop.end(row.id);
     expect(wakesFor("manager")[0]).toContain("Couldn't finish: paused by budget: IT is over its monthly budget");
   });
 
@@ -517,7 +517,7 @@ describe("DelegationLoop", () => {
     const relay = loop.recordRelay({ row, initiator: "backend", target: "dev", task: "Fix the bug by hand", link: loop.linkFor(row) });
     db.update(controlCommands).set({ status: "applied" }).where(eq(controlCommands.id, row.id)).run();
     loop.afterWrite(row, relay);
-    loop.end();
+    loop.end(row.id);
     expect(wakesFor("backend")).toEqual([]);
     const report = { id: "r1", ts: tick(), channel: "dm:backend-developer|developer", fromAgent: "dev", fromRole: "developer", kind: "report" as const, text: "Bug fixed in auth.ts", replyTo: null, mirroredAt: null };
     loop.onMessage(report);
@@ -533,7 +533,7 @@ describe("DelegationLoop", () => {
     const run = tracker.recordDelegation({ initiatorAgent: "manager", targetAgent: "backend", prompt: "Task", controlCommandId: row.id });
     loop.onMessage({ id: "r2", ts: tick(), channel: "boss", fromAgent: "backend", fromRole: null, kind: "report", text: "early", replyTo: null, mirroredAt: null });
     expect(tracker.find(run)!.outputReceivedAt).toBeNull();
-    loop.end();
+    loop.end(row.id);
   });
 
   // ---------------------------------------------------------------------------
@@ -634,7 +634,7 @@ describe("DelegationLoop", () => {
     tracker.recordDelegation({ initiatorAgent: "manager", targetAgent: "backend", prompt: "Slow task", controlCommandId: row.id });
     tick(120 * 60_000);
     expect(loop.watchdog()).toEqual({ nudged: 0, escalated: 0 });
-    loop.end();
+    loop.end(row.id);
   });
 });
 

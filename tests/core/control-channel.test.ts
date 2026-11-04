@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ControlChannel,
   ControlDrainPoller,
+  DEFAULT_MAX_PARALLEL_TASKS,
   isOwner,
+  maxParallelTasks,
   type ControlHandler,
   type ControlHandlerOutcome,
   type OwnerStore,
@@ -206,6 +208,113 @@ describe("ControlChannel (#440)", () => {
   });
 });
 
+describe("running tasks side by side", () => {
+  let db: ForemanDb;
+  let sqlite: Database.Database;
+  let channel: ControlChannel;
+  /** Tasks in flight, finished by hand. */
+  let open: Map<string, () => void>;
+  let handlers: Map<string, ControlHandler>;
+
+  const task = (agent: string, after?: number[]): number =>
+    channel.enqueue({ command: "write", args: [agent, "do it"], sourceAgent: "cli", ...(after ? { after } : {}) }).id;
+  const finish = async (agent: string): Promise<void> => {
+    open.get(agent)!();
+    open.delete(agent);
+    await new Promise((r) => setImmediate(r));
+  };
+  const status = (id: number): string | undefined => channel.get(id)?.status;
+
+  beforeEach(() => {
+    const handle = createInMemoryDb();
+    db = handle.db;
+    sqlite = handle.sqlite;
+    channel = new ControlChannel(db);
+    open = new Map();
+    handlers = new Map<string, ControlHandler>([
+      [
+        "write",
+        (row) =>
+          new Promise<ControlHandlerOutcome>((resolve) => {
+            const [agent] = JSON.parse(row.args) as string[];
+            open.set(agent!, () => resolve({ status: "applied" }));
+          }),
+      ],
+      ["stop", async () => ({ status: "applied" })],
+    ]);
+  });
+
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it("runs different agents at once and keeps one agent's tasks in order", async () => {
+    task("backend");
+    const second = task("backend");
+    task("frontend");
+    expect(channel.pump(handlers)).toBe(2);
+    expect([...open.keys()].sort()).toEqual(["backend", "frontend"]);
+    expect(channel.pump(handlers)).toBe(0);
+    await finish("backend");
+    expect(channel.pump(handlers)).toBe(1);
+    expect(status(second)).toBe("pending");
+    expect(open.has("backend")).toBe(true);
+    await finish("backend");
+    await finish("frontend");
+    await channel.settled();
+    expect(status(second)).toBe("applied");
+  });
+
+  it("stops at the limit and starts the rest as tasks finish", async () => {
+    for (const agent of ["a", "b", "c"]) task(agent);
+    expect(channel.pump(handlers, { maxTasks: 2 })).toBe(2);
+    expect(channel.pump(handlers, { maxTasks: 2 })).toBe(0);
+    await finish("a");
+    expect(channel.pump(handlers, { maxTasks: 2 })).toBe(1);
+    expect(open.has("c")).toBe(true);
+  });
+
+  it("doesn't make `stop` wait for a running task", async () => {
+    task("backend");
+    const stop = channel.enqueue({ command: "stop", args: [], sourceAgent: "cli" }).id;
+    channel.pump(handlers, { maxTasks: 1 });
+    await new Promise((r) => setImmediate(r));
+    expect(status(stop)).toBe("applied");
+    expect(open.has("backend")).toBe(true);
+  });
+
+  it("holds a task until the ones it waits for are done", async () => {
+    const backend = task("backend");
+    const frontend = task("frontend", [backend]);
+    const tester = task("tester", [backend, frontend]);
+    channel.pump(handlers);
+    expect([...open.keys()]).toEqual(["backend"]);
+    await finish("backend");
+    channel.pump(handlers);
+    expect([...open.keys()]).toEqual(["frontend"]);
+    expect(status(tester)).toBe("pending");
+    await finish("frontend");
+    channel.pump(handlers);
+    expect([...open.keys()]).toEqual(["tester"]);
+  });
+
+  it("doesn't start a task whose prerequisite failed, and says why", async () => {
+    const backend = task("backend");
+    const frontend = task("frontend", [backend]);
+    channel.markFailed(backend, "crashed");
+    channel.pump(handlers);
+    expect(open.size).toBe(0);
+    expect(channel.get(frontend)).toMatchObject({ status: "rejected", error: expect.stringContaining("backend") });
+  });
+
+  it("reads the limit from the environment, and falls back on nonsense", () => {
+    expect(maxParallelTasks({})).toBe(DEFAULT_MAX_PARALLEL_TASKS);
+    expect(maxParallelTasks({ FOREMAN_MAX_PARALLEL_TASKS: "2" })).toBe(2);
+    expect(maxParallelTasks({ FOREMAN_MAX_PARALLEL_TASKS: "0" })).toBe(DEFAULT_MAX_PARALLEL_TASKS);
+    expect(maxParallelTasks({ FOREMAN_MAX_PARALLEL_TASKS: "lots" })).toBe(DEFAULT_MAX_PARALLEL_TASKS);
+  });
+});
+
 describe("ControlDrainPoller (#440)", () => {
   let db: ForemanDb;
   let sqlite: Database.Database;
@@ -294,9 +403,9 @@ describe("ControlDrainPoller (#440)", () => {
 
   it("a failed drain is reported and retried, not left as an unhandled rejection (#594)", async () => {
     // Unhandled, this rejection used to take `foreman start` down.
-    const drain = vi
-      .spyOn(channel, "drainPending")
-      .mockRejectedValueOnce(Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" }));
+    const drain = vi.spyOn(channel, "pump").mockImplementationOnce(() => {
+      throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    });
     const errors: string[] = [];
     const poller = new ControlDrainPoller(channel, new Map(), {
       intervalMs: 100,

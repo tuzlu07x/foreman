@@ -913,6 +913,32 @@ describe("ForemanCommandRouter (#431)", () => {
       expect(proposePlan).not.toHaveBeenCalled();
     });
 
+    it("makes a hand-off wait for the steps it names", async () => {
+      const seen: Array<readonly number[] | undefined> = [];
+      const planRouter = new ForemanCommandRouter();
+      let id = 40;
+      planRouter.register(
+        "assign",
+        (_args, c) => {
+          seen.push(c.after);
+          return { ok: true, text: "→ queued", controlId: ++id };
+        },
+        "assign",
+      );
+      await handOutPlan(
+        planRouter,
+        [
+          { target: "backend", task: "API" },
+          { target: "frontend", task: "Page", after: ["backend"] },
+          { target: "tester", task: "Test", after: ["backend", "frontend"] },
+        ],
+        { sourceAgent: "telegram" },
+        ctx,
+        { approvalId: "req-2", logEvent: () => undefined },
+      );
+      expect(seen).toEqual([undefined, [41], [41, 42]]);
+    });
+
     it("hands an approved plan out as the asker's assigns, each audited like /foreman assign", async () => {
       const seen: Array<{ args: string[]; ctx: ForemanCommandContext }> = [];
       const planRouter = new ForemanCommandRouter();

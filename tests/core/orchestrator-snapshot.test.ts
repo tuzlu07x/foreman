@@ -332,6 +332,23 @@ describe("chat that hands out work (2.3.1)", () => {
     expect(buildOrchestratorPrompt({ snapshot: snap, question: "report" })).not.toContain("ASSIGN <role");
   });
 
+  it("reads what a hand-off waits for, keeping only earlier lines", () => {
+    const allowed = new Set(["backend", "frontend", "tester"]);
+    const { proposals } = parseAssignProposals(
+      [
+        "ASSIGN backend :: Build the API",
+        "ASSIGN frontend after backend :: Build the page",
+        "ASSIGN tester after backend, frontend, tester, nobody :: Test it",
+      ].join("\n"),
+      allowed,
+    );
+    expect(proposals).toEqual([
+      { target: "backend", task: "Build the API" },
+      { target: "frontend", task: "Build the page", after: ["backend"] },
+      { target: "tester", task: "Test it", after: ["backend", "frontend"] },
+    ]);
+  });
+
   it("takes ASSIGN lines out of the reply, keeping only known targets, bounded", () => {
     const allowed = assignableTargets(team);
     expect([...allowed].sort()).toEqual(["backend-developer", "it", "manager"]);

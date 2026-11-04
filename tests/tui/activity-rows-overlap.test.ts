@@ -182,6 +182,7 @@ describe('summariseControlCommand', () => {
     id: 6,
     command: name,
     args: JSON.stringify(args),
+    afterIds: null,
     sourceAgent: 'hermes',
     sourceUser: null,
     status: 'applied',
