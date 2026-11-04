@@ -16,7 +16,6 @@
 // turn out to hammer the APIs in practice.
 
 import { checkLlmBaseUrl, ollamaApiRoot } from './endpoint.js'
-import { OAUTH_BETA as ANTHROPIC_OAUTH_BETA } from './providers/anthropic.js'
 
 export interface DiscoveredModel {
   /** Bare model id as the provider returns it (e.g. `gpt-4o-mini`,
@@ -49,12 +48,6 @@ export interface DiscoverOptions {
   /** Required for `ollama` / `openai_compatible`: the server's http(s) base
    *  URL (an OpenAI-compatible one includes its version path, e.g. `…/v1`). */
   baseUrl?: string
-  /** How `apiKey` authenticates. `'oauth'` (a subscription sign-in token)
-   *  is only listable on Anthropic, which accepts the same Bearer + beta
-   *  headers as the OAuth messages client. ChatGPT sign-in tokens target
-   *  the ChatGPT backend, which has no model list, so OpenAI / Gemini
-   *  reject `'oauth'`. Default `'api_key'`. */
-  auth?: 'api_key' | 'oauth'
   fetchImpl?: typeof fetch
   /** Per-call timeout. Default 10s. */
   timeoutMs?: number
@@ -84,15 +77,9 @@ export async function discoverModels(
   provider: DiscoveryProvider,
   options: DiscoverOptions,
 ): Promise<DiscoveredModel[]> {
-  const auth = options.auth ?? 'api_key'
-  if (auth === 'oauth' && provider !== 'anthropic') {
-    throw new ModelDiscoveryError(
-      `${provider} has no model list for subscription sign-in`,
-    )
-  }
   const ttl = options.cacheTtlMs ?? 24 * 60 * 60 * 1000
   const now = options.now ?? Date.now
-  const cacheKey = `${provider}:${auth}:${options.baseUrl ?? ''}:${hashApiKey(options.apiKey)}`
+  const cacheKey = `${provider}:${options.baseUrl ?? ''}:${hashApiKey(options.apiKey)}`
   if (ttl > 0) {
     const cached = memoryCache.get(cacheKey)
     if (cached && now() - cached.fetchedAt < ttl) return cached.models
@@ -153,20 +140,10 @@ export async function listAnthropicModels(
   }>(
     'https://api.anthropic.com/v1/models',
     {
-      headers:
-        options.auth === 'oauth'
-          ? {
-              // Same Bearer + beta pair the OAuth messages client sends
-              // (providers/anthropic.ts); `oauth-2025-04-20` is what makes
-              // api.anthropic.com accept a subscription token.
-              authorization: `Bearer ${options.apiKey}`,
-              'anthropic-beta': ANTHROPIC_OAUTH_BETA,
-              'anthropic-version': '2023-06-01',
-            }
-          : {
-              'x-api-key': options.apiKey,
-              'anthropic-version': '2023-06-01',
-            },
+      headers: {
+        'x-api-key': options.apiKey,
+        'anthropic-version': '2023-06-01',
+      },
     },
     options,
   )

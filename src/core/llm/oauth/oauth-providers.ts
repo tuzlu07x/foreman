@@ -1,4 +1,4 @@
-export type OAuthProviderId = "anthropic" | "openai";
+export type OAuthProviderId = "openai";
 
 export type TokenEncoding = "form" | "json";
 
@@ -22,24 +22,6 @@ export interface OAuthProviderConfig {
 
 export const CODEX_ORIGINATOR = "codex_cli_rs";
 
-const ANTHROPIC: OAuthProviderConfig = {
-  id: "anthropic",
-  label: "Claude (Anthropic)",
-  authorizeUrl: "https://claude.ai/oauth/authorize",
-  tokenUrl: "https://platform.claude.com/v1/oauth/token",
-  clientId: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-  scope:
-    "org:create_api_key user:profile user:inference " +
-    "user:sessions:claude_code user:mcp_servers user:file_upload",
-  redirectUri: "http://localhost:53692/callback",
-  redirectPort: 53692,
-  redirectPath: "/callback",
-  stateMode: "pkce-verifier",
-  tokenEncoding: "json",
-  tokenExchangeIncludesState: true,
-  extraAuthorizeParams: { code: "true" },
-};
-
 const OPENAI: OAuthProviderConfig = {
   id: "openai",
   label: "Codex (ChatGPT)",
@@ -61,7 +43,6 @@ const OPENAI: OAuthProviderConfig = {
 };
 
 const PROVIDERS: Record<OAuthProviderId, OAuthProviderConfig> = {
-  anthropic: ANTHROPIC,
   openai: OPENAI,
 };
 
@@ -70,5 +51,5 @@ export function getOAuthProvider(id: OAuthProviderId): OAuthProviderConfig {
 }
 
 export function isOAuthProviderId(id: string): id is OAuthProviderId {
-  return id === "anthropic" || id === "openai";
+  return id === "openai";
 }

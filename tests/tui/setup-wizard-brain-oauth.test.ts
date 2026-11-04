@@ -53,14 +53,19 @@ describe('configuredBrainProviderIds', () => {
   })
 
   it('counts a provider with OAuth tokens already on disk (no key)', () => {
-    // `foreman llm login anthropic` stores the bundle under llm-oauth-anthropic
+    // `foreman llm login openai` stores the bundle under llm-oauth-openai
     const ids = configuredBrainProviderIds(
       PROVIDERS,
-      new Set(['llm-oauth-anthropic']),
+      new Set(['llm-oauth-openai']),
       [],
     )
-    expect(ids.has('anthropic')).toBe(true)
-    expect(ids.has('openai')).toBe(false)
+    expect(ids.has('openai')).toBe(true)
+    expect(ids.has('anthropic')).toBe(false)
+  })
+
+  it('ignores Claude tokens left by the sign-in Foreman no longer offers', () => {
+    const ids = configuredBrainProviderIds(PROVIDERS, new Set(['llm-oauth-anthropic']), [])
+    expect(ids.has('anthropic')).toBe(false)
   })
 
   it('returns nothing when neither key nor OAuth is present', () => {

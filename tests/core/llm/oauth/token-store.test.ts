@@ -42,12 +42,12 @@ describe("OAuth token store", () => {
   });
 
   it("omits accountId on load when none was stored (Anthropic case)", () => {
-    saveOAuthTokens(store, "anthropic", {
+    saveOAuthTokens(store, "openai", {
       accessToken: "sk-ant-oat",
       refreshToken: "rt",
       expiresAt: 1,
     });
-    const loaded = loadOAuthTokens(store, "anthropic");
+    const loaded = loadOAuthTokens(store, "openai");
     expect(loaded).toEqual({
       accessToken: "sk-ant-oat",
       refreshToken: "rt",
@@ -57,7 +57,7 @@ describe("OAuth token store", () => {
   });
 
   it("returns null when no bundle is stored", () => {
-    expect(loadOAuthTokens(store, "anthropic")).toBeNull();
+    expect(loadOAuthTokens(store, "openai")).toBeNull();
   });
 
   it("overwrites on a second save (rotate, not duplicate-add)", () => {

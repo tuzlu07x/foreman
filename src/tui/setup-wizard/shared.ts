@@ -22,10 +22,9 @@ export function firstRunAgents(
   return here.length > 0 ? here : ["claude-code"];
 }
 
-// Faz 4b-3 / #512 — providers that support subscription OAuth as an
-// alternative to an API key. Used by the values phase to ask "key or sign
-// in?" before the password prompt for these providers. Mirrors the catalog
-// in src/core/llm/oauth/oauth-providers.ts.
+// Faz 4b-3 / #512 — providers a subscription can connect as an alternative to
+// an API key: ChatGPT by signing in, Claude through Claude Code. Used by the
+// values phase to ask "key or subscription?" before the password prompt.
 export const OAUTH_CAPABLE_WIZARD_PROVIDERS = new Set<"anthropic" | "openai">([
   "anthropic",
   "openai",
@@ -94,8 +93,8 @@ export function configuredProviderIds(
  *
  * A user with a ChatGPT or Claude subscription can run Foreman's brain with
  * no API key at all: `openai` + `auth_mode: oauth` routes to the Codex client
- * (chatgpt.com/backend-api), `anthropic` + `auth_mode: oauth` to the Claude
- * subscription client — see `src/core/llm/factory.ts`. The brain picker used
+ * (chatgpt.com/backend-api), `anthropic` + `auth_mode: claude_code` to the
+ * user's own `claude` binary — see `src/core/llm/factory.ts`. The brain picker used
  * to gate on API-key secret slots only (`configuredProviderIds`), so a
  * subscription-only user saw OpenAI/Anthropic greyed out even though those
  * are exactly the paths they can use.
@@ -114,9 +113,7 @@ export function configuredBrainProviderIds(
 ): Set<string> {
   const ids = new Set(configuredProviderIds(providers, storedNames));
   for (const pid of signedInThisSession) ids.add(pid);
-  for (const pid of OAUTH_CAPABLE_WIZARD_PROVIDERS) {
-    if (storedNames.has(oauthSecretName(pid))) ids.add(pid);
-  }
+  if (storedNames.has(oauthSecretName("openai"))) ids.add("openai");
   return ids;
 }
 

@@ -22,6 +22,7 @@ import {
   OLLAMA_DEFAULT_BASE_URL,
 } from "./llm/endpoint.js";
 import { isOAuthProviderId } from "./llm/oauth/oauth-providers.js";
+import { CLAUDE_LOGIN_COMMAND } from "./llm/providers/claude-code.js";
 import { loadOAuthTokens } from "./llm/oauth/token-store.js";
 import { agentAddCommand, loadActiveProviders, loadActiveRegistry } from "./registry-catalog.js";
 import { detectProviderByPrefix } from "./key-prefix-detect.js";
@@ -677,10 +678,13 @@ export function checkLlmCredentials(): CheckResult {
   const providerCred = (
     config.credentials as Record<
       string,
-      | { auth_mode?: "api_key" | "oauth"; secret_name?: string | null }
+      | { auth_mode?: "api_key" | "oauth" | "claude_code"; secret_name?: string | null }
       | undefined
     >
   )[config.provider];
+  if (providerCred?.auth_mode === "claude_code") {
+    return checkClaudeCodeBrain();
+  }
   if (providerCred?.auth_mode === "oauth") {
     return checkOAuthCredentials(config.provider);
   }
@@ -830,6 +834,32 @@ function checkSelfHostedLlmCredentials(
   };
 }
 
+/** Foreman's brain runs the user's own `claude`. Doctor must stay free, so
+ *  this asks `claude auth status`, which can't see a revoked token:
+ *  `foreman llm test` is the real call. */
+export function checkClaudeCodeBrain(verify: RouteVerifyRunner = runRouteVerify): CheckResult {
+  const outcome = verify("claude auth status", ROUTE_VERIFY_TIMEOUT_MS);
+  if (outcome === "ok") {
+    return {
+      name: "llm_credentials",
+      status: "ok",
+      message: "anthropic through Claude Code (signed in) — `foreman llm test` makes a real call",
+    };
+  }
+  return {
+    name: "llm_credentials",
+    status: "warn",
+    message:
+      outcome === "failed"
+        ? "anthropic uses Claude Code, which is not signed in"
+        : "anthropic uses Claude Code, but `claude` could not be run",
+    remediation:
+      outcome === "failed"
+        ? `Run \`${CLAUDE_LOGIN_COMMAND}\`.`
+        : "Install Claude Code, or add an API key with `foreman llm logout anthropic` and `foreman secrets add anthropic-key`.",
+  };
+}
+
 /** OAuth credential check — when the active provider has `auth_mode: oauth`,
  *  verify a token bundle is in the encrypted store. Mirrors the api-key
  *  check's "tell the user clearly what's missing" contract: the user has
@@ -843,7 +873,7 @@ function checkOAuthCredentials(providerId: string): CheckResult {
     return {
       name: "llm_credentials",
       status: "warn",
-      message: `provider '${providerId}' has auth_mode: oauth but Foreman only supports OAuth for anthropic + openai — the setting is being ignored`,
+      message: `provider '${providerId}' has auth_mode: oauth but Foreman only supports OAuth for openai — the setting is being ignored`,
       remediation: `Set credentials.${providerId}.auth_mode: api_key in llm.yaml (or switch provider to anthropic / openai).`,
     };
   }

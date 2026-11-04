@@ -9,6 +9,7 @@ import {
 import { LlmConfigSchema, defaultLlmConfig } from '../../../src/core/llm/config.js'
 import { SecretNotFoundError } from '../../../src/core/secret-store.js'
 import { AnthropicLlmClient } from '../../../src/core/llm/providers/anthropic.js'
+import { ClaudeCodeLlmClient } from '../../../src/core/llm/providers/claude-code.js'
 import { CodexLlmClient } from '../../../src/core/llm/providers/codex.js'
 import { OpenAILlmClient } from '../../../src/core/llm/providers/openai.js'
 import { GeminiLlmClient } from '../../../src/core/llm/providers/gemini.js'
@@ -288,16 +289,14 @@ describe('buildLlmClient', () => {
     }
   }
 
-  it('returns an OAuth-aware AnthropicLlmClient when auth_mode = oauth', () => {
+  it('runs Claude Code when anthropic auth_mode = claude_code, with no secret', () => {
     const config = LlmConfigSchema.parse({
       provider: 'anthropic',
-      credentials: { anthropic: { auth_mode: 'oauth' } },
+      credentials: { anthropic: { auth_mode: 'claude_code' } },
     })
-    const store = new FakeStore(seedOAuthTokens('anthropic'))
-    const client = buildLlmClient(config, store as never)
-    expect(client).toBeInstanceOf(AnthropicLlmClient)
+    const client = buildLlmClient(config, new FakeStore({}) as never)
+    expect(client).toBeInstanceOf(ClaudeCodeLlmClient)
     expect(client.providerId).toBe('anthropic')
-    expect(client.model).toBe(config.model)
   })
 
   it('returns a CodexLlmClient when openai auth_mode = oauth', () => {
@@ -317,8 +316,8 @@ describe('buildLlmClient', () => {
 
   it('throws LlmOAuthLoginRequiredError when auth_mode = oauth but no tokens stored', () => {
     const config = LlmConfigSchema.parse({
-      provider: 'anthropic',
-      credentials: { anthropic: { auth_mode: 'oauth' } },
+      provider: 'openai',
+      credentials: { openai: { auth_mode: 'oauth' } },
     })
     expect(() =>
       buildLlmClient(config, new FakeStore({}) as never),
@@ -385,10 +384,10 @@ describe('LlmCredentialMissingError + LlmProviderUnavailableError — typed', ()
   })
 
   it('LlmOAuthLoginRequiredError carries the OAuth provider id', () => {
-    const err = new LlmOAuthLoginRequiredError('anthropic')
-    expect(err.providerId).toBe('anthropic')
+    const err = new LlmOAuthLoginRequiredError('openai')
+    expect(err.providerId).toBe('openai')
     expect(err.name).toBe('LlmOAuthLoginRequiredError')
-    expect(err.message).toMatch(/foreman llm login anthropic/)
+    expect(err.message).toMatch(/foreman llm login openai/)
   })
 
 })

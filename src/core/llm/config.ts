@@ -44,11 +44,13 @@ const BudgetSchema = z
 const CredentialBlockSchema = z
   .object({
     /** How Foreman authenticates to the provider for THIS block. With
-     *  `oauth`, the user signs in via `foreman llm login <provider>` and the
-     *  token bundle lives in the encrypted store under `llm-oauth-<provider>`
-     *  rather than the user-named slot pointed at by `secret_name`. Default
-     *  `api_key` so every existing llm.yaml stays valid (no migration). */
-    auth_mode: z.enum(['api_key', 'oauth']).default('api_key'),
+     *  `oauth` (ChatGPT), the user signs in via `foreman llm login openai` and
+     *  the token bundle lives in the encrypted store under
+     *  `llm-oauth-<provider>` rather than the user-named slot pointed at by
+     *  `secret_name`. With `claude_code` (Anthropic), Foreman runs the user's
+     *  own `claude` binary and holds no credential at all. Default `api_key`
+     *  so every existing llm.yaml stays valid (no migration). */
+    auth_mode: z.enum(['api_key', 'oauth', 'claude_code']).default('api_key'),
     secret_name: z.string().nullable().optional(),
     endpoint: z.string().optional(),
     endpoint_secret: z.string().optional(),
@@ -118,7 +120,12 @@ export function loadLlmConfig(path: string): LlmConfig {
   const raw = readFileSync(path, 'utf-8')
   const parsed = raw.trim().length === 0 ? {} : (parseYaml(raw) as unknown)
   // Merge with defaults so missing keys don't crash an older config.
-  return LlmConfigSchema.parse(mergeWithDefaults(parsed))
+  const config = LlmConfigSchema.parse(mergeWithDefaults(parsed))
+  // `oauth` here meant Foreman's own Claude sign-in, which is gone: that user
+  // now goes through Claude Code.
+  return config.credentials.anthropic?.auth_mode === 'oauth'
+    ? setAuthMode(config, 'anthropic', 'claude_code')
+    : config
 }
 
 export function saveLlmConfig(path: string, config: LlmConfig): void {
@@ -168,15 +175,27 @@ export function isFeatureEnabled(
 // updated and any other fields on the block preserved.
 // ============================================================================
 
-/** Provider ids that support subscription OAuth (anthropic + openai). Kept as
- *  a string literal union here so callers don't have to reach into
- *  `oauth/oauth-providers.ts` just to call `setAuthMode`. */
+/** Provider ids a subscription can connect: ChatGPT through OAuth, Claude
+ *  through Claude Code. */
 export type AuthModeProviderId = 'anthropic' | 'openai'
+
+export function isSubscriptionProvider(id: string): id is AuthModeProviderId {
+  return id === 'anthropic' || id === 'openai'
+}
+
+/** For screens: a broken llm.yaml must not take them down; doctor reports it. */
+export function usesClaudeCode(path: string): boolean {
+  try {
+    return loadLlmConfig(path).credentials.anthropic?.auth_mode === 'claude_code'
+  } catch {
+    return false
+  }
+}
 
 export function setAuthMode(
   config: LlmConfig,
   providerId: AuthModeProviderId,
-  mode: 'api_key' | 'oauth',
+  mode: 'api_key' | 'oauth' | 'claude_code',
 ): LlmConfig {
   const existing = config.credentials[providerId] ?? { auth_mode: mode }
   return {

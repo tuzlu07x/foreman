@@ -143,7 +143,9 @@ const HEADLESS_COMMAND_REWRITES: Array<(command: string) => string | null> = [
     return `${command.trimEnd()} --device-auth`;
   },
   (command) => {
-    if (!/(^|\s)foreman\s+llm\s+login\s/.test(command)) return null;
+    // `llm login anthropic` hands over to Claude Code's own sign-in, which
+    // has no device-code switch of ours to set.
+    if (!/(^|\s)foreman\s+llm\s+login\s+openai(\s|$)/.test(command)) return null;
     if (/--headless/.test(command)) return null;
     return `${command.trimEnd()} --headless`;
   },

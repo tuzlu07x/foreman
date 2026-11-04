@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { Command } from "commander";
@@ -8,6 +8,7 @@ import {
   loadLlmConfig,
   saveLlmConfig,
   setAuthMode,
+  type AuthModeProviderId,
   type LlmConfig,
   type LlmFeature,
 } from "../core/llm/config.js";
@@ -40,8 +41,14 @@ import {
 import {
   clearOAuthTokens,
   loadOAuthTokens,
+  removeLegacyClaudeTokens,
   saveOAuthTokens,
 } from "../core/llm/oauth/token-store.js";
+import {
+  CLAUDE_LOGIN_COMMAND,
+  ClaudeCodeLlmClient,
+  ClaudeCodeNotReadyError,
+} from "../core/llm/providers/claude-code.js";
 import { SecretStore } from "../core/secret-store.js";
 import { closeDb, getDb } from "../db/client.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
@@ -266,13 +273,13 @@ llmCommand
   });
 
 // ============================================================================
-// login / logout — subscription OAuth (Claude + Codex)
+// login / logout — a subscription (ChatGPT sign-in, or Claude Code for Claude)
 // ============================================================================
 
 llmCommand
   .command("login <provider>")
   .description(
-    "Sign in to a provider with your subscription (anthropic | openai)",
+    "Connect your subscription: openai signs in with ChatGPT, anthropic uses Claude Code",
   )
   .option(
     "--headless",
@@ -283,15 +290,28 @@ llmCommand
   )
   .action(async (providerArg: string, opts: { headless: boolean }) => {
     requireInitialised();
+    const paths = getForemanPaths();
+    if (providerArg === "anthropic") {
+      try {
+        await connectClaudeCode(paths.llmConfigPath);
+      } catch (err) {
+        console.error(red("error: ") + (err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+      console.log("");
+      console.log(green("✓ Connected to Claude Code"));
+      console.log(`  ${dim("auth_mode")}  credentials.anthropic → claude_code (saved to llm.yaml)`);
+      console.log(`  ${dim("next")}       foreman llm enable, if the brain is still off`);
+      return;
+    }
     if (!isOAuthProviderId(providerArg)) {
       console.error(
         red("error: ") +
-          `Unknown OAuth provider '${providerArg}'. Use: anthropic | openai`,
+          `Unknown provider '${providerArg}'. Use: anthropic | openai`,
       );
       process.exit(2);
     }
     const provider = getOAuthProvider(providerArg);
-    const paths = getForemanPaths();
     const db = getDb();
     try {
       const store = new SecretStore(db, loadOrCreateSecretsMasterKey());
@@ -326,14 +346,14 @@ llmCommand
 llmCommand
   .command("logout <provider>")
   .description(
-    "Forget an OAuth login and revert that provider to API-key auth_mode",
+    "Disconnect a subscription and revert that provider to API-key auth_mode",
   )
   .action((providerArg: string) => {
     requireInitialised();
-    if (!isOAuthProviderId(providerArg)) {
+    if (providerArg !== "anthropic" && !isOAuthProviderId(providerArg)) {
       console.error(
         red("error: ") +
-          `Unknown OAuth provider '${providerArg}'. Use: anthropic | openai`,
+          `Unknown provider '${providerArg}'. Use: anthropic | openai`,
       );
       process.exit(2);
     }
@@ -341,6 +361,14 @@ llmCommand
     const db = getDb();
     try {
       const store = new SecretStore(db, loadOrCreateSecretsMasterKey());
+      if (providerArg === "anthropic") {
+        removeLegacyClaudeTokens(store);
+        saveAuthMode(paths.llmConfigPath, "anthropic", "api_key");
+        console.log(
+          `${green("✓")} anthropic: auth_mode → api_key. Claude Code's own sign-in is unchanged.`,
+        );
+        return;
+      }
       const hadTokens = loadOAuthTokens(store, providerArg) !== null;
       performOAuthLogout(
         providerArg,
@@ -697,20 +725,51 @@ export function performOAuthLogout(
   store: SecretStore,
 ): void {
   clearOAuthTokens(store, providerId);
-  const config = loadLlmConfig(paths.llmConfigPath);
-  saveLlmConfig(
-    paths.llmConfigPath,
-    setAuthMode(config, providerId, "api_key"),
-  );
+  saveAuthMode(paths.llmConfigPath, providerId, "api_key");
+}
+
+function saveAuthMode(
+  path: string,
+  providerId: AuthModeProviderId,
+  mode: "api_key" | "oauth" | "claude_code",
+): void {
+  saveLlmConfig(path, setAuthMode(loadLlmConfig(path), providerId, mode));
+}
+
+/**
+ * Connect Foreman's brain to the user's own Claude Code. A real call decides,
+ * since `claude auth status` stays true after a token is revoked. Signing in
+ * happens only in Claude Code's own flow, which Foreman just starts.
+ */
+export async function connectClaudeCode(
+  llmConfigPath: string,
+  client: Pick<ClaudeCodeLlmClient, "ping"> = new ClaudeCodeLlmClient({
+    model: defaultLlmConfig().model,
+  }),
+  runClaudeLogin: () => boolean = () =>
+    spawnSync(CLAUDE_LOGIN_COMMAND, { shell: true, stdio: "inherit" }).status === 0,
+): Promise<void> {
+  try {
+    await client.ping();
+  } catch (err) {
+    if (!(err instanceof ClaudeCodeNotReadyError) || err.reason !== "signed-out") throw err;
+    console.log(`Claude Code isn't signed in. Starting its own sign-in (${CLAUDE_LOGIN_COMMAND})…`);
+    if (!runClaudeLogin()) throw err;
+    await client.ping();
+  }
+  saveAuthMode(llmConfigPath, "anthropic", "claude_code");
 }
 
 export function describeAuthMode(
   config: LlmConfig,
   store: SecretStore,
-  providerId: OAuthProviderId,
+  providerId: AuthModeProviderId,
 ): string {
   const cred = config.credentials[providerId];
-  if (cred?.auth_mode === "oauth") {
+  if (cred?.auth_mode === "claude_code") {
+    return `${green("Claude Code")} (its own sign-in)`;
+  }
+  if (providerId === "openai" && cred?.auth_mode === "oauth") {
     const tokens = loadOAuthTokens(store, providerId);
     if (!tokens) {
       return `${orange("OAuth (not signed in)")} — run \`foreman llm login ${providerId}\``;

@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { runInit } from '../../src/cli/init.js'
-import { checkLlmCredentials } from '../../src/core/doctor.js'
+import {
+  checkClaudeCodeBrain,
+  checkLlmCredentials,
+  type RouteVerifyOutcome,
+  type RouteVerifyRunner,
+} from '../../src/core/doctor.js'
 import { SecretStore } from '../../src/core/secret-store.js'
 import { closeDb, getDb } from '../../src/db/client.js'
 import { loadOrCreateSecretsMasterKey } from '../../src/identity/master-key.js'
@@ -197,30 +202,33 @@ credentials:
 
     it('warn when auth_mode: oauth but no tokens are stored', () => {
       runInit()
-      writeOAuthYaml('anthropic')
+      writeOAuthYaml('openai')
       const r = checkLlmCredentials()
       expect(r.status).toBe('warn')
-      expect(r.message).toMatch(/anthropic.*OAuth.*no tokens/)
-      expect(r.remediation).toContain('foreman llm login anthropic')
+      expect(r.message).toMatch(/openai.*OAuth.*no tokens/)
+      expect(r.remediation).toContain('foreman llm login openai')
     })
 
-    it('ok when auth_mode: oauth and tokens are present (Anthropic, no accountId)', () => {
+    it('reads an old Claude sign-in in llm.yaml as Claude Code', () => {
       runInit()
       writeOAuthYaml('anthropic')
-      const store = new SecretStore(getDb(), loadOrCreateSecretsMasterKey())
-      store.add(
-        'llm-oauth-anthropic',
-        JSON.stringify({
-          accessToken: 'sk-ant-oat01-x',
-          refreshToken: 'rt',
-          expiresAt: Date.now() + 60 * 60_000,
-        }),
-      )
-      const r = checkLlmCredentials()
-      expect(r.status).toBe('ok')
-      expect(r.message).toMatch(/anthropic OAuth tokens present/)
-      // No accountId for Anthropic → no "(account ...)" suffix.
-      expect(r.message).not.toContain('account ')
+      expect(checkLlmCredentials().message).toContain('Claude Code')
+    })
+
+    it('says whether Claude Code can be used, without a paid call', () => {
+      const asked: string[] = []
+      const verify = (outcome: RouteVerifyOutcome): RouteVerifyRunner => (command) => {
+        asked.push(command)
+        return outcome
+      }
+      expect(checkClaudeCodeBrain(verify('ok')).status).toBe('ok')
+      const signedOut = checkClaudeCodeBrain(verify('failed'))
+      expect(signedOut.status).toBe('warn')
+      expect(signedOut.remediation).toContain('claude auth login')
+      const missing = checkClaudeCodeBrain(verify('unavailable'))
+      expect(missing.status).toBe('warn')
+      expect(missing.remediation).toContain('Install Claude Code')
+      expect(new Set(asked)).toEqual(new Set(['claude auth status']))
     })
 
     it('ok when auth_mode: oauth and tokens are present (Codex, with accountId)', () => {
@@ -248,7 +256,7 @@ credentials:
       writeOAuthYaml('gemini')
       const r = checkLlmCredentials()
       expect(r.status).toBe('warn')
-      expect(r.message).toMatch(/Foreman only supports OAuth for anthropic \+ openai/)
+      expect(r.message).toMatch(/Foreman only supports OAuth for openai/)
       expect(r.remediation).toContain('api_key')
     })
 

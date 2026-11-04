@@ -5,7 +5,9 @@ import {
   useReducer,
 } from "react";
 import type { DoctorReport } from "../../core/doctor.js";
+import { usesClaudeCode } from "../../core/llm/config.js";
 import type { DiscoveredModel } from "../../core/llm/models-discovery.js";
+import { getForemanPaths } from "../../utils/config.js";
 import {
   pickSessionAgentConfig,
   type SetupState,
@@ -231,7 +233,11 @@ export function createInitialWizardState(
     providersPhase: "picker",
     providersSaved: [],
     providersSkipped: [],
-    providersSignedIn: session?.providersSignedIn ?? [],
+    // Claude Code chosen in an earlier run leaves nothing in the secret store,
+    // so llm.yaml is what says it stands.
+    providersSignedIn:
+      session?.providersSignedIn ??
+      (usesClaudeCode(getForemanPaths().llmConfigPath) ? ["anthropic"] : []),
     authModeAsked: [],
     providersWarning: null,
 

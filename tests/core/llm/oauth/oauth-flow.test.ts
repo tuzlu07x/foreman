@@ -8,7 +8,10 @@ import {
   refreshTokens,
   type OAuthFetch,
 } from "../../../../src/core/llm/oauth/oauth-flow.js";
-import { getOAuthProvider } from "../../../../src/core/llm/oauth/oauth-providers.js";
+import {
+  getOAuthProvider,
+  type OAuthProviderConfig,
+} from "../../../../src/core/llm/oauth/oauth-providers.js";
 
 interface MockResp {
   status?: number;
@@ -41,18 +44,31 @@ function makeJwt(payload: Record<string, unknown>): string {
   return `${header}.${body}.sig`;
 }
 
+/** The flow's JSON-encoded, PKCE-state branch, which no shipped provider uses
+ *  today. */
+const jsonProvider: OAuthProviderConfig = {
+  ...getOAuthProvider("openai"),
+  authorizeUrl: "https://auth.example/authorize",
+  tokenUrl: "https://auth.example/token",
+  scope: "read",
+  stateMode: "pkce-verifier",
+  tokenEncoding: "json",
+  tokenExchangeIncludesState: true,
+  extraAuthorizeParams: { code: "true" },
+};
+
 describe("buildAuthorizeUrl", () => {
-  it("includes all required PKCE params for Anthropic", () => {
-    const provider = getOAuthProvider("anthropic");
+  it("includes all required PKCE params", () => {
+    const provider = jsonProvider;
     const url = new URL(buildAuthorizeUrl(provider, "CHAL", "STATE"));
-    expect(url.origin + url.pathname).toBe("https://claude.ai/oauth/authorize");
+    expect(url.origin + url.pathname).toBe("https://auth.example/authorize");
     expect(url.searchParams.get("response_type")).toBe("code");
     expect(url.searchParams.get("client_id")).toBe(provider.clientId);
     expect(url.searchParams.get("redirect_uri")).toBe(provider.redirectUri);
     expect(url.searchParams.get("code_challenge")).toBe("CHAL");
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
     expect(url.searchParams.get("state")).toBe("STATE");
-    expect(url.searchParams.get("scope")).toContain("user:inference");
+    expect(url.searchParams.get("scope")).toBe("read");
     expect(url.searchParams.get("code")).toBe("true");
   });
 
@@ -162,9 +178,9 @@ describe("exchangeCodeForTokens — OpenAI (form encoding, no state echo)", () =
   });
 });
 
-describe("exchangeCodeForTokens — Anthropic (JSON encoding, state echo)", () => {
+describe("exchangeCodeForTokens — JSON encoding, state echo", () => {
   it("sends a JSON body that includes state and omits accountId", async () => {
-    const provider = getOAuthProvider("anthropic");
+    const provider = jsonProvider;
     const f = makeFetch([
       {
         body: {
@@ -194,7 +210,7 @@ describe("exchangeCodeForTokens — Anthropic (JSON encoding, state echo)", () =
 });
 
 describe("refreshTokens", () => {
-  const provider = getOAuthProvider("anthropic");
+  const provider = jsonProvider;
 
   it("sends grant_type=refresh_token and parses the new bundle", async () => {
     const f = makeFetch([

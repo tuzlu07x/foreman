@@ -42,21 +42,21 @@ describe("getValidOAuthTokens", () => {
   });
 
   it("throws when the user has never logged in", async () => {
-    await expect(getValidOAuthTokens(store, "anthropic")).rejects.toThrow(
+    await expect(getValidOAuthTokens(store, "openai")).rejects.toThrow(
       /Not signed in/,
     );
   });
 
   it("returns the stored bundle when it is still valid", async () => {
     const now = Date.now();
-    saveOAuthTokens(store, "anthropic", {
+    saveOAuthTokens(store, "openai", {
       accessToken: "A",
       refreshToken: "R",
       expiresAt: now + 60_000,
     });
     const tokens = await getValidOAuthTokens(
       store,
-      "anthropic",
+      "openai",
       undefined,
       now,
     );
@@ -64,7 +64,7 @@ describe("getValidOAuthTokens", () => {
   });
 
   it("refreshes and persists when the stored bundle is stale", async () => {
-    saveOAuthTokens(store, "anthropic", {
+    saveOAuthTokens(store, "openai", {
       accessToken: "OLD",
       refreshToken: "R-OLD",
       expiresAt: 1, // long ago
@@ -74,16 +74,16 @@ describe("getValidOAuthTokens", () => {
       refresh_token: "R-NEW",
       expires_in: 600,
     });
-    const tokens = await getValidOAuthTokens(store, "anthropic", fetchImpl);
+    const tokens = await getValidOAuthTokens(store, "openai", fetchImpl);
     expect(tokens.accessToken).toBe("NEW");
     expect(tokens.refreshToken).toBe("R-NEW");
     // Persisted to the store.
-    expect(loadOAuthTokens(store, "anthropic")?.accessToken).toBe("NEW");
+    expect(loadOAuthTokens(store, "openai")?.accessToken).toBe("NEW");
   });
 
   it("treats exactly-expired as stale (>= expiresAt)", async () => {
     const t = 1_000_000;
-    saveOAuthTokens(store, "anthropic", {
+    saveOAuthTokens(store, "openai", {
       accessToken: "OLD",
       refreshToken: "R",
       expiresAt: t,
@@ -93,7 +93,7 @@ describe("getValidOAuthTokens", () => {
       refresh_token: "R2",
       expires_in: 600,
     });
-    const tokens = await getValidOAuthTokens(store, "anthropic", fetchImpl, t);
+    const tokens = await getValidOAuthTokens(store, "openai", fetchImpl, t);
     expect(tokens.accessToken).toBe("NEW");
   });
 });
@@ -126,12 +126,12 @@ describe("makeAccessTokenProvider", () => {
   });
 
   it("omits accountId when absent (Anthropic)", async () => {
-    saveOAuthTokens(store, "anthropic", {
+    saveOAuthTokens(store, "openai", {
       accessToken: "A",
       refreshToken: "R",
       expiresAt: Date.now() + 60_000,
     });
-    const provider = makeAccessTokenProvider(store, "anthropic");
+    const provider = makeAccessTokenProvider(store, "openai");
     expect(await provider()).toEqual({ accessToken: "A" });
   });
 });
