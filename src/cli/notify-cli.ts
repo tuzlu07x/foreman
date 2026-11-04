@@ -18,7 +18,7 @@ import { approvalButtonSigner, approvalSigner } from '../core/approval-token.js'
 import { buildChannel } from '../core/notification/channel-factory.js'
 import { outboundUrlProblem } from '../core/notification/channels/http-post.js'
 import { planChannelEnable } from '../core/notification/channel-setup.js'
-import { CHAT_APPS, explainDeliveryError, findTelegramChat, type ChatAppId } from '../core/notification/chat-app-setup.js'
+import { CHAT_APPS, explainDeliveryError, findTelegramChat, SLACK_COMMAND_STEPS, type ChatAppId } from '../core/notification/chat-app-setup.js'
 import {
   checkDiscordBot,
   checkSlackAppToken,
@@ -718,8 +718,8 @@ notifyCommand
     console.log('')
     console.log('  In your Slack app settings (api.slack.com/apps), once:')
     console.log('  1. Interactivity & Shortcuts → on (no URL needed with Socket Mode).')
-    console.log('  2. Slash Commands → create /foreman.')
-    console.log('  3. Reinstall the app if Slack asks. Then restart foreman start.')
+    SLACK_COMMAND_STEPS.forEach((step, i) => console.log(`  ${i + 2}. ${step}.`))
+    console.log('  Then restart foreman start.')
     console.log(dim('  Only these users can press Allow / Deny or run /foreman. Undo: foreman notify slack-interactive --off'))
   })
 
