@@ -81,7 +81,7 @@ import { loadOrg } from "../core/org/org.js";
 import { writeGeminiPolicy } from "../core/gemini-launch.js";
 import { instanceLaunchFor } from "../core/role-launch.js";
 import {
-  claudeHookInstalled,
+  claudeHookFor,
   roleWorkspace,
   taskPermissions,
   type TaskPermissionInput,
@@ -109,7 +109,10 @@ import { wizardIntegrations } from "./wizard-integrations.js";
 import { runLoginWithSuspendedTui } from "../tui/run-login-in-tui.js";
 import { SecretStore } from "../core/secret-store.js";
 import type { IntegrationAuditSink } from "../core/integrations/service.js";
-import { createIntegrationWiring, type IntegrationWiring } from "../core/integrations/wiring.js";
+import {
+  createIntegrationWiring,
+  type IntegrationWiring,
+} from "../core/integrations/wiring.js";
 import { ConfirmationStore } from "../core/integrations/confirmations.js";
 import { loadOrCreateSecretsMasterKey } from "../identity/master-key.js";
 import {
@@ -291,7 +294,10 @@ export function startForeman(
   let heartbeat: NodeJS.Timeout | null = null;
   if (!attach) {
     acquireForemanPidfile(paths.configDir, headless ? "headless" : "tui");
-    heartbeat = setInterval(() => touchForemanPidfile(paths.configDir), PIDFILE_HEARTBEAT_MS);
+    heartbeat = setInterval(
+      () => touchForemanPidfile(paths.configDir),
+      PIDFILE_HEARTBEAT_MS,
+    );
     heartbeat.unref();
   }
   const registry = new RegistryService(db, bus);
@@ -410,7 +416,10 @@ export function startForeman(
   // Both a gateway and an attached TUI run one: a decision is written to
   // the row only while it is still pending, so exactly one counts, and
   // each process learns the outcome from the database.
-  const approvalBridge = new ApprovalBridge(db, { bus, adoptAnnounced: headless !== null });
+  const approvalBridge = new ApprovalBridge(db, {
+    bus,
+    adoptAnnounced: headless !== null,
+  });
 
   // In-app inbox (#613): every approval, block, crash and update, kept
   // with read state so the TUI shows what happened while you were away —
@@ -476,8 +485,14 @@ export function startForeman(
         // The headless gateway takes the socket over from a plain
         // `foreman daemon` once that one stops, as the 2.2.0 service did;
         // `foreman start` leaves agents on it (below).
-        if (!headless || !(err instanceof DaemonAlreadyRunningError) || hubDaemonStopping) throw err;
-        if (!waiting) headless.log(`${err.message}; waiting to take over when it stops`);
+        if (
+          !headless ||
+          !(err instanceof DaemonAlreadyRunningError) ||
+          hubDaemonStopping
+        )
+          throw err;
+        if (!waiting)
+          headless.log(`${err.message}; waiting to take over when it stops`);
         waiting = true;
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, HUB_RETRY_MS);
@@ -491,9 +506,9 @@ export function startForeman(
       }
     }
   };
-  const hubDaemonReady: Promise<void> = daemonSupported() && !attach
-    ? startHub()
-        .catch((err: unknown) => {
+  const hubDaemonReady: Promise<void> =
+    daemonSupported() && !attach
+      ? startHub().catch((err: unknown) => {
           const reason = err instanceof Error ? err.message : String(err);
           headless?.log(`agents run without the daemon: ${reason}`);
           if (err instanceof DaemonAlreadyRunningError) {
@@ -521,7 +536,7 @@ export function startForeman(
             dedupeKey: `daemon-unavailable:${reason}`,
           });
         })
-    : Promise.resolve();
+      : Promise.resolve();
 
   // Spend ledger (#629): agents report their token usage over
   // OpenTelemetry to a receiver on 127.0.0.1; spawned tasks get the
@@ -541,21 +556,24 @@ export function startForeman(
   });
   let otlpBoundPort: number | null = null;
   // The gateway's receiver takes the port; an attached TUI has none.
-  if (!attach) otlp
-    .start()
-    .then((port) => {
-      otlpBoundPort = port;
-    })
-    .catch(() => {
-      headless?.log(`agent spend tracking is off: port ${otlpPort()} is in use`);
-      inbox.add({
-        level: "warning",
-        kind: "system",
-        title: `Agent spend tracking is off: port ${otlpPort()} is in use`,
-        body: "Set FOREMAN_OTLP_PORT to a free port and restart foreman start.",
-        dedupeKey: `otlp-port:${otlpPort()}`,
+  if (!attach)
+    otlp
+      .start()
+      .then((port) => {
+        otlpBoundPort = port;
+      })
+      .catch(() => {
+        headless?.log(
+          `agent spend tracking is off: port ${otlpPort()} is in use`,
+        );
+        inbox.add({
+          level: "warning",
+          kind: "system",
+          title: `Agent spend tracking is off: port ${otlpPort()} is in use`,
+          body: "Set FOREMAN_OTLP_PORT to a free port and restart foreman start.",
+          dedupeKey: `otlp-port:${otlpPort()}`,
+        });
       });
-    });
 
   // Chat verbs for the TUI command bar (#612) — the same router the
   // Telegram / MCP path uses. Created up front so the TUI gets it.
@@ -608,7 +626,8 @@ export function startForeman(
         const entry = catalogEntryFor(loadActiveRegistry().doc, agentId, agent);
         const launchable =
           Boolean(entry?.task_command_template) ||
-          (entry?.approval_adapter === "acp-stdio-v1" && entry.acp_command !== undefined);
+          (entry?.approval_adapter === "acp-stdio-v1" &&
+            entry.acp_command !== undefined);
         return launchable ? null : "it has no non-interactive command";
       } catch {
         return "its registry entry can't be read";
@@ -658,14 +677,25 @@ export function startForeman(
     controlChannel,
     ownerStore: secretStore,
     secretStore,
-    ...(orchestratorChat ? { orchestratorChat, proposePlan: (plan: ChatPlan, who: PlanAsker) => proposePlan(plan, who) } : {}),
+    ...(orchestratorChat
+      ? {
+          orchestratorChat,
+          proposePlan: (plan: ChatPlan, who: PlanAsker) =>
+            proposePlan(plan, who),
+        }
+      : {}),
     ...(integrationWiring
       ? {
           integrations: {
             service: integrationWiring.service,
             confirmations: integrationConfirmations,
             notice: (title: string) =>
-              inbox.add({ level: "info", kind: "system", title, dedupeKey: `integration:${Date.now()}:${title}` }),
+              inbox.add({
+                level: "info",
+                kind: "system",
+                title,
+                dedupeKey: `integration:${Date.now()}:${title}`,
+              }),
           },
         }
       : {}),
@@ -675,7 +705,10 @@ export function startForeman(
   // assigned as yours, exactly like `/foreman assign`. The approval goes
   // through the mediator (policy, risk, audit, your channels); nothing is
   // assigned without an Allow. The outcome goes back where you asked.
-  const proposePlan = async (plan: ChatPlan, who: PlanAsker): Promise<string> => {
+  const proposePlan = async (
+    plan: ChatPlan,
+    who: PlanAsker,
+  ): Promise<string> => {
     const listed = plan.map((p) => `${p.target}: ${p.task.slice(0, 300)}`);
     void (async () => {
       let decision: "allowed" | "denied" = "denied";
@@ -704,23 +737,50 @@ export function startForeman(
         decision = "denied";
       }
       if (decision !== "allowed") {
-        tellAsker(who, "Plan not started", "Nobody allowed it (denied or timed out). Ask again when you want it.");
+        tellAsker(
+          who,
+          "Plan not started",
+          "Nobody allowed it (denied or timed out). Ask again when you want it.",
+        );
         return;
       }
-      const lines = await handOutPlan(commandRouter, plan, who, commandContext, {
-        approvalId,
-        logEvent: (type, payload) => audit.logEvent(type, payload),
-      });
+      const lines = await handOutPlan(
+        commandRouter,
+        plan,
+        who,
+        commandContext,
+        {
+          approvalId,
+          logEvent: (type, payload) => audit.logEvent(type, payload),
+        },
+      );
       tellAsker(who, "Plan handed out", lines.join("\n"));
     })();
     return planApprovalNote(who.sourceAgent);
   };
   const tellAsker = (who: PlanAsker, title: string, body: string): void => {
-    inbox.add({ level: "info", kind: "system", title: `${title} (from ${who.sourceAgent})`, body, dedupeKey: `chat-plan:${Date.now()}:${title}` });
+    inbox.add({
+      level: "info",
+      kind: "system",
+      title: `${title} (from ${who.sourceAgent})`,
+      body,
+      dedupeKey: `chat-plan:${Date.now()}:${title}`,
+    });
     const channel = who.sourceAgent;
-    if (!notificationSetup || !["telegram", "slack", "discord"].includes(channel)) return;
+    if (
+      !notificationSetup ||
+      !["telegram", "slack", "discord"].includes(channel)
+    )
+      return;
     void notificationSetup.service
-      .sendTo([channel], "info", { level: "info", requestId: null, title, body, actions: [], agentBlocking: false })
+      .sendTo([channel], "info", {
+        level: "info",
+        requestId: null,
+        title,
+        body,
+        actions: [],
+        agentBlocking: false,
+      })
       .catch(() => undefined);
   };
 
@@ -735,7 +795,9 @@ export function startForeman(
   ): Promise<string> => {
     const [verb = "help", ...args] = parseChatCommand(text);
     const sourceUser = `${channel}:${userId}`;
-    const refusal = opts.plain ? plainTextRefusal(commandRouter, registry, verb, args) : null;
+    const refusal = opts.plain
+      ? plainTextRefusal(commandRouter, registry, verb, args)
+      : null;
     if (refusal !== null) {
       audit.logEvent("foreman:command", {
         command: verb,
@@ -753,7 +815,11 @@ export function startForeman(
       sourceUser,
       conversation: sourceUser,
       trustedOwner: true,
-      integrationOwner: isIntegrationOwner(paths.notifyConfigPath, channel, userId),
+      integrationOwner: isIntegrationOwner(
+        paths.notifyConfigPath,
+        channel,
+        userId,
+      ),
     });
     audit.logEvent("foreman:command", {
       command: verb,
@@ -775,31 +841,33 @@ export function startForeman(
   // One notification bridge per home: the gateway's. Telegram allows one
   // getUpdates poller per bot, and Slack / Discord must not get every
   // approval twice, so an attached TUI runs none.
-  const notificationSetup = attach ? null : setupNotificationBridge({
-    db,
-    secretStore,
-    telegramSharedWith: telegramSharedWith(registry),
-    onChatCommand: runChatCommand,
-    onChannelDecision: (info) =>
-      audit.logEvent("approval:channel-decision", info),
-    onInteractionRefused: (refusal) => {
-      refusals.record(refusal);
-    },
-    notifyConfigPath: paths.notifyConfigPath,
-    notifyStatePath: paths.notifyStatePath,
-    llmConfigPath: paths.llmConfigPath,
-    // Channel trouble (e.g. someone else polling the approval bot) lands
-    // in the inbox, once per distinct message.
-    onChannelWarning: (message) => {
-      headless?.log(message);
-      inbox.add({
-        level: "warning",
-        kind: "system",
-        title: message,
-        dedupeKey: `channel:${message}`,
+  const notificationSetup = attach
+    ? null
+    : setupNotificationBridge({
+        db,
+        secretStore,
+        telegramSharedWith: telegramSharedWith(registry),
+        onChatCommand: runChatCommand,
+        onChannelDecision: (info) =>
+          audit.logEvent("approval:channel-decision", info),
+        onInteractionRefused: (refusal) => {
+          refusals.record(refusal);
+        },
+        notifyConfigPath: paths.notifyConfigPath,
+        notifyStatePath: paths.notifyStatePath,
+        llmConfigPath: paths.llmConfigPath,
+        // Channel trouble (e.g. someone else polling the approval bot) lands
+        // in the inbox, once per distinct message.
+        onChannelWarning: (message) => {
+          headless?.log(message);
+          inbox.add({
+            level: "warning",
+            kind: "system",
+            title: message,
+            dedupeKey: `channel:${message}`,
+          });
+        },
       });
-    },
-  });
   const notificationBridge = notificationSetup?.bridge ?? null;
   const dailyScheduler = notificationSetup?.scheduler ?? null;
 
@@ -1025,7 +1093,9 @@ export function startForeman(
           audit,
           orgConfigPath: paths.orgConfigPath,
           ...(integrationWiring ? { integrations: integrationWiring } : {}),
-          ...(attach ? { attachedGateway: () => attachedGatewayState(paths.configDir) } : {}),
+          ...(attach
+            ? { attachedGateway: () => attachedGatewayState(paths.configDir) }
+            : {}),
         },
       }),
       { exitOnCtrlC: false },
@@ -1279,7 +1349,11 @@ export function startForeman(
               }
               const registryDoc = loadActiveRegistry();
               // `backend --type codex` runs as Codex (agent-instance.ts).
-              const entry = catalogEntryFor(registryDoc.doc, agentId, registry.get(agentId));
+              const entry = catalogEntryFor(
+                registryDoc.doc,
+                agentId,
+                registry.get(agentId),
+              );
               const inboundDir = entry?.inbound_dir;
               const telegramBotToken = secretStore.exists("telegram-bot-token")
                 ? secretStore.get("telegram-bot-token")
@@ -1399,7 +1473,10 @@ export function startForeman(
                   agentId,
                 );
                 if (chainLimit) {
-                  loopRun.delegationId = recordUnrunHandOff("blocked", chainLimit);
+                  loopRun.delegationId = recordUnrunHandOff(
+                    "blocked",
+                    chainLimit,
+                  );
                   return { status: "failed", error: chainLimit };
                 }
                 // Department budgets, enforced here too: whichever path queued
@@ -1454,17 +1531,26 @@ export function startForeman(
                 const taskUsageKey = otlpBoundPort
                   ? otlp.issueTaskKey(agentId, String(row.id))
                   : null;
-                const instance = entry ? instanceLaunchFor(agentId, entry, secretStore, paths) : null;
+                const instance = entry
+                  ? instanceLaunchFor(agentId, entry, secretStore, paths)
+                  : null;
                 const trusted = registryRow?.taskSkipPermissions === true;
-                const permissions = entry ? taskPermissionsFor(agentId, entry, trusted, paths) : null;
+                const permissions = entry
+                  ? taskPermissionsFor(agentId, entry, trusted, paths)
+                  : null;
                 const cwd = taskCwd(agentId, derivedCwd);
                 const launch =
                   permissions || instance
                     ? {
-                        args: [...(instance?.args ?? []), ...(permissions?.args ?? [])],
+                        args: [
+                          ...(instance?.args ?? []),
+                          ...(permissions?.args ?? []),
+                        ],
                         env: instance?.env ?? {},
                         taskPrefix: instance?.taskPrefix ?? "",
-                        ...(instance?.acpMcpServers ? { acpMcpServers: instance.acpMcpServers } : {}),
+                        ...(instance?.acpMcpServers
+                          ? { acpMcpServers: instance.acpMcpServers }
+                          : {}),
                       }
                     : null;
                 // "What you did recently" (role-memory.ts): a headless run
@@ -1555,16 +1641,24 @@ export function startForeman(
                     "durationMs" in exec.spawn ? exec.spawn.durationMs : null,
                   timeoutMs:
                     exec.spawn.kind === "timeout" ? exec.spawn.timeoutMs : null,
-                  stdoutLen: "stdout" in exec.spawn ? exec.spawn.stdout.length : 0,
-                  stderrLen: "stderr" in exec.spawn ? exec.spawn.stderr.length : 0,
+                  stdoutLen:
+                    "stdout" in exec.spawn ? exec.spawn.stdout.length : 0,
+                  stderrLen:
+                    "stderr" in exec.spawn ? exec.spawn.stderr.length : 0,
                   stdoutTail:
-                    "stdout" in exec.spawn ? exec.spawn.stdout.slice(-2000) : null,
+                    "stdout" in exec.spawn
+                      ? exec.spawn.stdout.slice(-2000)
+                      : null,
                   stderrTail:
-                    "stderr" in exec.spawn ? exec.spawn.stderr.slice(-2000) : null,
+                    "stderr" in exec.spawn
+                      ? exec.spawn.stderr.slice(-2000)
+                      : null,
                   spawnError:
                     exec.spawn.kind === "spawn-error" ? exec.spawn.error : null,
                   unsupportedReason:
-                    exec.spawn.kind === "unsupported" ? exec.spawn.reason : null,
+                    exec.spawn.kind === "unsupported"
+                      ? exec.spawn.reason
+                      : null,
                   outputRelay: exec.outputRelay,
                 });
                 if (taskUsageKey) otlp.revokeTaskKey(taskUsageKey);
@@ -1582,7 +1676,8 @@ export function startForeman(
                         source: "task-output",
                         ...printed,
                         // The agent's configured model prices a bare token count.
-                        model: printed.model ?? registryRow?.modelVersion ?? null,
+                        model:
+                          printed.model ?? registryRow?.modelVersion ?? null,
                         taskRef: String(row.id),
                       });
                       onUsageRecorded();
@@ -1598,7 +1693,9 @@ export function startForeman(
                   task: delegationLoop.wakeTask(link) ?? message,
                   spawn: exec.spawn,
                   step: delegationLoop.isStep(link),
-                  handedOn: loopRun.delegationId ? delegationLoop.handedOn(loopRun.delegationId) : false,
+                  handedOn: loopRun.delegationId
+                    ? delegationLoop.handedOn(loopRun.delegationId)
+                    : false,
                 });
                 if (exec.spawn.kind === "ok") {
                   return { status: "applied" };
@@ -1628,7 +1725,10 @@ export function startForeman(
                 { telegramBotToken, telegramChatId },
               );
               if (outcome.status === "failed") {
-                loopRun.delegationId = recordUnrunHandOff("failed", outcome.error);
+                loopRun.delegationId = recordUnrunHandOff(
+                  "failed",
+                  outcome.error,
+                );
                 return { status: "failed", error: outcome.error };
               }
               // Its answer comes back as an org_report (or the watchdog asks).
@@ -1684,17 +1784,18 @@ export function startForeman(
   // restart) is asked of the agent that owes it, at most twice, then you
   // are told once. Results that came back are handed to the agent waiting
   // for them by the drain itself, not by this timer.
-  if (!attach) watchdogTimer = setInterval(() => {
-    try {
-      runDelegationWatchdog({ loop: delegationLoop });
-    } catch (err) {
-      process.stderr.write(
-        `foreman: delegation watchdog tick failed: ${
-          err instanceof Error ? err.message : String(err)
-        }\n`,
-      );
-    }
-  }, 15_000);
+  if (!attach)
+    watchdogTimer = setInterval(() => {
+      try {
+        runDelegationWatchdog({ loop: delegationLoop });
+      } catch (err) {
+        process.stderr.write(
+          `foreman: delegation watchdog tick failed: ${
+            err instanceof Error ? err.message : String(err)
+          }\n`,
+        );
+      }
+    }, 15_000);
   // Avoid keeping Node alive purely on the timer when the rest of
   // the process is winding down (e.g. CLI test runners) — the
   // signal handler at the top of run() handles graceful exit.
@@ -1702,8 +1803,13 @@ export function startForeman(
 
   const channels = notificationSetup?.channelIds ?? [];
   if (headless) {
-    const reach = channels.length > 0 ? channels.join(", ") : "none (notify.yaml has no working channel)";
-    headless.log(`gateway running (pid ${process.pid}): approvals and notifications go to ${reach}`);
+    const reach =
+      channels.length > 0
+        ? channels.join(", ")
+        : "none (notify.yaml has no working channel)";
+    headless.log(
+      `gateway running (pid ${process.pid}): approvals and notifications go to ${reach}`,
+    );
   }
 
   return {
@@ -1865,7 +1971,9 @@ function setupNotificationBridge(args: {
     ...(args.onInteractionRefused
       ? { onInteractionRefused: args.onInteractionRefused }
       : {}),
-    ...(args.telegramSharedWith ? { telegramSharedWith: args.telegramSharedWith } : {}),
+    ...(args.telegramSharedWith
+      ? { telegramSharedWith: args.telegramSharedWith }
+      : {}),
   });
 
   if (channels.size === 0) return null;
@@ -1922,7 +2030,13 @@ function setupNotificationBridge(args: {
     }
   }
 
-  return { bridge, scheduler, service, config, channelIds: [...channels.keys()] };
+  return {
+    bridge,
+    scheduler,
+    service,
+    config,
+    channelIds: [...channels.keys()],
+  };
 }
 
 // =============================================================================
@@ -2143,7 +2257,9 @@ async function runOnboardingWizard(): Promise<boolean> {
         requestOauthRun: (steps) => {
           oauthQueue.push(...steps);
         },
-        ...(wizardInt.integrations ? { integrations: wizardInt.integrations } : {}),
+        ...(wizardInt.integrations
+          ? { integrations: wizardInt.integrations }
+          : {}),
       },
       // `foreman start` continues into the TUI once the wizard exits.
       afterExit: "launch-tui",
@@ -2176,12 +2292,21 @@ export function rememberSetupSkipped(): void {
  *  checked by the channel). The Telegram approval bot only takes commands
  *  from your own private chat, so it always may. A notify.yaml that can't
  *  be read closes it. */
-export function isIntegrationOwner(notifyConfigPath: string, channel: string, userId: string): boolean {
+export function isIntegrationOwner(
+  notifyConfigPath: string,
+  channel: string,
+  userId: string,
+): boolean {
   if (channel === "telegram") return true;
   try {
-    const toggle = channelConfig(loadNotifyConfig(notifyConfigPath), channel as "slack" | "discord");
+    const toggle = channelConfig(
+      loadNotifyConfig(notifyConfigPath),
+      channel as "slack" | "discord",
+    );
     const owners = toggle?.owner_user_ids;
-    return owners ? owners.includes(userId) : (toggle?.allowed_user_ids ?? []).includes(userId);
+    return owners
+      ? owners.includes(userId)
+      : (toggle?.allowed_user_ids ?? []).includes(userId);
   } catch {
     return false;
   }
@@ -2194,7 +2319,13 @@ function integrationsForTui(
   audit: IntegrationAuditSink,
 ): { integrations?: IntegrationWiring } {
   try {
-    return { integrations: createIntegrationWiring({ paths: getForemanPaths(), store, audit }) };
+    return {
+      integrations: createIntegrationWiring({
+        paths: getForemanPaths(),
+        store,
+        audit,
+      }),
+    };
   } catch {
     return {};
   }
@@ -2272,9 +2403,10 @@ export interface DelegationWatchdogDeps {
 }
 
 /** One tick of the watchdog. Returns what it did, for tests and logs. */
-export function runDelegationWatchdog(
-  deps: DelegationWatchdogDeps,
-): { nudged: number; escalated: number } {
+export function runDelegationWatchdog(deps: DelegationWatchdogDeps): {
+  nudged: number;
+  escalated: number;
+} {
   return deps.loop.watchdog();
 }
 
@@ -2370,7 +2502,10 @@ export const startCommand = new Command("start")
       started = gateway ? startForeman({ attach: gateway }) : startForeman();
     } catch (err) {
       // The service took the home between the check and the lock.
-      const gateway = err instanceof ForemanAlreadyRunningError ? attachedGatewayState(configDir) : null;
+      const gateway =
+        err instanceof ForemanAlreadyRunningError
+          ? attachedGatewayState(configDir)
+          : null;
       if (gateway) {
         closeDb();
         started = startForeman({ attach: gateway });
@@ -2396,21 +2531,32 @@ export const startCommand = new Command("start")
     await started.shutdown();
     if (started.mode === "attached") {
       // Quitting the TUI leaves the gateway (and its channels) running.
-      console.log(dim("Foreman keeps guarding in the background (`foreman service status`)."));
+      console.log(
+        dim(
+          "Foreman keeps guarding in the background (`foreman service status`).",
+        ),
+      );
     }
   });
 
 /** The live headless gateway that owns this home, if any. */
-export function attachedGatewayState(configDir: string): { pid: number } | null {
+export function attachedGatewayState(
+  configDir: string,
+): { pid: number } | null {
   const gateway: GatewayProbe = probeGateway(configDir);
-  return gateway.state === "running" && gateway.mode === "headless" ? { pid: gateway.pid } : null;
+  return gateway.state === "running" && gateway.mode === "headless"
+    ? { pid: gateway.pid }
+    : null;
 }
 
 /** Registered chat agents that may read the Telegram bot's updates; when
  *  there are none, Foreman reads them (telegram-listener.ts). */
 function telegramSharedWith(registry: RegistryService): string[] {
   try {
-    return agentsSharingTelegram(registry.listAll(), loadActiveRegistry().doc.agents);
+    return agentsSharingTelegram(
+      registry.listAll(),
+      loadActiveRegistry().doc.agents,
+    );
   } catch {
     // Without the catalog we can't tell: assume an agent may share the bot,
     // so Foreman never fights it for updates.
@@ -2427,12 +2573,17 @@ function taskPermissionsFor(
   paths: { orgConfigPath: string; stateDir: string },
 ): TaskPermissions | null {
   if (entry.id === "gemini-cli") {
-    return { args: ["--policy", writeGeminiPolicy(paths.stateDir)], summary: "every tool call goes to Foreman over ACP" };
+    return {
+      args: ["--policy", writeGeminiPolicy(paths.stateDir)],
+      summary: "every tool call goes to Foreman over ACP",
+    };
   }
   let can: TaskPermissionInput["can"];
   try {
     const org = loadOrg(paths.orgConfigPath);
-    can = org ? Object.values(org.roles).find((r) => r.agent === agentId)?.can : undefined;
+    can = org
+      ? Object.values(org.roles).find((r) => r.agent === agentId)?.can
+      : undefined;
   } catch {
     // An unreadable org.yaml: no write, no network. The task still runs.
     can = ["read"];
@@ -2440,14 +2591,17 @@ function taskPermissionsFor(
   return taskPermissions({
     runtime: entry.id,
     trusted,
-    hookInstalled: entry.id === "claude-code" ? claudeHookInstalled(entry.config_paths ?? []) : null,
+    hookInstalled: claudeHookFor(agentId, entry),
     can,
   });
 }
 
 /** The folder a task runs in: the one the task names, else the role's own
  *  workspace (null when it can't be made: the service's cwd, as before). */
-function taskCwd(agentId: string, fromTask: string | undefined): string | undefined {
+function taskCwd(
+  agentId: string,
+  fromTask: string | undefined,
+): string | undefined {
   if (fromTask) return fromTask;
   try {
     return roleWorkspace(agentId);
@@ -2455,5 +2609,3 @@ function taskCwd(agentId: string, fromTask: string | undefined): string | undefi
     return undefined;
   }
 }
-
-

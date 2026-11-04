@@ -31,10 +31,15 @@ export function buildMcpSnippet(
   agentId: string,
   entry: AgentEntry,
   token?: string,
+  /** The Foreman CLI as argv. What gets written into an agent's config
+   *  should name it by absolute path (foremanCliArgv), like the hook does:
+   *  an agent started from a GUI often has no `foreman` on its PATH. */
+  foremanArgv: readonly string[] = ["foreman"],
 ): McpSnippet {
+  const [command = "foreman", ...cliArgs] = foremanArgv;
   const block = {
-    command: "foreman",
-    args: ["mcp-stdio", "--source", agentId],
+    command,
+    args: [...cliArgs, "mcp-stdio", "--source", agentId],
     env: { [AGENT_TOKEN_ENV]: token ?? AGENT_TOKEN_PLACEHOLDER },
   };
   // Where the agent actually reads MCP servers, when the registry says so.

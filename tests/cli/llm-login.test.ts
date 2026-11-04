@@ -11,6 +11,7 @@ import {
   performOAuthLogout,
   setAuthMode,
   type LoginDeps,
+  isKnownFeature,
 } from '../../src/cli/llm-cli.js'
 import {
   defaultLlmConfig,
@@ -48,6 +49,14 @@ const pong = {
   durationMs: 1,
   cacheHit: false,
 }
+
+describe("llm enable", () => {
+  it("knows every feature in llm.yaml, including the one Foreman's own messages name", () => {
+    expect(isKnownFeature("orchestrator_chat")).toBe(true);
+    expect(isKnownFeature("verification")).toBe(true);
+    expect(isKnownFeature("nonsense")).toBe(false);
+  });
+});
 
 describe('setAuthMode', () => {
   it('flips auth_mode while preserving secret_name + other fields', () => {

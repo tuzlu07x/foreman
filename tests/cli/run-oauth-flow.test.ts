@@ -258,7 +258,7 @@ describe("runOauthFlows", () => {
     const bad = makeScript("bad.sh", "#!/bin/sh\nexit 1\n");
     runOauthFlows([step({ command: ok }), step({ command: bad })]);
     const all = writeSpy.mock.calls.map((c) => String(c[0])).join("");
-    expect(all).toMatch(/OAuth setup: 1\/2 succeeded/);
+    expect(all).toMatch(/Sign-in: 1\/2 succeeded/);
     expect(all).toMatch(/foreman doctor/);
   });
 });

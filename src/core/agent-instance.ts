@@ -2,6 +2,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, realpathSync, rmSync, writ
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { AGENT_TOKEN_ENV, AGENT_TOKEN_FILE_ENV } from "./agent-identity.js";
+import { DEFAULT_PRETOOLUSE_MATCHER, mergeHook } from "./agent-hook.js";
 import type { AgentEntry, RegistryDoc } from "./registry-catalog.js";
 import type { RegisteredAgent } from "./registry.js";
 
@@ -75,6 +76,25 @@ export interface InstanceLaunchInput {
   foremanArgv: string[];
   /** One paragraph on the role (org.yaml), or null. */
   role: string | null;
+  /** Claude Code: Foreman's hook command, when its settings have none, so
+   *  the launch carries the hook and no settings file is written. */
+  hookCommand?: string | null;
+  /** The environment to read Foreman's home from. */
+  env?: NodeJS.ProcessEnv;
+}
+
+/** Where Foreman's state lives. An agent can start its MCP server with only
+ *  the env it is given (Codex does), and the server then opens another home,
+ *  or none, and the role loses its tools. */
+const HOME_ENV = ["FOREMAN_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] as const;
+
+function foremanHomeEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const name of HOME_ENV) {
+    const value = env[name];
+    if (value) out[name] = value;
+  }
+  return out;
 }
 
 /** Agents whose launch can carry their own Foreman MCP server. */
@@ -94,7 +114,11 @@ export function instanceLaunch(entry: Pick<AgentEntry, "id">, input: InstanceLau
   // The agent's own wiring may carry its token directly (FOREMAN_AGENT_TOKEN
   // wins over the file): blank it, or the instance would present the base
   // agent's token and run untrusted (token-mismatch).
-  const env = { [AGENT_TOKEN_ENV]: "", [AGENT_TOKEN_FILE_ENV]: input.tokenFile };
+  const env = {
+    ...foremanHomeEnv(input.env ?? process.env),
+    [AGENT_TOKEN_ENV]: "",
+    [AGENT_TOKEN_FILE_ENV]: input.tokenFile,
+  };
   const rolePrompt = input.role ? `${input.role}\n\n` : "";
   if (entry.id === "codex") {
     // `-c key=value` overrides ~/.codex/config.toml for this run. Codex
@@ -109,7 +133,7 @@ export function instanceLaunch(entry: Pick<AgentEntry, "id">, input: InstanceLau
         "-c",
         `mcp_servers.foreman.args=[${serverArgs.map(tomlString).join(",")}]`,
         "-c",
-        `mcp_servers.foreman.env={${AGENT_TOKEN_ENV}="",${AGENT_TOKEN_FILE_ENV}=${tomlString(input.tokenFile)}}`,
+        `mcp_servers.foreman.env={${Object.entries(env).map(([name, value]) => `${name}=${tomlString(value)}`).join(",")}}`,
         "-c",
         "mcp_servers.foreman.enabled=true",
       ],
@@ -131,10 +155,14 @@ export function instanceLaunch(entry: Pick<AgentEntry, "id">, input: InstanceLau
   }
   if (entry.id === "claude-code") {
     const mcp = { mcpServers: { foreman: { command, args: serverArgs, env } } };
+    const hook = input.hookCommand
+      ? mergeHook({}, { matcher: DEFAULT_PRETOOLUSE_MATCHER, hookCommand: input.hookCommand }).next
+      : null;
     return {
       args: [
         "--mcp-config",
         JSON.stringify(mcp),
+        ...(hook ? ["--settings", JSON.stringify(hook)] : []),
         ...(input.role ? ["--append-system-prompt", input.role] : []),
       ],
       env: {},

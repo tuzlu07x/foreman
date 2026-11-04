@@ -1,3 +1,4 @@
+import { foremanCliArgv } from "./agent-instance.js";
 import { isInstance, supportsInstances } from "./agent-instance.js";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { extname } from "node:path";
@@ -103,7 +104,7 @@ export function writeAgentWiring(
       config = "missing";
     } else {
       try {
-        const snippet = buildMcpSnippet(agentId, entry, token).json;
+        const snippet = buildMcpSnippet(agentId, entry, token, foremanCliArgv()).json;
         const zeroclaw = entry.mcp_config?.layout === "zeroclaw" ? planZeroclawInjection(configPath, snippet) : null;
         const plan = zeroclaw ?? planInjection(configPath, snippet);
         const warning = applyInjection(configPath, plan);

@@ -145,7 +145,8 @@ const HEADLESS_COMMAND_REWRITES: Array<(command: string) => string | null> = [
   (command) => {
     // `llm login anthropic` hands over to Claude Code's own sign-in, which
     // has no device-code switch of ours to set.
-    if (!/(^|\s)foreman\s+llm\s+login\s+openai(\s|$)/.test(command)) return null;
+    if (!/(^|\s)foreman\s+llm\s+login\s+openai(\s|$)/.test(command))
+      return null;
     if (/--headless/.test(command)) return null;
     return `${command.trimEnd()} --headless`;
   },
@@ -185,7 +186,7 @@ export function runOauthFlows(steps: WizardOauthRunStep[]): OauthFlowResult[] {
   process.stdout.write("\n");
   process.stdout.write(
     bold(
-      `Running ${steps.length} OAuth setup step${steps.length === 1 ? "" : "s"}\n\n`,
+      `Running ${steps.length} sign-in step${steps.length === 1 ? "" : "s"}\n\n`,
     ),
   );
   const headless = isHeadlessEnvironment();
@@ -256,7 +257,7 @@ export function runOauthFlows(steps: WizardOauthRunStep[]): OauthFlowResult[] {
   const succeeded = results.filter((r) => r.succeeded).length;
   process.stdout.write(
     bold(
-      `OAuth setup: ${succeeded}/${results.length} succeeded.\n` +
+      `Sign-in: ${succeeded}/${results.length} succeeded.\n` +
         `Run \`foreman doctor\` to confirm final state.\n\n`,
     ),
   );

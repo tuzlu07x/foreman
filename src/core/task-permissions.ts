@@ -2,8 +2,10 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { hasForemanHook, type ClaudeSettings } from "./agent-hook.js";
+import { isInstance } from "./agent-instance.js";
 import { resolveAgentSettingsPath } from "./agent-permissions.js";
 import type { RoleCapability } from "./org/org.js";
+import type { AgentEntry } from "./registry-catalog.js";
 
 // =============================================================================
 // What an agent may do on its own during a task Foreman hands it
@@ -104,6 +106,14 @@ export function taskPermissions(input: TaskPermissionInput): TaskPermissions | n
 
 /** Whether Claude Code's settings carry Foreman's PreToolUse hook: false
  *  when they don't, null when the file can't be read. */
+/** Whether Foreman's hook covers a task on `entry`: an instance carries its
+ *  own (role-launch.ts); the plain agent has the one in its settings. Null
+ *  for agents with no such hook. */
+export function claudeHookFor(agentId: string, entry: AgentEntry): boolean | null {
+  if (entry.id !== "claude-code") return null;
+  return isInstance(agentId, entry) || claudeHookInstalled(entry.config_paths ?? []);
+}
+
 export function claudeHookInstalled(configPaths: string[]): boolean | null {
   try {
     const path = resolveAgentSettingsPath(configPaths);

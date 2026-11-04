@@ -1,7 +1,14 @@
-import { catalogEntryFor, isInstance, supportsInstances } from "../core/agent-instance.js";
+import {
+  catalogEntryFor,
+  isInstance,
+  supportsInstances,
+} from "../core/agent-instance.js";
 import { loadOrg, type RoleCapability } from "../core/org/org.js";
-import { installedAgent, updateCommandFor } from "../core/agent-runtime-info.js";
-import { claudeHookInstalled, taskPermissions } from "../core/task-permissions.js";
+import {
+  installedAgent,
+  updateCommandFor,
+} from "../core/agent-runtime-info.js";
+import { claudeHookFor, taskPermissions } from "../core/task-permissions.js";
 import { existsSync, writeFileSync } from "node:fs";
 import { Command, Option } from "commander";
 import { bus } from "../core/event-bus.js";
@@ -23,7 +30,10 @@ import {
   projectSettingsPath,
   uninstallPreToolUseHook,
 } from "../core/agent-hook.js";
-import { buildMcpSnippet, snippetForDisplay } from "../core/agent-mcp-snippet.js";
+import {
+  buildMcpSnippet,
+  snippetForDisplay,
+} from "../core/agent-mcp-snippet.js";
 import {
   agentTokenSecretName,
   hasAgentToken,
@@ -75,7 +85,11 @@ import {
   pickMcpConfigPath,
 } from "../core/agent-add-flow.js";
 import { bold, dim, green, orange, red } from "./colors.js";
-import { renderAgentJson, renderAgentLine, renderPublicKeyJson } from "./render.js";
+import {
+  renderAgentJson,
+  renderAgentLine,
+  renderPublicKeyJson,
+} from "./render.js";
 import { requireConfirm } from "./require-confirm.js";
 
 function getRegistry(): RegistryService {
@@ -157,8 +171,6 @@ agentsCommand
       const db = getDb();
       try {
         let exit = 0;
-        // `foreman agent add claude-code`: a registry id is its own type
-        // (#657), as the README's quick start assumes.
         const type =
           options.type ??
           (name && loadActiveRegistry().doc.agents.some((a) => a.id === name)
@@ -218,7 +230,10 @@ agentsCommand
         const agent = registry.get(name);
         if (!agent) throw new AgentNotFoundError(name);
         if (options.uninstall && options.keepBinary) {
-          console.error(red("error: ") + "--uninstall and --keep-binary contradict each other.");
+          console.error(
+            red("error: ") +
+              "--uninstall and --keep-binary contradict each other.",
+          );
           process.exitCode = 1;
           return;
         }
@@ -248,7 +263,9 @@ agentsCommand
           );
           console.error(
             `  → Run 'foreman agent remove ${name}' to unregister it` +
-              (uninstallCmd ? `, then uninstall it yourself: ${uninstallCmd}` : "."),
+              (uninstallCmd
+                ? `, then uninstall it yourself: ${uninstallCmd}`
+                : "."),
           );
           process.exitCode = 1;
           return;
@@ -273,7 +290,8 @@ agentsCommand
         console.log(`${green("✓")} agent ${name} removed`);
         // Best-effort: take Foreman's wiring back out of the agent's config.
         const unwired = unwireAgent(name, entry);
-        for (const line of unwired.removed) console.log(`${green("✓")} removed ${line}`);
+        for (const line of unwired.removed)
+          console.log(`${green("✓")} removed ${line}`);
         for (const note of unwired.notes) console.log(orange("note: ") + note);
         if (!options.uninstall || !entry) {
           console.log(
@@ -286,8 +304,6 @@ agentsCommand
           );
           return;
         }
-        // #357 — the uninstall command follows how the binary was actually
-        // installed (brew vs npm), not just the registry's hint.
         if (uninstallCmd) {
           console.log(orange(`uninstalling ${label} (${uninstallCmd})…`));
           const result = await runUninstall({
@@ -328,8 +344,7 @@ agentsCommand
     try {
       const agent = registry.get(name);
       if (!agent) throw new AgentNotFoundError(name);
-      // Rotating invalidates the old key immediately — every running session
-      // authenticating with it starts failing. Require confirmation (#272).
+
       const ok = await requireConfirm({
         yes: options.yes,
         question: `Rotate ${name}'s keypair? Old key is invalidated immediately.`,
@@ -399,9 +414,7 @@ agentsCommand
         console.log(`  ${dim("llm:")}         ${agent.llmProvider}`);
       }
       if (agent.responsibilityNote) {
-        console.log(
-          `  ${dim("note:")}        ${agent.responsibilityNote}`,
-        );
+        console.log(`  ${dim("note:")}        ${agent.responsibilityNote}`);
       }
       // #552 / #445 — surface the action-mediation transport so
       // operators can audit which agents go through Foreman's
@@ -414,19 +427,30 @@ agentsCommand
         );
       }
       if (publicKey) {
-        console.log(`  ${dim("key:")}         ${renderPublicKeyJson(publicKey).publicKeyFingerprint}…`);
+        console.log(
+          `  ${dim("key:")}         ${renderPublicKeyJson(publicKey).publicKeyFingerprint}…`,
+        );
       }
       console.log(
         `  ${dim("token:")}       ` +
           (identityToken.present
             ? `set${identityToken.updatedAt ? dim(` (issued ${new Date(identityToken.updatedAt).toISOString()})`) : ""}`
-            : orange(`none — MCP calls run as untrusted:${agent.id}. Run 'foreman agent rewire ${agent.id}'.`)),
+            : orange(
+                `none — MCP calls run as untrusted:${agent.id}. Run 'foreman agent rewire ${agent.id}'.`,
+              )),
       );
       if (registryEntry) {
         const target = pickMcpConfigPath(registryEntry);
-        const shown = snippetForDisplay(buildMcpSnippet(agent.id, registryEntry), target);
+        const shown = snippetForDisplay(
+          buildMcpSnippet(agent.id, registryEntry),
+          target,
+        );
         console.log("");
-        console.log(bold(`MCP snippet (${shown.format}${target ? `, for ${target}` : ""}):`));
+        console.log(
+          bold(
+            `MCP snippet (${shown.format}${target ? `, for ${target}` : ""}):`,
+          ),
+        );
         console.log(shown.text);
       }
     } catch (err) {
@@ -452,8 +476,14 @@ agentsCommand
     "Give an agent its identity token and rewrite its MCP wiring (all agents with --all)",
   )
   .option("--all", "rewire every registered agent")
-  .option("--config-path <path>", "write the wiring to this config file instead of the registry default")
-  .option("--token-out <path>", "also write the token to this path (0600), for wiring by hand")
+  .option(
+    "--config-path <path>",
+    "write the wiring to this config file instead of the registry default",
+  )
+  .option(
+    "--token-out <path>",
+    "also write the token to this path (0600), for wiring by hand",
+  )
   .action(
     (
       name: string | undefined,
@@ -467,7 +497,10 @@ agentsCommand
           return;
         }
         if (options.all && (options.configPath || options.tokenOut)) {
-          console.error(red("error: ") + "--config-path and --token-out take a single agent, not --all");
+          console.error(
+            red("error: ") +
+              "--config-path and --token-out take a single agent, not --all",
+          );
           process.exitCode = 1;
           return;
         }
@@ -482,8 +515,13 @@ agentsCommand
         // reported, not failed: they need --token-out one by one.
         let failed = 0;
         for (const agent of agents) {
-          const outcome = rewireOne(agent, { rotate: false, configPath: options.configPath, tokenOut: options.tokenOut });
-          if (outcome === "failed" || (outcome === "manual" && !options.all)) failed++;
+          const outcome = rewireOne(agent, {
+            rotate: false,
+            configPath: options.configPath,
+            tokenOut: options.tokenOut,
+          });
+          if (outcome === "failed" || (outcome === "manual" && !options.all))
+            failed++;
         }
         process.exitCode = failed > 0 ? 1 : 0;
       } catch (err) {
@@ -500,9 +538,17 @@ const tokenSub = agentsCommand
 
 tokenSub
   .command("rotate <name>")
-  .description("Mint a new identity token and rewrite the wiring; the old token stops working at once")
-  .option("--config-path <path>", "write the wiring to this config file instead of the registry default")
-  .option("--token-out <path>", "also write the new token to this path (0600), for wiring by hand")
+  .description(
+    "Mint a new identity token and rewrite the wiring; the old token stops working at once",
+  )
+  .option(
+    "--config-path <path>",
+    "write the wiring to this config file instead of the registry default",
+  )
+  .option(
+    "--token-out <path>",
+    "also write the new token to this path (0600), for wiring by hand",
+  )
   .option("--yes", "skip confirmation prompt")
   .action(
     async (
@@ -521,7 +567,11 @@ tokenSub
           console.log("(cancelled)");
           return;
         }
-        const outcome = rewireOne(agent, { rotate: true, configPath: options.configPath, tokenOut: options.tokenOut });
+        const outcome = rewireOne(agent, {
+          rotate: true,
+          configPath: options.configPath,
+          tokenOut: options.tokenOut,
+        });
         process.exitCode = outcome === "ok" ? 0 : 1;
       } catch (err) {
         handleAgentError(err);
@@ -535,10 +585,18 @@ function getTokenStore(): SecretStore {
   return new SecretStore(getDb(), loadOrCreateSecretsMasterKey());
 }
 
-function tokenStatus(agentId: string): { present: boolean; updatedAt: number | null } {
+function tokenStatus(agentId: string): {
+  present: boolean;
+  updatedAt: number | null;
+} {
   const store = getTokenStore();
   const present = hasAgentToken(store, agentId);
-  return { present, updatedAt: present ? (store.meta(agentTokenSecretName(agentId))?.updatedAt ?? null) : null };
+  return {
+    present,
+    updatedAt: present
+      ? (store.meta(agentTokenSecretName(agentId))?.updatedAt ?? null)
+      : null,
+  };
 }
 
 function throwNotFound(agentId: string): never {
@@ -556,15 +614,28 @@ function oldTokenInvalid(agentId: string): string {
  *  nowhere to go, so the agent would still run untrusted. */
 function rewireOne(
   agent: RegisteredAgent,
-  options: { rotate: boolean; configPath?: string | undefined; tokenOut?: string | undefined },
+  options: {
+    rotate: boolean;
+    configPath?: string | undefined;
+    tokenOut?: string | undefined;
+  },
 ): "ok" | "manual" | "failed" {
-  const registryId = typeof agent.metadata?.registryId === "string" ? agent.metadata.registryId : null;
-  const entry = registryId ? safeFindAgent(loadActiveRegistry().doc, registryId) : null;
+  const registryId =
+    typeof agent.metadata?.registryId === "string"
+      ? agent.metadata.registryId
+      : null;
+  const entry = registryId
+    ? safeFindAgent(loadActiveRegistry().doc, registryId)
+    : null;
   console.log(bold(agent.id));
   // An instance (`backend --type codex`) has no wiring of its own to write:
   // Foreman gives it its identity at each launch, and writing the agent's
   // shared config would take it from the agent (agent-instance.ts).
-  const instance = entry !== null && isInstance(agent.id, entry) && supportsInstances(entry) && !options.configPath;
+  const instance =
+    entry !== null &&
+    isInstance(agent.id, entry) &&
+    supportsInstances(entry) &&
+    !options.configPath;
   let result;
   let issued = false;
   try {
@@ -582,7 +653,9 @@ function rewireOne(
     if (options.rotate) {
       console.log(
         `  ${orange("!")} ` +
-          (issued ? oldTokenInvalid(agent.id) : `No new token was issued: ${agent.id}'s current token is unchanged.`),
+          (issued
+            ? oldTokenInvalid(agent.id)
+            : `No new token was issued: ${agent.id}'s current token is unchanged.`),
       );
     }
     return "failed";
@@ -590,7 +663,8 @@ function rewireOne(
   if (entry && (result.config !== "none" || result.wrapperPath)) {
     logWiring(agent.id, entry, result, (line) => console.log(`  ${line}`));
   }
-  if (result.tokenOutPath) console.log(`  ${dim(`token written to ${result.tokenOutPath} (0600)`)}`);
+  if (result.tokenOutPath)
+    console.log(`  ${dim(`token written to ${result.tokenOutPath} (0600)`)}`);
   if (instance) {
     console.log(
       `  ${green("✓")} ${agent.id} runs as its own ${entry.name}: Foreman hands it its ${options.rotate ? "new " : ""}token at each launch` +
@@ -605,7 +679,8 @@ function rewireOne(
         (entry ? "" : " (not from the registry)") +
         `. Run 'foreman agent rewire ${agent.id} --token-out <file>' and set FOREMAN_AGENT_TOKEN in its MCP server env.`,
     );
-    if (options.rotate) console.log(`  ${orange("!")} ${oldTokenInvalid(agent.id)}`);
+    if (options.rotate)
+      console.log(`  ${orange("!")} ${oldTokenInvalid(agent.id)}`);
     return "manual";
   }
   const changed =
@@ -765,8 +840,7 @@ agentsCommand
       );
     } catch (err) {
       console.error(
-        red("error: ") +
-          (err instanceof Error ? err.message : String(err)),
+        red("error: ") + (err instanceof Error ? err.message : String(err)),
       );
       closeDb();
       process.exit(1);
@@ -853,9 +927,7 @@ agentsCommand
       console.log(
         `  ${dim("now")}       ${agentId} gets no extra rights from trust: Foreman has no way to change what it may do on its own`,
       );
-    console.log(
-      `  ${dim("revoke")}    \`foreman agent untrust ${agentId}\``,
-    );
+    console.log(`  ${dim("revoke")}    \`foreman agent untrust ${agentId}\``);
     closeDb();
   });
 
@@ -871,8 +943,12 @@ agentsCommand
 
 /** The settings file a hook command acts on: the project's with
  *  `--project [dir]`, else the agent's user settings. */
-function hookSettingsPath(project: string | boolean | undefined, configPaths: string[]): string {
-  if (project === undefined || project === false) return resolveAgentSettingsPath(configPaths);
+function hookSettingsPath(
+  project: string | boolean | undefined,
+  configPaths: string[],
+): string {
+  if (project === undefined || project === false)
+    return resolveAgentSettingsPath(configPaths);
   return projectSettingsPath(project === true ? process.cwd() : project);
 }
 
@@ -906,7 +982,12 @@ hookSub
   .action(
     (
       agentId: string,
-      opts: { matcher: string; command?: string; project?: string | boolean; dryRun: boolean },
+      opts: {
+        matcher: string;
+        command?: string;
+        project?: string | boolean;
+        dryRun: boolean;
+      },
     ) => {
       if (agentId !== "claude-code") {
         console.error(
@@ -981,7 +1062,8 @@ hookSub
           `  ${dim("revoke")}    \`foreman agent hook uninstall ${agentId}${opts.project !== undefined && opts.project !== false ? " --project" + (typeof opts.project === "string" ? ` ${opts.project}` : "") : ""}\``,
         );
       }
-      if (!opts.dryRun && !result.alreadyInstalled) console.log(hookRestartNote(agentId, "guards"));
+      if (!opts.dryRun && !result.alreadyInstalled)
+        console.log(hookRestartNote(agentId, "guards"));
       closeDb();
     },
   );
@@ -997,57 +1079,66 @@ hookSub
     "Remove it from <dir>/.claude/settings.json (default: the current directory)",
   )
   .option("--dry-run", "Show what would change without writing", false)
-  .action((agentId: string, opts: { project?: string | boolean; dryRun: boolean }) => {
-    const catalogEntry = safeFindAgent(loadActiveRegistry().doc, agentId);
-    if (!catalogEntry) {
-      console.error(
-        red("error: ") +
-          `Unknown agent '${agentId}'. Run \`foreman agent list\`.`,
-      );
+  .action(
+    (
+      agentId: string,
+      opts: { project?: string | boolean; dryRun: boolean },
+    ) => {
+      const catalogEntry = safeFindAgent(loadActiveRegistry().doc, agentId);
+      if (!catalogEntry) {
+        console.error(
+          red("error: ") +
+            `Unknown agent '${agentId}'. Run \`foreman agent list\`.`,
+        );
+        closeDb();
+        process.exit(1);
+      }
+      const configPaths = catalogEntry.config_paths ?? [];
+      if (configPaths.length === 0) {
+        console.error(
+          red("error: ") +
+            `Agent '${agentId}' has no config_paths in the registry.`,
+        );
+        closeDb();
+        process.exit(1);
+      }
+      const settingsPath = hookSettingsPath(opts.project, configPaths);
+      let result;
+      try {
+        result = uninstallPreToolUseHook(settingsPath, { dryRun: opts.dryRun });
+      } catch (err) {
+        console.error(
+          red("error: ") + (err instanceof Error ? err.message : String(err)),
+        );
+        closeDb();
+        process.exit(1);
+      }
+      if (!result.removed) {
+        console.log(
+          `${dim("·")} no Foreman-managed PreToolUse hook found for ${bold(
+            agentId,
+          )} — nothing to do.`,
+        );
+      } else {
+        console.log(
+          `${green("✓")} Removed Foreman PreToolUse hook for ${bold(agentId)}` +
+            (opts.dryRun ? dim(" (dry-run)") : ""),
+        );
+        console.log(`  ${dim("settings")}  ${result.settingsPath}`);
+        if (!opts.dryRun)
+          console.log(hookRestartNote(agentId, "stops guarding"));
+      }
       closeDb();
-      process.exit(1);
-    }
-    const configPaths = catalogEntry.config_paths ?? [];
-    if (configPaths.length === 0) {
-      console.error(
-        red("error: ") +
-          `Agent '${agentId}' has no config_paths in the registry.`,
-      );
-      closeDb();
-      process.exit(1);
-    }
-    const settingsPath = hookSettingsPath(opts.project, configPaths);
-    let result;
-    try {
-      result = uninstallPreToolUseHook(settingsPath, { dryRun: opts.dryRun });
-    } catch (err) {
-      console.error(
-        red("error: ") + (err instanceof Error ? err.message : String(err)),
-      );
-      closeDb();
-      process.exit(1);
-    }
-    if (!result.removed) {
-      console.log(
-        `${dim("·")} no Foreman-managed PreToolUse hook found for ${bold(
-          agentId,
-        )} — nothing to do.`,
-      );
-    } else {
-      console.log(
-        `${green("✓")} Removed Foreman PreToolUse hook for ${bold(agentId)}` +
-          (opts.dryRun ? dim(" (dry-run)") : ""),
-      );
-      console.log(`  ${dim("settings")}  ${result.settingsPath}`);
-      if (!opts.dryRun) console.log(hookRestartNote(agentId, "stops guarding"));
-    }
-    closeDb();
-  });
+    },
+  );
 
 /** Claude Code reads its hooks when a session starts: the change reaches
  *  new sessions only (2.3.0 real test: an uninstalled hook kept guarding
  *  the open session). */
-function hookRestartNote(agentId: string, what: "guards" | "stops guarding"): string {
+function hookRestartNote(
+  agentId: string,
+  what: "guards" | "stops guarding",
+): string {
   const name = agentId === "claude-code" ? "Claude Code" : agentId;
   return `  ${orange("restart")}   Foreman ${what} new ${name} sessions only: close and reopen the ones already open.`;
 }
@@ -1091,12 +1182,7 @@ agentsCommand
 // stored as responsibility_note) that surfaces in `foreman agent show`.
 // `handoff` mutates the agent's handoff_rules JSON array.
 
-const ALLOWED_ROLES = new Set([
-  "coder",
-  "reviewer",
-  "orchestrator",
-  "custom",
-]);
+const ALLOWED_ROLES = new Set(["coder", "reviewer", "orchestrator", "custom"]);
 
 agentsCommand
   .command("role <agentId> <role>")
@@ -1152,7 +1238,10 @@ agentsCommand
     }
     const joined = text.join(" ").trim();
     try {
-      registry.setResponsibilityNote(agentId, joined.length > 0 ? joined : null);
+      registry.setResponsibilityNote(
+        agentId,
+        joined.length > 0 ? joined : null,
+      );
     } catch (err) {
       handleAgentError(err);
     }
@@ -1359,7 +1448,9 @@ async function runAgentUpdateOne(
       cacheTtlMs: 0,
     }).catch(() => [undefined as AgentUpdateStatus | undefined]);
     if (status && !status.hasUpdate && status.current !== null) {
-      console.log(`${green("✓")} ${agent.id} is up to date (v${status.current})`);
+      console.log(
+        `${green("✓")} ${agent.id} is up to date (v${status.current})`,
+      );
       return 0;
     }
   }
@@ -1378,11 +1469,22 @@ async function runAgentUpdateOne(
   // installed it: another Node's npm would add a second copy the old one
   // keeps shadowing on PATH.
   const installed = installedAgent(entry.install);
-  const inPlace = installed ? updateCommandFor(installed, entry.install.npm) : null;
-  console.log(orange(`updating ${agent.id} (${entry.install.npm ?? entry.install.brew})…`));
-  if (installed) console.log(`  ${dim("found")}     ${installed.binPath}${installed.version ? ` (v${installed.version})` : ""}`);
+  const inPlace = installed
+    ? updateCommandFor(installed, entry.install.npm)
+    : null;
+  console.log(
+    orange(
+      `updating ${agent.id} (${entry.install.npm ?? entry.install.brew})…`,
+    ),
+  );
+  if (installed)
+    console.log(
+      `  ${dim("found")}     ${installed.binPath}${installed.version ? ` (v${installed.version})` : ""}`,
+    );
   const onLine = (line: string): void => console.log(`  ${dim(line)}`);
-  const result = inPlace ? await runShell(inPlace, onLine) : await runInstall({ install: entry.install, onLine });
+  const result = inPlace
+    ? await runShell(inPlace, onLine)
+    : await runInstall({ install: entry.install, onLine });
   if (!result.ok) {
     console.error(
       red("error: ") +
@@ -1391,7 +1493,9 @@ async function runAgentUpdateOne(
     return 1;
   }
   const after = installedAgent(entry.install);
-  console.log(`${green("✓")} ${agent.id} updated${after?.version ? ` to v${after.version}` : ""}`);
+  console.log(
+    `${green("✓")} ${agent.id} updated${after?.version ? ` to v${after.version}` : ""}`,
+  );
   return 0;
 }
 
@@ -1443,12 +1547,18 @@ function describeTaskPermissions(
   trusted: boolean,
 ): string | null {
   try {
-    const entry = catalogEntryFor(loadActiveRegistry().doc, agentId, registered);
+    const entry = catalogEntryFor(
+      loadActiveRegistry().doc,
+      agentId,
+      registered,
+    );
     if (!entry) return null;
     let can: RoleCapability[] | undefined;
     try {
       const org = loadOrg(getForemanPaths().orgConfigPath);
-      can = org ? Object.values(org.roles).find((r) => r.agent === agentId)?.can : undefined;
+      can = org
+        ? Object.values(org.roles).find((r) => r.agent === agentId)?.can
+        : undefined;
     } catch {
       can = ["read"];
     }
@@ -1456,7 +1566,7 @@ function describeTaskPermissions(
       taskPermissions({
         runtime: entry.id,
         trusted,
-        hookInstalled: entry.id === "claude-code" ? claudeHookInstalled(entry.config_paths ?? []) : null,
+        hookInstalled: claudeHookFor(agentId, entry),
         can,
       })?.summary ?? null
     );

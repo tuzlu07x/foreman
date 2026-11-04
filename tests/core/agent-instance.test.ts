@@ -55,7 +55,7 @@ describe("agent instances", () => {
   it("gives a Codex instance its own Foreman server with valid TOML overrides, token by file only", () => {
     const launch = instanceLaunch(
       { id: "codex" },
-      { agentId: "backend", tokenFile: '/state/agent-tokens/back"end.token', foremanArgv: ["/opt/node/bin/node", "/opt/foreman/dist/cli/index.js"], role: "You are the backend developer." },
+      { agentId: "backend", tokenFile: '/state/agent-tokens/back"end.token', foremanArgv: ["/opt/node/bin/node", "/opt/foreman/dist/cli/index.js"], role: "You are the backend developer.", env: {} },
     )!;
     expect(launch.args.filter((a) => a === "-c")).toHaveLength(4);
     const overrides = launch.args.filter((a) => a !== "-c").map((a) => parseToml(a) as { mcp_servers: { foreman: Record<string, unknown> } });
@@ -98,10 +98,33 @@ describe("agent instances", () => {
     }
   });
 
+  // The 2.3.2 real test: Codex starts the server with only this env, so with
+  // FOREMAN_HOME set the server opened no home and the role had no tools.
+  it("tells Foreman's server where its home is", () => {
+    const launch = instanceLaunch(
+      { id: "codex" },
+      { agentId: "backend", tokenFile: "/s/b.token", foremanArgv: ["/usr/local/bin/foreman"], role: null, env: { FOREMAN_HOME: "/qa/home", PATH: "/bin" } },
+    )!;
+    const overrides = launch.args.filter((a) => a !== "-c").map((a) => parseToml(a) as { mcp_servers: { foreman: Record<string, unknown> } });
+    const server = Object.assign({}, ...overrides.map((o) => o.mcp_servers.foreman)) as { env: Record<string, string> };
+    expect(server.env).toEqual({ FOREMAN_HOME: "/qa/home", FOREMAN_AGENT_TOKEN: "", FOREMAN_AGENT_TOKEN_FILE: "/s/b.token" });
+  });
+
+  it("carries Foreman's hook on a Claude Code launch, only when asked to", () => {
+    const input = { agentId: "frontend", tokenFile: "/s/f.token", foremanArgv: ["/usr/local/bin/foreman"], role: null };
+    const launch = instanceLaunch({ id: "claude-code" }, { ...input, hookCommand: "foreman-hook claude-code" })!;
+    const settings = JSON.parse(launch.args[launch.args.indexOf("--settings") + 1]!) as {
+      hooks: { PreToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }> };
+    };
+    expect(settings.hooks.PreToolUse[0]!.hooks[0]!.command).toBe("foreman-hook claude-code");
+    expect(settings.hooks.PreToolUse[0]!.matcher).toContain("Write");
+    expect(instanceLaunch({ id: "claude-code" }, { ...input, hookCommand: null })!.args).not.toContain("--settings");
+  });
+
   it("gives a Claude Code instance an --mcp-config that wins over its own foreman entry, and its role", () => {
     const launch = instanceLaunch(
       { id: "claude-code" },
-      { agentId: "reviewer", tokenFile: "/s/reviewer.token", foremanArgv: ["/usr/local/bin/foreman"], role: "You are the reviewer." },
+      { agentId: "reviewer", tokenFile: "/s/reviewer.token", foremanArgv: ["/usr/local/bin/foreman"], role: "You are the reviewer.", env: {} },
     )!;
     const cfg = JSON.parse(launch.args[launch.args.indexOf("--mcp-config") + 1]!) as unknown;
     expect(cfg).toEqual({
@@ -165,7 +188,7 @@ describe("a Gemini CLI instance", () => {
   const launch = () =>
     instanceLaunch(
       { id: "gemini-cli" },
-      { agentId: "analyst", tokenFile: "/state/agent-tokens/analyst.token", foremanArgv: ["/bin/node", "/app/cli.js"], role: "You are the Analyst." },
+      { agentId: "analyst", tokenFile: "/state/agent-tokens/analyst.token", foremanArgv: ["/bin/node", "/app/cli.js"], role: "You are the Analyst.", env: {} },
     );
 
   it("gets its own Foreman server through its ACP session", () => {

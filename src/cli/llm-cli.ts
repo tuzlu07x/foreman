@@ -137,7 +137,7 @@ llmCommand
 llmCommand
   .command("enable [feature]")
   .description(
-    "Turn on the global switch (no arg), or enable a specific feature (verification / smart_report / policy_suggestions)",
+    "Turn on the global switch (no arg), or enable a specific feature (verification / smart_report / policy_suggestions / orchestrator_chat)",
   )
   .action((feature: string | undefined) => {
     requireInitialised();
@@ -163,7 +163,7 @@ llmCommand
     if (!isKnownFeature(feature)) {
       console.error(
         red("error: ") +
-          `unknown feature: ${feature} — try verification / smart_report / policy_suggestions`,
+          `unknown feature: ${feature} — try ${KNOWN_FEATURES.join(" / ")}`,
       );
       process.exit(1);
     }
@@ -295,13 +295,19 @@ llmCommand
       try {
         await connectClaudeCode(paths.llmConfigPath);
       } catch (err) {
-        console.error(red("error: ") + (err instanceof Error ? err.message : String(err)));
+        console.error(
+          red("error: ") + (err instanceof Error ? err.message : String(err)),
+        );
         process.exit(1);
       }
       console.log("");
       console.log(green("✓ Connected to Claude Code"));
-      console.log(`  ${dim("auth_mode")}  credentials.anthropic → claude_code (saved to llm.yaml)`);
-      console.log(`  ${dim("next")}       foreman llm enable, if the brain is still off`);
+      console.log(
+        `  ${dim("auth_mode")}  credentials.anthropic → claude_code (saved to llm.yaml)`,
+      );
+      console.log(
+        `  ${dim("next")}       foreman llm enable, if the brain is still off`,
+      );
       return;
     }
     if (!isOAuthProviderId(providerArg)) {
@@ -663,13 +669,11 @@ function requireInitialised(): void {
   }
 }
 
-const KNOWN_FEATURES = new Set([
-  "verification",
-  "smart_report",
-  "policy_suggestions",
-]);
-function isKnownFeature(s: string): s is LlmFeature {
-  return KNOWN_FEATURES.has(s);
+const KNOWN_FEATURES: readonly string[] = Object.keys(
+  defaultLlmConfig().features,
+);
+export function isKnownFeature(s: string): s is LlmFeature {
+  return KNOWN_FEATURES.includes(s);
 }
 
 function hasAnyFeatureOn(config: LlmConfig): boolean {
@@ -747,13 +751,20 @@ export async function connectClaudeCode(
     model: defaultLlmConfig().model,
   }),
   runClaudeLogin: () => boolean = () =>
-    spawnSync(CLAUDE_LOGIN_COMMAND, { shell: true, stdio: "inherit" }).status === 0,
+    spawnSync(CLAUDE_LOGIN_COMMAND, { shell: true, stdio: "inherit" })
+      .status === 0,
 ): Promise<void> {
   try {
     await client.ping();
   } catch (err) {
-    if (!(err instanceof ClaudeCodeNotReadyError) || err.reason !== "signed-out") throw err;
-    console.log(`Claude Code isn't signed in. Starting its own sign-in (${CLAUDE_LOGIN_COMMAND})…`);
+    if (
+      !(err instanceof ClaudeCodeNotReadyError) ||
+      err.reason !== "signed-out"
+    )
+      throw err;
+    console.log(
+      `Claude Code isn't signed in. Starting its own sign-in (${CLAUDE_LOGIN_COMMAND})…`,
+    );
     if (!runClaudeLogin()) throw err;
     await client.ping();
   }
@@ -792,7 +803,11 @@ function openInBrowser(url: string, autoOpen = true): void {
   // win32: rundll32, not `cmd /c start` — cmd.exe would re-parse `&` in
   // the query string.
   const cmd =
-    platform === "darwin" ? "open" : platform === "win32" ? "rundll32" : "xdg-open";
+    platform === "darwin"
+      ? "open"
+      : platform === "win32"
+        ? "rundll32"
+        : "xdg-open";
   const args = platform === "win32" ? [WIN32_URL_HANDLER, url] : [url];
   try {
     const child = spawn(cmd, args, { detached: true, stdio: "ignore" });

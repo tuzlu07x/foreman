@@ -1,14 +1,25 @@
+import type { AgentEntry } from "../../src/core/registry-catalog.js";
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FOREMAN_HOOK_MARKER } from "../../src/core/agent-hook.js";
-import { claudeHookInstalled, codexSandboxFor, roleWorkspace, taskPermissions } from "../../src/core/task-permissions.js";
+import { claudeHookFor, claudeHookInstalled, codexSandboxFor, roleWorkspace, taskPermissions } from "../../src/core/task-permissions.js";
 
 // What Claude Code and Codex may do on their own during a task Foreman
 // hands them (task-permissions.ts). From the 2.3.0 real test: the manager
 // (Claude Code) couldn't use Foreman's own tools, and trusting a Codex role
 // took its sandbox away entirely.
+
+describe("claudeHookFor", () => {
+  const claude = { id: "claude-code", config_paths: [] } as unknown as AgentEntry;
+  it("counts a role's Claude Code as covered: its launch carries the hook", () => {
+    expect(claudeHookFor("frontend", claude)).toBe(true);
+  });
+  it("has nothing to say about other agents", () => {
+    expect(claudeHookFor("backend", { id: "codex" } as unknown as AgentEntry)).toBeNull();
+  });
+});
 
 describe("task permissions", () => {
   it("always lets Claude Code use Foreman's own tools, and skips its prompts only behind Foreman's hook or with trust", () => {

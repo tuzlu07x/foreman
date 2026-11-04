@@ -8,9 +8,11 @@ import {
   writeInstanceTokenFile,
   type InstanceLaunch,
 } from "./agent-instance.js";
+import { defaultHookCommand } from "./agent-hook.js";
 import { ensureAgentToken } from "./agent-token.js";
 import type { AgentEntry } from "./registry-catalog.js";
 import type { SecretStore } from "./secret-store.js";
+import { claudeHookInstalled } from "./task-permissions.js";
 
 // How Foreman starts a role that runs as an instance of Claude Code or
 // Codex: its own identity token, its own Foreman MCP server and its org.yaml
@@ -50,7 +52,11 @@ export function instanceLaunchFor(
     } catch {
       // an unreadable org.yaml: no role, the task still runs
     }
-    return instanceLaunch(entry, { agentId, tokenFile, foremanArgv: foremanCliArgv(), role });
+    const hookCommand =
+      entry.id === "claude-code" && claudeHookInstalled(entry.config_paths ?? []) !== true
+        ? defaultHookCommand("claude-code")
+        : null;
+    return instanceLaunch(entry, { agentId, tokenFile, foremanArgv: foremanCliArgv(), role, hookCommand });
   } catch (err) {
     process.stderr.write(
       `foreman: couldn't give ${agentId} its own identity (${err instanceof Error ? err.message : String(err)}); it runs with ${entry.id}'s wiring\n`,

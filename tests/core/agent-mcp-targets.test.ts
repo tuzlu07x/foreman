@@ -79,18 +79,20 @@ describe('MCP wiring targets', () => {
       expect(doc.numStartups).toBe(12)
       expect(doc.projects).toEqual(existing.projects)
       expect(doc.mcpServers.github).toEqual(existing.mcpServers.github)
-      expect(doc.mcpServers.foreman).toMatchObject({ command: 'foreman', args: ['mcp-stdio', '--source', 'claude-code'] })
+      expect(doc.mcpServers.foreman).toMatchObject({ command: process.execPath, args: expect.arrayContaining(['mcp-stdio', '--source', 'claude-code']) })
       expect(verifyAgentToken(store, 'claude-code', doc.mcpServers.foreman!.env!.FOREMAN_AGENT_TOKEN!)).toBe(true)
       expect(mode(claudeJson)).toBe(0o600)
       // settings.json is not an MCP config: untouched.
       expect(readFileSync(join(home, '.claude', 'settings.json'), 'utf-8')).toBe('{"env":{}}')
 
       // The hook's trust check reads the same entry and accepts it, when
-      // `foreman` on PATH is the install the hook runs from.
+      // the absolute path it names is the install the hook runs from.
       const hubConfigPath = join(home, 'mcp.yaml')
-      mkdirSync(join(home, 'bin'))
-      writeFileSync(join(home, 'bin', 'foreman'), '', { mode: 0o755 })
-      const self = { entries: new Set([realpathSync(join(home, 'bin', 'foreman'))]), node: null, path: join(home, 'bin') }
+      const self = {
+        entries: new Set([realpathSync(doc.mcpServers.foreman!.args[0]!)]),
+        node: realpathSync(process.execPath),
+        path: '',
+      }
       expect(isForemanServedTool('mcp__foreman__submit_approval', { cwd: home, hubConfigPath, home, env: {}, self })).toBe(true)
       // And doctor's audit looks there too.
       expect(auditAgentTokens([{ id: 'claude-code', metadata: { registryId: 'claude-code' } }], store, () => entry)).toEqual({
@@ -161,7 +163,7 @@ describe('MCP wiring targets', () => {
       }
       expect(doc.model.default).toBe('anthropic/claude-haiku-4-5')
       expect(doc.mcp_servers.github).toEqual({ command: 'npx', args: ['-y', 'gh-mcp'] })
-      expect(doc.mcp_servers.foreman).toMatchObject({ command: 'foreman', args: ['mcp-stdio', '--source', 'hermes'] })
+      expect(doc.mcp_servers.foreman).toMatchObject({ command: process.execPath, args: expect.arrayContaining(['mcp-stdio', '--source', 'hermes']) })
       expect(verifyAgentToken(store, 'hermes', doc.mcp_servers.foreman!.env!.FOREMAN_AGENT_TOKEN!)).toBe(true)
       expect(doc.mcpServers).toBeUndefined()
       expect(mode(config)).toBe(0o600)
@@ -252,7 +254,7 @@ describe('MCP wiring targets', () => {
       expect(doc.mcpServers).toBeUndefined()
       expect(doc.mcp.servers.map((s) => s.name)).toEqual(['filesystem', 'foreman'])
       const foreman = doc.mcp.servers[1]!
-      expect(foreman).toMatchObject({ command: 'foreman', args: ['mcp-stdio', '--source', 'zeroclaw'] })
+      expect(foreman).toMatchObject({ command: process.execPath, args: expect.arrayContaining(['mcp-stdio', '--source', 'zeroclaw']) })
       expect(verifyAgentToken(store, 'zeroclaw', foreman.env!.FOREMAN_AGENT_TOKEN!)).toBe(true)
       expect(doc.mcp_bundles).toEqual({ files: { servers: ['filesystem'] }, foreman: { servers: ['foreman'] } })
       expect(doc.agents?.assistant).toEqual({ model: 'claude-haiku', mcp_bundles: ['files', 'foreman'] })
