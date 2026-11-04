@@ -30,6 +30,7 @@ import { createHeuristicClassifier } from "../core/flow-classifier.js";
 import { FlowManager } from "../core/flow-manager.js";
 import { FlowRouter } from "../core/flow-router.js";
 import { parseChatCommand } from "../core/chat-text.js";
+import { TaskReports } from "../core/task-reports.js";
 import { extractCwdFromTask } from "../core/extract-cwd-from-task.js";
 import { ChatPrimaryService } from "../core/chat-primary.js";
 import {
@@ -702,6 +703,8 @@ export function startForeman(
         }
       : {}),
   };
+  // What was asked for in a chat app is answered there when it ends.
+  const taskReports = new TaskReports((channel, title, body) => tellChannel(channel, title, body));
   // 2.3.1 — A plan the chat proposed ("backend analyses the repo, the
   // manager prices it"): one approval for all of it, then each hand-off is
   // assigned as yours, exactly like `/foreman assign`. The approval goes
@@ -754,6 +757,7 @@ export function startForeman(
         {
           approvalId,
           logEvent: (type, payload) => audit.logEvent(type, payload),
+          onQueued: taskReports.plan(who.sourceAgent),
         },
       );
       tellAsker(who, "Plan handed out", lines.join("\n"));
@@ -768,7 +772,9 @@ export function startForeman(
       body,
       dedupeKey: `chat-plan:${Date.now()}:${title}`,
     });
-    const channel = who.sourceAgent;
+    tellChannel(who.sourceAgent, title, body);
+  };
+  const tellChannel = (channel: string, title: string, body: string): void => {
     if (
       !notificationSetup ||
       !["telegram", "slack", "discord"].includes(channel)
@@ -1600,7 +1606,9 @@ export function startForeman(
                     ...(flowContext ? { flowContext } : {}),
                   },
                   {
-                    telegramBotToken,
+                    // A task asked for in a chat app is reported by
+                    // taskReports, in that app; this relay is Telegram-only.
+                    telegramBotToken: taskReports.handles(row) ? undefined : telegramBotToken,
                     telegramChatId,
                     // #445 / #552 — Required by the ACP path so every
                     // approval the agent emits during the prompt routes
@@ -1688,6 +1696,9 @@ export function startForeman(
                     }
                   }
                 }
+                const handedOn = loopRun.delegationId
+                  ? delegationLoop.handedOn(loopRun.delegationId)
+                  : false;
                 // The TUI promised "output will arrive in your inbox".
                 recordDelegationOutcome(inbox, {
                   controlId: row.id,
@@ -1695,10 +1706,9 @@ export function startForeman(
                   task: delegationLoop.wakeTask(link) ?? message,
                   spawn: exec.spawn,
                   step: delegationLoop.isStep(link),
-                  handedOn: loopRun.delegationId
-                    ? delegationLoop.handedOn(loopRun.delegationId)
-                    : false,
+                  handedOn,
                 });
+                taskReports.note(row.id, { spawn: exec.spawn, handedOn });
                 if (exec.spawn.kind === "ok") {
                   return { status: "applied" };
                 }
@@ -1776,6 +1786,14 @@ export function startForeman(
       },
     ],
   ]);
+  if (!attach) {
+    const reportEnded = (e: { id: number }): void => {
+      const ended = controlChannel.get(e.id);
+      if (ended) taskReports.settled(ended);
+    };
+    bus.on("control:applied", reportEnded);
+    bus.on("control:failed", reportEnded);
+  }
   const controlPoller = new ControlDrainPoller(controlChannel, controlHandlers, {
     maxTasks: maxParallelTasks(),
   });

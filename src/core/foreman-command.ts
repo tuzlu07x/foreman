@@ -535,7 +535,12 @@ export async function handOutPlan(
   plan: ChatPlan,
   who: PlanAsker,
   ctx: Omit<ForemanCommandContext, "sourceAgent">,
-  opts: { approvalId: string; logEvent: (eventType: string, payload: unknown) => void },
+  opts: {
+    approvalId: string;
+    logEvent: (eventType: string, payload: unknown) => void;
+    /** Told the control row of each hand-off it queues. */
+    onQueued?: (controlId: number) => void;
+  },
 ): Promise<string[]> {
   const lines: string[] = [];
   const queued = new Map<string, number>();
@@ -549,7 +554,10 @@ export async function handOutPlan(
       trustedOwner: true,
       ...(after.length > 0 ? { after } : {}),
     });
-    if (r.controlId !== undefined) queued.set(p.target, r.controlId);
+    if (r.controlId !== undefined) {
+      queued.set(p.target, r.controlId);
+      opts.onQueued?.(r.controlId);
+    }
     opts.logEvent("foreman:command", {
       command: "assign",
       args,
@@ -1510,7 +1518,8 @@ async function writeHandler(
     isCallable = false;
   }
   // The TUI has no chat thread; results land in its Activity feed + inbox.
-  const where = ctx.trustedOwner ? "in the Activity feed and your inbox" : "in this chat";
+  const fromChatApp = ["telegram", "slack", "discord"].includes(ctx.sourceAgent);
+  const where = ctx.trustedOwner && !fromChatApp ? "in the Activity feed and your inbox" : "in this chat";
   const successText = isCallable
     ? `Spawning ${targetAgent} with your task — output will arrive ${where} when the agent finishes.`
     : `Directive queued for ${targetAgent}. ` +
