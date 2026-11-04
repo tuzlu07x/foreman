@@ -99,6 +99,14 @@ describe('Telegram approval bot commands', () => {
     ])
   })
 
+  it('reads a message that opens with a path as plain text', async () => {
+    const h = harness([dm('/Users/me/app klasöründeki projeyi yapın')])
+    await h.channel.listen(async () => undefined)
+    await settle()
+    await h.channel.shutdown()
+    expect(h.seen).toEqual([{ text: '/foreman /Users/me/app klasöründeki projeyi yapın', user: CHAT, plain: true }])
+  })
+
   it('says how to talk to it on /start', async () => {
     const h = harness([dm('/start')])
     await h.channel.listen(async () => undefined)

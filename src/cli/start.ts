@@ -29,6 +29,7 @@ import { executeWriteDirective } from "../core/agent-execute.js";
 import { createHeuristicClassifier } from "../core/flow-classifier.js";
 import { FlowManager } from "../core/flow-manager.js";
 import { FlowRouter } from "../core/flow-router.js";
+import { parseChatCommand } from "../core/chat-text.js";
 import { extractCwdFromTask } from "../core/extract-cwd-from-task.js";
 import { ChatPrimaryService } from "../core/chat-primary.js";
 import {
@@ -732,14 +733,7 @@ export function startForeman(
     userId: string,
     opts: { plain?: boolean } = {},
   ): Promise<string> => {
-    // `/integrations` and `/integration …` are verbs of their own; a
-    // Telegram `@bot` suffix never reaches here (the channel strips it).
-    const [verb = "help", ...args] = text
-      .trim()
-      .replace(/^\/?foreman\b\s*/i, "")
-      .replace(/^\//, "")
-      .split(/\s+/)
-      .filter(Boolean);
+    const [verb = "help", ...args] = parseChatCommand(text);
     const sourceUser = `${channel}:${userId}`;
     const refusal = opts.plain ? plainTextRefusal(commandRouter, registry, verb, args) : null;
     if (refusal !== null) {

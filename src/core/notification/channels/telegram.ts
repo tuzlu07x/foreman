@@ -1,5 +1,6 @@
 import { formatApprovalIdForDisplay } from '../../approval-id.js'
 import { compactBlockActionId } from '../../approval-token.js'
+import { isSlashCommand } from '../../chat-text.js'
 import {
   APPROVAL_BUTTON_ACTIONS,
   decisionFromButton,
@@ -483,7 +484,7 @@ export class TelegramChannel implements NotificationChannel {
       // Plain text in your own chat is a question for Foreman, as if it
       // began with /foreman. Other slash commands aren't Foreman's.
       const plain = msg?.text?.trim()
-      if (msg && this.onCommand && plain && !plain.startsWith('/')) {
+      if (msg && this.onCommand && plain && !isSlashCommand(plain)) {
         await this.handleApprovalBotCommand(msg, `/foreman ${plain}`, { plain: true })
       }
       return
