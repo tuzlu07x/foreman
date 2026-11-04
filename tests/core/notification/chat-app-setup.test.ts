@@ -9,6 +9,7 @@ import {
   removeChatApp,
   restartHint,
   saveChatApp,
+  TWO_WAY_GUIDE,
 } from "../../../src/core/notification/chat-app-setup.js";
 import { loadNotifyConfig, routeFor, saveNotifyConfig, defaultNotifyConfig } from "../../../src/core/notification/notify-config.js";
 import { checkDiscordBot, checkSlackBot, discordInviteUrl } from "../../../src/core/notification/token-checks.js";
@@ -17,6 +18,15 @@ import { createInMemoryDb } from "../../../src/db/client.js";
 
 // The Services page stored a token, said "configured" and stopped: the channel
 // was never turned on, so nothing was sent. These cover the whole job.
+
+describe("the two-way Slack guide", () => {
+  it("names the command, the reinstall and what Slack says without them", () => {
+    const guide = TWO_WAY_GUIDE.slack.join("\n");
+    expect(guide).toContain("Create New Command → /foreman");
+    expect(guide).toContain("Install App → Reinstall");
+    expect(guide).toContain("is not a valid command");
+  });
+});
 
 describe("saving a chat app", () => {
   let dir: string;

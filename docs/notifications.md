@@ -242,8 +242,11 @@ You need the Slack channel set up first (webhook or bot, see
    `connections:write` scope (it starts with `xapp-`).
 3. **Interactivity & Shortcuts** → turn it on. Socket Mode needs no request
    URL.
-4. **Slash Commands** → create `/foreman` (any description).
-5. Reinstall the app if Slack asks you to.
+4. **Slash Commands** → **Create New Command** → `/foreman` (any description)
+   → **Save**.
+5. Reinstall the app: click *reinstall your app* in Slack's yellow banner, or
+   **Install App** → **Reinstall**, then **Allow**. The command appears only
+   after this. Reload Slack afterwards.
 6. Store the token and turn two-way mode on for yourself. Your member id is
    under your Slack profile → ⋮ → *Copy member ID*. (The setup wizard's
    Services step asks for both after the Slack channel and does this step
@@ -253,6 +256,9 @@ You need the Slack channel set up first (webhook or bot, see
    foreman notify slack-interactive --user U0123ABCD
    ```
 7. Restart `foreman start`.
+
+If Slack answers `/foreman is not a valid command`, step 4 or 5 is missing.
+Restarting Foreman doesn't change that: the command lives in your Slack app.
 
 ### Discord (Gateway)
 

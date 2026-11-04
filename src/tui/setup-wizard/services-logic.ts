@@ -1,3 +1,4 @@
+import { SLACK_COMMAND_STEPS } from "../../core/notification/chat-app-setup.js";
 import {
   defaultNotifyConfig,
   loadNotifyConfig,
@@ -111,8 +112,8 @@ const SLACK_APP_TOKEN_PROMPT: ChannelPromptSpec = {
     "Optional: lets you press Allow / Deny and run /foreman in Slack. Enter on empty input skips it (Slack then only posts)",
     "In api.slack.com/apps → your app: Socket Mode → on",
     "Basic Information → App-Level Tokens → Generate, with the connections:write scope → copy it (xapp-…)",
-    "Interactivity & Shortcuts → on (no URL needed with Socket Mode), and Slash Commands → create /foreman",
-    "Reinstall the app if Slack asks",
+    "Interactivity & Shortcuts → on (no URL needed with Socket Mode)",
+    ...SLACK_COMMAND_STEPS,
   ],
 };
 

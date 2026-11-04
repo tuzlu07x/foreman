@@ -39,6 +39,14 @@ export const SLACK_APP_TOKEN = "slack-app-token";
 
 export const CHAT_APP_NAME: Record<ChatAppId, string> = { telegram: "Telegram", slack: "Slack", discord: "Discord" };
 
+/** What makes `/foreman` exist in Slack. Without both steps Slack refuses
+ *  the command itself, and restarting Foreman can't help, so the guide, the
+ *  wizard and `foreman notify slack-interactive` all say the same thing. */
+export const SLACK_COMMAND_STEPS: readonly string[] = [
+  'Slash Commands → Create New Command → /foreman → Save. Without it Slack says "/foreman is not a valid command"',
+  'Reinstall: "reinstall your app" in Slack\'s yellow banner, or Install App → Reinstall, then Allow. The command appears only after this',
+];
+
 /** What to do in the app so Foreman can take your Allow / Deny, beyond the
  *  sending set-up. Shown in the guide. */
 export const TWO_WAY_GUIDE: Record<ChatAppId, readonly string[]> = {
@@ -50,8 +58,7 @@ export const TWO_WAY_GUIDE: Record<ChatAppId, readonly string[]> = {
     "In api.slack.com/apps → your app: Socket Mode → on",
     "Basic Information → App-Level Tokens → Generate, with connections:write → copy it (xapp-…)",
     "Interactivity & Shortcuts → on (no URL needed with Socket Mode)",
-    "Slash Commands → create /foreman",
-    "Reinstall the app if Slack asks",
+    ...SLACK_COMMAND_STEPS,
   ],
   discord: [
     "Turn on Developer Mode: User Settings → Advanced",
