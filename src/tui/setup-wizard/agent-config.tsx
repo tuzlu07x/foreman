@@ -44,7 +44,9 @@ export function renderAgentConfigStep(ctx: WizardContext): JSX.Element {
     setAgentsPhase("confirm");
     return <Text>…</Text>;
   }
-  const progress = `(${agentConfigIdx + 1}/${agentConfigPrompts.length})`;
+  // Per agent: some prompts skip themselves, so counting prompts jumped.
+  const promptAgents = [...new Set(agentConfigPrompts.map((p) => p.agentId))];
+  const progress = `(agent ${promptAgents.indexOf(prompt.agentId) + 1} of ${promptAgents.length})`;
   if (prompt.kind === "llm-choice") {
     // llmPickerOptions (component-scoped useMemo) is the single source of
     // truth for both render and the ↑↓/Space/Enter handler in useInput.
@@ -249,6 +251,20 @@ export function renderAgentConfigStep(ctx: WizardContext): JSX.Element {
           <Text color={theme.fg.muted}>
             [s] skip (use the registry default) · [Esc] back
           </Text>
+        </Box>
+      );
+    }
+    // A subscription has no API key to list models with: that isn't a failure.
+    const route = provider ? agent.provider_mapping?.[provider]?.variants[agentConfigs[prompt.agentId]?.providerVariant ?? ""] : undefined;
+    if (agentModelOptions.length === 0 && route && !route.required_secret) {
+      return (
+        <Box flexDirection="column" gap={1} paddingY={1}>
+          <WizardProgress {...stepProgress("agents")} label="Agents" phase={`${agent.name} ${progress} · model`} />
+          <Text>
+            {agent.name} uses your subscription, so it starts on its own default model. You can pick another
+            later: [m] on the Team page.
+          </Text>
+          <Text color={theme.fg.muted}>[Enter] continue · [Esc] go back</Text>
         </Box>
       );
     }

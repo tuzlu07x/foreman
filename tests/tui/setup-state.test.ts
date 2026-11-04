@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   freshState,
   hasUserOptedOut,
+  setupLeftUnfinished,
   loadSetupState,
   markCompleted,
   markSetupSkipped,
@@ -82,6 +83,19 @@ describe("setup-state", () => {
       await new Promise((r) => setTimeout(r, 2));
       const s2 = markCompleted(s1, "welcome");
       expect(s2.lastUpdatedAt).toBeGreaterThan(s1.lastUpdatedAt);
+    });
+  });
+
+  describe("setupLeftUnfinished", () => {
+    it("is false before setup starts, once it is skipped, and once it is done", () => {
+      expect(setupLeftUnfinished(freshState())).toBe(false);
+      expect(setupLeftUnfinished(markSetupSkipped(markCompleted(freshState(), "welcome")))).toBe(false);
+      const done = STEPS.reduce((s, step) => markCompleted(s, step), freshState());
+      expect(setupLeftUnfinished(done)).toBe(false);
+    });
+
+    it("is true for a setup left after any step", () => {
+      expect(setupLeftUnfinished(markCompleted(freshState(), "welcome"))).toBe(true);
     });
   });
 

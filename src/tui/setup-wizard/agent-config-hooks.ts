@@ -7,6 +7,7 @@ import {
   applyAgentConfigSubmit,
   classifyModelDiscoveryError,
   computeSingleCompatProviderSeeds,
+  startingVariant,
 } from "./agents-logic.js";
 import type { WizardContext } from "./context.js";
 import { configuredBrainProviderIds } from "./shared.js";
@@ -87,6 +88,7 @@ export function useAgentConfigEffects(ctx: WizardContext): void {
     agentConfigs,
     agentVariantDraft,
     autoPickedVariants,
+    providersSignedIn,
   } = ctx.state;
   const {
     setAgentsPhase,
@@ -186,7 +188,7 @@ export function useAgentConfigEffects(ctx: WizardContext): void {
         (autoPicked !== undefined &&
           autoPicked.variantId === cfg.providerVariant))
     ) {
-      const preferredId = providerMapping.preferred;
+      const preferredId = startingVariant(providerMapping, effectiveProvider, providersSignedIn);
       const preferredVariant = providerMapping.variants[preferredId];
       if (preferredVariant && !preferredVariant.required_secret) {
         setAgentConfigs((prev) => ({
@@ -225,6 +227,7 @@ export function useAgentConfigEffects(ctx: WizardContext): void {
     agentCatalog,
     agentVariantDraft,
     autoPickedVariants,
+    providersSignedIn,
   ]);
 
   // #434 — Whenever we land on a model-pick prompt, kick off model

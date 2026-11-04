@@ -188,6 +188,13 @@ export function hasUserOptedOut(state: SetupState): boolean {
   return typeof state.skippedAt === "number";
 }
 
+// Setup was started and left before it finished (Ctrl-C, a closed terminal),
+// and you didn't skip it: `foreman start` offers to continue it, instead of
+// opening an empty dashboard.
+export function setupLeftUnfinished(state: SetupState): boolean {
+  return typeof state.skippedAt !== "number" && state.completed.length > 0 && nextStep(state) !== "done";
+}
+
 // Removes the step and every later step from `completed` so the wizard
 // re-flows from this step on next render. Used by Esc back-navigation —
 // without dropping later steps, going back leaves a gap that nextStep()

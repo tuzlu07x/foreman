@@ -734,7 +734,7 @@ describe('agents step', () => {
     const w = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
     await w.until('Agents ▸ pick which to install')
     await w.until('Checked: hermes')
-    await w.press(ENTER, 'Hermes (1/4)')
+    await w.press(ENTER, 'Hermes (agent 1 of 1)')
     await w.until('Currently selected')
     await w.press(ENTER, 'how to reach OpenAI')
     await w.press(ENTER, 'pick a OpenAI model')
@@ -805,7 +805,7 @@ describe('agents picker header', () => {
     expect(w.frame()).not.toMatch(/Hermes — Personal AI assistant on Telegram and Discord [✔√]/)
     // QA #657 M11 — Esc back to the picker used to re-tick the defaults
     // (and Enter then installed Hermes). It keeps your pick now.
-    await w.press(ENTER, 'OpenClaw (1/4)')
+    await w.press(ENTER, 'OpenClaw (agent 1 of 1)')
     await w.press(ESC, 'Agents ▸ pick which to install')
     await w.until('Checked: openclaw')
     await w.until(/OpenClaw — Multi-channel assistant with a lobster-themed TUI [✔√]/)
@@ -814,14 +814,14 @@ describe('agents picker header', () => {
 
   it('keeps the responsibility note you typed when you come back to it', async () => {
     const w = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
-    await w.press(ENTER, 'Hermes (1/4)')
+    await w.press(ENTER, 'Hermes (agent 1 of 1)')
     await w.press(ENTER, 'how to reach OpenAI')
     await w.press(ENTER, 'pick a OpenAI model')
     await w.press(ENTER, 'responsibility note')
     await w.type('Nightly diff triage')
     await w.press(ENTER, 'Agents ▸ confirm')
     await w.press(ESC, 'Agents ▸ pick which to install')
-    await w.press(ENTER, 'Hermes (1/4)')
+    await w.press(ENTER, 'Hermes (agent 1 of 1)')
     await w.press(ENTER, 'how to reach OpenAI')
     await w.press(ENTER, 'pick a OpenAI model')
     await w.press(ENTER, 'responsibility note')
@@ -855,10 +855,10 @@ describe('agents step Esc navigation', () => {
     await w.pressInList(SPACE)
     await w.pressInList(DOWN)
     await w.pressInList(SPACE)
-    await w.press(ENTER, 'OpenClaw (1/4)')
+    await w.press(ENTER, 'OpenClaw (agent 1 of 1)')
     await w.press(ENTER, 'pick a OpenAI model')
     // Used to loop: Esc → auto-skipped variant prompt → back to model-pick.
-    await w.press(ESC, 'OpenClaw (1/4)')
+    await w.press(ESC, 'OpenClaw (agent 1 of 1)')
     await w.until('Currently selected')
   })
 
@@ -867,13 +867,13 @@ describe('agents step Esc navigation', () => {
       secrets: { 'openai-key': 'sk-fake-openai-000', 'anthropic-key': 'sk-ant-fake-000' },
     })
     await w.until('Agents ▸ pick which to install')
-    await w.press(ENTER, 'Hermes (1/8)')
+    await w.press(ENTER, 'Hermes (agent 1 of 2)')
     await w.press(ENTER, 'pick a Anthropic model')
     await w.press(ENTER, 'Hermes — responsibility note')
-    await w.press(ENTER, 'Claude Code (5/8) · how to reach Anthropic')
-    await w.enterUntil('Claude Code — its own tools (7/8)')
+    await w.press(ENTER, 'Claude Code (agent 2 of 2) · how to reach Anthropic')
+    await w.enterUntil('Claude Code — its own tools (agent 2 of 2)')
     expect(w.frame()).toContain("Also check Claude Code's own tools before they run? (recommended)")
-    await w.press('n', 'Claude Code — responsibility note (8/8)')
+    await w.press('n', 'Claude Code — responsibility note (agent 2 of 2)')
   }, 20_000)
 
   it("Esc on a single-provider agent's variant screen returns to the picker, not the previous agent's note", async () => {
@@ -882,10 +882,10 @@ describe('agents step Esc navigation', () => {
     })
     await w.until('Agents ▸ pick which to install')
     // Hermes on Anthropic has one route, so its variant prompt auto-skips.
-    await w.press(ENTER, 'Hermes (1/8)')
+    await w.press(ENTER, 'Hermes (agent 1 of 2)')
     await w.press(ENTER, 'pick a Anthropic model')
     await w.press(ENTER, 'Hermes — responsibility note')
-    await w.press(ENTER, 'Claude Code (5/8) · how to reach Anthropic')
+    await w.press(ENTER, 'Claude Code (agent 2 of 2) · how to reach Anthropic')
     await w.press(ESC, 'Agents ▸ pick which to install')
     expect(w.frame()).not.toContain('responsibility note')
   }, 20_000)
@@ -1261,7 +1261,7 @@ describe('required-setup step', () => {
     // OpenRouter route, which needs an openrouter-key nobody has pasted.
     const w = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
     await w.until('Agents ▸ pick which to install')
-    await w.press(ENTER, 'Hermes (1/4)')
+    await w.press(ENTER, 'Hermes (agent 1 of 1)')
     await w.press(ENTER, 'how to reach OpenAI')
     await w.press(ENTER, 'pick a OpenAI model')
     await w.press(ENTER, 'responsibility note')
@@ -1289,11 +1289,11 @@ describe('required-setup step [s] skip', () => {
     // Hermes (needs openrouter-key, missing) + OpenClaw (uses the stored openai-key).
     await w.pressInList(DOWN)
     await w.pressInList(SPACE)
-    await w.press(ENTER, 'Hermes (1/8)')
+    await w.press(ENTER, 'Hermes (agent 1 of 2)')
     await w.press(ENTER, 'how to reach OpenAI')
     await w.press(ENTER, 'pick a OpenAI model')
     await w.press(ENTER, 'Hermes — responsibility note')
-    await w.press(ENTER, 'OpenClaw (5/8)')
+    await w.press(ENTER, 'OpenClaw (agent 2 of 2)')
     await w.press(ENTER, 'pick a OpenAI model')
     await w.press(ENTER, 'OpenClaw — responsibility note')
     await w.press(ENTER, 'Agents ▸ confirm')
@@ -1317,11 +1317,11 @@ describe('required-setup cursor', () => {
     // Hermes + OpenClaw → two rows; focus the second.
     await w.pressInList(DOWN)
     await w.pressInList(SPACE)
-    await w.press(ENTER, 'Hermes (1/8)')
+    await w.press(ENTER, 'Hermes (agent 1 of 2)')
     await w.press(ENTER, 'how to reach OpenAI')
     await w.press(ENTER, 'pick a OpenAI model')
     await w.press(ENTER, 'Hermes — responsibility note')
-    await w.press(ENTER, 'OpenClaw (5/8)')
+    await w.press(ENTER, 'OpenClaw (agent 2 of 2)')
     await w.press(ENTER, 'pick a OpenAI model')
     await w.press(ENTER, 'OpenClaw — responsibility note')
     await w.press(ENTER, 'Agents ▸ confirm')
@@ -1339,7 +1339,7 @@ describe('required-setup cursor', () => {
     await w.press('n', 'Agents ▸ pick which to install')
     // The picker keeps Hermes + OpenClaw checked (#657): untick Hermes.
     await w.press(SPACE, 'Checked: openclaw')
-    await w.press(ENTER, 'OpenClaw (1/4)')
+    await w.press(ENTER, 'OpenClaw (agent 1 of 1)')
     await w.press(ENTER, 'pick a OpenAI model')
     await w.press(ENTER, 'OpenClaw — responsibility note')
     await w.press(ENTER, 'Agents ▸ confirm')
@@ -1385,7 +1385,7 @@ describe('resume keeps session-only choices', () => {
   it('restores per-agent picks, services and notes from setup-state', async () => {
     const first = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
     await first.until('Agents ▸ pick which to install')
-    await first.press(ENTER, 'Hermes (1/4)')
+    await first.press(ENTER, 'Hermes (agent 1 of 1)')
     await first.press(ENTER, 'how to reach OpenAI')
     await first.press(ENTER, 'pick a OpenAI model')
     await first.press(ENTER, 'Hermes — responsibility note')
@@ -1458,7 +1458,7 @@ describe('resume never uninstalls on its own', () => {
   it('re-opens agents confirm for an agent registered after the snapshot, and removes nothing', async () => {
     const first = await mount('agents', { secrets: { 'openai-key': 'sk-fake-openai-000' } })
     await first.until('Agents ▸ pick which to install')
-    await first.press(ENTER, 'Hermes (1/4)')
+    await first.press(ENTER, 'Hermes (agent 1 of 1)')
     await first.press(ENTER, 'how to reach OpenAI')
     await first.press(ENTER, 'pick a OpenAI model')
     await first.press(ENTER, 'Hermes — responsibility note')

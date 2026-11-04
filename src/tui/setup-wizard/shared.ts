@@ -1,3 +1,4 @@
+import { detectInstall } from "../../core/agent-install.js";
 import { oauthSecretName } from "../../core/llm/oauth/token-store.js";
 import {
   findAgent,
@@ -7,6 +8,19 @@ import {
 } from "../../core/registry-catalog.js";
 
 export const DEFAULT_AGENTS = ["hermes", "claude-code"];
+
+/** What the agent step pre-checks on a first run: the coding agents this
+ *  machine already has, or Claude Code when it has neither. */
+export function firstRunAgents(
+  catalog: readonly { id: string; install: Parameters<typeof detectInstall>[0] }[],
+  found: (install: Parameters<typeof detectInstall>[0]) => boolean = (install) => detectInstall(install).found,
+): string[] {
+  const here = ["claude-code", "codex"].filter((id) => {
+    const entry = catalog.find((a) => a.id === id);
+    return entry ? found(entry.install) : false;
+  });
+  return here.length > 0 ? here : ["claude-code"];
+}
 
 // Faz 4b-3 / #512 — providers that support subscription OAuth as an
 // alternative to an API key. Used by the values phase to ask "key or sign

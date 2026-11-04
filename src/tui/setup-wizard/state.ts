@@ -216,6 +216,8 @@ export function createInitialWizardState(
   initialRegistered: string[],
   // Set by planResume when a resume re-opened the agents step.
   initialAgentsPhase: AgentsPhase = "picker",
+  // What the agent step pre-checks on a first run (defaultAgents).
+  firstRunAgents: readonly string[] = DEFAULT_AGENTS,
 ): WizardState {
   // Choices saved by a previous run of this setup (resume); see
   // snapshotSession. The root reconciles them first (planResume).
@@ -235,7 +237,7 @@ export function createInitialWizardState(
 
     agentsSelected:
       session?.agentsSelected ??
-      (initialRegistered.length > 0 ? initialRegistered : DEFAULT_AGENTS),
+      (initialRegistered.length > 0 ? initialRegistered : [...firstRunAgents]),
     agentsPhase: initialAgentsPhase,
     agentsPickerChecked: null,
     agentConfigPrompts: [],
@@ -417,15 +419,17 @@ export function useWizardState(
   initialState: SetupState,
   initialRegistered: string[],
   initialAgentsPhase?: AgentsPhase,
+  firstRunAgents?: readonly string[],
 ): WizardStateHandle {
   const [state, dispatch] = useReducer(
     wizardReducer,
-    { initialState, initialRegistered, initialAgentsPhase },
+    { initialState, initialRegistered, initialAgentsPhase, firstRunAgents },
     (args) =>
       createInitialWizardState(
         args.initialState,
         args.initialRegistered,
         args.initialAgentsPhase,
+        args.firstRunAgents,
       ),
   );
   // dispatch is stable for the component's lifetime, so the setters are

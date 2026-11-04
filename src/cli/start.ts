@@ -1,3 +1,4 @@
+import { firstRunAgents } from "../tui/setup-wizard/shared.js";
 import { existsSync } from "node:fs";
 import type { Interface as ReadlineInterface } from "node:readline";
 import { Command } from "commander";
@@ -95,6 +96,7 @@ import type { BootInfo } from "../tui/boot-info.js";
 import {
   freshState,
   hasUserOptedOut,
+  setupLeftUnfinished,
   loadSetupState,
   markSetupSkipped,
   saveSetupState,
@@ -2137,6 +2139,7 @@ async function runOnboardingWizard(): Promise<boolean> {
         notifyConfigPath: paths.notifyConfigPath,
         voiceConfigPath: paths.voiceConfigPath,
         launchEditor,
+        firstRunAgents: firstRunAgents(loadActiveRegistry().doc.agents),
         requestOauthRun: (steps) => {
           oauthQueue.push(...steps);
         },
@@ -2209,16 +2212,22 @@ export function parseStartChoice(answer: string): StartChoice {
   return "setup";
 }
 
-async function promptStartChoice(): Promise<StartChoice> {
+async function promptStartChoice(unfinished = false): Promise<StartChoice> {
   if (!process.stdin.isTTY) return "skip";
   process.stderr.write(
-    `\n${orange(bold("Foreman"))} ${dim("— not configured yet.")}\n\n` +
-      `  Recommended: run ${bold("foreman setup")} (5-minute wizard)\n` +
-      `  Or:          relaunch with ${bold("--skip-setup")} for defaults only\n\n` +
-      `  [Enter] Run setup now\n` +
-      `  [s]     Skip and launch with defaults\n` +
-      `  [q]     Quit\n\n` +
-      `> `,
+    unfinished
+      ? `\n${orange(bold("Foreman"))} ${dim("— setup isn't finished, and no agent is guarded yet.")}\n\n` +
+          `  [Enter] Continue setup where you left it\n` +
+          `  [s]     Skip it and launch with defaults\n` +
+          `  [q]     Quit\n\n` +
+          `> `
+      : `\n${orange(bold("Foreman"))} ${dim("— not configured yet.")}\n\n` +
+          `  Recommended: run ${bold("foreman setup")} (5-minute wizard)\n` +
+          `  Or:          relaunch with ${bold("--skip-setup")} for defaults only\n\n` +
+          `  [Enter] Run setup now\n` +
+          `  [s]     Skip and launch with defaults\n` +
+          `  [q]     Quit\n\n` +
+          `> `,
   );
   const { createInterface } = await import("node:readline");
   const rl = createInterface({ input: process.stdin, output: process.stderr });
@@ -2326,8 +2335,9 @@ export const startCommand = new Command("start")
     const flagSkip = options.onboarding === false || options.skipSetup;
     if (!flagSkip && looksLikeFreshInstall()) {
       const previousState = loadSetupState();
-      if (!hasUserOptedOut(previousState)) {
-        const choice = await promptStartChoice();
+      const unfinished = setupLeftUnfinished(previousState);
+      if (!hasUserOptedOut(previousState) || unfinished) {
+        const choice = await promptStartChoice(unfinished);
         if (choice === "setup") {
           // Quitting the wizard quits Foreman; only a finished setup goes
           // on to launch the TUI.

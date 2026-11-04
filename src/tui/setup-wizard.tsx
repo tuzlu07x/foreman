@@ -145,6 +145,7 @@ export function SetupWizard({
     resumePlan.setup,
     initialRegistered,
     resumePlan.agentsPhase ?? undefined,
+    services.firstRunAgents,
   );
   const welcomeLayout = useLayout();
   const terminal = useTerminalSize();
