@@ -13,10 +13,13 @@
         "Search for @BotFather",
         "Send /newbot",
         "Choose a display name (e.g. \"My Foreman Bot\")",
-        "Choose a username ending in 'bot' (e.g. fatih_assistant_bot)",
+        "Choose a username ending in 'bot' (e.g. acme_foreman_bot)",
         "Copy the token BotFather sends"
       ],
-      "used_by_agents": ["hermes", "openclaw"],
+      "used_by_agents": [
+        "hermes",
+        "openclaw"
+      ],
       "open_url_hotkey": true,
       "extra_secrets": [
         {
@@ -25,10 +28,9 @@
           "format_hint": "-1001234567890 (group) or 123456789 (DM)",
           "where_to_get": null,
           "setup_steps": [
-            "Open Telegram and send any message to your bot",
-            "In a browser open: https://api.telegram.org/bot<TOKEN>/getUpdates",
-            "Find the `chat.id` field in the JSON response",
-            "Paste the id here (negative numbers are groups, positive are DMs)"
+            "Open your bot in Telegram, press Start and send it any message",
+            "Easiest: press Enter here to skip. Foreman finds your chat for you: on the Services page press [n], or run foreman notify enable telegram",
+            "Or open https://api.telegram.org/bot<TOKEN>/getUpdates and paste the chat.id you see"
           ],
           "optional": true
         }
@@ -42,12 +44,15 @@
       "where_to_get": "https://discord.com/developers/applications",
       "format_hint": "long opaque string",
       "setup_steps": [
-        "Open Discord Developer Portal",
-        "Click \"New Application\" and name it",
-        "Bot tab → Add Bot",
-        "Reset Token → Copy"
+        "Open discord.com/developers/applications → New Application, and name it",
+        "Bot tab → Reset Token → Copy (no privileged intents are needed)",
+        "OAuth2 → URL Generator: scopes bot and applications.commands, permissions Send Messages and Embed Links",
+        "Open the generated URL and add the bot to your server"
       ],
-      "used_by_agents": ["hermes", "openclaw"],
+      "used_by_agents": [
+        "hermes",
+        "openclaw"
+      ],
       "open_url_hotkey": true
     },
     {
@@ -68,9 +73,12 @@
         "  [ ] files:write    → upload files / images",
         "  [ ] groups:read    → list private channels the bot is in",
         "Install to Workspace (top of the OAuth page) → Authorize",
-        "Copy the 'Bot User OAuth Token' (starts with xoxb-)"
+        "Copy the 'Bot User OAuth Token' (starts with xoxb-)",
+        "In the channel for alerts, type /invite @your-bot"
       ],
-      "used_by_agents": ["openclaw"],
+      "used_by_agents": [
+        "openclaw"
+      ],
       "open_url_hotkey": true
     },
     {
@@ -94,7 +102,10 @@
         "Click 'Generate token' at the bottom",
         "Copy immediately (won't show again — starts with ghp_)"
       ],
-      "used_by_agents": ["claude-code", "codex"],
+      "used_by_agents": [
+        "claude-code",
+        "codex"
+      ],
       "open_url_hotkey": true
     },
     {

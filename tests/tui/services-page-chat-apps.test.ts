@@ -107,7 +107,7 @@ describe('Services page', () => {
       const frame = strip(app.lastFrame())
       expect(frame).toContain('Telegram one bot — Foreman reads it')
       expect(frame).toContain('Slack notifications only')
-      expect(frame).toContain('Discord (available')
+      expect(frame).toContain('Discord not set up')
       expect(frame).not.toMatch(/[●○] (GitHub|Atlassian|Notion)/)
       expect(frame).toContain('GitHub, Jira, Notion and other tools are on the Integrations page')
       // Enter shows how to change the mode; the actions still work.
@@ -120,9 +120,73 @@ describe('Services page', () => {
       expect(strip(app.lastFrame())).toContain('change mode:  foreman notify slack-interactive')
       app.stdin.write('w')
       await tick()
-      expect(strip(app.lastFrame())).toContain('Slack setup walkthrough')
+      expect(strip(app.lastFrame())).toContain('Slack guide')
+      expect(strip(app.lastFrame())).toContain('Approve from Slack:')
       // No secret value is shown unless asked for.
       expect(strip(app.lastFrame())).not.toContain('xoxb-1')
+    } finally {
+      app.unmount()
+      sqlite.close()
+    }
+  })
+
+  it('t sends a test and says what happened; a token alone is not called connected', async () => {
+    writeFileSync(
+      join(home, 'notify.yaml'),
+      ['channels:', '  telegram: { enabled: true, bot_token_ref: telegram-bot-token, chat_id: "1", listener: foreman }', ''].join('\n'),
+    )
+    const { db, sqlite } = createInMemoryDb()
+    const bus = new EventBus<ForemanEventMap>()
+    const secretStore = new SecretStore(db, Buffer.alloc(32, 7))
+    secretStore.add('telegram-bot-token', '123456:abc')
+    // Stored by the old flow: a token, and no channel.
+    secretStore.add('slack-bot-token', 'xoxb-1')
+    let answer: { ok: true } | { ok: false; reason: string } = { ok: true }
+    const tested: string[] = []
+    const api = {
+      checkToken: async () => ({ status: 'ok' as const, value: { username: null } }),
+      checkSlackAppToken: async () => ({ status: 'ok' as const, value: null }),
+      findTelegramChat: async () => ({ status: 'ok' as const, value: null }),
+      test: async (id: string) => {
+        tested.push(id)
+        return answer
+      },
+    }
+    const app = render(
+      React.createElement(DashboardProvider, {
+        db,
+        sqlite,
+        bus,
+        registry: new RegistryService(db, bus),
+        secretStore,
+        children: React.createElement(ServicesPage, { onLeave: () => {}, api }),
+      }),
+    )
+    try {
+      await tick()
+      const frame = strip(app.lastFrame())
+      expect(frame).toContain('1 connected')
+      expect(frame).toContain('token saved, not sending yet')
+      app.stdin.write('t')
+      await tick(120)
+      expect(tested).toEqual(['telegram'])
+      expect(strip(app.lastFrame())).toContain('Test message sent to Telegram')
+      answer = { ok: false, reason: 'Telegram rejected the bot token.' }
+      app.stdin.write('t')
+      await tick(120)
+      expect(strip(app.lastFrame())).toContain('Telegram rejected the bot token.')
+      // The half-set app offers to finish, and has nothing to test.
+      for (let i = 0; i < 2; i++) {
+        app.stdin.write('\u001B[B')
+        await tick()
+      }
+      app.stdin.write('t')
+      await tick(120)
+      expect(tested).toHaveLength(2)
+      expect(strip(app.lastFrame())).toContain('[n] finish setup')
+      app.stdin.write('n')
+      await tick()
+      expect(strip(app.lastFrame())).toContain('Set up Slack')
     } finally {
       app.unmount()
       sqlite.close()

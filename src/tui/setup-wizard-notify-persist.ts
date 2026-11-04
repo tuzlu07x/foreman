@@ -1,9 +1,8 @@
 import {
-  addChannelToRoutes,
+  routeNewChannel,
   type ChannelToggle,
   type NotifyConfig,
 } from "../core/notification/notify-config.js";
-import type { NotificationLevel } from "../core/notification/types.js";
 import type { ServiceEntry } from "../core/registry-catalog.js";
 
 // =============================================================================
@@ -89,7 +88,7 @@ function withSlackTwoWay(block: ChannelToggle, twoWay: SlackTwoWay): ChannelTogg
 /** The command that turns a chat app on after setup once its bot token is
  *  stored: it names the chat id / channel the wizard didn't get. */
 export function channelFinishCommand(channel: string): string {
-  if (channel === "telegram") return "foreman notify enable telegram --chat-id <id>";
+  if (channel === "telegram") return "foreman notify enable telegram";
   if (channel === "slack") return "foreman notify enable slack --channel '#foreman'";
   return `foreman notify enable ${channel} --channel <channel-id>`;
 }
@@ -203,16 +202,7 @@ export function buildNotifyConfigFromWizard(
     },
     routing: structuredClone(input.existing.routing),
   };
-  // A chat app no level routes to would receive nothing (the default
-  // routing names Telegram only, so a Slack or Discord set up here got no
-  // approval, alert or digest). It gets those levels; a channel you
-  // routed yourself keeps your routing.
-  const routed = new Set(Object.values(input.existing.routing).flatMap((r) => r?.channels ?? []));
-  for (const channel of wired) {
-    if (!routed.has(channel)) addChannelToRoutes(next, channel, WIZARD_CHANNEL_LEVELS);
-  }
+  for (const channel of wired) routeNewChannel(next, channel);
   return { next, wiredChannels: wired, unwiredChannels: unwired };
 }
 
-/** Levels a chat app set up in the wizard receives. */
-const WIZARD_CHANNEL_LEVELS: readonly NotificationLevel[] = ["critical", "warning", "risk_deny", "budget_alert", "summary"];

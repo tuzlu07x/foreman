@@ -10,6 +10,7 @@ import {
   defaultNotifyConfig,
   isChannelEnabled,
   loadNotifyConfig,
+  routeNewChannel,
   saveNotifyConfig,
   type ChannelToggle,
 } from '../core/notification/notify-config.js'
@@ -17,9 +18,11 @@ import { approvalButtonSigner, approvalSigner } from '../core/approval-token.js'
 import { buildChannel } from '../core/notification/channel-factory.js'
 import { outboundUrlProblem } from '../core/notification/channels/http-post.js'
 import { planChannelEnable } from '../core/notification/channel-setup.js'
+import { CHAT_APPS, explainDeliveryError, findTelegramChat, type ChatAppId } from '../core/notification/chat-app-setup.js'
 import {
   checkDiscordBot,
   checkSlackAppToken,
+  checkSlackBot,
   checkTelegramBot,
   describeFailedTokenCheck,
 } from '../core/notification/token-checks.js'
@@ -130,7 +133,8 @@ notifyCommand
   )
   .option('--chat-id <id>', 'Telegram: the chat to send to (your DM or group with the bot)')
   .option('--channel <name>', 'Slack: the channel a bot token posts to; Discord: the channel id')
-  .action(async (channel: string, opts: { chatId?: string; channel?: string }) => {
+  .option('--no-verify', "don't check the token with the chat app")
+  .action(async (channel: string, opts: { chatId?: string; channel?: string; verify: boolean }) => {
     requireInitialised()
     // Reject typo'd channel names BEFORE writing anything (#264) — otherwise
     // the garbage entry ends up in the user's notify.yaml and `status` quietly
@@ -165,15 +169,23 @@ notifyCommand
       ...(opts.channel !== undefined ? { target: opts.channel } : {}),
     }
     let plan = planChannelEnable(input)
-    // Ask for the one value only you know, when there's someone to ask.
-    if (channel === 'telegram' && !plan.toggle.chat_id && process.stdin.isTTY) {
-      const answer = (await promptLine('Telegram chat id (your DM or group with the bot; Enter to skip): ')).trim()
+    const interactive = process.stdin.isTTY === true
+    // The chat id is the one value only you can vouch for: look for your
+    // message to the bot, and ask you before using it.
+    if (channel === 'telegram' && !plan.toggle.chat_id && interactive) {
+      const token = plan.toggle.bot_token_ref ? readSecret(plan.toggle.bot_token_ref) : null
+      const chat = token ? await offerTelegramChat(token) : null
+      const answer = chat ?? (await promptLine('Telegram chat id (your DM or group with the bot; Enter to skip): ')).trim()
       if (answer) plan = planChannelEnable({ ...input, chatId: answer })
     }
+    const problem = isChatApp(channel) && interactive && opts.verify ? await tokenProblem(channel, plan.toggle, readSecret) : null
     setChannel(config, channel, plan.toggle)
+    // Slack and Discord got nothing until you routed them by hand.
+    if (isChatApp(channel)) routeNewChannel(config, channel)
     saveNotifyConfig(paths.notifyConfigPath, config)
     closeDb()
     console.log(`${green('✓')} ${channel} enabled in ${dim(paths.notifyConfigPath)}  ${describeChannel(channel, plan.toggle)}`)
+    if (problem) console.log(`${orange('⚠')} ${problem}`)
     if (plan.missing.length > 0) {
       console.log(orange(`  ${channel} can't send yet — still to do:`))
       for (const step of plan.missing) console.log(`  → ${step}`)
@@ -419,10 +431,8 @@ notifyCommand
         `${green('✓')} test message sent (message_id=${ref.channelMessageId})`,
       )
     } catch (err) {
-      console.error(
-        red('error: ') +
-          `delivery failed: ${err instanceof Error ? err.message : String(err)}`,
-      )
+      const raw = err instanceof Error ? err.message : String(err)
+      console.error(red('error: ') + (isChatApp(channel) ? explainDeliveryError(channel, raw) : `delivery failed: ${raw}`))
       process.exit(1)
     } finally {
       try {
@@ -447,6 +457,37 @@ function requireInitialised(): void {
     )
     process.exit(1)
   }
+}
+
+function isChatApp(channel: string): channel is ChatAppId {
+  return (CHAT_APPS as readonly string[]).includes(channel)
+}
+
+/** Your chat, found from the message you sent the bot, once you've said it
+ *  is yours; null to ask for the id instead. */
+async function offerTelegramChat(token: string): Promise<string | null> {
+  const found = await findTelegramChat(token)
+  if (found.status !== 'ok' || !found.value) {
+    console.log(dim('  Tip: send your bot any message in Telegram and run this again, and Foreman finds your chat.'))
+    return null
+  }
+  const { chatId, name } = found.value
+  const answer = (await promptLine(`Found ${name} (chat ${chatId}). Approvals go to this chat. Is this you? [Y/n] `)).trim().toLowerCase()
+  return answer === '' || answer === 'y' || answer === 'yes' ? chatId : null
+}
+
+/** Why a chat app's stored token won't work, or null (also when it can't be
+ *  asked: being offline doesn't make a token wrong). */
+async function tokenProblem(
+  channel: ChatAppId,
+  toggle: ChannelToggle,
+  readSecret: (name: string) => string | null,
+): Promise<string | null> {
+  const token = toggle.bot_token_ref ? readSecret(toggle.bot_token_ref) : null
+  if (!token) return null
+  const check =
+    channel === 'telegram' ? await checkTelegramBot(token) : channel === 'slack' ? await checkSlackBot(token) : await checkDiscordBot(token)
+  return check.status === 'rejected' ? explainDeliveryError(channel, channel === 'slack' ? (check.detail ?? 'invalid_auth') : '401') : null
 }
 
 function describeChannel(id: string, ch: ChannelToggle): string {

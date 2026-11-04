@@ -112,7 +112,9 @@ An approval goes out on the level that matches its risk: `critical` for high and
 
 ## 3. Setting up Telegram
 
-Shortcut: the setup wizard does the steps below for you. In Step 4 (Services) pick Telegram, paste the bot token and your chat id, and it writes the `telegram` channel into `notify.yaml`. It does the same for a Slack bot (token, then the channel, `#foreman` by default) and a Discord bot (token, then the channel id). A chat app whose chat id or channel you skip stays off; the wizard's summary names the `foreman notify enable …` command that turns it on.
+Quickest: in the TUI open **Services** (`V` on Home), pick the app and press `n`. Foreman walks you through it for Telegram, Slack and Discord: it checks the token with the app, finds your Telegram chat from a message you send your bot and asks you to confirm it, turns the channel on, routes it and sends a test message. `t` sends another test any time, `w` shows the full guide. Restart Foreman afterwards so approvals start arriving: quit and run `foreman start`, or `foreman service install` when the background service runs the gateway.
+
+The setup wizard does the steps below for you too. In Step 4 (Services) pick Telegram, paste the bot token and your chat id, and it writes the `telegram` channel into `notify.yaml`. It does the same for a Slack bot (token, then the channel, `#foreman` by default) and a Discord bot (token, then the channel id). A chat app whose chat id or channel you skip stays off; the wizard's summary names the `foreman notify enable …` command that turns it on.
 
 ### Bot creation
 1. Open Telegram, message [@BotFather](https://t.me/BotFather).
@@ -135,12 +137,14 @@ Shortcut: the setup wizard does the steps below for you. In Step 4 (Services) pi
 ### Enable + test
 
 ```bash
-foreman notify enable telegram --chat-id 123456789   # the number you found
+foreman notify enable telegram     # finds your chat from the message you sent the bot
 foreman notify test telegram
 # → check your Telegram chat — you should see a "Foreman test ✓" message
 ```
 
-`notify enable telegram` points the channel at the `telegram-bot-token` secret and saves the chat id in `notify.yaml` (`chat_id`, a quoted string). Without `--chat-id` it uses the chat id the setup wizard stored, or asks for one when you run it in a terminal. It prints whatever is still missing, for example `foreman secrets add telegram-bot-token`.
+`notify enable telegram` points the channel at the `telegram-bot-token` secret and saves the chat id in `notify.yaml` (`chat_id`, a quoted string). Without `--chat-id` it uses the chat id the setup wizard stored; in a terminal it then looks for your message to the bot, shows who sent it and asks before using it, since that chat gets your approvals. It prints whatever is still missing, for example `foreman secrets add telegram-bot-token`.
+
+In a terminal, `notify enable telegram`, `slack` and `discord` also check the token with the app (`--no-verify` skips that). All three add the chat app to the `critical`, `warning`, `risk_deny`, `budget_alert` and `summary` levels unless you already routed it. `notify test` says what to do when a message doesn't arrive, for example *The bot isn't in that channel. Open the channel in Slack and type /invite @your-bot*.
 
 ### Approve and talk to Foreman on the same bot
 

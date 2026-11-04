@@ -69,11 +69,42 @@ export async function checkSlackAppToken(token: string, fetchFn: FetchFn = fetch
   return { status: "ok", value: null };
 }
 
-export async function checkDiscordBot(token: string, fetchFn: FetchFn = fetch): Promise<TokenCheck> {
+/** The bot token, and which bot it is. */
+export async function checkSlackBot(token: string, fetchFn: FetchFn = fetch): Promise<TokenCheck<{ username: string | null }>> {
+  const res = await ask(
+    `${slackEndpoints().api}/auth.test`,
+    { method: "POST", headers: { authorization: `Bearer ${token}` } },
+    fetchFn,
+  );
+  if ("unreachable" in res) return { status: "unreachable", detail: res.unreachable };
+  const body = await jsonOf(res);
+  if (body?.ok !== true) {
+    return { status: "rejected", detail: typeof body?.error === "string" ? body.error : null };
+  }
+  return { status: "ok", value: { username: typeof body.user === "string" ? body.user : null } };
+}
+
+export async function checkDiscordBot(
+  token: string,
+  fetchFn: FetchFn = fetch,
+): Promise<TokenCheck<{ username: string | null; id: string | null }>> {
   const res = await ask("https://discord.com/api/v10/users/@me", { headers: { authorization: `Bot ${token}` } }, fetchFn);
   if ("unreachable" in res) return { status: "unreachable", detail: res.unreachable };
   if (!res.ok) return { status: "rejected", detail: `HTTP ${res.status}` };
-  return { status: "ok", value: null };
+  const body = await jsonOf(res);
+  return {
+    status: "ok",
+    value: {
+      username: typeof body?.username === "string" ? body.username : null,
+      id: typeof body?.id === "string" ? body.id : null,
+    },
+  };
+}
+
+/** Adds a Discord bot to a server, with the permissions Foreman needs: View
+ *  Channels, Send Messages and Embed Links, and the /foreman command. */
+export function discordInviteUrl(botId: string): string {
+  return `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(botId)}&scope=bot+applications.commands&permissions=19456`;
 }
 
 /** The line to print when a check didn't pass. */

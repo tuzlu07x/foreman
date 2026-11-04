@@ -17,8 +17,17 @@ import {
   resolveTelegramListener,
   type ChatCatalogEntry,
 } from "../../core/notification/telegram-listener.js";
+import {
+  chatAppReady,
+  removeChatApp,
+  TWO_WAY_GUIDE,
+  type ChatAppId,
+} from "../../core/notification/chat-app-setup.js";
+import { approvalButtonSigner, approvalSigner } from "../../core/approval-token.js";
+import { loadOrCreateSecretsMasterKey } from "../../identity/master-key.js";
 import { getForemanPaths } from "../../utils/config.js";
 import { useDashboardServices } from "../dashboard-context.js";
+import { ChatAppConnect, chatAppApi, type ChatAppApi } from "./chat-app-connect.js";
 import { osc8 } from "../osc8.js";
 import { roundBorder, theme } from "../theme.js";
 import { PageHeader } from "../components/typography.js";
@@ -27,7 +36,10 @@ const REVEAL_AUTO_HIDE_MS = 10_000;
 
 interface Row {
   service: ServiceEntry;
+  /** Its token is in the vault. */
   configured: boolean;
+  /** It can send: on, with its token and somewhere to post. */
+  ready: boolean;
   /** How the chat app is set up in notify.yaml (chatAppMode). */
   mode: ChatAppMode;
 }
@@ -48,7 +60,8 @@ export interface ChatAppMode {
 // keyboard handler from ballooning as we add more management pages.
 type Op =
   | { kind: "list" }
-  | { kind: "adding"; service: ServiceEntry; warning: string | null }
+  | { kind: "connecting"; service: ServiceEntry }
+  | { kind: "testing"; service: ServiceEntry }
   | { kind: "rotating"; service: ServiceEntry }
   | { kind: "removing"; service: ServiceEntry; dependents: string[] }
   | { kind: "revealed"; secretName: string; value: string }
@@ -59,10 +72,19 @@ export interface ServicesPageProps {
   /** Told when the page starts or stops taking typed text, so global keys
    *  (Tab, `:`) stay out of a value being entered. */
   onEditingChange?: (editing: boolean) => void;
+  /** Stands in for the chat apps themselves in tests. */
+  api?: ChatAppApi;
 }
 
-export function ServicesPage({ onLeave, onEditingChange }: ServicesPageProps): JSX.Element {
-  const { registry, secretStore, bus } = useDashboardServices();
+/** The channels' own signers, so a two-way channel renders as it will. */
+function defaultApi(secretStore: SecretStore): ChatAppApi {
+  const key = loadOrCreateSecretsMasterKey();
+  return chatAppApi({ secrets: secretStore, signApproval: approvalSigner(key), signButton: approvalButtonSigner(key) });
+}
+
+export function ServicesPage({ onLeave, onEditingChange, api }: ServicesPageProps): JSX.Element {
+  const { registry, secretStore, bus, attachedGateway } = useDashboardServices();
+  const appApi = useMemo(() => api ?? (secretStore ? defaultApi(secretStore) : null), [api, secretStore]);
   const catalog = useMemo(
     () => loadActiveServices().doc.services.filter((s) => CHAT_APP_IDS.includes(s.id)),
     [],
@@ -112,10 +134,21 @@ export function ServicesPage({ onLeave, onEditingChange }: ServicesPageProps): J
   const safeSelected = Math.max(0, Math.min(selectedIdx, rows.length - 1));
   const selectedRow = rows[safeSelected];
 
+  const runTest = async (service: ServiceEntry): Promise<void> => {
+    if (!appApi) return;
+    setOp({ kind: "testing", service });
+    const id = service.id as ChatAppId;
+    const toggle = readNotifyConfig() ? channelConfig(readNotifyConfig()!, id) : null;
+    const result = toggle ? await appApi.test(id, toggle) : { ok: false as const, reason: `${service.name} isn't set up yet.` };
+    setOp({ kind: "list" });
+    setNotice(result.ok ? `✓ Test message sent to ${service.name}: look for it there.` : result.reason);
+  };
+
   useInput((input, key) => {
     if (!secretStore) return;
+    if (op.kind === "testing") return;
     if (
-      op.kind === "adding" ||
+      op.kind === "connecting" ||
       op.kind === "rotating" ||
       op.kind === "removing" ||
       op.kind === "revealed"
@@ -149,8 +182,14 @@ export function ServicesPage({ onLeave, onEditingChange }: ServicesPageProps): J
       return;
     }
     if (!selectedRow) return;
-    if (input === "n" && !selectedRow.configured) {
-      setOp({ kind: "adding", service: selectedRow.service, warning: null });
+    if (input === "n" && !selectedRow.ready) {
+      setNotice(null);
+      setOp({ kind: "connecting", service: selectedRow.service });
+      return;
+    }
+    if (input === "t" && selectedRow.ready) {
+      setNotice(null);
+      void runTest(selectedRow.service);
       return;
     }
     if (input === "r" && selectedRow.configured) {
@@ -211,8 +250,8 @@ export function ServicesPage({ onLeave, onEditingChange }: ServicesPageProps): J
       <PageHeader
         title="Services · chat apps"
         right={
-          `${rows.filter((r) => r.configured).length} configured · ` +
-          `${rows.filter((r) => !r.configured).length} available`
+          `${rows.filter((r) => r.ready).length} connected · ` +
+          `${rows.filter((r) => !r.ready).length} to set up`
         }
       />
 
@@ -234,16 +273,25 @@ export function ServicesPage({ onLeave, onEditingChange }: ServicesPageProps): J
         )}
       </Box>
 
-      {op.kind === "adding" && (
-        <AddingOverlay
+      {op.kind === "connecting" && appApi && (
+        <ChatAppConnect
+          id={op.service.id as ChatAppId}
           service={op.service}
-          warning={op.warning}
-          secretStore={secretStore}
+          store={secretStore}
+          notifyConfigPath={getForemanPaths().notifyConfigPath}
+          api={appApi}
+          attached={Boolean(attachedGateway)}
+          currentTarget={targetOf(op.service.id)}
           onDone={(message) => {
             setOp({ kind: "list" });
             setNotice(message);
           }}
         />
+      )}
+      {op.kind === "testing" && (
+        <Box marginTop={1}>
+          <Text color={theme.fg.muted}>Sending a test message to {op.service.name}…</Text>
+        </Box>
       )}
       {op.kind === "rotating" && (
         <RotatingOverlay
@@ -287,7 +335,7 @@ export function ServicesPage({ onLeave, onEditingChange }: ServicesPageProps): J
 
       {notice && op.kind === "list" && (
         <Box marginTop={1}>
-          <Text color={theme.accent.success}>{notice}</Text>
+          <Text color={notice.startsWith("✓") ? theme.accent.success : theme.accent.warning}>{notice}</Text>
         </Box>
       )}
 
@@ -295,8 +343,11 @@ export function ServicesPage({ onLeave, onEditingChange }: ServicesPageProps): J
         <Text color={theme.fg.muted}>{"─".repeat(60)}</Text>
       </Box>
       <Text color={theme.fg.muted}>
-        [↑↓] move · [n] new · [r] rotate · [d] remove · [s] show 10s · [w]
-        walkthrough · [Esc] back
+        {selectedRow?.ready
+          ? "[↑↓] move · [Enter] details · [t] send a test · [w] guide · [r] new token · [d] remove · [s] show 10s · [Esc] back"
+          : selectedRow?.configured
+            ? "[↑↓] move · [Enter] details · [n] finish setup · [w] guide · [d] remove · [Esc] back"
+            : "[↑↓] move · [Enter] details · [n] set up · [w] guide · [Esc] back"}
       </Text>
       <Text color={theme.fg.muted}>
         GitHub, Jira, Notion and other tools are on the Integrations page.
@@ -320,10 +371,19 @@ function buildRows(
   return catalog.map((s) => ({
     service: s,
     configured: secretStore.exists(s.secret_name),
+    ready: notify
+      ? chatAppReady(s.id as ChatAppId, channelConfig(notify, s.id), (name) => secretStore.exists(name))
+      : false,
     mode: notify
       ? chatAppMode(s.id, notify, sharedWith)
       : { label: "notify.yaml doesn't load — run foreman doctor", change: null },
   }));
+}
+
+/** Where a Slack or Discord bot posts today. */
+function targetOf(id: string): string | undefined {
+  const notify = readNotifyConfig();
+  return notify ? (channelConfig(notify, id)?.channel ?? undefined) : undefined;
 }
 
 function readNotifyConfig(): NotifyConfig | null {
@@ -390,8 +450,8 @@ function ServiceRow({
   registry: ReturnType<typeof useDashboardServices>["registry"];
 }): JSX.Element {
   const cursor = selected ? "▸ " : "  ";
-  const dot = row.configured ? theme.symbols.activeDot : theme.symbols.idleDot;
-  const dotColor = row.configured ? theme.accent.success : theme.fg.muted;
+  const dot = row.ready ? theme.symbols.activeDot : theme.symbols.idleDot;
+  const dotColor = row.ready ? theme.accent.success : row.configured ? theme.accent.warning : theme.fg.muted;
   const installed = row.configured
     ? registry.list().map((a) => a.id)
     : [];
@@ -406,25 +466,21 @@ function ServiceRow({
         </Text>
         <Text color={dotColor}>{dot}</Text>{" "}
         <Text color={theme.accent.primary}>{row.service.name}</Text>{" "}
-        {row.configured ? (
+        {row.ready ? (
           <Text>
             {row.mode.label}
             {consumers.length > 0 ? (
               <Text color={theme.fg.muted}>{` · used by ${consumers.join(", ")}`}</Text>
             ) : null}
           </Text>
+        ) : row.configured ? (
+          <Text color={theme.accent.warning}>token saved, not sending yet — press [n] to finish</Text>
         ) : (
-          <Text color={theme.fg.muted}>(available — press [n] to configure)</Text>
+          <Text color={theme.fg.muted}>not set up — press [n]</Text>
         )}
       </Text>
       {expanded ? (
         <Box flexDirection="column" marginLeft={4} marginTop={1} marginBottom={1}>
-          <Text color={theme.fg.muted}>
-            id:           <Text color={theme.fg.default}>{row.service.id}</Text>
-          </Text>
-          <Text color={theme.fg.muted}>
-            description:  <Text color={theme.fg.default}>{row.service.description}</Text>
-          </Text>
           <Text color={theme.fg.muted}>
             mode:         <Text color={theme.fg.default}>{row.mode.label}</Text>
           </Text>
@@ -434,85 +490,18 @@ function ServiceRow({
             </Text>
           ) : null}
           <Text color={theme.fg.muted}>
-            secret_name:  <Text color={theme.fg.default}>{row.service.secret_name}</Text>
+            token:        <Text color={theme.fg.default}>{row.service.secret_name}</Text>
           </Text>
-          {row.service.extra_secrets && row.service.extra_secrets.length > 0 ? (
-            <Text color={theme.fg.muted}>
-              extra secrets:{" "}
-              <Text color={theme.fg.default}>
-                {row.service.extra_secrets.map((s) => s.name).join(", ")}
-              </Text>
-            </Text>
-          ) : null}
           <Text color={theme.fg.muted}>
             homepage:     <Text color={theme.accent.primary}>{row.service.where_to_get}</Text>
           </Text>
-          <Text color={theme.fg.muted}>
-            used by:      <Text color={theme.fg.default}>{row.service.used_by_agents.length === 0 ? "(none in catalog)" : row.service.used_by_agents.join(", ")}</Text>
-          </Text>
-          <Text color={theme.fg.muted}>
-            actions:      {row.configured
-              ? "[s] show · [r] rotate · [d] remove · [w] walkthrough"
-              : "[n] configure · [w] walkthrough"}
-          </Text>
+          {consumers.length > 0 ? (
+            <Text color={theme.fg.muted}>
+              used by:      <Text color={theme.fg.default}>{consumers.join(", ")}</Text>
+            </Text>
+          ) : null}
         </Box>
       ) : null}
-    </Box>
-  );
-}
-
-function AddingOverlay({
-  service,
-  warning,
-  secretStore,
-  onDone,
-}: {
-  service: ServiceEntry;
-  warning: string | null;
-  secretStore: SecretStore;
-  onDone: (message: string) => void;
-}): JSX.Element {
-  const onSubmit = (value: string): void => {
-    if (value.length === 0) {
-      onDone(`add ${service.name} cancelled (empty value)`);
-      return;
-    }
-    try {
-      if (secretStore.exists(service.secret_name)) {
-        secretStore.rotate(service.secret_name, value);
-      } else {
-        secretStore.add(service.secret_name, value);
-      }
-      onDone(`✓ ${service.name} configured`);
-    } catch (err) {
-      onDone(`error: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-  return (
-    <Box
-      flexDirection="column"
-      marginTop={1}
-      paddingX={1}
-      borderStyle={roundBorder()}
-      borderColor={theme.accent.warning}
-    >
-      <Text color={theme.accent.warning}>
-        Adding {service.name} token
-      </Text>
-      {service.where_to_get && (
-        <Text color={theme.fg.muted}>
-          Get yours at:{" "}
-          <Text color={theme.accent.primary}>
-            {service.open_url_hotkey
-              ? osc8(service.where_to_get)
-              : service.where_to_get}
-          </Text>
-        </Text>
-      )}
-      <Text color={theme.fg.muted}>Expected format: {service.format_hint}</Text>
-      {warning && <Text color={theme.accent.danger}>⚠ {warning}</Text>}
-      <PasswordInput placeholder="…" onSubmit={onSubmit} />
-      <Text color={theme.fg.muted}>[Enter] save · [Esc] cancel</Text>
     </Box>
   );
 }
@@ -580,9 +569,8 @@ function RemovingOverlay({
     >
       <Text color={theme.accent.danger}>Remove {service.name}?</Text>
       <Text color={theme.fg.muted}>
-        This will delete {service.secret_name} from the secret store. The
-        bot/integration itself stays on the service side — message
-        @BotFather / revoke the token there if you want it fully gone.
+        Foreman stops using {service.name} and deletes its token. The bot
+        stays on {service.name}'s side: delete it there if you want it gone.
       </Text>
       {dependents.length > 0 && (
         <Text color={theme.accent.warning}>
@@ -595,7 +583,10 @@ function RemovingOverlay({
       <ConfirmInput
         onConfirm={() => {
           try {
-            secretStore.remove(service.secret_name);
+            removeChatApp(service.id as ChatAppId, {
+              store: secretStore,
+              notifyConfigPath: getForemanPaths().notifyConfigPath,
+            });
             onDone(`✓ ${service.name} removed`);
           } catch (err) {
             onDone(
@@ -623,9 +614,17 @@ function WalkthroughOverlay({
       borderColor={theme.accent.primary}
     >
       <Text bold color={theme.accent.primary}>
-        {service.name} setup walkthrough
+        {service.name} guide
       </Text>
+      <Text>Send alerts:</Text>
       {service.setup_steps.map((step, i) => (
+        <Text key={i} color={theme.fg.muted}>
+          {"  "}
+          {i + 1}. {step}
+        </Text>
+      ))}
+      <Text>Approve from {service.name}:</Text>
+      {(TWO_WAY_GUIDE[service.id as ChatAppId] ?? []).map((step, i) => (
         <Text key={i} color={theme.fg.muted}>
           {"  "}
           {i + 1}. {step}
@@ -642,7 +641,7 @@ function WalkthroughOverlay({
           </Text>
         </Text>
       )}
-      <Text color={theme.fg.muted}>Expected format: {service.format_hint}</Text>
+      <Text color={theme.fg.muted}>Press [n] and Foreman walks you through it, checks each value and sends a test.</Text>
       <Text color={theme.fg.muted}>[Esc] close</Text>
     </Box>
   );
