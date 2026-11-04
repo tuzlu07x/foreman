@@ -131,11 +131,11 @@ export const HOOK_FAILED_TEXT =
   "Otherwise run: foreman doctor";
 
 /** An argument for sh: bare when it's safe as is, else single-quoted. */
-function shQuote(arg: string): string {
+export function shQuote(arg: string): string {
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`;
 }
 
-function winQuote(arg: string): string {
+export function winQuote(arg: string): string {
   return /^[A-Za-z0-9_:.\\/-]+$/.test(arg) ? arg : `"${arg}"`;
 }
 

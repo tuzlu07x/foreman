@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { shQuote, winQuote } from "../core/agent-hook.js";
+import { foremanCliArgv } from "../core/agent-instance.js";
 import type { WizardOauthRunStep } from "../tui/setup-wizard.js";
 import { bold, dim, green, orange, red } from "./colors.js";
 
@@ -159,6 +161,22 @@ export function rewriteForHeadless(command: string): string {
   return command;
 }
 
+/**
+ * `foreman …` as this very binary. A sign-in queued from the TUI must not
+ * depend on `foreman` being on PATH: a local build has no such command, and
+ * with several Node versions it can be another install altogether. What the
+ * user reads keeps the short form.
+ */
+export function ownForemanCommand(
+  command: string,
+  argv: string[] = foremanCliArgv(),
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (!/^foreman(\s|$)/.test(command)) return command;
+  const quote = platform === "win32" ? winQuote : shQuote;
+  return argv.map(quote).join(" ") + command.slice("foreman".length);
+}
+
 export function runOauthFlows(steps: WizardOauthRunStep[]): OauthFlowResult[] {
   if (steps.length === 0) return [];
   const results: OauthFlowResult[] = [];
@@ -184,7 +202,7 @@ export function runOauthFlows(steps: WizardOauthRunStep[]): OauthFlowResult[] {
       );
     }
     process.stdout.write(dim(`        running… (browser may open)\n`));
-    const setup = spawnSync(command, {
+    const setup = spawnSync(ownForemanCommand(command), {
       shell: true,
       stdio: "inherit",
     });
@@ -256,7 +274,7 @@ function runWithCaptureAndEcho(command: string): {
   exitCode: number | null;
   output: string;
 } {
-  const result = spawnSync(command, {
+  const result = spawnSync(ownForemanCommand(command), {
     shell: true,
     stdio: ["inherit", "pipe", "pipe"],
     encoding: "utf-8",
