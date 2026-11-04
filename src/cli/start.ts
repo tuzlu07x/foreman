@@ -77,6 +77,7 @@ import { loadActiveRegistry } from "../core/registry-catalog.js";
 import { agentsSharingTelegram } from "../core/notification/telegram-listener.js";
 import { createRoleGuard } from "../core/org/role-guard.js";
 import { loadOrg } from "../core/org/org.js";
+import { writeGeminiPolicy } from "../core/gemini-launch.js";
 import { instanceLaunchFor } from "../core/role-launch.js";
 import {
   claudeHookInstalled,
@@ -1459,7 +1460,7 @@ export function startForeman(
                   : null;
                 const instance = entry ? instanceLaunchFor(agentId, entry, secretStore, paths) : null;
                 const trusted = registryRow?.taskSkipPermissions === true;
-                const permissions = entry ? taskPermissionsFor(agentId, entry, trusted, paths.orgConfigPath) : null;
+                const permissions = entry ? taskPermissionsFor(agentId, entry, trusted, paths) : null;
                 const cwd = taskCwd(agentId, derivedCwd);
                 const launch =
                   permissions || instance
@@ -1467,6 +1468,7 @@ export function startForeman(
                         args: [...(instance?.args ?? []), ...(permissions?.args ?? [])],
                         env: instance?.env ?? {},
                         taskPrefix: instance?.taskPrefix ?? "",
+                        ...(instance?.acpMcpServers ? { acpMcpServers: instance.acpMcpServers } : {}),
                       }
                     : null;
                 // "What you did recently" (role-memory.ts): a headless run
@@ -2420,10 +2422,18 @@ function telegramSharedWith(registry: RegistryService): string[] {
 
 /** The flags for what the agent may do on its own during the task
  *  (task-permissions.ts), or null for an agent they don't cover. */
-function taskPermissionsFor(agentId: string, entry: AgentEntry, trusted: boolean, orgConfigPath: string): TaskPermissions | null {
+function taskPermissionsFor(
+  agentId: string,
+  entry: AgentEntry,
+  trusted: boolean,
+  paths: { orgConfigPath: string; stateDir: string },
+): TaskPermissions | null {
+  if (entry.id === "gemini-cli") {
+    return { args: ["--policy", writeGeminiPolicy(paths.stateDir)], summary: "every tool call goes to Foreman over ACP" };
+  }
   let can: TaskPermissionInput["can"];
   try {
-    const org = loadOrg(orgConfigPath);
+    const org = loadOrg(paths.orgConfigPath);
     can = org ? Object.values(org.roles).find((r) => r.agent === agentId)?.can : undefined;
   } catch {
     // An unreadable org.yaml: no write, no network. The task still runs.

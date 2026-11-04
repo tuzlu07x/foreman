@@ -6,6 +6,18 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Gemini CLI can fill a role.** `foreman agent add gemini-cli`, then
+  `foreman org add-role <id> --runs-on gemini-cli`, or switch a role to it
+  with `r` on the Team page. A team can mix Claude Code, Codex and Gemini
+  CLI, and several roles can share one. Each Gemini role works as itself,
+  with its own identity and channel posts. Foreman runs it over ACP, so
+  every tool call goes through Foreman first, and with a policy of its own
+  Gemini asks about reads and the shell commands it would otherwise call
+  safe, like `cat .env`. Risky calls wait for your OK and the role's `can`
+  holds, as on Claude Code.
+
 ### Fixed
 
 - **An agent can no longer start itself over and over.** `foreman write`

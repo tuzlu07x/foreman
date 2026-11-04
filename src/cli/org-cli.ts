@@ -457,7 +457,7 @@ orgCommand
   .option("--agent <agent>", "agent that fills the role (an agent you registered)")
   .option(
     "--runs-on <type>",
-    "fill the role with a new instance of claude-code or codex, named after the role",
+    "fill the role with a new instance of claude-code, codex or gemini-cli, named after the role",
   )
   .option("--preset <id>", "start from a ready-made role (see `foreman org roles`)")
   .option("--describe <text>", "what the role does, in your own words (the agent is told this)")
@@ -499,12 +499,12 @@ orgCommand
       const reportsTo = opts.reportsTo?.toLowerCase() ?? (dept ? org!.departments[dept]!.head : defaultBoss(org, id));
       // Who fills it: a registered agent, or a new instance named after the role.
       const runsOn = opts.agent ? null : (opts.runsOn ?? preset?.runsOn ?? null);
-      if (!opts.agent && !runsOn) fail("say who fills the role: --agent <registered agent> or --runs-on <claude-code|codex|…>");
+      if (!opts.agent && !runsOn) fail("say who fills the role: --agent <registered agent> or --runs-on <claude-code|codex|gemini-cli>");
       const agent = opts.agent ?? id;
-      // Only Claude Code and Codex run as several agents; anything else
+      // Only Claude Code, Codex and Gemini CLI run as several agents; anything else
       // would be rewired to the role's name, taking its own identity.
       if (runsOn && agent !== runsOn && !supportsInstances({ id: runsOn })) {
-        fail(`only claude-code and codex can fill several roles; for ${runsOn}, pass --agent ${runsOn}`);
+        fail(`only claude-code, codex and gemini-cli can fill several roles; for ${runsOn}, pass --agent ${runsOn}`);
       }
       if (runsOn && !registeredAgents().has(agent)) {
         const db = getDb();

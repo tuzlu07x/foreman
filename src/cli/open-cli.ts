@@ -60,6 +60,10 @@ export function openPlan(input: {
     return { error: `${role.title} runs on '${role.agent}', which isn't registered. Add it with: foreman agent add ${role.agent} --type claude-code` };
   }
   const entry = catalogEntryFor(input.catalog, role.agent, input.registered);
+  if (entry?.id === "gemini-cli") {
+    // Only Foreman's ACP launch puts its tool calls through Foreman.
+    return { error: `${role.title} runs on Gemini CLI, which Foreman can only guard when it runs the task. Talk to it with: foreman write ${role.agent} <message>` };
+  }
   if (!entry || !supportsInstances(entry)) {
     return { error: `${role.title} runs on ${entry?.name ?? role.agent}. foreman open works for roles on Claude Code or Codex; open that agent the usual way.` };
   }

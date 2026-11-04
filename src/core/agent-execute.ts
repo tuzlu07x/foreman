@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import { runAcpMediatedTask } from "./acp-mediated-task.js";
+import { GEMINI_POLICY_FALLBACK } from "./gemini-launch.js";
 import { explainTaskFailure, taskLanguage } from "./task-failure-hints.js";
 import {
   type SpawnAgentTaskOutcome,
@@ -526,18 +527,25 @@ async function executeAcpDirective(
   const acpOutcome = await runAcpMediatedTask({
     mediator: deps.mediator,
     sourceAgent: input.agentId,
-    prompt: `${input.contextPrefix ?? ""}${input.message}`,
+    prompt: `${input.launch?.taskPrefix ?? ""}${input.contextPrefix ?? ""}${input.message}`,
     cwd: input.cwd,
     spawnImpl: deps.acpSpawnImpl,
     argv: {
       command: input.entry.acp_command.command,
-      args: input.entry.acp_command.args ?? [],
+      args: [
+        ...(input.entry.acp_command.args ?? []),
+        ...(input.launch?.args ?? []),
+        ...(input.modelVersion && input.entry.task_model_flag ? [input.entry.task_model_flag, input.modelVersion] : []),
+      ],
     },
+    ...(input.launch?.acpMcpServers ? { mcpServers: input.launch.acpMcpServers } : {}),
+    ...(input.entry.id === "gemini-cli" ? { policyFallback: GEMINI_POLICY_FALLBACK } : {}),
     // The same environment a task spawn gets (agent-spawn.ts): who
     // delegates when this agent runs `foreman write`, the nesting depth
     // that keeps a recursive Foreman from draining the queue, telemetry.
     env: {
       ...(input.extraEnv ?? {}),
+      ...(input.launch?.env ?? {}),
       FOREMAN_SPAWN_DEPTH: String(currentDepth + 1),
       FOREMAN_SPAWNED_BY: input.agentId,
     },

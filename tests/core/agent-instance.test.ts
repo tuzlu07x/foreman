@@ -160,3 +160,35 @@ function mergeTables(into: Record<string, unknown>, from: Record<string, unknown
   }
   return out;
 }
+
+describe("a Gemini CLI instance", () => {
+  const launch = () =>
+    instanceLaunch(
+      { id: "gemini-cli" },
+      { agentId: "analyst", tokenFile: "/state/agent-tokens/analyst.token", foremanArgv: ["/bin/node", "/app/cli.js"], role: "You are the Analyst." },
+    );
+
+  it("gets its own Foreman server through its ACP session", () => {
+    expect(launch()?.acpMcpServers).toEqual([
+      {
+        name: "foreman",
+        command: "/bin/node",
+        args: ["/app/cli.js", "mcp-stdio", "--source", "analyst"],
+        env: [
+          { name: "FOREMAN_AGENT_TOKEN", value: "" },
+          { name: "FOREMAN_AGENT_TOKEN_FILE", value: "/state/agent-tokens/analyst.token" },
+        ],
+      },
+    ]);
+  });
+
+  it("is told its role before the task, with no token on the command line", () => {
+    const l = launch()!;
+    expect(l.taskPrefix).toBe("You are the Analyst.\n\n");
+    expect(l.args).toEqual([]);
+  });
+
+  it("counts as an agent that runs several roles", () => {
+    expect(supportsInstances({ id: "gemini-cli" })).toBe(true);
+  });
+});

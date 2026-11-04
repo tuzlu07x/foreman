@@ -330,7 +330,7 @@ export function TeamPage({ onLeave, onEditingChange, height }: TeamPageProps): J
   const canAdd = (): boolean => {
     setNotice(null);
     if (runtimes.length === 0) {
-      setNotice("Roles run on Claude Code or Codex: add one first (foreman agent add claude-code).");
+      setNotice("Roles run on Claude Code, Codex or Gemini CLI: add one first (foreman agent add claude-code).");
       return false;
     }
     if (loaded.error) {
@@ -388,7 +388,7 @@ export function TeamPage({ onLeave, onEditingChange, height }: TeamPageProps): J
       setNotice(
         have
           ? `${theme.symbols.cross} Only ${TEAM_RUNTIME_NAMES[have]} is set up: add ${missing} first (foreman agent add ${missing}).`
-          : `${theme.symbols.cross} Roles run on Claude Code or Codex: add both to switch between them (foreman agent add codex).`,
+          : `${theme.symbols.cross} Roles run on Claude Code, Codex or Gemini CLI: add two to switch between them (foreman agent add codex).`,
       );
       return;
     }
@@ -398,7 +398,7 @@ export function TeamPage({ onLeave, onEditingChange, height }: TeamPageProps): J
       runtimes,
     );
     if (!target) {
-      const why = infos.some((i) => i.registered) ? "doesn't run on Claude Code or Codex" : "has no registered agent to switch";
+      const why = infos.some((i) => i.registered) ? "doesn't run on Claude Code, Codex or Gemini CLI" : "has no registered agent to switch";
       setNotice(`${theme.symbols.cross} ${oneLine(t.label)} ${why}.`);
       return;
     }

@@ -38,6 +38,7 @@ import {
   type AcpSpawnLike,
   type SpawnAcpMediatedOptions,
 } from './acp-mediated-spawn.js'
+import type { AcpMcpServer } from './agent-instance.js'
 import type { MediatorLike } from './codex-mediator-connector.js'
 import type { JsonRpcStdioBridgeHooks } from './jsonrpc-stdio-bridge.js'
 
@@ -66,6 +67,10 @@ export interface RunAcpMediatedTaskOptions {
   timeoutMs?: number
   /** Env overrides forwarded to the child process. */
   env?: NodeJS.ProcessEnv
+  /** See SpawnAcpMediatedOptions. */
+  policyFallback?: SpawnAcpMediatedOptions['policyFallback']
+  /** MCP servers for this session; an instance's own Foreman server. */
+  mcpServers?: AcpMcpServer[]
   /** Optional bridge hooks (e.g. onNotification to surface
    *  `session/update` streamed deltas to the operator). */
   hooks?: JsonRpcStdioBridgeHooks
@@ -151,6 +156,7 @@ export async function runAcpMediatedTask(
       argv: opts.argv,
       capabilities: opts.capabilities,
       protocolVersion: opts.protocolVersion,
+      ...(opts.policyFallback ? { policyFallback: opts.policyFallback } : {}),
       hooks: {
         ...opts.hooks,
         onTransportError(err) {
@@ -171,14 +177,14 @@ export async function runAcpMediatedTask(
     stage = 'session'
     // ACP `session/new` requires:
     //   - cwd: absolute path (the session's working directory)
-    //   - mcpServers: array of MCP server configs (empty is fine — we
-    //     don't bridge agent-side MCP servers from here)
+    //   - mcpServers: array of MCP server configs (empty is fine: the
+    //     agent keeps the ones in its own config)
     // (https://agentclientprotocol.com/protocol/schema.md)
     const sessionCwd = opts.cwd ?? process.cwd()
     const newSessionResp = (await Promise.race([
       session.bridge.request('session/new', {
         cwd: sessionCwd,
-        mcpServers: [],
+        mcpServers: opts.mcpServers ?? [],
       }),
       timeoutPromise,
     ])) as { sessionId?: string }

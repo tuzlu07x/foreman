@@ -35,7 +35,7 @@ const KNOWN: readonly Known[] = [
   {
     test: /\b401\b|invalid[ _-]?(x-)?api[ _-]?key|failed to authenticate|authentication_error|not logged in|please (run )?.*login/i,
     explain: ({ runtime, program }) => {
-      const login = runtime === "codex" ? "codex login" : "claude auth login";
+      const login = runtime === "codex" ? "codex login" : runtime === "gemini-cli" ? "gemini" : "claude auth login";
       return {
         en: {
           reason: `${program} couldn't sign in (401).`,

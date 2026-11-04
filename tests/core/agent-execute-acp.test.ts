@@ -222,6 +222,69 @@ describe('executeWriteDirective — ACP routing branch', () => {
     expect(env).toMatchObject({ FOREMAN_SPAWNED_BY: 'hermes', FOREMAN_SPAWN_DEPTH: '1', OTEL_RESOURCE_ATTRIBUTES: 'task=1' })
   })
 
+  it('a Gemini role starts with its policy and model, its own server and role, and the risk-based fallback', async () => {
+    const h = makeFakeChild()
+    const mediator = mediatorReturning('allowed')
+    const server = { name: 'foreman', command: 'node', args: ['mcp-stdio', '--source', 'analyst'], env: [] }
+    const entry = { ...acpEntry('gemini-cli'), acp_command: { command: 'gemini', args: ['--acp'] }, task_model_flag: '--model' } as AgentEntry
+    const promise = executeWriteDirective(
+      {
+        agentId: 'analyst',
+        message: 'read the numbers',
+        entry,
+        modelVersion: 'gemini-pro',
+        launch: { args: ['--policy', '/state/gemini-policy'], env: {}, taskPrefix: 'You are the Analyst.\n\n', acpMcpServers: [server] },
+      },
+      { mediator, acpSpawnImpl: h.spawn, telegramBotToken: undefined, telegramChatId: undefined },
+    )
+    await tick()
+    h.emit({ jsonrpc: '2.0', id: JSON.parse(h.lines[0]!).id, result: { protocolVersion: 1 } })
+    await tick()
+    const session = JSON.parse(h.lines[1]!)
+    expect(session.params.mcpServers).toEqual([server])
+    h.emit({ jsonrpc: '2.0', id: session.id, result: { sessionId: 's1' } })
+    await tick()
+    const prompt = JSON.parse(h.lines[2]!)
+    expect(prompt.params.prompt[0].text).toBe('You are the Analyst.\n\nread the numbers')
+    expect(vi.mocked(h.spawn).mock.calls[0]!.slice(0, 2)).toEqual(['gemini', ['--acp', '--policy', '/state/gemini-policy', '--model', 'gemini-pro']])
+    // A tool call: risk-based, like Claude Code under its hook.
+    h.emit({
+      jsonrpc: '2.0',
+      id: 99,
+      method: 'session/request_permission',
+      params: { sessionId: 's1', toolCall: { toolCallId: 't', kind: 'read', title: 'notes.txt' }, options: [{ optionId: 'ok', name: 'Allow', kind: 'allow_once' }] },
+    })
+    await tick(3)
+    expect(vi.mocked(mediator.handleRequest).mock.calls[0]![0].policyFallback).toEqual({ effect: 'allow', source: 'acp:risk-based' })
+    h.emit({ jsonrpc: '2.0', id: prompt.id, result: { stopReason: 'end_turn' } })
+    await promise
+  })
+
+  it('other ACP agents keep asking about what no rule covers', async () => {
+    const h = makeFakeChild()
+    const mediator = mediatorReturning('allowed')
+    const promise = executeWriteDirective(
+      { agentId: 'hermes', message: 'plan', entry: acpEntry('hermes') },
+      { mediator, acpSpawnImpl: h.spawn, telegramBotToken: undefined, telegramChatId: undefined },
+    )
+    await tick()
+    h.emit({ jsonrpc: '2.0', id: JSON.parse(h.lines[0]!).id, result: { protocolVersion: 1 } })
+    await tick()
+    h.emit({ jsonrpc: '2.0', id: JSON.parse(h.lines[1]!).id, result: { sessionId: 's1' } })
+    await tick()
+    const prompt = JSON.parse(h.lines[2]!)
+    h.emit({
+      jsonrpc: '2.0',
+      id: 99,
+      method: 'session/request_permission',
+      params: { sessionId: 's1', toolCall: { toolCallId: 't', kind: 'read', title: 'notes.txt' }, options: [{ optionId: 'ok', name: 'Allow', kind: 'allow_once' }] },
+    })
+    await tick(3)
+    expect(vi.mocked(mediator.handleRequest).mock.calls[0]![0].policyFallback).toBeUndefined()
+    h.emit({ jsonrpc: '2.0', id: prompt.id, result: { stopReason: 'end_turn' } })
+    await promise
+  })
+
   it('does NOT route through ACP when entry lacks approval_adapter', async () => {
     // Legacy entry without ACP fields — falls through to the
     // task_command_template branch. Missing template → unsupported.
