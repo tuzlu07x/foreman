@@ -7,6 +7,7 @@ import { Command } from "commander";
 import { foremanCliArgv } from "../core/agent-instance.js";
 import { defaultHookCommand, installPreToolUseHook } from "../core/agent-hook.js";
 import { resolveAgentSettingsPath } from "../core/agent-permissions.js";
+import { pickMcpConfigPath } from "../core/agent-add-flow.js";
 import { probeGateway, gatewayHolder } from "../core/gateway.js";
 import { loadLlmConfig, saveLlmConfig } from "../core/llm/config.js";
 import { approvalButtonSigner, approvalSigner } from "../core/approval-token.js";
@@ -59,6 +60,11 @@ export interface QuickstartIo {
 export interface QuickstartSteps {
   /** Who runs Foreman right now, or null. */
   gatewayRunning(): string | null;
+  /** FOREMAN_HOME, when it's set. A hook in Claude Code's settings serves
+   *  every session and wouldn't know this home. */
+  customHome(): string | null;
+  /** What guarding Claude Code changes, as `path: change` lines. */
+  guardChanges(): string[];
   connectClaude(): Promise<void>;
   /** Register Claude Code; with `wire`, also add Foreman to its settings. */
   guardClaude(wire: boolean): Promise<void>;
@@ -69,9 +75,11 @@ export interface QuickstartSteps {
   firstApproval(): Promise<FirstApproval>;
 }
 
+/** Both questions decide something real (your settings, who gets your
+ *  approvals), so a stray Enter is a no. */
 function saidYes(answer: string): boolean {
   const a = answer.trim().toLowerCase();
-  return a === "" || a === "y" || a === "yes" || a === "e" || a === "evet";
+  return a === "y" || a === "yes" || a === "e" || a === "evet";
 }
 
 async function connectTelegram(io: QuickstartIo, steps: QuickstartSteps): Promise<boolean> {
@@ -105,7 +113,7 @@ async function connectTelegram(io: QuickstartIo, steps: QuickstartSteps): Promis
     }
     if (found.status === "ok" && found.value) {
       const chat = found.value;
-      if (!saidYes(await io.ask(`  Found ${bold(chat.name)}. Approvals go to this chat. Is this you? (Y/n) `))) {
+      if (!saidYes(await io.ask(`  Found ${bold(chat.name)}. Approvals go to this chat. Is this you? (y/N) `))) {
         io.say("  Send your bot a message from your own account, then press Enter here.");
         await io.ask("");
         continue;
@@ -147,20 +155,25 @@ export async function runQuickstart(
     return 1;
   }
   io.say(`  ${green("✓")} Connected. Foreman uses your own Claude Code and holds no Claude login.`);
-  const wire = saidYes(
-    await io.ask("  Guard Claude Code? Foreman adds its hook and MCP server to Claude Code's settings. (Y/n) "),
-  );
+  let wire = false;
+  const home = steps.customHome();
+  if (home) {
+    io.say(dim(`  Using the separate home ${home}, so Claude Code's own settings stay as they are.`));
+  } else {
+    io.say("  Foreman can guard every Claude Code session on this computer. That changes:");
+    for (const change of steps.guardChanges()) io.say(`    ${change}`);
+    io.say(dim("  Risky calls then wait for your OK, and are denied while Foreman isn't running."));
+    io.say(dim("  Undo any time: foreman agent remove claude-code"));
+    wire = saidYes(await io.ask("  Guard Claude Code now? Type y to do it, or press Enter to skip: "));
+  }
   try {
     await steps.guardClaude(wire);
   } catch (err) {
     io.say(`  ${red("✗")} ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
-  io.say(
-    wire
-      ? `  ${green("✓")} Claude Code now asks Foreman before it acts.`
-      : dim("  Skipped. When you're ready: foreman agent rewire claude-code, then foreman agent hook install claude-code"),
-  );
+  if (wire) io.say(`  ${green("✓")} Claude Code now asks Foreman before it acts.`);
+  else if (!home) io.say(dim("  Skipped. When you're ready: foreman agent rewire claude-code, then foreman agent hook install claude-code"));
 
   io.say(bold("\n2/3 Telegram"));
   if (steps.telegramReady()) {
@@ -260,11 +273,17 @@ export const quickstartCommand = new Command("quickstart")
     const store = new SecretStore(db, masterKey);
     const registry = new RegistryService(db);
     const signers = { signApproval: approvalSigner(masterKey), signButton: approvalButtonSigner(masterKey) };
+    const claudeEntry = () => loadActiveRegistry().doc.agents.find((a) => a.id === "claude-code");
     const code = await runQuickstart(terminalIo(), {
       gatewayRunning: () => {
         const gateway = probeGateway(paths.configDir);
         return gateway.state === "none" ? null : gatewayHolder(gateway);
       },
+      customHome: () => process.env.FOREMAN_HOME ?? null,
+      guardChanges: () => [
+        `${resolveAgentSettingsPath(claudeEntry()?.config_paths ?? [])}: adds Foreman's hook`,
+        `${pickMcpConfigPath(claudeEntry()!) ?? "Claude Code's config"}: adds Foreman's MCP server`,
+      ],
       connectClaude: async () => {
         await connectClaudeCode(paths.llmConfigPath);
         const config = loadLlmConfig(paths.llmConfigPath);
@@ -284,9 +303,8 @@ export const quickstartCommand = new Command("quickstart")
           if (added !== 0) throw new Error("Foreman couldn't add Claude Code. Run: foreman agent add claude-code");
         }
         if (!wire) return;
-        const entry = loadActiveRegistry().doc.agents.find((a) => a.id === "claude-code");
         installPreToolUseHook({
-          settingsPath: resolveAgentSettingsPath(entry?.config_paths ?? []),
+          settingsPath: resolveAgentSettingsPath(claudeEntry()?.config_paths ?? []),
           hookCommand: defaultHookCommand("claude-code"),
         });
       },

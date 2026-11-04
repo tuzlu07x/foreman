@@ -3,7 +3,7 @@ import { type QuickstartIo, type QuickstartSteps, runQuickstart } from "../../sr
 
 const CHAT = { chatId: "42", name: "Fatih" };
 
-function harness(over: Partial<QuickstartSteps> = {}, answers: string[] = [], tokens: string[] = ["good"]) {
+function harness(over: Partial<QuickstartSteps> = {}, answers: string[] = ["", "y"], tokens: string[] = ["good"]) {
   const lines: string[] = [];
   const io: QuickstartIo = {
     say: (line) => lines.push(line),
@@ -13,6 +13,8 @@ function harness(over: Partial<QuickstartSteps> = {}, answers: string[] = [], to
   };
   const steps: QuickstartSteps = {
     gatewayRunning: () => null,
+    customHome: () => null,
+    guardChanges: () => ["/home/me/.claude/settings.json: adds Foreman's hook"],
     connectClaude: vi.fn(async () => undefined),
     guardClaude: vi.fn(async () => undefined),
     telegramReady: () => false,
@@ -31,20 +33,34 @@ function harness(over: Partial<QuickstartSteps> = {}, answers: string[] = [], to
 
 describe("foreman quickstart", () => {
   it("goes from Claude Code to Telegram to a first approval card", async () => {
-    const h = harness();
+    const h = harness({}, ["y", "y"]);
     expect(await runQuickstart(h.io, h.steps)).toBe(0);
     expect(h.steps.guardClaude).toHaveBeenCalledWith(true);
+    expect(h.text()).toContain("settings.json: adds Foreman's hook");
+    expect(h.text()).toContain("foreman agent remove claude-code");
     expect(h.steps.saveTelegram).toHaveBeenCalledWith("good", "42");
     expect(h.steps.firstApproval).toHaveBeenCalledOnce();
     expect(h.text()).toContain("Blocked");
     expect(h.text()).toContain("foreman start");
   });
 
-  it("says how to say no to touching Claude Code's settings, and goes on", async () => {
-    const h = harness({}, ["n"]);
+  // The real test: a stray Enter put Foreman in the real Claude Code settings.
+  it("leaves Claude Code's settings alone on a bare Enter, and goes on", async () => {
+    const h = harness({}, ["", "y"]);
     expect(await runQuickstart(h.io, h.steps)).toBe(0);
     expect(h.steps.guardClaude).toHaveBeenCalledWith(false);
     expect(h.text()).toContain("foreman agent hook install claude-code");
+  });
+
+  // ...and that hook pointed at another home than the card went through.
+  it("never asks to touch Claude Code's settings from a separate home", async () => {
+    const asked: string[] = [];
+    const h = harness({ customHome: () => "/tmp/test-home" });
+    const io = { ...h.io, ask: async (q: string) => (asked.push(q), "y") };
+    expect(await runQuickstart(io, h.steps)).toBe(0);
+    expect(h.steps.guardClaude).toHaveBeenCalledWith(false);
+    expect(asked.some((q) => q.includes("Guard Claude Code"))).toBe(false);
+    expect(h.text()).toContain("/tmp/test-home");
   });
 
   it("won't run beside a running Foreman: it couldn't see the new channel", async () => {
@@ -62,19 +78,19 @@ describe("foreman quickstart", () => {
   });
 
   it("gives a mistyped token two more chances", async () => {
-    const h = harness({}, [], ["bad", "bad", "good"]);
+    const h = harness({}, undefined, ["bad", "bad", "good"]);
     expect(await runQuickstart(h.io, h.steps)).toBe(0);
     expect(h.steps.checkBot).toHaveBeenCalledTimes(3);
   });
 
   it("gives up after three bad tokens, without saving one", async () => {
-    const h = harness({}, [], ["a", "b", "c"]);
+    const h = harness({}, undefined, ["a", "b", "c"]);
     expect(await runQuickstart(h.io, h.steps)).toBe(1);
     expect(h.steps.saveTelegram).not.toHaveBeenCalled();
   });
 
   it("uses a chat only once you confirm it's yours", async () => {
-    const h = harness({}, ["", "n", ""]);
+    const h = harness({}, ["", "n", "", "y"]);
     const first = { status: "ok", value: { chatId: "666", name: "Stranger" } } as const;
     const second = { status: "ok", value: CHAT } as const;
     h.steps.findChat = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
