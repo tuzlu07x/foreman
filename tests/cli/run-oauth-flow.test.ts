@@ -85,9 +85,9 @@ describe("rewriteForHeadless", () => {
     ).toBe("hermes auth add openai-codex --type oauth");
   });
 
-  it("adds --headless to `foreman llm login <provider>`", () => {
+  it("adds --headless to `foreman llm login openai` only", () => {
     expect(rewriteForHeadless("foreman llm login anthropic")).toBe(
-      "foreman llm login anthropic --headless",
+      "foreman llm login anthropic",
     );
     expect(rewriteForHeadless("foreman llm login openai")).toBe(
       "foreman llm login openai --headless",

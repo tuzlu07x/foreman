@@ -256,7 +256,7 @@ credentials:
       writeOAuthYaml('gemini')
       const r = checkLlmCredentials()
       expect(r.status).toBe('warn')
-      expect(r.message).toMatch(/Foreman only supports OAuth for anthropic \+ openai/)
+      expect(r.message).toMatch(/Foreman only supports OAuth for openai/)
       expect(r.remediation).toContain('api_key')
     })
 
