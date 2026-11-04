@@ -906,7 +906,7 @@ describe('services step', () => {
     expect(w.secretStore.get('telegram-bot-token')).toBe(FAKE_TELEGRAM_TOKEN)
     expect(w.frame()).not.toContain(FAKE_TELEGRAM_TOKEN)
     // No chat id: Telegram is not turned on half-configured.
-    await w.until(loose('telegram (no chat id): foreman notify enable telegram --chat-id <id>'))
+    await w.until(loose('telegram (no chat id): foreman notify enable telegram'))
     await w.press('y', 'Integrations ▸ optional')
     expect(loadNotifyConfig(w.services.notifyConfigPath).channels.telegram?.enabled).toBe(false)
   })

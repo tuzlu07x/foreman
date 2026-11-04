@@ -220,6 +220,17 @@ export function channelConfig(
 }
 
 /** Append `channel` to the routes for `levels` (creating them if absent). */
+/** Levels a newly connected chat app receives. */
+export const NEW_CHANNEL_LEVELS: readonly NotificationLevel[] = ['critical', 'warning', 'risk_deny', 'budget_alert', 'summary']
+
+/** A channel no level routes to would receive nothing: the default routing
+ *  names Telegram only, so a Slack or Discord you set up got no approval,
+ *  alert or digest. A channel you routed yourself keeps your routing. */
+export function routeNewChannel(config: NotifyConfig, channel: string): void {
+  const routed = new Set(Object.values(config.routing).flatMap((r) => r?.channels ?? []))
+  if (!routed.has(channel)) addChannelToRoutes(config, channel, NEW_CHANNEL_LEVELS)
+}
+
 export function addChannelToRoutes(
   config: NotifyConfig,
   channel: string,

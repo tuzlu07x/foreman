@@ -30,6 +30,19 @@ All notable changes to Foreman are documented here. The format follows
   to the agent, which used to ask for an API key and then report that it
   had none. Step 1 says Claude Code and Codex need a provider, and the
   agent step pre-checks the ones this machine has.
+- **The Services page really connects a chat app.** `n` used to store the
+  token and say "configured", with the channel still off, so nothing was
+  ever sent. It now walks you through Telegram, Slack or Discord: it checks
+  the token with the app, finds your Telegram chat and asks you to confirm
+  it, gives Discord's invite link, optionally turns on two-way Slack and
+  Discord, turns the channel on and sends a test message. `t` sends another
+  test, `w` shows the full guide, and removing an app turns its channel off.
+- **Chat apps tell you what's wrong.** `foreman notify test` says *The bot
+  isn't in that channel: type /invite @your-bot* instead of raw HTTP and
+  JSON. `foreman notify enable` checks the token and routes Slack and
+  Discord, which got no approvals until you routed them by hand, and finds
+  your Telegram chat so `--chat-id` is optional. The guides are right too:
+  Slack's skipped inviting the bot, Discord's skipped adding it to a server.
 
 ## [2.3.2] - 2026-10-01
 

@@ -184,7 +184,7 @@ describe('buildNotifyConfigFromWizard — never enables a half-configured channe
     expect(result.wiredChannels).toEqual([])
     expect(result.next.channels.telegram?.enabled).toBe(false)
     expect(result.unwiredChannels).toEqual([
-      { channel: 'telegram', missing: 'chat id', finish: 'foreman notify enable telegram --chat-id <id>' },
+      { channel: 'telegram', missing: 'chat id', finish: 'foreman notify enable telegram' },
     ])
   })
 
