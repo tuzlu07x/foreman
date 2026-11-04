@@ -107,6 +107,8 @@ export interface ForemanCommandContext {
    *  Only in-process owner surfaces set this; the MCP path never does,
    *  and nothing an agent sends can turn it on. */
   trustedOwner?: boolean;
+  /** Control rows a hand-off must wait for: the earlier steps of a plan. */
+  after?: readonly number[];
   /** The owner allowed this exact command in a Foreman approval (#656): a
    *  command an agent relayed that changes Foreman. Satisfies the owner
    *  check that `source_user` used to (an agent can send any id it
@@ -186,6 +188,8 @@ export interface ForemanCommandResult {
   /** Text body to send back to the user. Multi-line is fine; channels
    *  fit ~4000 chars on Telegram, less on Discord. Keep replies tight. */
   text: string;
+  /** The control row it queued, if any. */
+  controlId?: number;
   /** Stable code for failures so callers can branch on category. */
   errorCode?:
     | "UNKNOWN_COMMAND"
@@ -494,7 +498,7 @@ function isSentenceNotCommand(command: string, args: readonly string[], ctx: For
 
 /** The approval a chat plan asks for (mediated like a tool call). */
 export const CHAT_PLAN_TOOL = "foreman_plan";
-export type ChatPlan = { target: string; task: string }[];
+export type ChatPlan = { target: string; task: string; after?: string[] }[];
 export interface PlanAsker {
   sourceAgent: string;
   sourceUser?: string;
@@ -510,9 +514,14 @@ export function planApprovalNote(sourceAgent: string): string {
   return `I've sent this plan for your approval. ${where}; nothing starts before that.`;
 }
 
+/** Who does a hand-off, and who it waits for. */
+export function planLabel(p: ChatPlan[number]): string {
+  return p.after?.length ? `${p.target} (after ${p.after.join(", ")})` : p.target;
+}
+
 /** The plan as the chat shows it, numbered, one line per hand-off. */
-export function formatPlan(plan: readonly { target: string; task: string }[]): string {
-  return plan.map((p, i) => `${i + 1}. ${p.target}: ${p.task.length > 300 ? `${p.task.slice(0, 299)}…` : p.task}`).join("\n");
+export function formatPlan(plan: ChatPlan): string {
+  return plan.map((p, i) => `${i + 1}. ${planLabel(p)}: ${p.task.length > 300 ? `${p.task.slice(0, 299)}…` : p.task}`).join("\n");
 }
 
 /**
@@ -529,14 +538,18 @@ export async function handOutPlan(
   opts: { approvalId: string; logEvent: (eventType: string, payload: unknown) => void },
 ): Promise<string[]> {
   const lines: string[] = [];
+  const queued = new Map<string, number>();
   for (const p of plan) {
     const args = [p.target, p.task];
+    const after = (p.after ?? []).flatMap((target) => queued.get(target) ?? []);
     const r = await router.dispatch("assign", args, {
       ...ctx,
       sourceAgent: who.sourceAgent,
       ...(who.sourceUser ? { sourceUser: who.sourceUser } : {}),
       trustedOwner: true,
+      ...(after.length > 0 ? { after } : {}),
     });
+    if (r.controlId !== undefined) queued.set(p.target, r.controlId);
     opts.logEvent("foreman:command", {
       command: "assign",
       args,
@@ -1613,6 +1626,7 @@ function enqueueMutating(
     // Use the resolved value (may be the telegram-chat-id fallback)
     // so the drain handler sees a consistent user id for audit/relay.
     sourceUser: effectiveSourceUser,
+    ...(ctx.after ? { after: ctx.after } : {}),
   });
   // "tracking id" rather than "queued id" — the latter reads like the
   // request is stuck waiting, but in practice the drain handler picks
@@ -1621,6 +1635,7 @@ function enqueueMutating(
   const includeId = opts.includeQueueId !== false;
   return {
     ok: true,
+    controlId: enq.id,
     text: includeId
       ? `${opts.successText} (tracking id=${enq.id})`
       : opts.successText,

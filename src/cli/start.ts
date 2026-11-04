@@ -35,6 +35,7 @@ import { ChatPrimaryService } from "../core/chat-primary.js";
 import {
   ControlChannel,
   ControlDrainPoller,
+  maxParallelTasks,
   type ControlHandler,
   type ControlHandlerOutcome,
 } from "../core/control-channel.js";
@@ -54,6 +55,7 @@ import {
   ForemanCommandRouter,
   planApprovalNote,
   handOutPlan,
+  planLabel,
   plainTextRefusal,
   registerBuiltinCommands,
   type ChatPlan,
@@ -709,7 +711,7 @@ export function startForeman(
     plan: ChatPlan,
     who: PlanAsker,
   ): Promise<string> => {
-    const listed = plan.map((p) => `${p.target}: ${p.task.slice(0, 300)}`);
+    const listed = plan.map((p) => `${planLabel(p)}: ${p.task.slice(0, 300)}`);
     void (async () => {
       let decision: "allowed" | "denied" = "denied";
       let approvalId = "";
@@ -1769,12 +1771,14 @@ export function startForeman(
               }\n`,
             );
           }
-          delegationLoop.end();
+          delegationLoop.end(row.id);
         }
       },
     ],
   ]);
-  const controlPoller = new ControlDrainPoller(controlChannel, controlHandlers);
+  const controlPoller = new ControlDrainPoller(controlChannel, controlHandlers, {
+    maxTasks: maxParallelTasks(),
+  });
   // The drain runs in the gateway only: two would spawn every delegated
   // task twice. An attached TUI's console enqueues; the gateway drains.
   if (!attach) controlPoller.start();

@@ -180,6 +180,8 @@ export const controlCommands = sqliteTable(
       .notNull()
       .default("pending"),
     error: text("error"),
+    /** Control rows that must finish first, as a JSON array (control-channel.ts). */
+    afterIds: text("after_ids"),
     createdAt: integer("created_at").notNull(),
     appliedAt: integer("applied_at"),
   },

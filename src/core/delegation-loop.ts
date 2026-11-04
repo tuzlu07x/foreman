@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, notInArray, ne, sql } from "drizzle-orm";
 import type { ForemanDb } from "../db/client.js";
 import {
   controlCommands,
@@ -146,10 +146,10 @@ export class DelegationLoop {
   readonly maxNudges: number;
   readonly maxChainDepth: number;
   readonly maxChainRuns: number;
-  /** The control row the drain is running right now: its run is not
-   *  "owed", and the row, though still `pending` in the table until the
-   *  drain records it, is not waiting either. */
-  private inFlightControlId: number | null = null;
+  /** The control rows running right now: their runs are not "owed", and
+   *  the rows, though still `pending` in the table until the drain records
+   *  them, are not waiting either. */
+  private readonly inFlightControlIds = new Set<number>();
   private org: { doc: OrgDoc | null; at: number } | null = null;
   /** Reports already handled (the mirror retries a pass after a 429). */
   private readonly seenReports = new Set<string>();
@@ -171,7 +171,7 @@ export class DelegationLoop {
 
   /** The drain starts running `controlId`. */
   begin(controlId: number): void {
-    this.inFlightControlId = controlId;
+    this.inFlightControlIds.add(controlId);
   }
 
   /** The drain is done with a `write` row, whatever happened to it: settle
@@ -189,9 +189,9 @@ export class DelegationLoop {
     this.reconcile(link.followup ? link.threadId : link.parentThreadId);
   }
 
-  /** The drain finished the row it was running. */
-  end(): void {
-    this.inFlightControlId = null;
+  /** The drain finished running `controlId`. */
+  end(controlId: number): void {
+    this.inFlightControlIds.delete(controlId);
   }
 
   /** How the drain should record the run for this row. */
@@ -346,7 +346,7 @@ export class DelegationLoop {
       .where(and(eq(delegations.targetAgent, agent), isNotNull(delegations.threadId), isNull(delegations.outputReceivedAt), lte(delegations.startedAt, message.ts)))
       .orderBy(desc(delegations.startedAt))
       .all()
-      .find((r) => r.controlCommandId === null || r.controlCommandId !== this.inFlightControlId);
+      .find((r) => r.controlCommandId === null || !this.inFlightControlIds.has(r.controlCommandId));
     if (!run?.threadId) return;
     this.tracker.recordOutputReceived({ delegationId: run.id, spawnOutcome: "reported", resultText: message.text });
     this.reconcile(run.threadId);
@@ -486,7 +486,7 @@ export class DelegationLoop {
           eq(controlCommands.command, "write"),
           eq(controlCommands.status, "pending"),
           sql`lower(${controlCommands.sourceAgent}) = ${agent}`,
-          ...(this.inFlightControlId !== null ? [ne(controlCommands.id, this.inFlightControlId)] : []),
+          ...(this.inFlightControlIds.size > 0 ? [notInArray(controlCommands.id, [...this.inFlightControlIds])] : []),
         ),
       )
       .all();
@@ -509,7 +509,7 @@ export class DelegationLoop {
         and(
           eq(delegationFollowups.threadId, threadId),
           eq(controlCommands.status, "pending"),
-          ...(this.inFlightControlId !== null ? [ne(controlCommands.id, this.inFlightControlId)] : []),
+          ...(this.inFlightControlIds.size > 0 ? [notInArray(controlCommands.id, [...this.inFlightControlIds])] : []),
         ),
       )
       .get();
@@ -623,7 +623,7 @@ export class DelegationLoop {
       .from(delegations)
       .where(and(isNotNull(delegations.threadId), isNull(delegations.outputReceivedAt), lt(delegations.startedAt, cutoff)))
       .all()
-      .filter((r) => r.controlCommandId === null || r.controlCommandId !== this.inFlightControlId);
+      .filter((r) => r.controlCommandId === null || !this.inFlightControlIds.has(r.controlCommandId));
     const seen = new Set<string>();
     for (const run of owed) {
       const root = run.threadId ? this.tracker.find(run.threadId) : null;

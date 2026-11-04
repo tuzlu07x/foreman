@@ -1,4 +1,4 @@
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { ForemanDb } from "../db/client.js";
 import {
   controlCommands,
@@ -38,6 +38,8 @@ export interface EnqueueInput {
   args: string[];
   sourceAgent: string;
   sourceUser?: string | undefined;
+  /** Control rows that must finish before this one starts. */
+  after?: readonly number[];
 }
 
 export interface EnqueueResult {
@@ -54,12 +56,54 @@ export type ControlHandler = (
   row: ControlCommand,
 ) => Promise<ControlHandlerOutcome> | ControlHandlerOutcome;
 
+export interface PumpOptions {
+  /** Tasks running at once. */
+  maxTasks?: number;
+  /** A run ended with an error nothing else could report. */
+  onError?: (err: unknown) => void;
+}
+
+/** Team tasks at once, unless FOREMAN_MAX_PARALLEL_TASKS says otherwise. */
+export const DEFAULT_MAX_PARALLEL_TASKS = 4;
+/** How far down the queue `pump` looks for something it can start. */
+const PUMP_WINDOW = 64;
+
+/** FOREMAN_MAX_PARALLEL_TASKS, or the default. 1 runs tasks one at a time. */
+export function maxParallelTasks(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env.FOREMAN_MAX_PARALLEL_TASKS);
+  return Number.isInteger(n) && n >= 1 ? n : DEFAULT_MAX_PARALLEL_TASKS;
+}
+
+/** The agent a task is for: its tasks run in order, others alongside. Null
+ *  for a command that isn't a task. */
+function taskLane(row: ControlCommand): string | null {
+  if (row.command !== "write") return null;
+  try {
+    const [agent] = JSON.parse(row.args) as unknown[];
+    return typeof agent === "string" ? agent.toLowerCase() : "";
+  } catch {
+    return "";
+  }
+}
+
+function parseAfterIds(value: string | null): number[] {
+  if (!value) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((id): id is number => Number.isInteger(id)) : [];
+  } catch {
+    return [];
+  }
+}
+
 export class ControlChannel {
   /** Commands that ran but whose status write failed, by row id. */
   private readonly unrecorded = new Map<
     number,
     { row: ControlCommand; outcome: ControlHandlerOutcome; durationMs: number }
   >();
+  /** What `pump` started and hasn't finished. */
+  private readonly running = new Map<number, { lane: string | null; done: Promise<void> }>();
 
   // #498 — Optional bus injection so the writer side (mcp-stdio /
   // foreman write CLI) can announce enqueue events for the TUI. Reader
@@ -83,6 +127,7 @@ export class ControlChannel {
         sourceAgent: input.sourceAgent,
         sourceUser: input.sourceUser ?? null,
         status: "pending",
+        afterIds: input.after && input.after.length > 0 ? JSON.stringify(input.after) : null,
         createdAt: now,
       })
       .returning({ id: controlCommands.id })
@@ -106,7 +151,7 @@ export class ControlChannel {
       .select()
       .from(controlCommands)
       .where(eq(controlCommands.status, "pending"))
-      .orderBy(asc(controlCommands.createdAt))
+      .orderBy(asc(controlCommands.createdAt), asc(controlCommands.id))
       .limit(limit)
       .all();
   }
@@ -162,6 +207,65 @@ export class ControlChannel {
     return rows[0] ?? null;
   }
 
+  /** Start what can start now and return, without waiting for it: the
+   *  gateway's loop. Tasks for different agents run side by side, up to
+   *  `maxTasks`; one agent's tasks stay in order; a task with `after` waits
+   *  for those rows; a command that isn't a task (`stop`, `llm-switch`…)
+   *  waits for nothing. Returns how many it started. */
+  pump(handlers: Map<string, ControlHandler>, opts: PumpOptions = {}): number {
+    const maxTasks = opts.maxTasks ?? DEFAULT_MAX_PARALLEL_TASKS;
+    this.flushUnrecorded();
+    const lanes = new Set<string>();
+    let tasks = 0;
+    for (const { lane } of this.running.values()) {
+      if (lane === null) continue;
+      lanes.add(lane);
+      tasks++;
+    }
+    let started = 0;
+    for (const row of this.pending(PUMP_WINDOW)) {
+      if (this.running.has(row.id)) continue;
+      const lane = taskLane(row);
+      if (lane !== null) {
+        const taken = lanes.has(lane);
+        // A later task for this agent stays behind this one, started or not.
+        lanes.add(lane);
+        if (taken) continue;
+        const after = this.afterState(row);
+        if (after === "waiting") continue;
+        if (after !== "ready") {
+          this.record(row, { status: "rejected", error: after.error }, 0);
+          continue;
+        }
+        if (tasks >= maxTasks) continue;
+        tasks++;
+      }
+      const done = this.runRow(row, handlers)
+        .catch((err: unknown) => opts.onError?.(err))
+        .finally(() => this.running.delete(row.id));
+      this.running.set(row.id, { lane, done });
+      started++;
+    }
+    return started;
+  }
+
+  /** Resolves when everything `pump` started has finished. */
+  async settled(): Promise<void> {
+    await Promise.all([...this.running.values()].map((r) => r.done));
+  }
+
+  /** Whether the rows `row` waits for are done. One that failed means the
+   *  work it was to build on isn't there, so this one must not start. */
+  private afterState(row: ControlCommand): "ready" | "waiting" | { error: string } {
+    const ids = parseAfterIds(row.afterIds);
+    if (ids.length === 0) return "ready";
+    const rows = this.db.select().from(controlCommands).where(inArray(controlCommands.id, ids)).all();
+    if (rows.some((r) => r.status === "pending")) return "waiting";
+    const failed = rows.find((r) => r.status !== "applied");
+    if (!failed) return "ready";
+    return { error: `Not started: it was waiting for ${taskLane(failed) ?? `#${failed.id}`}, which didn't finish.` };
+  }
+
   /** Process every pending row using the provided handler map. Marks
    *  the row applied / failed / rejected based on the handler outcome.
    *  Unknown commands are rejected. Returns the count of processed
@@ -170,46 +274,52 @@ export class ControlChannel {
     handlers: Map<string, ControlHandler>,
     limit = 16,
   ): Promise<number> {
-    // Outcomes a previous drain could not write (#594): record them first.
-    // Their rows still read "pending", but the command already ran and must
-    // not run again (a delegated agent would be spawned twice).
+    this.flushUnrecorded();
+    const rows = this.pending(limit);
+    for (const row of rows) await this.runRow(row, handlers);
+    return rows.length;
+  }
+
+  /** Outcomes a previous drain could not write (#594): record them first.
+   *  Their rows still read "pending", but the command already ran and must
+   *  not run again (a delegated agent would be spawned twice). */
+  private flushUnrecorded(): void {
     for (const [id, done] of this.unrecorded) {
       this.record(done.row, done.outcome, done.durationMs);
       this.unrecorded.delete(id);
     }
-    const rows = this.pending(limit);
-    for (const row of rows) {
-      const handler = handlers.get(row.command);
-      const startedAt = Date.now();
-      let outcome: ControlHandlerOutcome;
-      if (!handler) {
-        outcome = {
-          status: "rejected",
-          error: `Unknown control command "${row.command}". Update foreman start to register a handler.`,
-        };
-      } else {
-        try {
-          outcome = await handler(row);
-        } catch (err) {
-          outcome = {
-            status: "failed",
-            error: err instanceof Error ? err.message : String(err),
-          };
-        }
-      }
-      const durationMs = Date.now() - startedAt;
+  }
+
+  private async runRow(row: ControlCommand, handlers: Map<string, ControlHandler>): Promise<void> {
+    const handler = handlers.get(row.command);
+    const startedAt = Date.now();
+    let outcome: ControlHandlerOutcome;
+    if (!handler) {
+      outcome = {
+        status: "rejected",
+        error: `Unknown control command "${row.command}". Update foreman start to register a handler.`,
+      };
+    } else {
       try {
-        this.record(row, outcome, durationMs);
+        outcome = await handler(row);
       } catch (err) {
-        // The command ran; only its status write failed (e.g. another
-        // process held the database past its busy timeout). Keep the
-        // outcome for the next drain instead of recording a false
-        // "failed" or running the command again.
-        this.unrecorded.set(row.id, { row, outcome, durationMs });
-        throw err;
+        outcome = {
+          status: "failed",
+          error: err instanceof Error ? err.message : String(err),
+        };
       }
     }
-    return rows.length;
+    const durationMs = Date.now() - startedAt;
+    try {
+      this.record(row, outcome, durationMs);
+    } catch (err) {
+      // The command ran; only its status write failed (e.g. another
+      // process held the database past its busy timeout). Keep the
+      // outcome for the next drain instead of recording a false
+      // "failed" or running the command again.
+      this.unrecorded.set(row.id, { row, outcome, durationMs });
+      throw err;
+    }
   }
 
   private record(
@@ -266,6 +376,8 @@ export class ControlChannel {
 
 export interface ControlDrainPollerOptions {
   intervalMs?: number;
+  /** Tasks running at once (see maxParallelTasks). */
+  maxTasks?: number;
   /** Told when a drain fails (e.g. another process held the database past
    *  its busy timeout); the next tick tries again. Defaults to stderr. */
   onError?: (message: string) => void;
@@ -273,9 +385,8 @@ export interface ControlDrainPollerOptions {
 
 export class ControlDrainPoller {
   private timer: NodeJS.Timeout | null = null;
-  private running = false;
-  private inFlight: Promise<void> | null = null;
   private readonly intervalMs: number;
+  private readonly maxTasks: number | undefined;
   private readonly onError: (message: string) => void;
 
   constructor(
@@ -284,6 +395,7 @@ export class ControlDrainPoller {
     opts: ControlDrainPollerOptions = {},
   ) {
     this.intervalMs = opts.intervalMs ?? 1500;
+    this.maxTasks = opts.maxTasks;
     this.onError =
       opts.onError ??
       ((message) => process.stderr.write(`foreman: ${message}\n`));
@@ -291,41 +403,36 @@ export class ControlDrainPoller {
 
   start(): void {
     if (this.timer) return;
-    const tick = async (): Promise<void> => {
-      if (this.running) return; // avoid overlapping ticks
-      this.running = true;
-      try {
-        await this.channel.drainPending(this.handlers);
-      } catch (err) {
-        // Unhandled, this rejection took `foreman start` down (#594).
-        this.onError(
-          `control channel drain failed, retrying on the next tick: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-      } finally {
-        this.running = false;
-      }
-    };
+    // Unhandled, a rejection here took `foreman start` down (#594).
+    const failed = (err: unknown): void =>
+      this.onError(
+        `control channel drain failed, retrying on the next tick: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
     this.timer = setInterval(() => {
-      if (this.running) return;
-      this.inFlight = tick().finally(() => {
-        this.inFlight = null;
-      });
+      try {
+        this.channel.pump(this.handlers, {
+          ...(this.maxTasks !== undefined ? { maxTasks: this.maxTasks } : {}),
+          onError: failed,
+        });
+      } catch (err) {
+        failed(err);
+      }
     }, this.intervalMs);
     // Don't keep the event loop alive solely on the poller — foreman
     // start has its own keepAlive interval.
     this.timer.unref?.();
   }
 
-  /** Stop polling and wait for a command that is already running, so the
-   *  database isn't closed underneath it on shutdown. */
+  /** Stop polling and wait for the commands already running, so the
+   *  database isn't closed underneath them on shutdown. */
   async stop(): Promise<void> {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
-    await this.inFlight?.catch(() => undefined);
+    await this.channel.settled().catch(() => undefined);
   }
 }
 

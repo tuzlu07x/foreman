@@ -299,6 +299,8 @@ export interface ChatTurn {
 
 /** How a proposed hand-off is written at the end of a reply. */
 export const ASSIGN_LINE_FORMAT = "ASSIGN <role or department id> :: <task>";
+/** The same line for a hand-off that needs other hand-offs to finish first. */
+export const ASSIGN_AFTER_FORMAT = "ASSIGN <id> after <id>,<id> :: <task>";
 export const MAX_PROPOSALS = 5;
 export const MAX_TASK_CHARS = 2000;
 
@@ -307,6 +309,8 @@ export interface AssignProposal {
   /** A role or department id from org.yaml. */
   target: string;
   task: string;
+  /** Earlier hand-offs of this plan that must finish first. */
+  after?: string[];
 }
 
 /** Role and department ids a plan may name. */
@@ -317,9 +321,11 @@ export function assignableTargets(team: TeamSnapshot | null): Set<string> {
 
 /**
  * Split a reply into the text for the user and the hand-offs it proposes
- * (`ASSIGN <target> :: <task>` lines). Only targets in `allowed` count, at
- * most MAX_PROPOSALS, each task one line and at most MAX_TASK_CHARS; every
- * ASSIGN line is taken out of the text whether it counts or not.
+ * (`ASSIGN <target> [after <a>,<b>] :: <task>` lines). Only targets in
+ * `allowed` count, at most MAX_PROPOSALS, each task one line and at most
+ * MAX_TASK_CHARS; every ASSIGN line is taken out of the text whether it
+ * counts or not. `after` keeps only targets of earlier lines, so a plan can
+ * never wait on itself.
  */
 export function parseAssignProposals(
   reply: string,
@@ -328,16 +334,19 @@ export function parseAssignProposals(
   const proposals: AssignProposal[] = [];
   const kept: string[] = [];
   for (const line of reply.split("\n")) {
-    const m = /^\s*[-*•]?\s*ASSIGN\s+([A-Za-z0-9._-]{1,64})\s*::\s*(.+?)\s*$/.exec(line);
+    const m = /^\s*[-*•]?\s*ASSIGN\s+([A-Za-z0-9._-]{1,64})(?:\s+after\s+([A-Za-z0-9._,\s-]{1,256}?))?\s*::\s*(.+?)\s*$/.exec(line);
     if (!m) {
       kept.push(line);
       continue;
     }
     const target = m[1]!;
-    const task = stripApprovalQuestion(m[2]!).slice(0, MAX_TASK_CHARS);
+    const task = stripApprovalQuestion(m[3]!).slice(0, MAX_TASK_CHARS);
     if (!task) continue;
+    const after = (m[2] ?? "")
+      .split(/[\s,]+/)
+      .filter((id) => id !== target && proposals.some((p) => p.target === id));
     if (allowed.has(target) && proposals.length < MAX_PROPOSALS && !proposals.some((p) => p.target === target && p.task === task)) {
-      proposals.push({ target, task });
+      proposals.push({ target, task, ...(after.length > 0 ? { after } : {}) });
     }
   }
   return { text: kept.join("\n").trim(), proposals };
@@ -424,6 +433,7 @@ export function buildOrchestratorPrompt(args: BuildPromptArgs): string {
         `  - Then, at the very end, one line per hand-off, exactly: ${ASSIGN_LINE_FORMAT}`,
         `  - Use only role or department ids from "Your team" below. At most ${MAX_PROPOSALS} lines. Prefer a department id or a lead when the work spans a team: the lead splits it further.`,
         "  - Each task must stand on its own: what to do, on what (repo URL, path), and what to report back.",
+        `  - Hand-offs run at the same time. When one needs another's result, list it later and write: ${ASSIGN_AFTER_FORMAT}. Keep work that can go side by side side by side, and don't let two roles change the same files at once.`,
         "  - Close by asking the user to approve the plan, in your text: never inside an ASSIGN line. Nothing starts before they approve.",
         "  - If you need one detail first (which repo? by when?), ask it instead, with no ASSIGN lines.",
         "Never write ASSIGN lines when the user only asks a question.",
