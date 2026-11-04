@@ -31,7 +31,7 @@ describe('model picker in the TUI', () => {
         commandRouter: {
           dispatch: async (verb: string, args: string[]) => {
             dispatched.push([verb, ...args])
-            return { ok: true, text: 'claude-code now runs claude-sonnet-5' }
+            return { ok: true, text: 'claude-code now runs claude-sonnet-5-5' }
           },
           listVerbs: () => ['model'],
         } as never,
@@ -42,12 +42,12 @@ describe('model picker in the TUI', () => {
     await m.press('m', 150)
     const frame = m.frame()
     expect(frame).toContain("claude-code's model (anthropic)")
-    expect(frame).toContain('claude-haiku-4-5 — fast, cheapest')
+    expect(frame).toContain('claude-haiku-5-5 — fast, cheapest')
     expect(frame).toContain('claude-fable-5-1 — most capable')
     await m.press('\u001B[B', 80) // ↓ to balanced
     await m.press('\r', 200)
-    expect(dispatched).toEqual([['model', 'claude-code', 'claude-sonnet-5']])
-    expect(m.frame()).toContain('claude-code now runs claude-sonnet-5')
+    expect(dispatched).toEqual([['model', 'claude-code', 'claude-sonnet-5-5']])
+    expect(m.frame()).toContain('claude-code now runs claude-sonnet-5-5')
   })
 
   it('Esc closes it without changing anything', async () => {

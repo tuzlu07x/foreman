@@ -19,7 +19,7 @@ export interface ModelPrice {
   cacheWrite?: number;
 }
 
-// List prices checked 2026-09-28 against each provider's pricing page.
+// List prices checked 2026-11-04 against each provider's pricing page.
 const PRICES: Record<string, ModelPrice> = {
   "claude-fable-5-1": { input: 10, output: 50, cacheRead: 0.25 },
   "claude-fable-5": { input: 10, output: 50 },
@@ -32,10 +32,13 @@ const PRICES: Record<string, ModelPrice> = {
   "claude-opus-4-6": { input: 5, output: 25 },
   "claude-opus-4-5": { input: 5, output: 25 },
   "claude-opus-4": { input: 15, output: 75 },
+  "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2 },
   "claude-sonnet-5": { input: 2, output: 10 },
   "claude-sonnet-4": { input: 3, output: 15 },
   "claude-3-7-sonnet": { input: 3, output: 15 },
   "claude-3-5-sonnet": { input: 3, output: 15 },
+  // Up to 100K tokens per prompt; $0.50 / $2.50 above that.
+  "claude-haiku-5-5": { input: 0.1, output: 0.5 },
   "claude-haiku-4": { input: 1, output: 5 },
   "claude-3-5-haiku": { input: 0.8, output: 4 },
   "gpt-6-astra": { input: 10, output: 50 },

@@ -95,7 +95,7 @@ export function brainPickerCursor(
 /** Model persisted when the user doesn't (or can't) pick one from the live
  *  list — e.g. discovery failed or the sign-in has no model list. */
 export const BRAIN_DEFAULT_MODELS: Record<BrainCloudProvider, string> = {
-  anthropic: registryDefault("anthropic", "claude-haiku-4-5"),
+  anthropic: registryDefault("anthropic", "claude-haiku-5-5"),
   openai: registryDefault("openai", "gpt-6-luna"),
   gemini: registryDefault("gemini", "gemini-3.5-flash-lite"),
 };

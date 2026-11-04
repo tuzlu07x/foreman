@@ -4,6 +4,7 @@ import {
   AnthropicLlmClient,
   calculateCostUsd,
   type AnthropicFetch,
+  modelTuning,
 } from "../../../src/core/llm/providers/anthropic.js";
 
 interface MockResponse {
@@ -144,7 +145,7 @@ describe("AnthropicLlmClient — call", () => {
     const body = JSON.parse(String(f.calls[0]!.init.body)) as {
       max_tokens: number;
     };
-    expect(body.max_tokens).toBeLessThanOrEqual(16);
+    expect(body.max_tokens).toBeLessThanOrEqual(64);
   });
 
   it("default temperature = 0 (deterministic verification / report)", async () => {
@@ -356,5 +357,43 @@ describe("AnthropicLlmClient — OAuth mode", () => {
       unknown
     >;
     expect(body.system).toBeUndefined();
+  });
+});
+
+describe("what each model is sent", () => {
+  it.each([
+    ["claude-haiku-4-5", { temperature: 0 }],
+    ["claude-sonnet-4-6", { temperature: 0 }],
+    ["claude-opus-4-6", { temperature: 0 }],
+    ["claude-opus-4-20250514", { temperature: 0 }],
+    ["claude-3-5-haiku-20241022", { temperature: 0 }],
+    ["claude-opus-4-7", {}],
+    ["claude-opus-4-8", {}],
+    ["claude-opus-5-5", {}],
+    ["claude-fable-5-1", {}],
+    ["claude-mythos-5-1", {}],
+    ["claude-haiku-5-5", { thinking: { type: "disabled" } }],
+    ["claude-sonnet-5", { thinking: { type: "disabled" } }],
+    ["claude-opus-5", { thinking: { type: "disabled" } }],
+    ["claude-sonnet-5-5", { thinking: { type: "between_tools" } }],
+    ["claude-next-model", {}],
+  ])("%s", (model, expected) => {
+    expect(modelTuning(model, 0)).toEqual(expected);
+  });
+
+  it("a current model gets no temperature on the wire", async () => {
+    let body: Record<string, unknown> = {};
+    const client = new AnthropicLlmClient({
+      apiKey: "k",
+      model: "claude-haiku-5-5",
+      fetchImpl: (async (_url: string, init: { body: string }) => {
+        body = JSON.parse(init.body) as Record<string, unknown>;
+        return { ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: "ok" }], usage: { input_tokens: 1000000, output_tokens: 1000000 } }) };
+      }) as never,
+    });
+    const res = await client.call("hi", { feature: "test", maxTokens: 8, temperature: 0.3 });
+    expect(body).not.toHaveProperty("temperature");
+    expect(body.thinking).toEqual({ type: "disabled" });
+    expect(res.costUsd).toBeCloseTo(0.6);
   });
 });

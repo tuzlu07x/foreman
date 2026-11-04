@@ -57,7 +57,7 @@ describe('resolveBrainModelSource', () => {
     if (source.kind !== 'no-listing') return
     expect(source.message).toContain('Claude subscription')
     expect(source.message).toContain('foreman llm login anthropic')
-    expect(source.message).toContain('claude-haiku-4-5')
+    expect(source.message).toContain('claude-haiku-5-5')
     expect(source.message).not.toContain('No anthropic-key')
   })
 

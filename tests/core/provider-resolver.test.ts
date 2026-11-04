@@ -327,7 +327,7 @@ describe("deriveDefaultModelId (#419 — data-driven)", () => {
   it("reads the default model from registry/providers.json", () => {
     // Defaults populated in PR fix/419 — registry edit, no TS change
     expect(deriveDefaultModelId("openai")).toBe("gpt-6-luna");
-    expect(deriveDefaultModelId("anthropic")).toBe("claude-haiku-4-5");
+    expect(deriveDefaultModelId("anthropic")).toBe("claude-haiku-5-5");
     expect(deriveDefaultModelId("gemini")).toBe("gemini-3.5-flash-lite");
     expect(deriveDefaultModelId("ollama")).toBe("llama3.2");
   });

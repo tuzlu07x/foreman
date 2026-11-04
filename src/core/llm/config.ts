@@ -74,7 +74,7 @@ export const LlmConfigSchema = z
     // pricing-validate at runtime, not parse-time.
     // Same as registry/providers.json's anthropic default_model (a test
     // keeps them in step).
-    model: z.string().min(1).default('claude-haiku-4-5'),
+    model: z.string().min(1).default('claude-haiku-5-5'),
     features: FeaturesSchema.default({
       verification: false,
       smart_report: false,

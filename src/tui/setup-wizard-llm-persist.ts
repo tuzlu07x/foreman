@@ -58,7 +58,7 @@ const CATALOG_ID_TO_PROVIDER: Record<string, ProviderId> = {
 // existing `model` belongs to a different provider (#340). Picked to be cheap
 // + production-suitable; user can override in llm.yaml afterwards.
 const PROVIDER_DEFAULT_MODEL: Record<ProviderId, string> = {
-  anthropic: providerDefault("anthropic", "claude-haiku-4-5"),
+  anthropic: providerDefault("anthropic", "claude-haiku-5-5"),
   openai: providerDefault("openai", "gpt-6-luna"),
   gemini: providerDefault("gemini", "gemini-3.5-flash-lite"),
   ollama: providerDefault("ollama", "llama3.2"),

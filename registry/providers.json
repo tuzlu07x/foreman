@@ -17,10 +17,10 @@
       ],
       "endpoint_default": null,
       "endpoint_required": false,
-      "default_model": "claude-haiku-4-5",
+      "default_model": "claude-haiku-5-5",
       "model_tiers": {
-        "fast": "claude-haiku-4-5",
-        "balanced": "claude-sonnet-5",
+        "fast": "claude-haiku-5-5",
+        "balanced": "claude-sonnet-5-5",
         "strongest": "claude-fable-5-1"
       }
     },

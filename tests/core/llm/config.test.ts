@@ -22,7 +22,7 @@ describe('llm-config — schema + defaults', () => {
   it('default provider = anthropic + Haiku model', () => {
     const c = defaultLlmConfig()
     expect(c.provider).toBe('anthropic')
-    expect(c.model).toMatch(/^claude-haiku-4-5/)
+    expect(c.model).toMatch(/^claude-haiku-5-5/)
   })
 
   it('default budget cap = $5, alert at 80%, resets on the 1st', () => {
