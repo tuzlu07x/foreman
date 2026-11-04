@@ -79,15 +79,13 @@ export function claudeCodeArgs(model: string): string[] {
 
 /** The caller's env, minus what must not reach this call: an agent's Foreman
  *  token, and API keys, which would bill the API instead of the user's plan
- *  and so slip past the budget (this client reports a cost of 0). */
-export function claudeCodeEnv(
-  maxTokens: number,
-  env: NodeJS.ProcessEnv = process.env,
-): NodeJS.ProcessEnv {
-  const out: NodeJS.ProcessEnv = {
-    ...env,
-    CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(maxTokens),
-  };
+ *  and so slip past the budget (this client reports a cost of 0).
+ *
+ *  `maxTokens` is not passed on. The API cuts a reply off at that length, but
+ *  Claude Code's own limit fails the whole call once a reply goes over it, and
+ *  its thinking counts too, so a normal plan came back as an error. */
+export function claudeCodeEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...env };
   delete out[AGENT_TOKEN_ENV];
   delete out.ANTHROPIC_API_KEY;
   delete out.ANTHROPIC_AUTH_TOKEN;
@@ -117,7 +115,7 @@ export class ClaudeCodeLlmClient implements LlmClient {
   async call(prompt: string, opts: LlmCallOptions): Promise<LlmResponse> {
     const t0 = Date.now();
     const timeoutMs = opts.timeoutMs ?? this.defaultTimeoutMs;
-    const run = await this.run(prompt, opts.maxTokens, timeoutMs);
+    const run = await this.run(prompt, timeoutMs);
     const durationMs = Date.now() - t0;
     if (run.timedOut) {
       throw new LlmProviderError(
@@ -148,7 +146,6 @@ export class ClaudeCodeLlmClient implements LlmClient {
 
   private run(
     prompt: string,
-    maxTokens: number,
     timeoutMs: number,
   ): Promise<{
     stdout: string;
@@ -159,7 +156,7 @@ export class ClaudeCodeLlmClient implements LlmClient {
     return new Promise((resolve, reject) => {
       const child = spawn(this.command, claudeCodeArgs(this.model), {
         cwd: tmpdir(),
-        env: claudeCodeEnv(maxTokens),
+        env: claudeCodeEnv(),
         stdio: ["pipe", "pipe", "pipe"],
         timeout: timeoutMs,
         windowsHide: true,

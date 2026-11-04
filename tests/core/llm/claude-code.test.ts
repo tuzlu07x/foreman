@@ -86,13 +86,18 @@ describe("ClaudeCodeLlmClient", () => {
   });
 
   it("keeps Foreman's token and API keys out of the child", () => {
-    const env = claudeCodeEnv(32, {
+    const env = claudeCodeEnv({
       PATH: "/bin",
       FOREMAN_AGENT_TOKEN: "x",
       ANTHROPIC_API_KEY: "y",
       ANTHROPIC_AUTH_TOKEN: "z",
     });
-    expect(env).toEqual({ PATH: "/bin", CLAUDE_CODE_MAX_OUTPUT_TOKENS: "32" });
+    expect(env).toEqual({ PATH: "/bin" });
+  });
+
+  it("sets no output limit: Claude Code fails the call when a reply goes over one", async () => {
+    await stub(recording(answer)).call("hi", { ...opts, maxTokens: 900 });
+    expect(seen().env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBeUndefined();
   });
 
   it("reports a revoked login as signed out, however `auth status` looks", async () => {
