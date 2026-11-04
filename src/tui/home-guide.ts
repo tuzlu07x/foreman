@@ -29,12 +29,21 @@ export interface HomeFacts {
 /** The setup steps still open, most useful first. */
 export function nextSteps(facts: HomeFacts): NextStep[] {
   const steps: NextStep[] = [];
-  if (facts.agents === 0) steps.push({ text: "Guard an agent", how: "foreman agent add claude-code" });
-  if (!facts.chatApp) steps.push({ text: "Approve from your phone", how: "foreman notify enable telegram" });
+  if (facts.agents === 0)
+    steps.push({
+      text: "Guard an agent",
+      how: "foreman agent add claude-code",
+    });
+  if (!facts.chatApp)
+    steps.push({ text: "Approve from your phone", how: "V, then n" });
   if (facts.service === false) {
-    steps.push({ text: "Guard with the terminal closed", how: "foreman service install" });
+    steps.push({
+      text: "Guard with the terminal closed",
+      how: "foreman service install",
+    });
   }
-  if (!facts.org && !facts.orgBroken) steps.push({ text: "Give your agents jobs", how: "t, then n" });
+  if (!facts.org && !facts.orgBroken)
+    steps.push({ text: "Give your agents jobs", how: "t, then n" });
   return steps;
 }
 
@@ -60,14 +69,18 @@ export function readHomeFacts(input: {
   let chatApp = false;
   try {
     const channels = loadNotifyConfig(input.notifyConfigPath).channels;
-    chatApp = [channels.telegram, channels.slack, channels.discord].some((c) => c?.enabled === true);
+    chatApp = [channels.telegram, channels.slack, channels.discord].some(
+      (c) => c?.enabled === true,
+    );
   } catch {
     chatApp = false;
   }
   let service: boolean | null = input.attached ? true : null;
   if (!input.attached) {
     const manager = serviceManagerFor();
-    service = manager ? installedServiceFile(manager, homedir()) !== null : null;
+    service = manager
+      ? installedServiceFile(manager, homedir()) !== null
+      : null;
   }
   let org: OrgDoc | null = null;
   let orgBroken = false;

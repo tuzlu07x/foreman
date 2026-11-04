@@ -3,7 +3,10 @@ import { Command } from "commander";
 import { jsonForTerminal, terminalSafe } from "../core/terminal-text.js";
 import { isMap, parseDocument } from "yaml";
 import { EventBus, type ForemanEventMap } from "../core/event-bus.js";
-import { agentAddCommand, loadActiveRegistry } from "../core/registry-catalog.js";
+import {
+  agentAddCommand,
+  loadActiveRegistry,
+} from "../core/registry-catalog.js";
 import { RegistryService } from "../core/registry.js";
 import { isUntrustedSource } from "../core/agent-identity.js";
 import { DELEGATION_TOOL } from "../core/foreman-command.js";
@@ -37,8 +40,18 @@ import {
 } from "../core/org/role-library.js";
 import { printPolicyLoadError } from "./policy-error.js";
 import { findOrgTemplate, ORG_TEMPLATES } from "../core/org/templates.js";
-import { buildOrgReport, parsePeriod, renderOrgReport, resolveReportTarget } from "../core/usage/report.js";
-import { BOSS, channelLabel, OrgComms, renderMessages } from "../core/org/comms.js";
+import {
+  buildOrgReport,
+  parsePeriod,
+  renderOrgReport,
+  resolveReportTarget,
+} from "../core/usage/report.js";
+import {
+  BOSS,
+  channelLabel,
+  OrgComms,
+  renderMessages,
+} from "../core/org/comms.js";
 import { closeDb, getDb } from "../db/client.js";
 import { getForemanPaths } from "../utils/config.js";
 import { supportsInstances } from "../core/agent-instance.js";
@@ -69,9 +82,12 @@ orgCommand
   .command("templates")
   .description("List starter org charts")
   .action(() => {
-    for (const t of ORG_TEMPLATES) console.log(`  ${bold(t.id.padEnd(15))} ${t.summary}`);
+    for (const t of ORG_TEMPLATES)
+      console.log(`  ${bold(t.id.padEnd(15))} ${t.summary}`);
     console.log("");
-    console.log(dim("Start one: foreman org init --template <id> --company \"Your Co\""));
+    console.log(
+      dim('Start one: foreman org init --template <id> --company "Your Co"'),
+    );
   });
 
 orgCommand
@@ -85,13 +101,19 @@ orgCommand
     const paths = getForemanPaths();
     const template = findOrgTemplate(opts.template);
     if (!template) {
-      fail(`unknown template '${opts.template}' — run \`foreman org templates\``);
+      fail(
+        `unknown template '${opts.template}' — run \`foreman org templates\``,
+      );
     }
     if (existsSync(paths.orgConfigPath) && !opts.force) {
-      fail(`${paths.orgConfigPath} already exists — pass --force to replace it`);
+      fail(
+        `${paths.orgConfigPath} already exists — pass --force to replace it`,
+      );
     }
     saveOrgText(paths.orgConfigPath, template.render(opts.company));
-    console.log(`${green("✓")} wrote ${dim(paths.orgConfigPath)} (${template.id})`);
+    console.log(
+      `${green("✓")} wrote ${dim(paths.orgConfigPath)} (${template.id})`,
+    );
     printTree(parseOrgText(template.render(opts.company)), registeredAgents());
     console.log("");
     console.log(
@@ -109,7 +131,9 @@ orgCommand
   .action((opts: { json?: boolean }) => {
     const org = requireOrg();
     if (opts.json) {
-      process.stdout.write(`${JSON.stringify({ org, tree: buildTree(org) }, null, 2)}\n`);
+      process.stdout.write(
+        `${JSON.stringify({ org, tree: buildTree(org) }, null, 2)}\n`,
+      );
       return;
     }
     printTree(org, registeredAgents());
@@ -121,7 +145,8 @@ orgCommand
   .action(() => {
     requireInitialised();
     const paths = getForemanPaths();
-    if (!existsSync(paths.orgConfigPath)) fail("no org.yaml — run `foreman org init`");
+    if (!existsSync(paths.orgConfigPath))
+      fail("no org.yaml — run `foreman org init`");
     let org: OrgDoc;
     try {
       org = parseOrgText(readFileSync(paths.orgConfigPath, "utf-8"));
@@ -138,14 +163,18 @@ orgCommand
 
 orgCommand
   .command("check <from> <to>")
-  .description("Explain whether <from> may hand work to <to> (agent or role ids)")
+  .description(
+    "Explain whether <from> may hand work to <to> (agent or role ids)",
+  )
   .action((from: string, to: string) => {
     const org = requireOrg();
     // The human (and an unverified connection) is decided before any
     // lookup, exactly as a real hand-off is.
     const fromIsHuman = HUMAN_SOURCES.has(from.trim().toLowerCase());
     if (fromIsHuman) {
-      console.log(`${green("allowed")} — assigned by the human ${dim("(policy.yaml rules bind agents only)")}`);
+      console.log(
+        `${green("allowed")} — assigned by the human ${dim("(policy.yaml rules bind agents only)")}`,
+      );
       return;
     }
     if (isUntrustedSource(from)) {
@@ -156,9 +185,10 @@ orgCommand
     const fromSide = resolveCheckSide(org, from);
     const toSide = resolveCheckSide(org, to);
     if (!fromSide || !toSide) {
-      const missing = [fromSide ? null : `<from> '${from}'`, toSide ? null : `<to> '${to}'`].filter(
-        (s): s is string => s !== null,
-      );
+      const missing = [
+        fromSide ? null : `<from> '${from}'`,
+        toSide ? null : `<to> '${to}'`,
+      ].filter((s): s is string => s !== null);
       console.error(
         red("error: ") +
           terminalSafe(missing.join(" and ")) +
@@ -169,7 +199,8 @@ orgCommand
       return;
     }
     for (const side of [fromSide, toSide]) {
-      if (side.viaRole) console.log(dim(`${side.viaRole} is filled by ${side.agent}`));
+      if (side.viaRole)
+        console.log(dim(`${side.viaRole} is filled by ${side.agent}`));
     }
 
     // policy.yaml decides first: a hand-off is the call `<from> → <to>:write`.
@@ -188,14 +219,20 @@ orgCommand
     if (!verdict.allowed) {
       console.log(`${red("blocked")} — ${verdict.reason}`);
       if (policy?.effect === "allow") {
-        console.log(dim(`  policy.yaml allows it (${policy.why}), but a policy allow doesn't lift a block from the org chart`));
+        console.log(
+          dim(
+            `  policy.yaml allows it (${policy.why}), but a policy allow doesn't lift a block from the org chart`,
+          ),
+        );
       }
       if (verdict.next) console.log(`  ${bold("next:")} ${verdict.next}`);
       process.exitCode = 1;
       return;
     }
     if (policy?.effect === "ask") {
-      console.log(`${orange("ask")} — org.yaml allows it (${verdict.reason}), and policy.yaml sends it to you for approval (${policy.why})`);
+      console.log(
+        `${orange("ask")} — org.yaml allows it (${verdict.reason}), and policy.yaml sends it to you for approval (${policy.why})`,
+      );
       return;
     }
     console.log(
@@ -213,7 +250,9 @@ orgCommand
     const org = requireOrg();
     const roleId = resolveAssignee(org, target);
     if (!roleId) {
-      fail(`'${target}' is not a role, department or agent in org.yaml — see \`foreman org show\``);
+      fail(
+        `'${target}' is not a role, department or agent in org.yaml — see \`foreman org show\``,
+      );
     }
     const role = org.roles[roleId]!;
     console.log(dim(`→ ${roleId} (${role.title}) · ${role.agent}`));
@@ -222,7 +261,9 @@ orgCommand
 
 orgCommand
   .command("sync")
-  .description("Push each role's title + responsibility (and model) to the registered agents")
+  .description(
+    "Push each role's title + responsibility (and model) to the registered agents",
+  )
   .action(() => {
     const org = requireOrg();
     const db = getDb();
@@ -237,14 +278,22 @@ orgCommand
         }
         const titles = Object.entries(org.roles)
           .filter(([, r]) => r.agent === role.agent)
-          .map(([id, r]) => `${r.title} (${id})${r.responsibility ? `: ${r.responsibility}` : ""}`);
-        registry.setResponsibilityNote(role.agent, `${org.company} — ${titles.join("; ")}`);
+          .map(
+            ([id, r]) =>
+              `${r.title} (${id})${r.responsibility ? `: ${r.responsibility}` : ""}`,
+          );
+        registry.setResponsibilityNote(
+          role.agent,
+          `${org.company} — ${titles.join("; ")}`,
+        );
         if (role.model) registry.setModelVersion(role.agent, role.model);
         updated++;
         console.log(`${green("✓")} ${bold(role.agent)} ← ${roleId}`);
       }
       for (const agent of skipped) {
-        console.log(`${orange("skip")} ${agent} is not registered — \`${agentAddCommand(agent)}\``);
+        console.log(
+          `${orange("skip")} ${agent} is not registered — \`${agentAddCommand(agent)}\``,
+        );
       }
       console.log(dim(`${updated} role(s) synced`));
     } finally {
@@ -254,7 +303,9 @@ orgCommand
 
 orgCommand
   .command("upgrade")
-  .description("Upgrade every agent runtime used in the org to its latest supported version")
+  .description(
+    "Upgrade every agent runtime used in the org to its latest supported version",
+  )
   .action(async () => {
     const org = requireOrg();
     const db = getDb();
@@ -270,91 +321,130 @@ orgCommand
 
 orgCommand
   .command("report [target] [period]")
-  .description("What a department, role or agent did and what it cost (today · week · month · 7d)")
+  .description(
+    "What a department, role or agent did and what it cost (today · week · month · 7d)",
+  )
   .option("--json", "output JSON")
-  .action((target: string | undefined, period: string | undefined, opts: { json?: boolean }) => {
-    requireInitialised();
-    const paths = getForemanPaths();
-    let org: OrgDoc | null = null;
-    try {
-      org = loadOrg(paths.orgConfigPath);
-    } catch (err) {
-      reportInvalid(err);
-    }
-    // `foreman org report month` means the whole company this month.
-    if (target && !period && parsePeriod(target)) {
-      period = target;
-      target = undefined;
-    }
-    const p = parsePeriod(period);
-    if (!p) fail(`unknown period '${period}' — use today, yesterday, week, month or e.g. 7d`);
-    const db = getDb();
-    try {
-      const agents = new RegistryService(db, new EventBus<ForemanEventMap>()).listAll().map((a) => a.id.toLowerCase());
-      const resolved = resolveReportTarget(org, target, agents);
-      if (!resolved) fail(`'${target}' is not a department, role or agent — see \`foreman org show\``);
-      const report = buildOrgReport(db, org, resolved, p);
-      if (opts.json) {
-        process.stdout.write(`${jsonForTerminal(report, 2)}\n`);
-        return;
+  .action(
+    (
+      target: string | undefined,
+      period: string | undefined,
+      opts: { json?: boolean },
+    ) => {
+      requireInitialised();
+      const paths = getForemanPaths();
+      let org: OrgDoc | null = null;
+      try {
+        org = loadOrg(paths.orgConfigPath);
+      } catch (err) {
+        reportInvalid(err);
       }
-      // Task excerpts and agent ids come from agents (#656).
-      const [title, ...rest] = terminalSafe(renderOrgReport(report), { multiline: true }).split("\n");
-      console.log(orange(bold(title ?? "")));
-      for (const line of rest) console.log(line);
-    } finally {
-      closeDb();
-    }
-  });
+      // `foreman org report month` means the whole company this month.
+      if (target && !period && parsePeriod(target)) {
+        period = target;
+        target = undefined;
+      }
+      const p = parsePeriod(period);
+      if (!p)
+        fail(
+          `unknown period '${period}' — use today, yesterday, week, month or e.g. 7d`,
+        );
+      const db = getDb();
+      try {
+        const agents = new RegistryService(db, new EventBus<ForemanEventMap>())
+          .listAll()
+          .map((a) => a.id.toLowerCase());
+        const resolved = resolveReportTarget(org, target, agents);
+        if (!resolved)
+          fail(
+            `'${target}' is not a department, role or agent — see \`foreman org show\``,
+          );
+        const report = buildOrgReport(db, org, resolved, p);
+        if (opts.json) {
+          process.stdout.write(`${jsonForTerminal(report, 2)}\n`);
+          return;
+        }
+        // Task excerpts and agent ids come from agents (#656).
+        const [title, ...rest] = terminalSafe(renderOrgReport(report), {
+          multiline: true,
+        }).split("\n");
+        console.log(orange(bold(title ?? "")));
+        for (const line of rest) console.log(line);
+      } finally {
+        closeDb();
+      }
+    },
+  );
 
 orgCommand
   .command("budget <department> [usd]")
-  .description("Set a department's spend limit (monthly unless --daily); `off` removes it")
+  .description(
+    "Set a department's spend limit (monthly unless --daily); `off` removes it",
+  )
   .option("--daily", "a daily limit instead of monthly")
-  .option("--pause", "when spent, agents can't hand the department new work (you still can)")
+  .option(
+    "--pause",
+    "when spent, agents can't hand the department new work (you still can)",
+  )
   .option("--warn", "when spent, only alert (default)")
-  .action((department: string, usd: string | undefined, opts: { daily?: boolean; pause?: boolean; warn?: boolean }) => {
-    const org = requireOrg();
-    const id = department.toLowerCase();
-    if (!Object.hasOwn(org.departments, id)) {
-      fail(`no department '${department}' — departments: ${Object.keys(org.departments).join(", ") || "(none)"}`);
-    }
-    const paths = getForemanPaths();
-    const doc = parseDocument(readFileSync(paths.orgConfigPath, "utf-8"));
-    const base = ["departments", id, "budget"];
-    if (usd === undefined) {
-      const b = org.departments[id]!.budget;
+  .action(
+    (
+      department: string,
+      usd: string | undefined,
+      opts: { daily?: boolean; pause?: boolean; warn?: boolean },
+    ) => {
+      const org = requireOrg();
+      const id = department.toLowerCase();
+      if (!Object.hasOwn(org.departments, id)) {
+        fail(
+          `no department '${department}' — departments: ${Object.keys(org.departments).join(", ") || "(none)"}`,
+        );
+      }
+      const paths = getForemanPaths();
+      const doc = parseDocument(readFileSync(paths.orgConfigPath, "utf-8"));
+      const base = ["departments", id, "budget"];
+      if (usd === undefined) {
+        const b = org.departments[id]!.budget;
+        console.log(
+          b
+            ? `${id}: ${b.monthly_usd ? `$${b.monthly_usd}/month ` : ""}${b.daily_usd ? `$${b.daily_usd}/day ` : ""}(${b.on_exceed})`
+            : `${id} has no budget — set one: foreman org budget ${id} 50`,
+        );
+        return;
+      }
+      if (usd === "off") {
+        doc.deleteIn(base);
+      } else {
+        const amount = Number(usd.replace(/^\$/, ""));
+        if (!Number.isFinite(amount) || amount <= 0)
+          fail(`'${usd}' is not an amount in USD`);
+        doc.setIn([...base, opts.daily ? "daily_usd" : "monthly_usd"], amount);
+        if (opts.pause || opts.warn)
+          doc.setIn([...base, "on_exceed"], opts.pause ? "pause" : "warn");
+      }
+      try {
+        saveOrgText(paths.orgConfigPath, doc.toString());
+      } catch (err) {
+        reportInvalid(err);
+      }
       console.log(
-        b
-          ? `${id}: ${b.monthly_usd ? `$${b.monthly_usd}/month ` : ""}${b.daily_usd ? `$${b.daily_usd}/day ` : ""}(${b.on_exceed})`
-          : `${id} has no budget — set one: foreman org budget ${id} 50`,
+        usd === "off"
+          ? `${green("✓")} ${id} has no budget now`
+          : `${green("✓")} ${id}: $${Number(usd.replace(/^\$/, ""))} per ${opts.daily ? "day" : "month"}` +
+              dim(
+                opts.pause
+                  ? " · agents pause when it's spent"
+                  : " · alerts at 80% and 100%",
+              ),
       );
-      return;
-    }
-    if (usd === "off") {
-      doc.deleteIn(base);
-    } else {
-      const amount = Number(usd.replace(/^\$/, ""));
-      if (!Number.isFinite(amount) || amount <= 0) fail(`'${usd}' is not an amount in USD`);
-      doc.setIn([...base, opts.daily ? "daily_usd" : "monthly_usd"], amount);
-      if (opts.pause || opts.warn) doc.setIn([...base, "on_exceed"], opts.pause ? "pause" : "warn");
-    }
-    try {
-      saveOrgText(paths.orgConfigPath, doc.toString());
-    } catch (err) {
-      reportInvalid(err);
-    }
-    console.log(
-      usd === "off"
-        ? `${green("✓")} ${id} has no budget now`
-        : `${green("✓")} ${id}: $${Number(usd.replace(/^\$/, ""))} per ${opts.daily ? "day" : "month"}` +
-            dim(opts.pause ? " · agents pause when it's spent" : " · alerts at 80% and 100%"),
-    );
-  });
+    },
+  );
 
 orgCommand
   .command("escalate [state]")
-  .description("Send low/medium-risk approvals to the requester's manager agent for a recommendation (`on` / `off`)")
+  .description(
+    "Send low/medium-risk approvals to the requester's manager agent for a recommendation (`on` / `off`)",
+  )
   .action((state: string | undefined) => {
     const org = requireOrg();
     if (state === undefined) {
@@ -372,7 +462,8 @@ orgCommand
     if (value === "on") doc.setIn(["approvals", "escalate_via_manager"], true);
     else doc.deleteIn(["approvals", "escalate_via_manager"]);
     const approvals = doc.getIn(["approvals"]);
-    if (isMap(approvals) && approvals.items.length === 0) doc.deleteIn(["approvals"]);
+    if (isMap(approvals) && approvals.items.length === 0)
+      doc.deleteIn(["approvals"]);
     try {
       saveOrgText(paths.orgConfigPath, doc.toString());
     } catch (err) {
@@ -381,34 +472,67 @@ orgCommand
     console.log(
       value === "on"
         ? `${green("✓")} low- and medium-risk approvals now also go to the requester's manager agent` +
-            dim(" · managers recommend with org_recommend; you still decide every approval")
+            dim(
+              " · managers recommend with org_recommend; you still decide every approval",
+            )
         : `${green("✓")} approvals come only to you`,
     );
   });
 
 orgCommand
   .command("add-department <id>")
-  .description("Add a department with its head role (e.g. marketing led by a cmo)")
-  .requiredOption("--head <role>", "role id of the department head (created if missing), e.g. cmo")
+  .description(
+    "Add a department with its head role (e.g. marketing led by a cmo)",
+  )
+  .requiredOption(
+    "--head <role>",
+    "role id of the department head (created if missing), e.g. cmo",
+  )
   .option("--name <name>", "display name, e.g. Marketing")
   .option("--title <title>", "the head's title, e.g. Chief Marketing Officer")
-  .option("--agent <agent>", "agent that fills the head role (needed when the role is new)")
-  .option("--reports-to <role>", "who the head reports to (default: the Manager, else you)")
+  .option(
+    "--agent <agent>",
+    "agent that fills the head role (needed when the role is new)",
+  )
+  .option(
+    "--reports-to <role>",
+    "who the head reports to (default: the Manager, else you)",
+  )
   .option("--description <text>", "what the department does")
-  .option("--company <name>", "company name, when this starts org.yaml", DEFAULT_COMPANY)
+  .option(
+    "--company <name>",
+    "company name, when this starts org.yaml",
+    DEFAULT_COMPANY,
+  )
   .action(
     (
       rawId: string,
-      opts: { head: string; name?: string; title?: string; agent?: string; reportsTo?: string; description?: string; company: string },
+      opts: {
+        head: string;
+        name?: string;
+        title?: string;
+        agent?: string;
+        reportsTo?: string;
+        description?: string;
+        company: string;
+      },
     ) => {
       const org = orgOrNone();
       const id = rawId.toLowerCase();
       const head = opts.head.toLowerCase();
-      if (org && Object.hasOwn(org.departments, id)) fail(`department '${id}' already exists`);
+      if (org && Object.hasOwn(org.departments, id))
+        fail(`department '${id}' already exists`);
       const paths = getForemanPaths();
-      const doc = parseDocument(org ? readFileSync(paths.orgConfigPath, "utf-8") : newOrgText(opts.company));
+      const doc = parseDocument(
+        org
+          ? readFileSync(paths.orgConfigPath, "utf-8")
+          : newOrgText(opts.company),
+      );
       if (!org || !Object.hasOwn(org.roles, head)) {
-        if (!opts.agent) fail(`role '${head}' is new — say which agent fills it: --agent claude-code`);
+        if (!opts.agent)
+          fail(
+            `role '${head}' is new — say which agent fills it: --agent claude-code`,
+          );
         doc.setIn(["roles", head], {
           title: opts.title ?? `Head of ${opts.name ?? titleCase(id)}`,
           agent: opts.agent,
@@ -429,45 +553,85 @@ orgCommand
         reportInvalid(err);
       }
       console.log(`${green("✓")} added ${bold(id)}, led by ${bold(head)}`);
-      console.log(dim(`Add people: foreman org add-role <id> --department ${id} --reports-to ${head} --agent <agent>`));
+      console.log(
+        dim(
+          `Add people: foreman org add-role <id> --department ${id} --reports-to ${head} --agent <agent>`,
+        ),
+      );
     },
   );
 
 orgCommand
   .command("roles")
-  .description("Ready-made roles for `org add-role --preset` (any agent can fill any role)")
+  .description(
+    "Ready-made roles for `org add-role --preset` (any agent can fill any role)",
+  )
   .action(() => {
     const width = Math.max(...ROLE_PRESETS.map((p) => p.id.length)) + 1;
     const print = (p: (typeof ROLE_PRESETS)[number]): void => {
       console.log(`  ${bold(p.id.padEnd(width))} ${p.title} — ${p.summary}`);
-      console.log(dim(`  ${" ".repeat(width + 1)}may: ${p.can.join(", ")} · runs on ${p.runsOn} by default`));
+      console.log(
+        dim(
+          `  ${" ".repeat(width + 1)}may: ${p.can.join(", ")} · runs on ${p.runsOn} by default`,
+        ),
+      );
     };
     console.log(bold("General"));
     for (const p of generalRolePresets()) print(p);
     for (const d of DEPARTMENT_PRESETS) {
-      console.log(`\n${bold(d.name)} ${dim(`(department ${d.id}: ${d.summary}; the first role leads it)`)}`);
+      console.log(
+        `\n${bold(d.name)} ${dim(`(department ${d.id}: ${d.summary}; the first role leads it)`)}`,
+      );
       for (const p of departmentRolePresets(d)) print(p);
     }
-    console.log(dim("\nYour own role: foreman org add-role <id> --runs-on claude-code --describe \"what it does, in your words\""));
+    console.log(
+      dim(
+        '\nYour own role: foreman org add-role <id> --runs-on claude-code --describe "what it does, in your words"',
+      ),
+    );
   });
 
 orgCommand
   .command("add-role <id>")
-  .description("Add a role to the chart: a ready-made one (--preset) or your own (--describe), filled by an agent")
-  .option("--agent <agent>", "agent that fills the role (an agent you registered)")
+  .description(
+    "Add a role to the chart: a ready-made one (--preset) or your own (--describe), filled by an agent",
+  )
+  .option(
+    "--agent <agent>",
+    "agent that fills the role (an agent you registered)",
+  )
   .option(
     "--runs-on <type>",
     "fill the role with a new instance of claude-code, codex or gemini-cli, named after the role",
   )
-  .option("--preset <id>", "start from a ready-made role (see `foreman org roles`)")
-  .option("--describe <text>", "what the role does, in your own words (the agent is told this)")
-  .option("--can <list>", "what its agent may do: read,write,shell,network (comma-separated)")
+  .option(
+    "--preset <id>",
+    "start from a ready-made role (see `foreman org roles`)",
+  )
+  .option(
+    "--describe <text>",
+    "what the role does, in your own words (the agent is told this)",
+  )
+  .option(
+    "--can <list>",
+    "what its agent may do: read,write,shell,network (comma-separated)",
+  )
   .option("--title <title>", "job title")
   .option("--department <id>", "department it belongs to")
-  .option("--reports-to <role>", "manager role (default: the department head, else the Manager, else you)")
+  .option(
+    "--reports-to <role>",
+    "manager role (default: the department head, else the Manager, else you)",
+  )
   .option("--responsibility <text>", "what this role is for, in one line")
-  .option("--model <model>", "model override for this role (a cheaper model for routine work)")
-  .option("--company <name>", "company name, when this starts org.yaml", DEFAULT_COMPANY)
+  .option(
+    "--model <model>",
+    "model override for this role (a cheaper model for routine work)",
+  )
+  .option(
+    "--company <name>",
+    "company name, when this starts org.yaml",
+    DEFAULT_COMPANY,
+  )
   .action(
     async (
       rawId: string,
@@ -487,32 +651,61 @@ orgCommand
     ) => {
       const org = orgOrNone();
       const id = rawId.toLowerCase();
-      if (org && Object.hasOwn(org.roles, id)) fail(`role '${id}' already exists`);
-      const preset = opts.preset ? findRolePreset(opts.preset.toLowerCase()) : undefined;
-      if (opts.preset && !preset) fail(`no ready-made role '${opts.preset}' — see \`foreman org roles\``);
-      if (opts.agent && opts.runsOn) fail("pass --agent (an agent you registered) or --runs-on (a new one), not both");
+      if (org && Object.hasOwn(org.roles, id))
+        fail(`role '${id}' already exists`);
+      const preset = opts.preset
+        ? findRolePreset(opts.preset.toLowerCase())
+        : undefined;
+      if (opts.preset && !preset)
+        fail(`no ready-made role '${opts.preset}' — see \`foreman org roles\``);
+      if (opts.agent && opts.runsOn)
+        fail(
+          "pass --agent (an agent you registered) or --runs-on (a new one), not both",
+        );
       const can = opts.can !== undefined ? parseCan(opts.can) : preset?.can;
       const dept = opts.department?.toLowerCase();
       if (dept && !org?.departments[dept]) {
-        fail(`no department '${dept}' — add it first: foreman org add-department ${dept} --head <role>`);
+        fail(
+          `no department '${dept}' — add it first: foreman org add-department ${dept} --head <role>`,
+        );
       }
-      const reportsTo = opts.reportsTo?.toLowerCase() ?? (dept ? org!.departments[dept]!.head : defaultBoss(org, id));
+      const reportsTo =
+        opts.reportsTo?.toLowerCase() ??
+        (dept ? org!.departments[dept]!.head : defaultBoss(org, id));
       // Who fills it: a registered agent, or a new instance named after the role.
-      const runsOn = opts.agent ? null : (opts.runsOn ?? preset?.runsOn ?? null);
-      if (!opts.agent && !runsOn) fail("say who fills the role: --agent <registered agent> or --runs-on <claude-code|codex|gemini-cli>");
+      const runsOn = opts.agent
+        ? null
+        : (opts.runsOn ?? preset?.runsOn ?? null);
+      if (!opts.agent && !runsOn)
+        fail(
+          "say who fills the role: --agent <registered agent> or --runs-on <claude-code|codex|gemini-cli>",
+        );
       const agent = opts.agent ?? id;
       // Only Claude Code, Codex and Gemini CLI run as several agents; anything else
       // would be rewired to the role's name, taking its own identity.
       if (runsOn && agent !== runsOn && !supportsInstances({ id: runsOn })) {
-        fail(`only claude-code, codex and gemini-cli can fill several roles; for ${runsOn}, pass --agent ${runsOn}`);
+        fail(
+          `only claude-code, codex and gemini-cli can fill several roles; for ${runsOn}, pass --agent ${runsOn}`,
+        );
       }
       if (runsOn && !registeredAgents().has(agent)) {
         const db = getDb();
-        const code = await runAgentAddScripted(agent, { type: runsOn }, { db, registry: new RegistryService(db, new EventBus<ForemanEventMap>()) });
+        const code = await runAgentAddScripted(
+          agent,
+          { type: runsOn },
+          {
+            db,
+            registry: new RegistryService(db, new EventBus<ForemanEventMap>()),
+          },
+        );
         if (code !== 0) fail(`couldn't add ${agent} (${runsOn}) for the role`);
       }
       const paths = getForemanPaths();
-      const doc = parseDocument(org ? readFileSync(paths.orgConfigPath, "utf-8") : newOrgText(opts.company));
+      const doc = parseDocument(
+        org
+          ? readFileSync(paths.orgConfigPath, "utf-8")
+          : newOrgText(opts.company),
+      );
       const instructions = opts.describe ?? preset?.instructions;
       doc.setIn(["roles", id], {
         title: opts.title ?? preset?.title ?? titleCase(id),
@@ -529,9 +722,27 @@ orgCommand
       } catch (err) {
         reportInvalid(err);
       }
-      console.log(`${green("✓")} added ${bold(id)} (${agent})${dept ? ` in ${dept}` : ""}, reporting to ${reportsTo}`);
-      if (can) console.log(dim(`  may: ${can.length > 0 ? can.join(", ") : "nothing but talking to colleagues"}`));
-      if (!registeredAgents().has(agent)) console.log(dim(`Register the agent: ${agentAddCommand(agent)}`));
+      console.log(
+        `${green("✓")} added ${bold(id)} (${agent})${dept ? ` in ${dept}` : ""}, reporting to ${reportsTo}`,
+      );
+      if (can)
+        console.log(
+          dim(
+            `  may: ${can.length > 0 ? can.join(", ") : "nothing but talking to colleagues"}`,
+          ),
+        );
+      if (!registeredAgents().has(agent))
+        console.log(dim(`Register the agent: ${agentAddCommand(agent)}`));
+      if (
+        runsOn === "codex" &&
+        (!can || can.includes("write") || can.includes("shell"))
+      ) {
+        console.log(
+          dim(
+            `  Codex can only read until you allow writing: foreman agent trust ${agent}`,
+          ),
+        );
+      }
     },
   );
 
@@ -541,51 +752,75 @@ function parseCan(list: string): RoleCapability[] {
     .split(",")
     .map((w) => w.trim().toLowerCase())
     .filter(Boolean);
-  const bad = words.filter((w) => !(ROLE_CAPABILITIES as readonly string[]).includes(w));
-  if (bad.length > 0) fail(`--can takes ${ROLE_CAPABILITIES.join(", ")} (not ${bad.join(", ")})`);
+  const bad = words.filter(
+    (w) => !(ROLE_CAPABILITIES as readonly string[]).includes(w),
+  );
+  if (bad.length > 0)
+    fail(`--can takes ${ROLE_CAPABILITIES.join(", ")} (not ${bad.join(", ")})`);
   return [...new Set(words)] as RoleCapability[];
 }
 
 orgCommand
   .command("messages [channel]")
-  .description("Read your agents' conversations (all channels, or one: marketing, leadership, all, a role)")
+  .description(
+    "Read your agents' conversations (all channels, or one: marketing, leadership, all, a role)",
+  )
   .option("--limit <n>", "how many", (v) => Number.parseInt(v, 10), 30)
   .option("--follow", "keep printing new messages")
-  .action(async (channel: string | undefined, opts: { limit: number; follow?: boolean }) => {
-    requireInitialised();
-    const paths = getForemanPaths();
-    const comms = new OrgComms(getDb(), { orgConfigPath: paths.orgConfigPath });
-    try {
-      const problem = channel ? comms.readError({ viewer: BOSS, asOwner: true, channel }) : null;
-      if (problem) fail(problem);
-      const read = (since?: number) =>
-        comms.read({ viewer: BOSS, asOwner: true, ...(channel ? { channel } : {}), limit: opts.limit, ...(since ? { since } : {}) });
-      let messages = read();
-      console.log(renderMessages(messages));
-      if (!opts.follow) return;
-      let last = messages.at(-1)?.ts ?? Date.now();
-      console.log(dim("— following; Ctrl+C to stop —"));
-      for (;;) {
-        await new Promise((r) => setTimeout(r, 1_000));
-        messages = read(last);
-        if (messages.length > 0) {
-          console.log(renderMessages(messages));
-          last = messages.at(-1)!.ts;
+  .action(
+    async (
+      channel: string | undefined,
+      opts: { limit: number; follow?: boolean },
+    ) => {
+      requireInitialised();
+      const paths = getForemanPaths();
+      const comms = new OrgComms(getDb(), {
+        orgConfigPath: paths.orgConfigPath,
+      });
+      try {
+        const problem = channel
+          ? comms.readError({ viewer: BOSS, asOwner: true, channel })
+          : null;
+        if (problem) fail(problem);
+        const read = (since?: number) =>
+          comms.read({
+            viewer: BOSS,
+            asOwner: true,
+            ...(channel ? { channel } : {}),
+            limit: opts.limit,
+            ...(since ? { since } : {}),
+          });
+        let messages = read();
+        console.log(renderMessages(messages));
+        if (!opts.follow) return;
+        let last = messages.at(-1)?.ts ?? Date.now();
+        console.log(dim("— following; Ctrl+C to stop —"));
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 1_000));
+          messages = read(last);
+          if (messages.length > 0) {
+            console.log(renderMessages(messages));
+            last = messages.at(-1)!.ts;
+          }
         }
+      } finally {
+        closeDb();
       }
-    } finally {
-      closeDb();
-    }
-  });
+    },
+  );
 
 orgCommand
   .command("tell <target> <message...>")
-  .description("Post to a department, role, leadership or all-hands as yourself")
+  .description(
+    "Post to a department, role, leadership or all-hands as yourself",
+  )
   .action((target: string, message: string[]) => {
     requireInitialised();
     const paths = getForemanPaths();
     try {
-      const comms = new OrgComms(getDb(), { orgConfigPath: paths.orgConfigPath });
+      const comms = new OrgComms(getDb(), {
+        orgConfigPath: paths.orgConfigPath,
+      });
       const result = comms.post({
         from: BOSS,
         asOwner: true,
@@ -595,7 +830,11 @@ orgCommand
       });
       if (!result.ok) fail(result.reason);
       console.log(`${green("✓")} posted to ${bold(result.label)}`);
-      console.log(dim("Agents read it with org_read; `foreman start` mirrors it to Slack / Discord if mapped."));
+      console.log(
+        dim(
+          "Agents read it with org_read; `foreman start` mirrors it to Slack / Discord if mapped.",
+        ),
+      );
     } finally {
       closeDb();
     }
@@ -603,43 +842,69 @@ orgCommand
 
 orgCommand
   .command("channel <target> [platform] [channel]")
-  .description("Mirror a channel to Slack / Discord: `foreman org channel marketing slack #marketing` (`off` removes)")
-  .action((target: string, platform: string | undefined, channel: string | undefined) => {
-    const org = requireOrg();
-    const id = target.toLowerCase().replace(/^#/, "");
-    const company = ["all", "leadership", "boss", "direct"].includes(id);
-    if (!company && !Object.hasOwn(org.departments, id)) {
-      fail(`'${target}' is not a department or one of: all, leadership, boss, direct`);
-    }
-    const base = company ? ["channels", id] : ["departments", id, "channels"];
-    const current = company ? org.channels?.[id as "all"] : org.departments[id]?.channels;
-    if (!platform) {
-      const entries = Object.entries(current ?? {});
-      console.log(entries.length ? entries.map(([p, c]) => `${id} → ${p} ${c}`).join("\n") : `${id} is not mirrored`);
-      return;
-    }
-    const key = platform.toLowerCase();
-    if (!/^[a-z][a-z0-9-]{0,31}$/.test(key)) fail(`'${platform}' is not a platform name (slack, discord, …)`);
-    if (!channel) fail("say which channel: a Slack channel (#marketing or C0123…) or a Discord channel id");
-    const paths = getForemanPaths();
-    const doc = parseDocument(readFileSync(paths.orgConfigPath, "utf-8"));
-    if (channel === "off") doc.deleteIn([...base, key]);
-    else doc.setIn([...base, key], channel);
-    try {
-      saveOrgText(paths.orgConfigPath, doc.toString());
-    } catch (err) {
-      reportInvalid(err);
-    }
-    const label = company ? channelLabel(id === "direct" ? "dm:a|b" : id) : `#${id}`;
-    console.log(
-      channel === "off"
-        ? `${green("✓")} ${label} is no longer mirrored to ${key}`
-        : `${green("✓")} ${id === "direct" ? "role-to-role threads" : label} → ${key} ${channel}`,
-    );
-    if (channel !== "off") {
-      console.log(dim(`Needs a ${key} bot token in notify.yaml (bot_token_ref), invited to that channel. Restart foreman start.`));
-    }
-  });
+  .description(
+    "Mirror a channel to Slack / Discord: `foreman org channel marketing slack #marketing` (`off` removes)",
+  )
+  .action(
+    (
+      target: string,
+      platform: string | undefined,
+      channel: string | undefined,
+    ) => {
+      const org = requireOrg();
+      const id = target.toLowerCase().replace(/^#/, "");
+      const company = ["all", "leadership", "boss", "direct"].includes(id);
+      if (!company && !Object.hasOwn(org.departments, id)) {
+        fail(
+          `'${target}' is not a department or one of: all, leadership, boss, direct`,
+        );
+      }
+      const base = company ? ["channels", id] : ["departments", id, "channels"];
+      const current = company
+        ? org.channels?.[id as "all"]
+        : org.departments[id]?.channels;
+      if (!platform) {
+        const entries = Object.entries(current ?? {});
+        console.log(
+          entries.length
+            ? entries.map(([p, c]) => `${id} → ${p} ${c}`).join("\n")
+            : `${id} is not mirrored`,
+        );
+        return;
+      }
+      const key = platform.toLowerCase();
+      if (!/^[a-z][a-z0-9-]{0,31}$/.test(key))
+        fail(`'${platform}' is not a platform name (slack, discord, …)`);
+      if (!channel)
+        fail(
+          "say which channel: a Slack channel (#marketing or C0123…) or a Discord channel id",
+        );
+      const paths = getForemanPaths();
+      const doc = parseDocument(readFileSync(paths.orgConfigPath, "utf-8"));
+      if (channel === "off") doc.deleteIn([...base, key]);
+      else doc.setIn([...base, key], channel);
+      try {
+        saveOrgText(paths.orgConfigPath, doc.toString());
+      } catch (err) {
+        reportInvalid(err);
+      }
+      const label = company
+        ? channelLabel(id === "direct" ? "dm:a|b" : id)
+        : `#${id}`;
+      console.log(
+        channel === "off"
+          ? `${green("✓")} ${label} is no longer mirrored to ${key}`
+          : `${green("✓")} ${id === "direct" ? "role-to-role threads" : label} → ${key} ${channel}`,
+      );
+      if (channel !== "off") {
+        console.log(
+          dim(
+            `Needs a ${key} bot token in notify.yaml (bot_token_ref), invited to that channel. Restart foreman start.`,
+          ),
+        );
+      }
+    },
+  );
 
 // -----------------------------------------------------------------------------
 // helpers
@@ -650,17 +915,25 @@ function titleCase(id: string): string {
 }
 
 function printTree(org: OrgDoc, registered: ReadonlySet<string>): void {
-  console.log(`${orange(bold(org.company))}${org.mission ? dim(` — ${org.mission}`) : ""}`);
-  console.log(`${bold("you")}${org.human.title ? dim(` (${org.human.title})`) : ""}`);
+  console.log(
+    `${orange(bold(org.company))}${org.mission ? dim(` — ${org.mission}`) : ""}`,
+  );
+  console.log(
+    `${bold("you")}${org.human.title ? dim(` (${org.human.title})`) : ""}`,
+  );
   const walk = (nodes: OrgTreeNode[], prefix: string): void => {
     nodes.forEach((node, i) => {
       const last = i === nodes.length - 1;
       const { role } = node;
       const dot = registered.has(role.agent) ? green("●") : dim("○");
-      const dept = role.department ? dim(` [${org.departments[role.department]?.name ?? role.department}]`) : "";
+      const dept = role.department
+        ? dim(` [${org.departments[role.department]?.name ?? role.department}]`)
+        : "";
       const servers =
         role.mcp_servers ??
-        (role.department ? org.departments[role.department]?.mcp_servers : undefined);
+        (role.department
+          ? org.departments[role.department]?.mcp_servers
+          : undefined);
       const mcp = servers ? dim(` mcp: ${servers.join(", ")}`) : "";
       console.log(
         `${prefix}${last ? "└─" : "├─"} ${bold(node.roleId)} · ${role.title} · ${dot} ${role.agent}${dept}${mcp}`,
@@ -670,14 +943,23 @@ function printTree(org: OrgDoc, registered: ReadonlySet<string>): void {
   };
   walk(buildTree(org), "");
   if ([...Object.values(org.roles)].some((r) => !registered.has(r.agent))) {
-    const missing = [...new Set(Object.values(org.roles).map((r) => r.agent))].filter((a) => !registered.has(a));
-    console.log(dim(`○ = agent not registered yet: ${missing.map((a) => `\`${agentAddCommand(a)}\``).join(", ")}`));
+    const missing = [
+      ...new Set(Object.values(org.roles).map((r) => r.agent)),
+    ].filter((a) => !registered.has(a));
+    console.log(
+      dim(
+        `○ = agent not registered yet: ${missing.map((a) => `\`${agentAddCommand(a)}\``).join(", ")}`,
+      ),
+    );
   }
 }
 
 function registeredAgents(): Set<string> {
   try {
-    const registry = new RegistryService(getDb(), new EventBus<ForemanEventMap>());
+    const registry = new RegistryService(
+      getDb(),
+      new EventBus<ForemanEventMap>(),
+    );
     return new Set(registry.listAll().map((a) => a.id));
   } catch {
     return new Set();
@@ -688,10 +970,17 @@ function registeredAgents(): Set<string> {
 
 /** A side of `foreman org check`: an agent id in org.yaml, or a role id
  *  (then the agent filling it). An agent id wins when a name is both. */
-function resolveCheckSide(org: OrgDoc, input: string): { agent: string; viaRole: string | null } | null {
-  if (rolesForAgent(org, input).length > 0) return { agent: input.trim().toLowerCase(), viaRole: null };
+function resolveCheckSide(
+  org: OrgDoc,
+  input: string,
+): { agent: string; viaRole: string | null } | null {
+  if (rolesForAgent(org, input).length > 0)
+    return { agent: input.trim().toLowerCase(), viaRole: null };
   if (Object.hasOwn(org.roles, input)) {
-    return { agent: org.roles[input]!.agent.trim().toLowerCase(), viaRole: input };
+    return {
+      agent: org.roles[input]!.agent.trim().toLowerCase(),
+      viaRole: input,
+    };
   }
   return null;
 }
@@ -700,7 +989,10 @@ function resolveCheckSide(org: OrgDoc, input: string): { agent: string; viaRole:
  *  every agent-to-agent hand-off is mediated as, or null when no rule
  *  decides it (then the org chart does). A policy.yaml that doesn't load
  *  stops the command: no verdict from a policy the file doesn't say. */
-function policyHandoffVerdict(from: string, to: string): { effect: "allow" | "deny" | "ask"; why: string } | null {
+function policyHandoffVerdict(
+  from: string,
+  to: string,
+): { effect: "allow" | "deny" | "ask"; why: string } | null {
   const paths = getForemanPaths();
   const engine = new PolicyEngine(getDb(), new EventBus<ForemanEventMap>());
   try {
@@ -713,10 +1005,16 @@ function policyHandoffVerdict(from: string, to: string): { effect: "allow" | "de
         process.exit(1);
       }
     }
-    const evaluation = engine.evaluate({ sourceAgent: from, targetAgent: to, targetTool: DELEGATION_TOOL });
+    const evaluation = engine.evaluate({
+      sourceAgent: from,
+      targetAgent: to,
+      targetTool: DELEGATION_TOOL,
+    });
     if (evaluation.matchedRuleId !== undefined) {
       const rule = engine.list().find((r) => r.id === evaluation.matchedRuleId);
-      const shown = rule ? `${rule.sourceAgent} → ${rule.target}` : `${from} → ${to}:${DELEGATION_TOOL}`;
+      const shown = rule
+        ? `${rule.sourceAgent} → ${rule.target}`
+        : `${from} → ${to}:${DELEGATION_TOOL}`;
       return {
         effect: evaluation.decision,
         why: `${terminalSafe(shown)} ${evaluation.decision}, rule #${evaluation.matchedRuleId}`,
@@ -729,7 +1027,10 @@ function policyHandoffVerdict(from: string, to: string): { effect: "allow" | "de
       };
     }
     if (evaluation.label !== undefined) {
-      return { effect: evaluation.decision, why: `policy:${terminalSafe(evaluation.label)}` };
+      return {
+        effect: evaluation.decision,
+        why: `policy:${terminalSafe(evaluation.label)}`,
+      };
     }
     return null;
   } finally {
@@ -739,7 +1040,10 @@ function policyHandoffVerdict(from: string, to: string): { effect: "allow" | "de
 
 function requireOrg(): OrgDoc {
   const org = orgOrNone();
-  if (!org) fail("no org.yaml yet — add your first role (foreman org add-role <id> --preset manager) or start from a template (foreman org init --template startup)");
+  if (!org)
+    fail(
+      "no org.yaml yet — add your first role (foreman org add-role <id> --preset manager) or start from a template (foreman org init --template startup)",
+    );
   return org;
 }
 
@@ -766,7 +1070,9 @@ function plural(n: number, word: string): string {
 /** Whom a new role reports to when nobody says: the team's Manager, as in
  *  the setup wizard and on the Team page, else you. */
 function defaultBoss(org: OrgDoc | null, roleId: string): string {
-  return org && roleId !== "manager" && Object.hasOwn(org.roles, "manager") ? "manager" : HUMAN;
+  return org && roleId !== "manager" && Object.hasOwn(org.roles, "manager")
+    ? "manager"
+    : HUMAN;
 }
 
 function reportInvalid(err: unknown): never {
@@ -780,7 +1086,10 @@ function reportInvalid(err: unknown): never {
 
 function requireInitialised(): void {
   const paths = getForemanPaths();
-  if (!existsSync(paths.root)) fail(`Foreman is not initialised at ${paths.root}. Run 'foreman init' first.`);
+  if (!existsSync(paths.root))
+    fail(
+      `Foreman is not initialised at ${paths.root}. Run 'foreman init' first.`,
+    );
 }
 
 function fail(message: string): never {
