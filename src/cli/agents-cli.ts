@@ -125,7 +125,7 @@ agentsCommand
   .option("--config-path <path>", "override the registry's default config path")
   .option(
     "--skip-config",
-    "do not inject the MCP snippet into the agent config",
+    "leave the agent's own config alone: no MCP snippet, no identity file",
   )
   .option(
     "--skip-projection",

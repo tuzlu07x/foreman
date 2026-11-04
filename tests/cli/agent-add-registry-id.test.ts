@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -38,6 +38,35 @@ describe('foreman agent add <registry-id>', () => {
     expect(out.status).toBe(0)
     const shown = JSON.parse(run('agent', 'show', 'claude-code', '--json').stdout) as { metadata: { registryId: string } }
     expect(shown.metadata.registryId).toBe('claude-code')
+  })
+
+  describe("the agent's own identity file", () => {
+    const identity = () => join(dir, 'home', '.codex', 'AGENTS.md')
+    const mine = 'my own Codex instructions\n'
+
+    beforeEach(() => {
+      mkdirSync(dirname(identity()), { recursive: true })
+      writeFileSync(identity(), mine)
+    })
+
+    it('is left alone by --skip-config', () => {
+      expect(run('agent', 'add', 'codex', '--skip-config').status).toBe(0)
+      expect(readFileSync(identity(), 'utf-8')).toBe(mine)
+      expect(existsSync(`${identity()}.pre-foreman.bak`)).toBe(false)
+    })
+
+    it('is left alone by an instance, on add and on identity push', () => {
+      expect(run('agent', 'add', 'reviewer', '--type', 'codex').status).toBe(0)
+      expect(readFileSync(identity(), 'utf-8')).toBe(mine)
+      expect(run('identity', 'push').status).toBe(0)
+      expect(readFileSync(identity(), 'utf-8')).toBe(mine)
+    })
+
+    it('is still written for the agent itself, keeping a backup', () => {
+      expect(run('agent', 'add', 'codex').status).toBe(0)
+      expect(readFileSync(identity(), 'utf-8')).toContain('Foreman-mediated agent identity')
+      expect(readFileSync(`${identity()}.pre-foreman.bak`, 'utf-8')).toBe(mine)
+    })
   })
 
   it('asks for --type when the name is not a registry id', () => {
