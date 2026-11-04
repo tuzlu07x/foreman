@@ -9,6 +9,7 @@ import { hookCommand } from "./hook-cli.js";
 import { daemonCommand } from "./hub-daemon.js";
 import { identityCommand } from "./identity-cli.js";
 import { initCommand } from "./init.js";
+import { quickstartCommand } from "./quickstart.js";
 import { logCommand } from "./log.js";
 import { mcpCommand } from "./mcp-cli.js";
 import { integrationsCommand } from "./integrations-cli.js";
@@ -48,6 +49,7 @@ export function buildProgram(): Command {
     .version(FOREMAN_VERSION);
 
   program.addCommand(initCommand);
+  program.addCommand(quickstartCommand);
   program.addCommand(setupCommand);
   program.addCommand(startCommand);
   program.addCommand(daemonCommand);

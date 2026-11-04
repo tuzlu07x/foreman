@@ -192,6 +192,11 @@ Reboot, open the Ubuntu app to finish the user setup, then follow the Linux step
 
 ## First run
 
+Using Claude Code? `foreman quickstart` connects it and Telegram in about 5 minutes and
+ends with a real approval card on your phone. Say no at its first question to leave Claude
+Code's settings alone. For anything else, the guided setup below covers every agent and
+chat app.
+
 ```bash
 foreman start
 ```

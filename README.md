@@ -127,7 +127,16 @@ The agents are stand-ins with canned answers, and they're the only agent CLIs on
 `PATH`. Everything lives in a throwaway folder with its own `FOREMAN_HOME`, and no keys are
 needed. Your real agents, your files and your own Foreman home are never touched.
 
-**Then set up your own:**
+**Then set up your own in about 5 minutes:**
+
+```bash
+foreman quickstart
+```
+
+It connects Claude Code and Telegram, then sends a real approval card to your phone, so
+you see Foreman stop an agent before you trust it with anything.
+
+For other agents, Slack or Discord, use the full setup:
 
 ```bash
 foreman init            # identity, policy, encrypted secret store, audit DB
