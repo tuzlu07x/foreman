@@ -1599,8 +1599,10 @@ export function startForeman(
                 recordDelegationOutcome(inbox, {
                   controlId: row.id,
                   agentId,
-                  task: message,
+                  task: delegationLoop.wakeTask(link) ?? message,
                   spawn: exec.spawn,
+                  step: delegationLoop.isStep(link),
+                  handedOn: loopRun.delegationId ? delegationLoop.handedOn(loopRun.delegationId) : false,
                 });
                 if (exec.spawn.kind === "ok") {
                   return { status: "applied" };

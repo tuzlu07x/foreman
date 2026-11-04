@@ -131,8 +131,8 @@ orgCommand
     const warnings = validateOrg(org, registeredAgents());
     for (const w of warnings) console.log(`${orange("warn:")} ${w.message}`);
     console.log(
-      `${green("✓")} org.yaml valid — ${Object.keys(org.roles).length} roles, ` +
-        `${Object.keys(org.departments).length} departments`,
+      `${green("✓")} org.yaml valid — ${plural(Object.keys(org.roles).length, "role")}, ` +
+        plural(Object.keys(org.departments).length, "department"),
     );
   });
 
@@ -757,6 +757,10 @@ function orgOrNone(): OrgDoc | null {
  *  `add-department` fills it in, so it is only saved with a role in it. */
 function newOrgText(company: string): string {
   return `# Foreman Org — who does what, who reports to whom. Docs: docs/org.md\nversion: 1\ncompany: ${JSON.stringify(company)}\nhuman:\n  title: Founder\n`;
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
 /** Whom a new role reports to when nobody says: the team's Manager, as in

@@ -601,7 +601,17 @@ export function oneLineSummary(text: string, max: number): string {
  *  Written by the drain handler in `foreman start`. */
 export function recordDelegationOutcome(
   inbox: InboxService,
-  input: { controlId: number; agentId: string; task: string; spawn: DelegationSpawn },
+  input: {
+    controlId: number;
+    agentId: string;
+    task: string;
+    spawn: DelegationSpawn;
+    /** A step inside work you handed someone else: kept, but only new to
+     *  you when it failed. You hear when the whole of it is back. */
+    step?: boolean;
+    /** The run left work with others, so it isn't done yet. */
+    handedOn?: boolean;
+  },
 ): InboxItem | null {
   const { spawn, agentId } = input;
   const task = clip(input.task, 60);
@@ -610,7 +620,7 @@ export function recordDelegationOutcome(
   let body: string;
   switch (spawn.kind) {
     case "ok":
-      title = `${agentId} finished: ${task}`;
+      title = input.handedOn ? `${agentId} handed it on: ${task}` : `${agentId} finished: ${task}`;
       body = tail(spawn.stdout) || "(no output)";
       break;
     case "failed":
@@ -636,5 +646,6 @@ export function recordDelegationOutcome(
     body,
     agentId,
     dedupeKey: `control:${input.controlId}:outcome`,
+    ...((input.step || input.handedOn) && spawn.kind === "ok" ? { read: true } : {}),
   });
 }

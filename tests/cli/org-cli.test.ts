@@ -52,7 +52,7 @@ describe('foreman org (CLI)', () => {
     const first = run(['org', 'add-role', 'manager', '--preset', 'manager', '--agent', 'claude-code', '--company', 'Acme'])
     expect(first.status, first.stderr).toBe(0)
     expect(first.stdout).toContain('reporting to human')
-    expect(run(['org', 'validate']).stdout).toContain('1 roles')
+    expect(run(['org', 'validate']).stdout).toContain('1 role, 0 departments')
 
     // No department yet: the Manager, as in the wizard and on the Team page.
     const head = run(['org', 'add-role', 'backend', '--preset', 'backend-developer', '--agent', 'codex'])

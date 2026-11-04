@@ -26,6 +26,16 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Fixed
 
+- **The inbox counts what's yours.** A task that passed through five roles
+  used to leave ten new items. The steps in between are still listed, but
+  only a failure among them counts as new. A lead that hands work on says
+  *handed it on*, not *finished*, and the final result carries your task's
+  name, not *the work you handed off is back*.
+- **`what is backend doing?` works without an LLM**, in English or Turkish:
+  it answers with today's report on that role.
+- **TUI fixes.** With several agents on an 80-column terminal, Home's agent
+  line no longer breaks across rows, and the Delegations page shows a task
+  on one line.
 - **Foreman's brain works on current Claude models.** Every call sent
   `temperature`, which most current models answer with a 400, so a brain
   on Claude Sonnet 5, Opus 4.7 or later, or Fable failed every time; only

@@ -252,6 +252,36 @@ describe("DelegationLoop", () => {
     expect(db.select().from(delegations).where(eq(delegations.id, wake.id)).get()?.status).toBe("closed");
   });
 
+  it("tells a step inside someone's work from the work itself, and a wake from its task", () => {
+    scripts.manager = (task) => (task.startsWith("Foreman:") ? { out: "Done." } : { handOff: [["backend", "Build the API"]] });
+    scripts.backend = (task) => (task.startsWith("Foreman:") ? { out: "Done." } : { handOff: [["dev", "Write the tests"]] });
+    enqueue("manager", "Ship the feature", "cli");
+    const seen: Array<[string, boolean, string | null]> = [];
+    for (let row = pending()[0], n = 0; row && n < 30; row = pending()[0], n++) {
+      const link = loop.linkFor(row);
+      seen.push([argsOf(row)[0], loop.isStep(link), loop.wakeTask(link)]);
+      runOne(row);
+    }
+    const handedOn = db.select().from(delegations).all().map((r) => [r.targetAgent, loop.handedOn(r.id)]);
+    // Nothing is out once it is all back.
+    expect(handedOn.every(([, out]) => out === false)).toBe(true);
+    expect(seen).toEqual([
+      ["manager", false, null],
+      ["backend", true, null],
+      ["dev", true, null],
+      ["backend", true, "Build the API"],
+      ["manager", false, "Ship the feature"],
+    ]);
+  });
+
+  it("knows when a run ended with work out to others", () => {
+    scripts.manager = () => ({ handOff: [["backend", "Build the API"]] });
+    enqueue("manager", "Ship the feature", "cli");
+    runOne(pending()[0]!);
+    const run = db.select().from(delegations).all()[0]!;
+    expect(loop.handedOn(run.id)).toBe(true);
+  });
+
   it("batches: hand-offs from the same run wake the lead once, after the last one is back", () => {
     scripts.manager = (task) =>
       task.startsWith("Foreman:")

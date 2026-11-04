@@ -193,7 +193,7 @@ it('A company of agents: goals flow down the chart, agents talk, the chart and y
   })
 
   await j.step("every agent's answer reaches your inbox, the CEO's streamed ACP reply included", async (ev) => {
-    const ceo = await sb.inboxItem('the CEO result', (i) => i.title.startsWith('hermes finished: Launch'), 30_000)
+    const ceo = await sb.inboxItem('the CEO result', (i) => i.title.startsWith('hermes handed it on: Launch'), 30_000)
     // The ACP reply streams in two chunks and ends with { stopReason }: the
     // inbox shows what the CEO said, not {"stopReason": "end_turn"}.
     expect(ceo.body).toContain('Plan: the CTO builds it, the CMO announces it.')
@@ -205,7 +205,7 @@ it('A company of agents: goals flow down the chart, agents talk, the chart and y
       ['codex', 'Done: Write tests for the login page'],
       ['openclaw', 'Announcement drafted for Friday.'],
     ] as const) {
-      const item = await sb.inboxItem(`${agent}'s result`, (i) => i.title.startsWith(`${agent} finished`) && i.body.includes(text), 30_000)
+      const item = await sb.inboxItem(`${agent}'s result`, (i) => i.title.startsWith(`${agent} `) && i.body.includes(text), 30_000)
       ev(`inbox "${item.title}": ${item.body.split('\n')[0]}`)
     }
     const delegations = sb.json<DelegationRow[]>(['delegations', 'list', '--recent', '--json'])
