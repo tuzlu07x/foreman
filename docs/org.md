@@ -154,7 +154,7 @@ Any number of departments, any names. Each one is a line:
 ```bash
 foreman org add-department sales --head cso --agent codex --name Sales
 foreman org add-role sdr --agent hermes --department sales --title "Sales rep"
-foreman org add-role analyst --agent claude-code --department sales --model claude-haiku-4-5
+foreman org add-role analyst --agent claude-code --department sales --model claude-haiku-5-5
 foreman org show
 ```
 

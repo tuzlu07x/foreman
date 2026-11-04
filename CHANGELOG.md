@@ -6,6 +6,12 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Foreman's own Anthropic model is now Claude Haiku 5.5**, the balanced
+  tier Claude Sonnet 5.5, and both are priced. `llm.yaml` files that name a
+  model keep it.
+
 ### Added
 
 - **Gemini CLI can fill a role.** `foreman agent add gemini-cli`, then
@@ -20,6 +26,10 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Fixed
 
+- **Foreman's brain works on current Claude models.** Every call sent
+  `temperature`, which most current models answer with a 400, so a brain
+  on Claude Sonnet 5, Opus 4.7 or later, or Fable failed every time; only
+  Claude Haiku 4.5 and older worked. Foreman now sends what each model takes.
 - **An agent can no longer start itself over and over.** `foreman write`
   run from an agent's shell had neither the self check nor the runaway
   guard the chat path has, so a role handing work to itself ran until

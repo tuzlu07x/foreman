@@ -76,13 +76,32 @@ const PRICING_USD_PER_MTOK: Record<string, TokenPrice> = {
   "claude-opus-4-5": { input: 5, output: 25 },
   "claude-opus-4-1": { input: 15, output: 75 },
   "claude-opus-4": { input: 15, output: 75 },
+  "claude-sonnet-5-5": { input: 2, output: 10 },
   "claude-sonnet-5": { input: 2, output: 10 },
   "claude-sonnet-4-6": { input: 3, output: 15 },
   "claude-sonnet-4-5": { input: 3, output: 15 },
   "claude-sonnet-4": { input: 3, output: 15 },
+  // Up to 100K tokens per prompt; five times that above. Foreman's prompts
+  // stay well under it.
+  "claude-haiku-5-5": { input: 0.1, output: 0.5 },
   "claude-haiku-4-5": { input: 1, output: 5 },
   "claude-3-5-haiku": { input: 0.8, output: 4 },
 };
+
+/** Models that still take `temperature`; every newer one answers 400. */
+const TAKES_TEMPERATURE = /^claude-(3-|haiku-4|sonnet-4|opus-4(-[0-6])?(-\d{8})?$)/;
+
+/** What `model` accepts of the settings for a short, plain answer. Foreman's
+ *  calls have no use for thinking, which would also eat into their small
+ *  `max_tokens`. Fable and Opus 5.5 always think and refuse to be told not to. */
+export function modelTuning(model: string, temperature: number): Record<string, unknown> {
+  if (TAKES_TEMPERATURE.test(model)) return { temperature };
+  if (model.startsWith("claude-sonnet-5-5")) return { thinking: { type: "between_tools" } };
+  if (model.startsWith("claude-haiku-5") || /^claude-(sonnet|opus)-5(-\d{8})?$/.test(model)) {
+    return { thinking: { type: "disabled" } };
+  }
+  return {};
+}
 
 // A model missing from the table is billed like the most expensive current
 // one (Fable), so the budget can't be outrun by a model we haven't priced.
@@ -129,7 +148,8 @@ export class AnthropicLlmClient implements LlmClient {
   async ping(): Promise<LlmResponse> {
     return this.call('Say "pong" in one word.', {
       feature: "test",
-      maxTokens: 8,
+      // Room for a model that always thinks first.
+      maxTokens: 64,
       temperature: 0,
     });
   }
@@ -145,7 +165,7 @@ export class AnthropicLlmClient implements LlmClient {
     let bodyObj: Record<string, unknown> = {
       model: this.model,
       max_tokens: opts.maxTokens,
-      temperature: opts.temperature ?? 0,
+      ...modelTuning(this.model, opts.temperature ?? 0),
       messages: [{ role: "user", content: prompt }],
     };
     if (isOAuth) {
