@@ -36,9 +36,9 @@ describe("Gemini CLI's policy", () => {
   it("is owner-only, and refreshed if someone changed it", () => {
     const folder = writeGeminiPolicy(dir);
     const file = join(folder, "foreman.toml");
+    expect(readFileSync(file, "utf-8")).toBe(GEMINI_POLICY);
     expect(statSync(folder).mode & 0o777).toBe(0o700);
     expect(statSync(file).mode & 0o777).toBe(0o600);
-    expect(readFileSync(file, "utf-8")).toBe(GEMINI_POLICY);
   });
 });
 
