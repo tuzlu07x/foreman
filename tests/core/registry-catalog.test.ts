@@ -193,7 +193,7 @@ describe("loadBundledRegistry", () => {
     // `${task}` as an env var before our substitution. See
     // agent-spawn.ts module docstring.
     expect(codex?.task_command_template).toBe("codex exec \"{task}\"");
-    expect(codex?.task_timeout_seconds).toBe(600);
+    expect(codex?.task_timeout_seconds).toBe(1800);
   });
 
   it("declares task_command_template for Claude Code (--print mode)", () => {
@@ -202,7 +202,7 @@ describe("loadBundledRegistry", () => {
     expect(claude?.task_command_template).toBe(
       "claude --print \"{task}\"",
     );
-    expect(claude?.task_timeout_seconds).toBe(600);
+    expect(claude?.task_timeout_seconds).toBe(1800);
   });
 
   it("does NOT declare task_command_template for daemon-style agents (Hermes)", () => {

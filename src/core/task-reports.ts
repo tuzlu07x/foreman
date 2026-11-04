@@ -91,7 +91,10 @@ function outcomeOf(spawn: DelegationSpawn, handedOn: boolean): Outcome {
     case "failed":
       return { ok: false, text: clean(spawn.stderr || spawn.stdout) || `exit ${spawn.exitCode}` };
     case "timeout":
-      return { ok: false, text: `stopped after ${Math.round(spawn.timeoutMs / 1000)}s` };
+      return {
+        ok: false,
+        text: `ran out of time after ${Math.round(spawn.timeoutMs / 60_000)} min. What it had done is still in the project.`,
+      };
     case "spawn-error":
       return { ok: false, text: clean(spawn.error) };
     default:

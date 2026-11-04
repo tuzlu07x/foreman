@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildArgvFromTemplate,
   spawnAgentTask,
+  taskTimeoutFromEnv,
 } from "../../src/core/agent-spawn.js";
 import type { AgentEntry } from "../../src/core/registry-catalog.js";
 import { withoutAgentToken } from "../../src/core/agent-identity.js";
@@ -32,6 +33,15 @@ function agent(overrides: Partial<AgentEntry>): AgentEntry {
     ...overrides,
   } as AgentEntry;
 }
+
+describe("taskTimeoutFromEnv", () => {
+  it("reads minutes, and ignores anything else", () => {
+    expect(taskTimeoutFromEnv({ FOREMAN_TASK_TIMEOUT_MINUTES: "45" })).toBe(45 * 60_000);
+    expect(taskTimeoutFromEnv({ FOREMAN_TASK_TIMEOUT_MINUTES: "0" })).toBeUndefined();
+    expect(taskTimeoutFromEnv({ FOREMAN_TASK_TIMEOUT_MINUTES: "soon" })).toBeUndefined();
+    expect(taskTimeoutFromEnv({})).toBeUndefined();
+  });
+});
 
 describe("buildArgvFromTemplate", () => {
   it("tokenizes a simple `cmd arg ${task}` template", () => {

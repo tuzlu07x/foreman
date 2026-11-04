@@ -67,7 +67,7 @@ describe("TaskReports", () => {
     reports.settled(row(2, "dev", { status: "failed", error: "agent timed out" }));
     expect(told).toEqual([
       ["telegram", "lead finished", "handed it on. Asked the designer."],
-      ["telegram", "dev didn't finish", "stopped after 600s"],
+      ["telegram", "dev didn't finish", "ran out of time after 10 min. What it had done is still in the project."],
     ]);
   });
 

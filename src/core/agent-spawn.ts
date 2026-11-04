@@ -33,6 +33,12 @@ const KILL_GRACE_MS = 2_000;
 // our substitution, losing the placeholder entirely.
 const TASK_TOKEN = "{task}";
 
+/** FOREMAN_TASK_TIMEOUT_MINUTES, for work the catalog's limit doesn't fit. */
+export function taskTimeoutFromEnv(env: NodeJS.ProcessEnv = process.env): number | undefined {
+  const minutes = Number(env.FOREMAN_TASK_TIMEOUT_MINUTES);
+  return Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : undefined;
+}
+
 export interface SpawnAgentTaskOptions {
   /** Registry entry for the target agent. Must have task_command_template
    *  set; otherwise the outcome is `unsupported` with a clear reason. */
@@ -40,8 +46,9 @@ export interface SpawnAgentTaskOptions {
   /** The user-provided task text. Substituted into the template as a
    *  single argv element — embedded shell metachars are NOT interpreted. */
   task: string;
-  /** Override the per-agent timeout (defaults to entry.task_timeout_seconds
-   *  * 1000, or 300 000ms when both are unset). */
+  /** Override the per-agent timeout (defaults to
+   *  FOREMAN_TASK_TIMEOUT_MINUTES, then entry.task_timeout_seconds * 1000,
+   *  or 300 000ms when those are unset). */
   timeoutMs?: number;
   /** Streaming callback for live output. Called once per line of stdout
    *  or stderr the child produces. The same content is also captured in
@@ -194,6 +201,7 @@ export async function spawnAgentTask(
 
   const timeoutMs =
     options.timeoutMs ??
+    taskTimeoutFromEnv() ??
     (options.entry.task_timeout_seconds
       ? options.entry.task_timeout_seconds * 1000
       : DEFAULT_TIMEOUT_MS);

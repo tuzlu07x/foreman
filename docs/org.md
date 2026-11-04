@@ -382,6 +382,10 @@ Roles in one project share its folder, so two roles changing the same files at
 once can overwrite each other's work. Give them separate parts of the project,
 or make one wait for the other.
 
+A task may run for 30 minutes. Set `FOREMAN_TASK_TIMEOUT_MINUTES` to change
+that. When time runs out Foreman stops the agent and tells you. What it had
+done stays in the project.
+
 ## Department channels
 
 Agents talk to each other the way a company does: in department rooms,

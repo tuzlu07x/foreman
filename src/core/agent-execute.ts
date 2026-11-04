@@ -5,6 +5,7 @@ import { explainTaskFailure, taskLanguage } from "./task-failure-hints.js";
 import {
   type SpawnAgentTaskOutcome,
   spawnAgentTask,
+  taskTimeoutFromEnv,
 } from "./agent-spawn.js";
 import type { MediatorLike } from "./codex-mediator-connector.js";
 import type { FlowManager } from "./flow-manager.js";
@@ -524,7 +525,9 @@ async function executeAcpDirective(
   // notifications; the prompt's result is only `{ stopReason }`.
   const reply = new AcpReplyCollector();
   const currentDepth = Number(process.env.FOREMAN_SPAWN_DEPTH ?? "0") || 0;
+  const timeoutMs = taskTimeoutFromEnv() ?? (input.entry.task_timeout_seconds ?? 600) * 1000;
   const acpOutcome = await runAcpMediatedTask({
+    timeoutMs,
     mediator: deps.mediator,
     sourceAgent: input.agentId,
     prompt: `${input.launch?.taskPrefix ?? ""}${input.contextPrefix ?? ""}${input.message}`,
@@ -552,7 +555,7 @@ async function executeAcpDirective(
     hooks: { onNotification: (method, params) => reply.onNotification(method, params) },
   });
   const durationMs = Date.now() - startMs;
-  const spawn = acpOutcomeToSpawn(acpOutcome, durationMs, reply.text());
+  const spawn = acpOutcomeToSpawn(acpOutcome, durationMs, reply.text(), timeoutMs);
 
   // Close the session on outcome — matches the spawnAgentTask branch
   // exactly so the lifecycle bridge (#523) treats both transports
@@ -588,6 +591,7 @@ export function acpOutcomeToSpawn(
   outcome: Awaited<ReturnType<typeof runAcpMediatedTask>>,
   durationMs: number,
   streamedReply = "",
+  timeoutMs = 10 * 60 * 1000,
 ): SpawnAgentTaskOutcome {
   if (outcome.ok) {
     // The agent's reply is what it streamed (agent_message_chunk). An
@@ -615,8 +619,7 @@ export function acpOutcomeToSpawn(
       kind: "timeout",
       stdout: "",
       stderr: outcome.error,
-      // Match the timeout from runAcpMediatedTask's default.
-      timeoutMs: 10 * 60 * 1000,
+      timeoutMs,
       durationMs,
     };
   }
