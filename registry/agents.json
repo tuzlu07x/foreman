@@ -505,6 +505,52 @@
       }
     },
     {
+      "id": "gemini-cli",
+      "name": "Gemini CLI",
+      "tagline": "Google's terminal coding agent",
+      "homepage": "https://github.com/google-gemini/gemini-cli",
+      "install": { "npm": "@google/gemini-cli", "brew": "gemini-cli", "binary": "gemini" },
+      "config_paths": ["~/.gemini/settings.json"],
+      "mcp_config": { "paths": ["~/.gemini/settings.json"], "layout": "map", "key": "mcpServers" },
+      "required_secrets": [],
+      "optional_secrets": ["gemini-key"],
+      "llm_compat": ["gemini"],
+      "mcp_compatible": true,
+      "approval_adapter": "acp-stdio-v1",
+      "acp_command": { "command": "gemini", "args": ["--acp"] },
+      "task_model_flag": "--model",
+      "task_timeout_seconds": 600,
+      "supported_versions": ">=0.66.0",
+      "min_foreman_version": "2.3.2",
+      "provider_mapping": {
+        "gemini": {
+          "preferred": "oauth",
+          "variants": {
+            "oauth": {
+              "label": "Google account sign-in",
+              "interactive_setup": "gemini",
+              "required_secret": null,
+              "secret_acquisition": {
+                "name": "Google account",
+                "note": "Gemini CLI uses your Google sign-in, so no API key is needed. Run `gemini` once in a terminal and choose Sign in with Google."
+              }
+            },
+            "api-key": {
+              "label": "Gemini API key",
+              "env_vars": { "GEMINI_API_KEY": "${secret:gemini-key}" },
+              "required_secret": "gemini-key",
+              "secret_acquisition": { "name": "Google AI Studio API key", "url": "https://aistudio.google.com/app/apikey" }
+            }
+          }
+        }
+      },
+      "secret_projection": {
+        "env_file": "~/.gemini/.env",
+        "env_vars": { "GEMINI_API_KEY": { "from_secret": "gemini-key", "if_provider": "gemini" } },
+        "launch": "gemini"
+      }
+    },
+    {
       "id": "zeroclaw",
       "name": "ZeroClaw",
       "tagline": "Minimalist Rust-based AI agent runtime for low-resource boxes",

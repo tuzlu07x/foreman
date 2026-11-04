@@ -38,7 +38,7 @@ export interface WizardServices {
   orgConfigPath?: string;
   /** Adds a role's instance (`foreman agent add <id> --type <runsOn>`);
    *  null when added, else why not. Default: the CLI's scripted add. */
-  addTeamAgent?: (agentId: string, runsOn: "claude-code" | "codex") => Promise<string | null>;
+  addTeamAgent?: (agentId: string, runsOn: "claude-code" | "codex" | "gemini-cli") => Promise<string | null>;
 }
 
 export interface WizardOauthRunStep {

@@ -26,7 +26,7 @@
 
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
 
-import { wireAcpBridgeToMediator } from './acp-mediator-connector.js'
+import { wireAcpBridgeToMediator, type WireAcpBridgeToMediatorOptions } from './acp-mediator-connector.js'
 import {
   ACP_APPROVAL_METHODS,
   type AcpRequestPermissionResponse,
@@ -91,6 +91,8 @@ export interface SpawnAcpMediatedOptions {
   /** Argv used to spawn the ACP-mode agent. PR 5 wires this from the
    *  registry entry's `task_acp_command_template`. */
   argv: { command: string; args: string[] }
+  /** Forwarded to the mediator connector (acp-mediator-connector.ts). */
+  policyFallback?: WireAcpBridgeToMediatorOptions['policyFallback']
   /** Override the initialize capabilities payload. Defaults to a
    *  conservative "no fs / terminal" capability set so agents won't
    *  emit those server requests we'd have to reject. */
@@ -179,6 +181,7 @@ export function spawnAcpMediated(
     onApprovalRequest: wireAcpBridgeToMediator({
       sourceAgent: options.sourceAgent,
       mediator: options.mediator,
+      ...(options.policyFallback ? { policyFallback: options.policyFallback } : {}),
     }),
     failClosedReply: () => ({ outcome: { outcome: 'cancelled' as const } }),
     hooks: options.hooks,

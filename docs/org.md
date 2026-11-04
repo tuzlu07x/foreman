@@ -25,8 +25,8 @@ foreman org sync                                       # push roles to registere
 foreman org assign marketing "draft the launch post"   # department → its head
 ```
 
-Any registered runtime can fill a role — Claude Code, Codex, Hermes,
-OpenClaw, ZeroClaw or your own MCP agent (`foreman agent add <id>`, where
+Any registered runtime can fill a role — Claude Code, Codex, Gemini CLI,
+Hermes, OpenClaw, ZeroClaw or your own MCP agent (`foreman agent add <id>`, where
 `<id>` is a catalog id from `foreman registry list`).
 
 ## What the chart enforces
@@ -255,8 +255,8 @@ foreman org add-role chores --runs-on claude-code --title "Chores" \
   --can read,network
 ```
 
-- `--runs-on claude-code|codex` fills the role with a new instance named after
-  the role ([several roles on one agent](#several-roles-on-one-agent)).
+- `--runs-on claude-code|codex|gemini-cli` fills the role with a new instance
+  named after the role ([several roles on one agent](#several-roles-on-one-agent)).
   `--agent <id>` gives it to an agent you already registered instead.
 - `--describe` (org.yaml `instructions`) is what the agent is told when
   Foreman hands it work, after who it is and before the task.
@@ -281,8 +281,8 @@ How `can` works:
 
 ### Several roles on one agent
 
-You don't need a different agent for each role. Register Claude Code or Codex
-again under a name per role, and give each name a role:
+You don't need a different agent for each role. Register Claude Code, Codex or
+Gemini CLI again under a name per role, and give each name a role:
 
 ```bash
 foreman agent add codex                          # the agent itself
@@ -313,7 +313,8 @@ the instance, named after the role, and the role.
 
 The agent's own config (`~/.codex/config.toml`, `~/.claude.json`) stays wired
 to the agent itself: adding an instance, `agent rewire` and `doctor` leave it
-alone. Instances work for Claude Code and Codex. For Hermes, OpenClaw and
+alone. Instances work for Claude Code, Codex and Gemini CLI, and one team can
+mix them. For Hermes, OpenClaw and
 ZeroClaw a second instance runs with the agent's own wiring (pass
 `--config-path` to give it a config of its own).
 
@@ -604,6 +605,13 @@ resets. You can still assign work to it yourself.
 - Codex has no hook before its own tools run: a Codex instance's built-in
   shell and file edits follow Codex's sandbox and approval settings. Its
   role's `can` applies to what goes through Foreman.
+- Gemini CLI is guarded when Foreman runs the task (`gemini --acp`): every tool
+  call reaches Foreman first, including reads and the shell commands Gemini
+  calls safe, and the role's `can` applies. Foreman only asks you about what
+  `policy.yaml` or the risk rules flag, as with Claude Code's hook. Gemini
+  run by you, outside Foreman, isn't guarded, so `foreman open` doesn't open
+  it; talk to a Gemini role with `foreman write <role> <message>`. Spend isn't
+  tracked yet: tasks and tool calls show up in reports, tokens and cost don't.
 - A manager's recommendation is only as trustworthy as the manager agent.
   Agent ids are self-declared, so any process that starts
   `foreman mcp-stdio --source <manager-id>` can recommend as that manager.

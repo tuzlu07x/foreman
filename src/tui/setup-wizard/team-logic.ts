@@ -22,12 +22,13 @@ import {
 // `add-department` do, from the wizard and the Team page.
 
 /** The agents a role can run on: only these run as several agents. */
-export const TEAM_RUNTIMES = ["claude-code", "codex"] as const;
+export const TEAM_RUNTIMES = ["claude-code", "codex", "gemini-cli"] as const;
 export type TeamRuntime = (typeof TEAM_RUNTIMES)[number];
 
 export const TEAM_RUNTIME_NAMES: Record<TeamRuntime, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
+  "gemini-cli": "Gemini CLI",
 };
 
 export type TeamPhase =

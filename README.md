@@ -6,7 +6,7 @@
 
 ### Run a whole crew of AI agents. Safely. On your own machine.
 
-Foreman is the **security gateway and foreman** for Claude Code, Codex, Hermes, OpenClaw and
+Foreman is the **security gateway and foreman** for Claude Code, Codex, Gemini CLI, Hermes, OpenClaw and
 any MCP agent. Every tool call is **mediated, scored, approved by you when it matters, and
 audited**, and your agents are organised like a company, with departments, reporting lines
 and least-privilege access.
@@ -52,7 +52,7 @@ Foreman sits in the path of every call and handles all four locally, before anyt
 
 | | |
 | --- | --- |
-| 🛡️ **Mediate every call** | MCP tools, Claude Code's built-in tools (PreToolUse hook), Codex and ACP agents (Hermes, OpenClaw, ZeroClaw) all go through one pipeline: `policy.yaml`, then risk rules, then your approval, then an audit log. It fails closed: if Foreman can't decide, the call doesn't run. |
+| 🛡️ **Mediate every call** | MCP tools, Claude Code's built-in tools (PreToolUse hook), Codex and ACP agents (Gemini CLI, Hermes, OpenClaw, ZeroClaw) all go through one pipeline: `policy.yaml`, then risk rules, then your approval, then an audit log. It fails closed: if Foreman can't decide, the call doesn't run. |
 | 🧰 **[MCP Hub](docs/mcp-hub.md)** | `foreman mcp add github` once, and every agent gets it, mediated. There is a curated catalog of 19 servers (GitHub, filesystem, Playwright, Notion, Stripe, Sentry, Brave, Exa, Discord, X, YouTube, App Store / Google Play, …). Secrets stay in Foreman's encrypted store, never in agent configs. |
 | 🧪 **Tool-poisoning & rug-pull defence** | Tool descriptions are scanned for hidden instructions. Definitions are pinned on first use, and a tool that changes later is withheld until you trust it again. Results are redacted for secrets and flagged for injected instructions. |
 | 🏢 **[Foreman Org](docs/org.md)** | `foreman org init --template startup` sets up a CEO, CTO, CMO, CFO and teams, each role filled by the agent you choose. Delegation follows reporting lines, and each department sees only the tools it needs. |
@@ -207,7 +207,7 @@ effects afterwards. See [`docs/architecture.md`](docs/architecture.md).
 
 | Category | Integrations |
 | --- | --- |
-| **Agents** ([guide](docs/agent-lifecycle.md)) | Claude Code · Codex · Hermes · OpenClaw · ZeroClaw · any MCP agent |
+| **Agents** ([guide](docs/agent-lifecycle.md)) | Claude Code · Codex · Gemini CLI · Hermes · OpenClaw · ZeroClaw · any MCP agent |
 | **Work tools** ([integrations](docs/integrations.md)) | GitHub · GitLab · Jira & Confluence · Trello · Linear · Notion: add once, pick which agents may use each, read-only by default |
 | **MCP servers** ([hub](docs/mcp-hub.md)) | GitHub · Filesystem · Memory · Playwright · Chrome DevTools · Notion · Sentry · Stripe · Brave · Exa · Firecrawl · Context7 · Figma · Resend · Discord · X · YouTube · App Store Connect · App Store + Google Play · your own (stdio or HTTPS) |
 | **Channels** ([guide](docs/notifications.md)) | Telegram, Slack and Discord (tap-to-approve, `/foreman` commands) · Email (SMTP) · ntfy · Webhook (signed) · OS notifications |

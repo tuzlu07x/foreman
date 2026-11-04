@@ -54,6 +54,16 @@ export interface InstanceLaunch {
   args: string[];
   env: Record<string, string>;
   taskPrefix: string;
+  /** MCP servers for an ACP agent's session (`session/new`). */
+  acpMcpServers?: AcpMcpServer[];
+}
+
+/** An MCP server as ACP's `session/new` takes it. */
+export interface AcpMcpServer {
+  name: string;
+  command: string;
+  args: string[];
+  env: Array<{ name: string; value: string }>;
 }
 
 export interface InstanceLaunchInput {
@@ -69,7 +79,7 @@ export interface InstanceLaunchInput {
 
 /** Agents whose launch can carry their own Foreman MCP server. */
 export function supportsInstances(entry: Pick<AgentEntry, "id">): boolean {
-  return entry.id === "codex" || entry.id === "claude-code";
+  return entry.id === "codex" || entry.id === "claude-code" || entry.id === "gemini-cli";
 }
 
 /**
@@ -105,6 +115,18 @@ export function instanceLaunch(entry: Pick<AgentEntry, "id">, input: InstanceLau
       ],
       env: {},
       taskPrefix: rolePrompt,
+    };
+  }
+  if (entry.id === "gemini-cli") {
+    // Gemini runs over ACP, where each session names its MCP servers. Like
+    // Codex it has no flag for a role, so the role goes before the task.
+    return {
+      args: [],
+      env: {},
+      taskPrefix: rolePrompt,
+      acpMcpServers: [
+        { name: "foreman", command, args: serverArgs, env: Object.entries(env).map(([name, value]) => ({ name, value })) },
+      ],
     };
   }
   if (entry.id === "claude-code") {

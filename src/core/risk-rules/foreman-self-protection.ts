@@ -42,6 +42,7 @@ const AGENT_WIRING_PATTERNS: ReadonlyArray<{ re: RegExp; reason: string }> = [
   { re: /(^|[/\\\s"'~])\.claude\.json\b/i, reason: 'Claude Code MCP config (holds the Foreman wiring and agent token)' },
   { re: /(^|[/\\\s"'])\.mcp\.json\b/i, reason: "project MCP config (can shadow Foreman's MCP server)" },
   { re: /\.codex[/\\]config\.toml\b/i, reason: 'Codex config (MCP wiring)' },
+  { re: /\.gemini[/\\]settings\.json\b/i, reason: 'Gemini CLI settings (MCP wiring)' },
   { re: /\.hermes[/\\]config\.ya?ml\b/i, reason: 'Hermes config (MCP wiring)' },
   { re: /\.openclaw[/\\][^\s"']*\.(json|ya?ml|toml)\b/i, reason: 'OpenClaw config (MCP wiring)' },
   { re: /\.zeroclaw[/\\]config\.toml\b/i, reason: 'ZeroClaw config (MCP wiring)' },
@@ -52,6 +53,7 @@ const AGENT_WIRING_PATTERNS: ReadonlyArray<{ re: RegExp; reason: string }> = [
 const TOKEN_WIRING_FILES: ReadonlyArray<{ re: RegExp; agent: string; label: string }> = [
   { re: /(^|[/\\\s"'~])\.claude\.json\b/i, agent: 'claude-code', label: "Claude Code's MCP config" },
   { re: /\.codex[/\\]config\.toml\b/i, agent: 'codex', label: "Codex's config" },
+  { re: /\.gemini[/\\]settings\.json\b/i, agent: 'gemini-cli', label: "Gemini CLI's settings" },
   { re: /\.hermes[/\\]config\.ya?ml\b/i, agent: 'hermes', label: "Hermes' config" },
   { re: /\.openclaw[/\\][^\s"']*\.(json5?|ya?ml|toml)\b/i, agent: 'openclaw', label: "OpenClaw's config" },
   { re: /\.zeroclaw[/\\]config\.toml\b/i, agent: 'zeroclaw', label: "ZeroClaw's config" },

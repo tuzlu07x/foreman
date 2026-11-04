@@ -39,7 +39,7 @@ import {
   type NormalisedDecision,
 } from './adapters/index.js'
 import type { MediatorLike } from './codex-mediator-connector.js'
-import { denialReason, type MediatorOutput } from './mediator.js'
+import { denialReason, type MediatorInput, type MediatorOutput } from './mediator.js'
 
 /** Specific adapter shape the connector needs — the third argument
  *  to encodeDecision (the ACP-offered options list) is not part of
@@ -60,6 +60,9 @@ export interface WireAcpBridgeToMediatorOptions {
   sourceAgent: string
   /** Mediator (or a test double) for risk + approval. */
   mediator: MediatorLike
+  /** What a call no policy.yaml rule covers gets (the mediator's own
+   *  default: ask). The risk engine still escalates risky calls. */
+  policyFallback?: MediatorInput['policyFallback']
   /** Adapter — defaults to `acpStdioV1Adapter`. Override only when
    *  wiring a future ACP v2 or a fixture adapter in tests. */
   adapter?: AcpAdapter
@@ -126,6 +129,7 @@ export function wireAcpBridgeToMediator(
         targetTool: normalised.targetTool,
         sessionId: normalised.sessionId,
         message,
+        ...(options.policyFallback ? { policyFallback: options.policyFallback } : {}),
       })
     } catch (err) {
       void err

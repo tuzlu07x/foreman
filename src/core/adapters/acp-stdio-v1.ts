@@ -149,7 +149,10 @@ function argsFor(tool: AcpToolCall): Record<string, unknown> {
 
   // network_fetch — `url` is the canonical key.
   if (tool.kind === 'fetch') {
+    // Gemini CLI sends no input here: the url is only in the title.
+    const fromTitle = tool.title?.match(/https?:\/\/[^\s"'<>)]+/)?.[0]
     if (typeof raw.url === 'string') args.url = raw.url
+    else if (fromTitle) args.url = fromTitle
     if (typeof raw.method === 'string') args.method = raw.method
     return args
   }

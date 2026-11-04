@@ -1042,6 +1042,7 @@ export function quickModels(provider: string): Array<{ id: string; hint: string 
 export const AGENT_PROVIDER: Readonly<Record<string, string>> = {
   codex: "openai",
   "claude-code": "anthropic",
+  "gemini-cli": "gemini",
 };
 
 // Providers for which Foreman supports subscription sign-in (alongside

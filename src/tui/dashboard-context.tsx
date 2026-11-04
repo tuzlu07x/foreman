@@ -46,7 +46,7 @@ export interface DashboardServices {
   orgConfigPath?: string;
   /** Team page: adds a role's Claude Code / Codex instance (null when added,
    *  else why not). Unset: `runAgentAddScripted`. Tests pass a fake. */
-  addTeamAgent?: (agentId: string, runsOn: "claude-code" | "codex") => Promise<string | null>;
+  addTeamAgent?: (agentId: string, runsOn: "claude-code" | "codex" | "gemini-cli") => Promise<string | null>;
   /** Team page: unregisters a removed role's instance (null when done,
    *  else why not). Unset: unregister, revoke its token, unwire it (as
    *  Agents `x` does). Tests pass a fake. */
