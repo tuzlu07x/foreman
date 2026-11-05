@@ -4,6 +4,7 @@ import {
   buildAuthorizeUrl,
   exchangeCodeForTokens,
   OAuthError,
+  OAuthSignedOutError,
   parseCallbackInput,
   waitForLoopbackCallback,
   type OAuthCallback,
@@ -27,11 +28,17 @@ import { generatePkce, generateState } from "./pkce.js";
 // it, bound to that account. Both are kept across sign-outs, because signing
 // out ends the session, not the registration. The ID token is checked before
 // anything is stored, and a sign-in without the plan scope doesn't count.
+//
+// The issued id is saved as soon as the browser brings it back. OpenAI can
+// refuse the code that came with it (invalid_grant), and the guide's answer is
+// a fresh authorization with that same id, not a second registration.
 
 const REGISTRATION_SECRET = "llm-oauth-openai-registration";
 const APP_NAME = "Foreman";
 const JWKS_URL = `${OPENAI_ISSUER}/.well-known/jwks.json`;
 const CLOCK_SKEW_SECONDS = 60;
+/** A refused code gets one fresh authorization. */
+const MAX_AUTHORIZATIONS = 2;
 
 export interface ChatgptRegistration {
   /** Opaque and stable for this computer: identifies nobody. */
@@ -62,11 +69,35 @@ export interface SignInIo {
   presentAuthUrl: (url: string) => void | Promise<void>;
   readPastedCode?: () => Promise<string>;
   useLoopback?: boolean;
+  /** OpenAI refused the code, so the browser is about to open once more. */
+  onRetry?: () => void;
 }
 
 /** The whole sign-in. Returns tokens that have passed every check; the
  *  caller stores them. */
 export async function signInWithChatgpt(
+  store: RegistrationStore,
+  io: SignInIo,
+  fetchImpl?: OAuthFetch,
+): Promise<OAuthTokens> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await authorize(store, io, fetchImpl);
+    } catch (err) {
+      if (!(err instanceof OAuthSignedOutError) || err.code !== "invalid_grant") throw err;
+      if (attempt >= MAX_AUTHORIZATIONS) {
+        const reason = err.detail ? `invalid_grant: ${err.detail}` : "invalid_grant";
+        throw new OAuthError(
+          `OpenAI refused the sign-in code twice (${reason}). Run \`foreman llm login openai\` to try again.`,
+        );
+      }
+      io.onRetry?.();
+    }
+  }
+}
+
+/** One trip through the browser and the token endpoint. */
+async function authorize(
   store: RegistrationStore,
   io: SignInIo,
   fetchImpl?: OAuthFetch,
@@ -79,9 +110,10 @@ export async function signInWithChatgpt(
   const nonce = randomBytes(16).toString("base64url");
   const url = buildAuthorizeUrl(provider, challenge, state, {
     nonce,
+    ext_agent_host_id: registration.hostId,
     ...(registration.clientId
       ? { client_id: registration.clientId }
-      : { ext_agent_host_id: registration.hostId, agent_name_hint: APP_NAME }),
+      : { agent_name_hint: APP_NAME }),
   });
 
   // The listener has to be up before the browser can come back to it.
@@ -101,6 +133,7 @@ export async function signInWithChatgpt(
 
   if (callback.state !== state) throw new OAuthError("OAuth state mismatch — aborting (possible CSRF)");
   const clientId = issuedClientId(registration, callback);
+  if (!registration.clientId) saveRegistration(store, { ...registration, clientId });
   const tokens = await exchangeCodeForTokens(
     provider,
     { code: callback.code, verifier, clientId },
@@ -124,7 +157,10 @@ function issuedClientId(registration: ChatgptRegistration, callback: OAuthCallba
     }
     return registration.clientId;
   }
-  if (!callback.clientId) throw new OAuthError("OpenAI didn't finish registering Foreman. Sign in again.");
+  // The shared entry point is never an issued id.
+  if (!callback.clientId || callback.clientId === getOAuthProvider("openai").clientId) {
+    throw new OAuthError("OpenAI didn't finish registering Foreman. Sign in again.");
+  }
   return callback.clientId;
 }
 

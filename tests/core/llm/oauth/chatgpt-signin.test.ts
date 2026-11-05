@@ -73,8 +73,13 @@ function secrets(seed: Record<string, string> = {}) {
 }
 
 /** Plays OpenAI: reads the authorize URL, answers the callback and token call. */
-function openai(opts: { scope?: string; issued?: string | null; state?: string; sub?: string } = {}) {
-  const seen: { authorize?: URL; token?: URLSearchParams } = {};
+function openai(
+  opts: { scope?: string; issued?: string | null; state?: string; sub?: string; refuse?: number; failWith?: string } = {},
+) {
+  const seen: { authorize?: URL; token?: URLSearchParams; authorizes: URL[]; tokens: URLSearchParams[] } = {
+    authorizes: [],
+    tokens: [],
+  };
   let nonce = "";
   let state = "";
   let clientId = "";
@@ -82,13 +87,16 @@ function openai(opts: { scope?: string; issued?: string | null; state?: string; 
     useLoopback: false,
     presentAuthUrl: (url: string) => {
       seen.authorize = new URL(url);
+      seen.authorizes.push(seen.authorize);
       nonce = seen.authorize.searchParams.get("nonce")!;
       state = seen.authorize.searchParams.get("state")!;
     },
     readPastedCode: async () => {
       await new Promise((r) => setImmediate(r));
-      const issued = opts.issued === undefined ? "oaiapp_1" : opts.issued;
-      clientId = issued ?? seen.authorize!.searchParams.get("client_id")!;
+      // Only a new registration is sure to bring the id back.
+      const asked = seen.authorize!.searchParams.get("client_id")!;
+      const issued = opts.issued === undefined ? (asked === "dynamic_agent_client" ? "oaiapp_1" : null) : opts.issued;
+      clientId = issued ?? asked;
       const q = new URLSearchParams({ code: "CODE", state: opts.state ?? state, ...(issued ? { client_id: issued } : {}) });
       return `http://127.0.0.1:1455/auth/callback?${q.toString()}`;
     },
@@ -96,6 +104,12 @@ function openai(opts: { scope?: string; issued?: string | null; state?: string; 
   const fetchImpl: OAuthFetch = async (url, init) => {
     if (url.endsWith("/jwks.json")) return { ok: true, status: 200, text: async () => JSON.stringify({ keys: [jwk] }) };
     seen.token = new URLSearchParams(String(init.body));
+    seen.tokens.push(seen.token);
+    if (opts.failWith) return { ok: false, status: 400, text: async () => opts.failWith! };
+    if (seen.tokens.length <= (opts.refuse ?? 0)) {
+      const refusal = { error: "invalid_grant", error_description: "The code was not accepted" };
+      return { ok: false, status: 400, text: async () => JSON.stringify(refusal) };
+    }
     const claims = { ...good({ nonce, aud: clientId, exp: Date.now() / 1000 + 600 }), sub: opts.sub ?? "user-1" };
     const body = {
       access_token: "AT",
@@ -124,7 +138,7 @@ describe("signInWithChatgpt", () => {
     expect(JSON.parse(store.data.get("llm-oauth-openai-registration")!)).toMatchObject({ clientId: "oaiapp_1", sub: "user-1" });
   });
 
-  it("uses the saved client id later, and no registration fields", async () => {
+  it("signs in later with the saved client id and the same host id, without the app name", async () => {
     const store = secrets();
     const first = openai();
     await signInWithChatgpt(store, first.io, first.fetchImpl);
@@ -132,7 +146,7 @@ describe("signInWithChatgpt", () => {
     await signInWithChatgpt(store, later.io, later.fetchImpl);
     const query = later.seen.authorize!.searchParams;
     expect(query.get("client_id")).toBe("oaiapp_1");
-    expect(query.has("ext_agent_host_id")).toBe(false);
+    expect(query.get("ext_agent_host_id")).toBe(first.seen.authorize!.searchParams.get("ext_agent_host_id"));
     expect(query.has("agent_name_hint")).toBe(false);
   });
 
@@ -150,6 +164,51 @@ describe("signInWithChatgpt", () => {
   it("treats a registration with no issued id as unfinished", async () => {
     const o = openai({ issued: null });
     await expect(signInWithChatgpt(secrets(), o.io, o.fetchImpl)).rejects.toThrow(/finish registering/);
+  });
+
+  it("doesn't take the shared entry point for an issued id", async () => {
+    const store = secrets();
+    const o = openai({ issued: "dynamic_agent_client" });
+    await expect(signInWithChatgpt(store, o.io, o.fetchImpl)).rejects.toThrow(/finish registering/);
+    expect(o.seen.tokens).toHaveLength(0);
+    expect(JSON.parse(store.data.get("llm-oauth-openai-registration")!).clientId).toBeUndefined();
+  });
+
+  it("answers a refused code with a fresh authorization as the issued client", async () => {
+    const store = secrets();
+    const o = openai({ refuse: 1 });
+    let retries = 0;
+    const tokens = await signInWithChatgpt(store, { ...o.io, onRetry: () => retries++ }, o.fetchImpl);
+    expect(retries).toBe(1);
+    const [first, second] = o.seen.authorizes.map((u) => u.searchParams);
+    expect(first!.get("client_id")).toBe("dynamic_agent_client");
+    expect(second!.get("client_id")).toBe("oaiapp_1");
+    expect(second!.has("agent_name_hint")).toBe(false);
+    expect(second!.get("ext_agent_host_id")).toBe(first!.get("ext_agent_host_id"));
+    for (const fresh of ["state", "nonce", "code_challenge"]) {
+      expect(second!.get(fresh)).not.toBe(first!.get(fresh));
+    }
+    expect(o.seen.tokens.map((t) => t.get("client_id"))).toEqual(["oaiapp_1", "oaiapp_1"]);
+    expect(o.seen.tokens[1]!.get("code_verifier")).not.toBe(o.seen.tokens[0]!.get("code_verifier"));
+    expect(tokens).toMatchObject({ clientId: "oaiapp_1", sub: "user-1" });
+  });
+
+  it("stops after a second refusal, says what OpenAI said, and keeps the issued id", async () => {
+    const store = secrets();
+    const o = openai({ refuse: 2 });
+    await expect(signInWithChatgpt(store, o.io, o.fetchImpl)).rejects.toThrow(
+      /refused the sign-in code twice \(invalid_grant: The code was not accepted\)/,
+    );
+    expect(o.seen.tokens).toHaveLength(2);
+    const later = openai({ issued: null });
+    await signInWithChatgpt(store, later.io, later.fetchImpl);
+    expect(later.seen.authorize!.searchParams.get("client_id")).toBe("oaiapp_1");
+  });
+
+  it("doesn't start over for an error a new sign-in can't fix", async () => {
+    const o = openai({ failWith: JSON.stringify({ error: "invalid_client" }) });
+    await expect(signInWithChatgpt(secrets(), o.io, o.fetchImpl)).rejects.toThrow(/invalid_client/);
+    expect(o.seen.authorizes).toHaveLength(1);
   });
 
   it("won't mix another account into this computer's registration", async () => {

@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { redactSecretShapes } from "../../risk-rules/secret-patterns.js";
 import type { OAuthProviderConfig } from "./oauth-providers.js";
 
 export interface OAuthFetch {
@@ -128,8 +129,11 @@ function tokensFromRaw(
 
 /** A sign-in that can't be refreshed: only signing in again helps. */
 export class OAuthSignedOutError extends OAuthError {
-  constructor(public readonly code: string) {
-    super(`Sign-in ended (${code})`);
+  constructor(
+    public readonly code: string,
+    public readonly detail?: string,
+  ) {
+    super(`Sign-in ended (${code}${detail ? `: ${detail}` : ""})`);
     this.name = "OAuthSignedOutError";
   }
 }
@@ -143,13 +147,27 @@ const SIGNED_OUT_ERRORS: ReadonlySet<string> = new Set([
   "refresh_token_reused",
 ]);
 
-function tokenErrorCode(text: string): string | null {
+const MAX_ERROR_DETAIL = 200;
+
+/** What the token endpoint said, in OAuth's flat shape or OpenAI's nested one.
+ *  The detail is the only clue to a refused code, so it's kept, with anything
+ *  shaped like a secret taken out. */
+function tokenError(text: string): { code: string | null; detail?: string } {
   try {
-    const body = JSON.parse(text) as { error?: string | { code?: string } };
-    const code = typeof body.error === "string" ? body.error : body.error?.code;
-    return typeof code === "string" ? code : null;
+    const body = JSON.parse(text) as {
+      error?: string | { code?: string; message?: string };
+      error_description?: string;
+    };
+    const nested = typeof body.error === "object" ? body.error : undefined;
+    const code = typeof body.error === "string" ? body.error : nested?.code;
+    const raw = body.error_description ?? nested?.message;
+    const detail =
+      typeof raw === "string"
+        ? redactSecretShapes(raw.replace(/\s+/g, " ").trim()).text.slice(0, MAX_ERROR_DETAIL)
+        : "";
+    return { code: typeof code === "string" ? code : null, ...(detail ? { detail } : {}) };
   } catch {
-    return null;
+    return { code: null };
   }
 }
 
@@ -186,10 +204,10 @@ async function postToken(
   }
   const text = await res.text().catch(() => "<no body>");
   if (!res.ok) {
-    const code = tokenErrorCode(text);
-    if (code && SIGNED_OUT_ERRORS.has(code)) throw new OAuthSignedOutError(code);
+    const { code, detail } = tokenError(text);
+    if (code && SIGNED_OUT_ERRORS.has(code)) throw new OAuthSignedOutError(code, detail);
     throw new OAuthError(
-      `${provider.label} token endpoint returned HTTP ${res.status}${code ? `: ${code}` : ""}`,
+      `${provider.label} token endpoint returned HTTP ${res.status}${code ? `: ${code}` : ""}${detail ? ` (${detail})` : ""}`,
     );
   }
   try {

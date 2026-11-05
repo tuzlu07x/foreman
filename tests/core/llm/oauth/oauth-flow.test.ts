@@ -245,6 +245,24 @@ describe("refreshTokens", () => {
     await expect(refreshTokens(provider, bundle("rt"), f.fetchImpl)).rejects.toThrow(OAuthSignedOutError);
   });
 
+  it("keeps what the token endpoint said, in both shapes, without anything secret", async () => {
+    const shapedLikeAKey = `sk-ant-api03-${"a".repeat(60)}`;
+    const flat = makeFetch([
+      { status: 400, textBody: JSON.stringify({ error: "invalid_grant", error_description: `Bad code\n ${shapedLikeAKey}` }) },
+    ]);
+    const refused = await refreshTokens(provider, bundle("rt"), flat.fetchImpl).catch((e: OAuthSignedOutError) => e);
+    expect(refused).toBeInstanceOf(OAuthSignedOutError);
+    expect((refused as OAuthSignedOutError).detail).toMatch(/^Bad code \[REDACTED/);
+    expect((refused as OAuthSignedOutError).message).not.toContain(shapedLikeAKey);
+
+    const nested = makeFetch([
+      { status: 400, textBody: JSON.stringify({ error: { code: "invalid_client", message: "Unknown client" } }) },
+    ]);
+    await expect(refreshTokens(provider, bundle("rt"), nested.fetchImpl)).rejects.toThrow(
+      /HTTP 400: invalid_client \(Unknown client\)/,
+    );
+  });
+
   it("keeps the previous refresh token when the response omits one", async () => {
     const f = makeFetch([
       { body: { access_token: "sk-ant-oat03", expires_in: 600 } },

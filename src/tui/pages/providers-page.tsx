@@ -10,7 +10,7 @@ import {
   loadActiveProviders,
   type ProviderEntry,
 } from "../../core/registry-catalog.js";
-import { isSubscriptionProvider, usesClaudeCode } from "../../core/llm/config.js";
+import { isSubscriptionProvider, loadLlmConfig, usesClaudeCode } from "../../core/llm/config.js";
 import { isOAuthProviderId } from "../../core/llm/oauth/oauth-providers.js";
 import { oauthSecretName } from "../../core/llm/oauth/token-store.js";
 import type { SecretStore } from "../../core/secret-store.js";
@@ -236,11 +236,13 @@ export function ProvidersPage({ onLeave, onEditingChange }: ProvidersPageProps):
       const ok = results.every((r) => r.succeeded);
       setRows(buildRows(catalog, secretStore));
       setNotice(
-        ok
-          ? providerId === "anthropic"
-            ? "✓ connected — Foreman uses Claude Code on this computer"
-            : `✓ signed in to ${selectedRow.provider.name} — Foreman calls it with your subscription`
-          : `login did not complete — run 'foreman doctor' or retry [o]`,
+        !ok
+          ? `login did not complete — run 'foreman doctor' or retry [o]`
+          : !brainRunsOn(providerId)
+            ? `✓ signed in to ${selectedRow.provider.name} — to run Foreman's brain on it: foreman llm use ${providerId}`
+            : providerId === "anthropic"
+              ? "✓ connected — Foreman uses Claude Code on this computer"
+              : `✓ signed in to ${selectedRow.provider.name} — Foreman calls it with your subscription`,
       );
       return;
     }
@@ -355,6 +357,15 @@ export function ProvidersPage({ onLeave, onEditingChange }: ProvidersPageProps):
       </Text>
     </Box>
   );
+}
+
+/** Signing in doesn't move the brain, so say so when it's elsewhere. */
+function brainRunsOn(providerId: string): boolean {
+  try {
+    return loadLlmConfig(getForemanPaths().llmConfigPath).provider === providerId;
+  } catch {
+    return false;
+  }
 }
 
 function buildRows(catalog: ProviderEntry[], secretStore: SecretStore): Row[] {

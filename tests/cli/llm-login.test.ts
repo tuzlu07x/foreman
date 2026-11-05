@@ -8,6 +8,7 @@ import {
   connectClaudeCode,
   describeAuthMode,
   performOAuthLogin,
+  switchBrain,
   performOAuthLogout,
   setAuthMode,
   type LoginDeps,
@@ -400,5 +401,45 @@ describe('connectClaudeCode', () => {
     ).rejects.toThrow('not installed')
     expect(login).not.toHaveBeenCalled()
     expect(mode()).toBe('api_key')
+  })
+})
+
+describe('switchBrain', () => {
+  let dir: string
+  let path: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'foreman-brain-'))
+    path = join(dir, 'llm.yaml')
+    saveLlmConfig(path, { ...defaultLlmConfig(), provider: 'anthropic', model: 'claude-haiku-5-5' })
+  })
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it("moves to the provider's own default model, never the old provider's", () => {
+    const next = switchBrain(path, 'openai')
+    expect(next.provider).toBe('openai')
+    expect(next.model).toMatch(/^gpt-/)
+    expect(next.enabled).toBe(true)
+    expect(parseYaml(readFileSync(path, 'utf-8'))).toMatchObject({ provider: 'openai', model: next.model })
+  })
+
+  it('takes the model you name', () => {
+    expect(switchBrain(path, 'openai', 'gpt-custom').model).toBe('gpt-custom')
+  })
+
+  it('keeps the model when the provider stays', () => {
+    expect(switchBrain(path, 'anthropic').model).toBe('claude-haiku-5-5')
+  })
+
+  it('asks for a model when the provider has no default', () => {
+    expect(() => switchBrain(path, 'openai_compatible')).toThrow(/Name one/)
+    expect(loadLlmConfig(path).provider).toBe('anthropic')
+  })
+
+  it('leaves how you sign in alone', () => {
+    const signedIn = setAuthMode(loadLlmConfig(path), 'openai', 'oauth')
+    saveLlmConfig(path, signedIn)
+    expect(switchBrain(path, 'openai').credentials.openai?.auth_mode).toBe('oauth')
   })
 })

@@ -6,12 +6,15 @@ import {
   defaultLlmConfig,
   isFeatureEnabled,
   loadLlmConfig,
+  ProviderIdSchema,
   saveLlmConfig,
   setAuthMode,
   type AuthModeProviderId,
   type LlmConfig,
   type LlmFeature,
+  type ProviderId,
 } from "../core/llm/config.js";
+import { deriveDefaultModelId } from "../core/provider-resolver.js";
 
 export { setAuthMode };
 import {
@@ -309,6 +312,10 @@ llmCommand
       console.log(
         `  ${dim("next")}       foreman llm enable, if the brain is still off`,
       );
+      const brain = loadLlmConfig(paths.llmConfigPath).provider;
+      if (brain !== "anthropic") {
+        console.log(`  ${dim("switch")}     foreman llm use anthropic (the brain runs on ${brain} now)`);
+      }
       return;
     }
     if (!isOAuthProviderId(providerArg)) {
@@ -332,9 +339,16 @@ llmCommand
         defaultLoginDeps(),
       );
       console.log("");
-      console.log(green("✓ You're using your ChatGPT plan"));
+      const brain = loadLlmConfig(paths.llmConfigPath).provider;
+      const inUse = brain === provider.id;
+      console.log(green(inUse ? "✓ You're using your ChatGPT plan" : "✓ Signed in to ChatGPT"));
       if (result.email) console.log(`  ${dim("account")}    ${result.email}`);
-      console.log("  Foreman's AI requests use your plan, separately from anything else you pay for.");
+      if (inUse) {
+        console.log("  Foreman's AI requests use your plan, separately from anything else you pay for.");
+      } else {
+        console.log(`  Foreman's brain still runs on ${brain}, so your plan isn't in use yet.`);
+        console.log(`  ${dim("switch")}     foreman llm use ${provider.id}`);
+      }
       console.log(`  ${dim("manage")}     ${CHATGPT_USAGE_URL}`);
       console.log(`  ${dim("auth_mode")}  credentials.${provider.id} → oauth (saved to llm.yaml)`);
     } catch (err) {
@@ -400,6 +414,30 @@ llmCommand
 // ============================================================================
 // budget — set + status
 // ============================================================================
+
+llmCommand
+  .command("use <provider> [model]")
+  .description("Run Foreman's brain on this provider, with its default model unless you name one")
+  .action((providerArg: string, modelArg?: string) => {
+    requireInitialised();
+    const provider = ProviderIdSchema.safeParse(providerArg);
+    if (!provider.success) {
+      console.error(
+        red("error: ") +
+          `Unknown provider '${providerArg}'. Use: ${ProviderIdSchema.options.join(" | ")}`,
+      );
+      process.exit(2);
+    }
+    try {
+      const { provider: id, model } = switchBrain(getForemanPaths().llmConfigPath, provider.data, modelArg);
+      console.log(`${green("✓")} Foreman's brain now runs on ${id}`);
+      console.log(`  ${dim("model")}      ${model}`);
+      console.log(`  ${dim("next")}       foreman llm test`);
+    } catch (err) {
+      console.error(red("error: ") + (err instanceof Error ? err.message : String(err)));
+      process.exit(2);
+    }
+  });
 
 llmCommand
   .command("budget")
@@ -721,6 +759,7 @@ export async function performOAuthLogin(
   const tokens: OAuthTokens = await deps.runLogin(store, {
     presentAuthUrl: (url: string) => deps.openInBrowser(url, !opts.headless),
     useLoopback: !opts.headless,
+    onRetry: () => console.log("OpenAI needs one more sign-in to finish setting up Foreman.\n"),
     ...(opts.headless ? { readPastedCode: deps.promptPaste } : {}),
   });
   saveOAuthTokens(store, provider.id, tokens);
@@ -736,6 +775,22 @@ export function performOAuthLogout(
 ): void {
   clearOAuthTokens(store, providerId);
   saveAuthMode(paths.llmConfigPath, providerId, "api_key");
+}
+
+/**
+ * Move Foreman's brain to another provider. Signing in doesn't do this: setup
+ * can sign in to two plans in a row after you chose one. A model from the old
+ * provider wouldn't exist on the new one, so it takes that provider's default.
+ */
+export function switchBrain(path: string, provider: ProviderId, model?: string): LlmConfig {
+  const current = loadLlmConfig(path);
+  const chosen = model ?? (current.provider === provider ? current.model : deriveDefaultModelId(provider));
+  if (chosen === "default") {
+    throw new Error(`${provider} has no default model. Name one: foreman llm use ${provider} <model>`);
+  }
+  const next = { ...current, enabled: true, provider, model: chosen };
+  saveLlmConfig(path, next);
+  return next;
 }
 
 function saveAuthMode(

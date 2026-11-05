@@ -97,6 +97,9 @@ foreman llm enable <feature>             # verification / smart_report / policy_
 foreman llm disable
 foreman llm disable <feature>
 
+foreman llm use openai                   # run the brain on this provider, with its default model
+foreman llm use openai <model>           # ... or with the model you name
+
 foreman llm test                         # cheap round-trip against the configured provider
 foreman llm budget                       # detailed status (window, spent, remaining)
 foreman llm budget --set 10              # change the monthly cap
@@ -155,7 +158,9 @@ foreman llm logout anthropic
 foreman llm logout openai
 ```
 
-Each command flips `credentials.<provider>.auth_mode` in `llm.yaml` accordingly (no manual edit needed), so the next LLM call goes through the matching client.
+Each command flips `credentials.<provider>.auth_mode` in `llm.yaml` accordingly (no manual edit needed), so the next LLM call to that provider goes through the matching client.
+
+Signing in doesn't move Foreman's brain to that provider. If the brain runs elsewhere, the sign-in says so, and `foreman llm use openai` moves it. `foreman llm test` then makes a real call on your plan.
 
 ### Claude Code
 
@@ -175,6 +180,8 @@ A prompt can hold text from agents and chat users, so each call can only answer:
 ### ChatGPT
 
 The first sign-in registers this computer with OpenAI, under the app name Foreman, and OpenAI issues a client id for it. Later sign-ins reuse that id. You approve plan use in the browser, and without that approval Foreman doesn't use the sign-in. It never falls back to another way of paying.
+
+OpenAI can ask you to sign in a second time to finish setting Foreman up. If it does, your browser opens again by itself.
 
 Eligible requests from Foreman then use your ChatGPT plan, separately from anything else you pay for. See and limit that use in [ChatGPT usage settings](https://chatgpt.com/settings/usage). When you reach a limit, Foreman stops and links you there.
 
