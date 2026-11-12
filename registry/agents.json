@@ -521,7 +521,7 @@
       "task_model_flag": "--model",
       "task_timeout_seconds": 1800,
       "supported_versions": ">=0.66.0",
-      "min_foreman_version": "2.3.2",
+      "min_foreman_version": "2.4.0",
       "provider_mapping": {
         "gemini": {
           "preferred": "oauth",

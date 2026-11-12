@@ -6,14 +6,57 @@ All notable changes to Foreman are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-12
+
+**Upgrading:** if Foreman's brain used your ChatGPT plan, run
+`foreman llm login openai` once. If it used Foreman's old Claude sign-in,
+nothing to do: it moves to your own Claude Code by itself.
+
 ### Changed
 
+- **Foreman no longer has a Claude sign-in of its own.** It ran Claude.ai
+  login itself and kept the tokens, which Anthropic doesn't permit for other
+  apps. A Claude plan now connects through your own Claude Code:
+  `foreman llm login anthropic` runs the unmodified `claude` binary, and
+  Foreman holds no Claude credential. Each call can only answer: no tools,
+  MCP servers, hooks or saved session, and the prompt goes over stdin. An old
+  `llm.yaml` moves over by itself, and `foreman start` deletes the old tokens.
+- **ChatGPT sign-in follows OpenAI's guide for open-source apps.** Foreman
+  used to sign in as Codex and call ChatGPT's private backend. It now
+  registers as its own app through OpenAI's
+  [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source),
+  checks the ID token's signature before keeping anything, and calls the
+  public API. Without your OK for plan use it stops, and it never switches to
+  another way of paying. Plan use for open-source apps is an OpenAI preview.
+  Chat apps no longer start a sign-in; it happens on the computer.
+- **Signing in doesn't move the brain.** `foreman llm login openai` says
+  where the brain runs, and the new `foreman llm use <provider> [model]`
+  moves it.
+- **A team task may run for 30 minutes**, up from 10, which cut real work
+  off. `FOREMAN_TASK_TIMEOUT_MINUTES` changes it, for ACP agents like Gemini
+  CLI too. When time runs out, the report says the work so far stays in the
+  project.
 - **Foreman's own Anthropic model is now Claude Haiku 5.5**, the balanced
   tier Claude Sonnet 5.5, and both are priced. `llm.yaml` files that name a
   model keep it.
 
 ### Added
 
+- **`foreman quickstart`: your first approval on your phone in about five
+  minutes.** It connects Claude Code and Telegram, then sends a real approval
+  card through the same gateway and hook a real agent uses. It changes Claude
+  Code's settings only after an explicit `y`, lists the files first, and never
+  touches them when `FOREMAN_HOME` points at a test home.
+- **A team works side by side.** Tasks for different roles run at the same
+  time, up to 4 (`FOREMAN_MAX_PARALLEL_TASKS`, `1` for one at a time). One
+  role's own tasks stay in order, and `/foreman stop` doesn't wait for them.
+  A plan step can wait for others (*after backend-developer*), and doesn't
+  start if one of them failed.
+- **You hear when the work is done.** A task asked from Telegram, Slack or
+  Discord reports its result to that chat, and a plan sends one message when
+  every step has ended. A restart before then loses that message.
+- **`npm run qa:real`** runs 14 checks against a real, signed-in Claude Code,
+  for contributors before a release.
 - **Gemini CLI can fill a role.** `foreman agent add gemini-cli`, then
   `foreman org add-role <id> --runs-on gemini-cli`, or switch a role to it
   with `r` on the Team page. A team can mix Claude Code, Codex and Gemini
@@ -26,6 +69,28 @@ All notable changes to Foreman are documented here. The format follows
 
 ### Fixed
 
+- **Every tool call of a Claude Code role goes through Foreman.** A role is
+  started with Foreman's hook and its own Foreman home even when the global
+  hook isn't installed, so its role limits and approvals hold.
+- **Wiring and sign-in work without `foreman` on your PATH.** Agents' MCP
+  entries and the TUI's sign-in now run Foreman by its full path, so a local
+  build or a second Node version doesn't break them.
+- **Adding a role on Codex no longer rewrites Codex's global instructions.**
+  `--skip-config` and roles left `~/.codex/AGENTS.md` alone in words but not
+  in fact.
+- **Long replies from Claude Code arrive whole.** A reply limit made Claude
+  Code drop the start of long answers or fail with *exceeded the 900 output
+  token maximum*.
+- **A chat message that starts with a path is a message.** Telegram dropped
+  it, and Slack and Discord lost its first slash, so work could land in the
+  wrong folder.
+- **The Slack guide covers `/foreman` all the way.** Creating the command
+  isn't enough: the app has to be reinstalled, and the guide, wizard and CLI
+  now say so and name Slack's *not a valid command* error.
+- **`foreman llm enable orchestrator_chat` works**, as Foreman's own messages
+  said it would.
+- **`foreman org add-role` says a Codex role stays read-only** until
+  `foreman agent trust`.
 - **An agent that dies no longer takes Foreman down with it.** When Foreman
   wrote to an agent that had just exited (`write EPIPE`), `foreman start`
   or the background service crashed, and every approval went with it. The
