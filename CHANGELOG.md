@@ -28,7 +28,9 @@ nothing to do: it moves to your own Claude Code by itself.
   checks the ID token's signature before keeping anything, and calls the
   public API. Without your OK for plan use it stops, and it never switches to
   another way of paying. Plan use for open-source apps is an OpenAI preview.
-  Chat apps no longer start a sign-in; it happens on the computer.
+  Chat apps no longer start a sign-in; it happens on the computer. We
+  couldn't test it with a paid ChatGPT plan before this release: if you try
+  it, tell us in an issue how it went.
 - **Signing in doesn't move the brain.** `foreman llm login openai` says
   where the brain runs, and the new `foreman llm use <provider> [model]`
   moves it.

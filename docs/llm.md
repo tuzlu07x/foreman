@@ -183,6 +183,8 @@ The first sign-in registers this computer with OpenAI, under the app name Forema
 
 OpenAI can ask you to sign in a second time to finish setting Foreman up. If it does, your browser opens again by itself.
 
+This sign-in hasn't been tested with a paid ChatGPT plan yet. With a free account, OpenAI stopped it with *This app is only available to members of its workspace* (`3p_login_workspace_scope_denied`). If you try it with a paid plan, please tell us in an issue how it went.
+
 Eligible requests from Foreman then use your ChatGPT plan, separately from anything else you pay for. See and limit that use in [ChatGPT usage settings](https://chatgpt.com/settings/usage). When you reach a limit, Foreman stops and links you there.
 
 Foreman signs in only on the host: chat apps point you to `foreman llm login openai`.
