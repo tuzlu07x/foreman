@@ -91,7 +91,7 @@ import {
   type TaskPermissions,
 } from "../core/task-permissions.js";
 import type { AgentEntry } from "../core/registry-catalog.js";
-import { catalogEntryFor } from "../core/agent-instance.js";
+import { catalogEntryFor, type InstanceLaunch } from "../core/agent-instance.js";
 import { checkForUpdate } from "../core/update-check.js";
 import { closeDb, getDb, getSqlite, type ForemanDb } from "../db/client.js";
 import { controlCommands } from "../db/schema.js";
@@ -1545,7 +1545,7 @@ export function startForeman(
                   : null;
                 const trusted = registryRow?.taskSkipPermissions === true;
                 const permissions = entry
-                  ? taskPermissionsFor(agentId, entry, trusted, paths)
+                  ? taskPermissionsFor(agentId, entry, trusted, paths, instance)
                   : null;
                 const cwd = taskCwd(agentId, derivedCwd);
                 const launch =
@@ -2594,6 +2594,7 @@ function taskPermissionsFor(
   entry: AgentEntry,
   trusted: boolean,
   paths: { orgConfigPath: string; stateDir: string },
+  launch: InstanceLaunch | null,
 ): TaskPermissions | null {
   if (entry.id === "gemini-cli") {
     return {
@@ -2614,7 +2615,9 @@ function taskPermissionsFor(
   return taskPermissions({
     runtime: entry.id,
     trusted,
-    hookInstalled: claudeHookFor(agentId, entry),
+    // The hook this very launch carries, not whether it's a role: a role
+    // whose launch failed runs without one.
+    hookInstalled: claudeHookFor(entry, launch),
     can,
   });
 }

@@ -1566,7 +1566,9 @@ function describeTaskPermissions(
       taskPermissions({
         runtime: entry.id,
         trusted,
-        hookInstalled: claudeHookFor(agentId, entry),
+        // A role's launch brings Foreman's hook when the settings have none
+        // (role-launch.ts); a launch that fails is checked again when it runs.
+        hookInstalled: claudeHookFor(entry, isInstance(agentId, entry) ? { hooked: true } : null),
         can,
       })?.summary ?? null
     );

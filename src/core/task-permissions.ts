@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { hasForemanHook, type ClaudeSettings } from "./agent-hook.js";
-import { isInstance } from "./agent-instance.js";
+import type { InstanceLaunch } from "./agent-instance.js";
 import { resolveAgentSettingsPath } from "./agent-permissions.js";
 import type { RoleCapability } from "./org/org.js";
 import type { AgentEntry } from "./registry-catalog.js";
@@ -104,16 +104,23 @@ export function taskPermissions(input: TaskPermissionInput): TaskPermissions | n
   return null;
 }
 
-/** Whether Claude Code's settings carry Foreman's PreToolUse hook: false
- *  when they don't, null when the file can't be read. */
-/** Whether Foreman's hook covers a task on `entry`: an instance carries its
- *  own (role-launch.ts); the plain agent has the one in its settings. Null
- *  for agents with no such hook. */
-export function claudeHookFor(agentId: string, entry: AgentEntry): boolean | null {
+/** Whether Foreman's hook covers a task on `entry`: the one this launch
+ *  carries (role-launch.ts), else the one in Claude Code's settings. A role
+ *  whose launch couldn't be built runs on the plain wiring, with no hook of
+ *  its own, so only the settings count for it. Null for agents with no such
+ *  hook. Deciding by "is it a role" here would skip Claude Code's prompts
+ *  with nothing guarding the role. */
+export function claudeHookFor(
+  entry: AgentEntry,
+  launch: Pick<InstanceLaunch, "hooked"> | null,
+): boolean | null {
   if (entry.id !== "claude-code") return null;
-  return isInstance(agentId, entry) || claudeHookInstalled(entry.config_paths ?? []);
+  if (launch?.hooked === true) return true;
+  return claudeHookInstalled(entry.config_paths ?? []);
 }
 
+/** Whether Claude Code's settings carry Foreman's PreToolUse hook: false
+ *  when they don't, null when the file can't be read. */
 export function claudeHookInstalled(configPaths: string[]): boolean | null {
   try {
     const path = resolveAgentSettingsPath(configPaths);

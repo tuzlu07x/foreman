@@ -57,6 +57,8 @@ export interface InstanceLaunch {
   taskPrefix: string;
   /** MCP servers for an ACP agent's session (`session/new`). */
   acpMcpServers?: AcpMcpServer[];
+  /** True when this launch carries Foreman's hook itself (`--settings`). */
+  hooked?: boolean;
 }
 
 /** An MCP server as ACP's `session/new` takes it. */
@@ -167,6 +169,7 @@ export function instanceLaunch(entry: Pick<AgentEntry, "id">, input: InstanceLau
       ],
       env: {},
       taskPrefix: "",
+      hooked: hook !== null,
     };
   }
   return null;

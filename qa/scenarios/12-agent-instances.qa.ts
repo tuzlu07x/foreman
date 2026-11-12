@@ -222,10 +222,19 @@ it('One runtime, several roles: two Codex and a Claude Code instance each work a
     expect(reviewer).toMatchObject({ agent: 'claude-code', spawnedBy: 'reviewer' })
     expect(reviewer.server?.args.slice(-3)).toEqual(['mcp-stdio', '--source', 'reviewer'])
     expect(reviewer.argv).toContain('--append-system-prompt')
-    // Foreman's own tools are always allowed; no hook here, so Claude
-    // Code's own prompts stay on.
+    // Foreman's own tools are always allowed. Claude Code's settings have no
+    // hook here, so the launch carries Foreman's hook itself, and only that
+    // lets Claude Code's own prompts be skipped: every tool call still goes
+    // through Foreman, as the reviewer.
     expect(reviewer.argv.join(' ')).toContain('--allowedTools mcp__foreman')
-    expect(reviewer.argv).not.toContain('--dangerously-skip-permissions')
+    const settings = JSON.parse(reviewer.argv[reviewer.argv.indexOf('--settings') + 1]!) as {
+      hooks: { PreToolUse: { matcher: string; hooks: { command: string }[] }[] }
+    }
+    const hookCommand = settings.hooks.PreToolUse[0]!.hooks[0]!.command
+    expect(hookCommand).toMatch(/hook(\.js)?['"]? ['"]?claude-code/)
+    // A hook that can't run blocks the call instead of letting it through.
+    expect(hookCommand).toContain('s=2')
+    expect(reviewer.argv).toContain('--dangerously-skip-permissions')
     expect(reviewer.argv.join(' ')).toContain("Review the change and report findings with file and line. Don't edit files.")
     // The lead is the agent itself: launched as before.
     expect(byTask('Ship the signup feature')).toMatchObject({ agent: 'claude-code', spawnedBy: 'claude-code', server: null })

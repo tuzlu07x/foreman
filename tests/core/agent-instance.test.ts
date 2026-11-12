@@ -119,6 +119,9 @@ describe("agent instances", () => {
     expect(settings.hooks.PreToolUse[0]!.hooks[0]!.command).toBe("foreman-hook claude-code");
     expect(settings.hooks.PreToolUse[0]!.matcher).toContain("Write");
     expect(instanceLaunch({ id: "claude-code" }, { ...input, hookCommand: null })!.args).not.toContain("--settings");
+    // What the task's permissions are decided on.
+    expect(launch.hooked).toBe(true);
+    expect(instanceLaunch({ id: "claude-code" }, { ...input, hookCommand: null })!.hooked).toBe(false);
   });
 
   it("gives a Claude Code instance an --mcp-config that wins over its own foreman entry, and its role", () => {

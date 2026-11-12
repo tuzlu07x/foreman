@@ -12,12 +12,39 @@ import { claudeHookFor, claudeHookInstalled, codexSandboxFor, roleWorkspace, tas
 // took its sandbox away entirely.
 
 describe("claudeHookFor", () => {
-  const claude = { id: "claude-code", config_paths: [] } as unknown as AgentEntry;
-  it("counts a role's Claude Code as covered: its launch carries the hook", () => {
-    expect(claudeHookFor("frontend", claude)).toBe(true);
+  let home: string;
+  let claude: AgentEntry;
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "foreman-hookfor-"));
+    claude = { id: "claude-code", config_paths: [join(home, "settings.json")] } as unknown as AgentEntry;
   });
+  afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+  it("counts a launch that carries the hook", () => {
+    expect(claudeHookFor(claude, { hooked: true })).toBe(true);
+  });
+
+  it("fails closed for a role whose launch couldn't be built and no hook in the settings", () => {
+    expect(claudeHookFor(claude, null)).toBe(false);
+    expect(claudeHookFor(claude, { hooked: false })).toBe(false);
+    // With nothing covering it, Claude Code's own prompts stay on.
+    expect(taskPermissions({ runtime: "claude-code", trusted: false, can: undefined, hookInstalled: claudeHookFor(claude, null) })!.args).not.toContain(
+      "--dangerously-skip-permissions",
+    );
+  });
+
+  it("counts the hook in Claude Code's settings, for the agent itself or a role on its wiring", () => {
+    writeFileSync(
+      join(home, "settings.json"),
+      JSON.stringify({
+        hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "/x/foreman hook claude-code", managed_by: FOREMAN_HOOK_MARKER }] }] },
+      }),
+    );
+    expect(claudeHookFor(claude, null)).toBe(true);
+  });
+
   it("has nothing to say about other agents", () => {
-    expect(claudeHookFor("backend", { id: "codex" } as unknown as AgentEntry)).toBeNull();
+    expect(claudeHookFor({ id: "codex" } as unknown as AgentEntry, { hooked: true })).toBeNull();
   });
 });
 
