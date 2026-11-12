@@ -75,7 +75,7 @@ jobs:
           python3 scripts/smoke-binary.py "$binary"
 
       - name: Upload binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: foreman-${{ matrix.label }}
           path: dist-binaries/foreman-${{ matrix.label }}
@@ -104,7 +104,7 @@ jobs:
           test "$(wc -l < SHA256SUMS)" -eq 4
 
       - name: Upload checksums
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: SHA256SUMS
           path: dist-binaries/SHA256SUMS
