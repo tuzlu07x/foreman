@@ -179,7 +179,11 @@ it('A company of agents: goals flow down the chart, agents talk, the chart and y
     ev(`the stand-ins received ${tasks.length} tasks, each running as itself (FOREMAN_SPAWNED_BY) — e.g. ${JSON.stringify(byTask('Build the login page'))}`)
 
     const wakes = all.filter((r) => r.source_agent === 'foreman:delegation')
-    expect(wakes.map((w) => JSON.parse(w.args)[0])).toEqual(['claude-code', 'openclaw', 'hermes'])
+    // The CTO and the CMO work side by side, so either may be woken first;
+    // the CEO only once both are done.
+    const woken = wakes.map((w) => JSON.parse(w.args)[0] as string)
+    expect(woken.slice(0, 2).sort()).toEqual(['claude-code', 'openclaw'])
+    expect(woken[2]).toBe('hermes')
     expect(wakes.every((w) => w.status === 'applied'), JSON.stringify(wakes)).toBe(true)
     const ceoWake = JSON.parse(wakes[2]!.args)[1] as string
     expect(ceoWake).toContain('Your task (from the owner):\n    Launch the login feature by Friday')
