@@ -1,8 +1,8 @@
 class ForemanAgent < Formula
   desc "Local security gateway for AI coding agents: mediates, scores, asks, audits"
   homepage "https://foreman-agent.com"
-  url "https://registry.npmjs.org/foreman-agent/-/foreman-agent-2.1.1.tgz"
-  sha256 "6fa2b558116ae3394402fdd46993a9074e238172d01ad6bec05b94b16df8ee14"
+  url "https://registry.npmjs.org/foreman-agent/-/foreman-agent-2.4.0.tgz"
+  sha256 "d960902506929c8945820f83ff4c086614dd130a5c7d6b04cdfdd52e6dfd89b0"
   license "MIT"
   head "https://github.com/tuzlu07x/foreman.git", branch: "main"
 
@@ -22,6 +22,11 @@ class ForemanAgent < Formula
       Get started:
         foreman setup      # 5-minute wizard: providers, agents, services
         foreman start      # the TUI, where risky calls wait for your OK
+
+      Optional: `foreman service install` keeps Foreman running at
+      login. It runs Homebrew's Node by its full path, so run it again after
+      `brew upgrade` updates node or foreman-agent (`foreman service status`
+      warns when it points at a version that is gone).
 
       Foreman keeps its state (identity key, policy.yaml, audit database)
       outside the Homebrew prefix; `foreman doctor` prints where. Upgrading
